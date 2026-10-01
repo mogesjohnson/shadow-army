@@ -18,6 +18,7 @@ node dist/cli.js army  # run the built CLI (or `sa` after `npm link`)
 - End every commit message with the attribution trailer the session gives (`Co-Authored-By: Claude <model> <noreply@anthropic.com>`). Use the exact line from the session's reminder.
 - Stage files by explicit path. Never `git add -A` or `git add .`: other agents leave untracked files in the working tree.
 - Never force-push, `filter-branch`, or otherwise rewrite pushed history unless the user explicitly asks for it in that session.
+- Enforced, not just asked: the `commit-msg` hook in `.githooks/` (turned on by `npm install`) rejects a wrong subject, and the `PR format` workflow checks every PR's title, body and commit subjects. If either rejects, fix the text. Never bypass with `--no-verify`.
 
 ## Pull requests
 
@@ -29,6 +30,7 @@ Follow `.github/pull_request_template.md` exactly.
 - Tick a checklist box only for something actually verified. Leave the rest unchecked and say why on the line.
 - Put the detailed AC-to-evidence mapping and the limitations in a PR comment, not in the body.
 - Use `Tracking: #N`. Never closing keywords (`closes`, `fixes`, `resolves`): they close issues on merge before acceptance is checked.
+- The `PR format` check needs: a `#N`/`[F<n>]` title, `Validation:`, `Tracking:`, `Checklist:` with all 6 boxes, and no closing keyword. Edit the PR body to re-run it.
 - Open as a draft unless all required evidence and human acceptance exist. End the body with the PR attribution line the session gives.
 - Stacked work: base the PR on the previous feature branch and name it in `Tracking:`.
 
