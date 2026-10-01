@@ -68,14 +68,14 @@ Pre-write hooks (blocking a write at the moment of the attempt) are on the roadm
 ## Planned commands
 
 ```bash
-shadow                     # banner + status
-shadow army                # detect soldiers, show health and models
-shadow summon <soldier> "<task>"   # one-off dispatch
-shadow run "<goal>"        # monarch plans, delegates, synthesizes
-shadow vault               # inspect shared notes and runs
-shadow locks               # show leases and queue
-shadow formation <name>    # run a saved formation
-shadow adapter new <name>  # scaffold a new soldier adapter
+sa                          # banner + status
+sa army                     # detect soldiers, show health and models
+sa summon <soldier> "<task>"  # one-off dispatch
+sa run "<goal>"             # monarch plans, delegates, synthesizes
+sa vault                    # inspect shared notes and runs
+sa locks                    # show leases and queue
+sa formation <name>         # run a saved formation
+sa adapter new <name>       # scaffold a new soldier adapter
 ```
 
 Add `--plain` for log output without the dashboard (also automatic when not attached to a TTY).
@@ -89,12 +89,12 @@ TypeScript on Node, with [Ink](https://github.com/vadimdemedes/ink) (Yoga flexbo
 Built one feature at a time, each as its own issue and pull request:
 
 - [ ] **F1** Scaffold and banner
-- [ ] **F2** Adapter interface and the four adapters (`shadow army`)
-- [ ] **F3** `shadow summon`: single dispatch with brief and report
+- [ ] **F2** Adapter interface and the four adapters (`sa army`)
+- [ ] **F3** `sa summon`: single dispatch with brief and report
 - [ ] **F4** Shadow Vault
 - [ ] **F5** Delegate parser and router (`orchestratorDelegate.md`)
 - [ ] **F6** Worktrees, locks, and claim audit
-- [ ] **F7** Monarch: `shadow run`
+- [ ] **F7** Monarch: `sa run`
 - [ ] **F8** Live dashboard and `--plain`
 - [ ] **F9** Formations and the adapter scaffold
 

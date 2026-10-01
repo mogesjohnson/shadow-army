@@ -56,7 +56,7 @@ Codex reviews and merges; Claude does not merge or close the issue by assertion.
 
 ## Adding a soldier
 
-Implement the `Adapter` interface (`src/adapters/Adapter.ts`), declare its capabilities (`write`, `review`), add it to `shadow.config.json`, and describe its strengths and weaknesses in `orchestratorDelegate.md`. `shadow adapter new <name>` will scaffold this once F9 lands.
+Implement the `Adapter` interface (`src/adapters/Adapter.ts`), declare its capabilities (`write`, `review`), add it to `shadow.config.json`, and describe its strengths and weaknesses in `orchestratorDelegate.md`. `sa adapter new <name>` will scaffold this once F9 lands.
 
 ## Development
 
