@@ -4,6 +4,7 @@
   "description": "A CLI that commands other AI CLIs as an army with isolated context",
   "type": "module",
   "bin": {
+    "sa": "dist/cli.js",
     "shadow": "dist/cli.js"
   },
   "files": [
