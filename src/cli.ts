@@ -25,7 +25,7 @@ const pkg = JSON.parse(
 const program = new Command();
 
 program
-  .name("shadow")
+  .name("sa")
   .description("Shadow Army: command other AI CLIs as an army with isolated context")
   .version(pkg.version)
   .option("--plain", "plain text output (automatic when not a TTY)")
