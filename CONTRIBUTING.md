@@ -56,7 +56,7 @@ Codex reviews and merges; Claude does not merge or close the issue by assertion.
 
 ## Adding a soldier
 
-Implement the `Adapter` interface (`src/adapters/Adapter.ts`), declare its capabilities (`write`, `review`), add it to `shadow.config.json`, and describe its strengths and weaknesses in `orchestratorDelegate.md`. `sa adapter new <name>` will scaffold this once F9 lands.
+Implement the `Adapter` interface (`src/adapters/Adapter.ts`), declare its capabilities (`write`, `review`), add its `cli` and `model` to `shadow.config.json`, and add its roles and rules to the front-matter of `orchestratorDelegate.md`. Both files must list the same soldiers, and a misspelled rule key is an error. A rule in the delegate file can only restrict an adapter, never grant it more than its declared capabilities. Describe its strengths and weaknesses in the prose below the front-matter. Preview the effect with `sa route --role <role>`. `sa adapter new <name>` will scaffold this once F9 lands.
 
 ## Development
 

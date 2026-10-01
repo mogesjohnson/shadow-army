@@ -5,12 +5,30 @@ import React from "react";
 import { render } from "ink";
 import { Banner } from "./ui/Banner.js";
 import { plainBanner } from "./ui/art.js";
-import { loadConfig } from "./core/config.js";
+import { ConfigError } from "./core/config.js";
+import { DelegateError } from "./core/delegate.js";
+import { loadRoster, RosterError, type Roster } from "./core/roster.js";
 import { checkArmy, renderArmy } from "./core/army.js";
+import { renderRoute, route, type TaskProfile } from "./core/router.js";
 import { summon, renderReport, SummonError } from "./core/summon.js";
 import { Vault } from "./vault/vault.js";
 import { registerVaultCommands } from "./vault/cli.js";
+import { getAdapter } from "./adapters/registry.js";
 import type { Effort, Role } from "./adapters/Adapter.js";
+
+/** Load config + delegate; a bad file is a clean one-screen error, not a stack trace. */
+function rosterOrExit(): Roster | undefined {
+  try {
+    return loadRoster();
+  } catch (e) {
+    if (e instanceof ConfigError || e instanceof DelegateError || e instanceof RosterError) {
+      console.error(`error: ${e.message}`);
+      process.exitCode = 2;
+      return undefined;
+    }
+    throw e;
+  }
+}
 
 interface SummonCliOptions {
   role?: string;
@@ -47,7 +65,9 @@ program
   .description("detect each soldier's CLI, show its version, and verify its configured model")
   .option("--json", "machine-readable output")
   .action(async (opts: { json?: boolean }) => {
-    const rows = await checkArmy(loadConfig());
+    const roster = rosterOrExit();
+    if (!roster) return;
+    const rows = await checkArmy(roster);
     if (opts.json) {
       console.log(JSON.stringify(rows, null, 2));
     } else {
@@ -81,9 +101,11 @@ program
       process.exitCode = 2;
       return;
     }
+    const roster = rosterOrExit();
+    if (!roster) return;
     try {
       const report = await summon({
-        config: loadConfig(),
+        roster,
         soldier,
         task: task.join(" "),
         role: opts.role as Role | undefined,
@@ -103,6 +125,37 @@ program
       }
       throw e;
     }
+  });
+
+program
+  .command("route")
+  .description("preview who may take a task and in what order (no soldier is run)")
+  .addOption(
+    new Option("--role <role>", "the kind of task")
+      .choices(["build", "review", "research", "test", "orchestrate"])
+      .makeOptionMandatory(),
+  )
+  .option("--hard", "treat a build task as hard")
+  .option("--write", "the task needs write access (default: only for build)")
+  .option("--author <soldier>", "who wrote the change under review; they never review their own work")
+  .option("--json", "machine-readable output")
+  .action((opts: { role: string; hard?: boolean; write?: boolean; author?: string; json?: boolean }) => {
+    const roster = rosterOrExit();
+    if (!roster) return;
+    if (opts.author && !roster.soldiers.has(opts.author)) {
+      console.error(`error: unknown soldier "${opts.author}" (known: ${[...roster.soldiers.keys()].join(", ")})`);
+      process.exitCode = 2;
+      return;
+    }
+    const profile: TaskProfile = {
+      role: opts.role as Role,
+      difficulty: opts.hard ? "hard" : "routine",
+      write: opts.write,
+      author: opts.author,
+    };
+    const result = route(roster, getAdapter, profile);
+    console.log(opts.json ? JSON.stringify({ profile, ...result }, null, 2) : renderRoute(profile, result));
+    if (!result.candidates.length) process.exitCode = 1;
   });
 
 registerVaultCommands(program);

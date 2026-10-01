@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,10 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Vault } from "../vault/vault.js";
 import type { Adapter, RunRequest, RunResult } from "../adapters/Adapter.js";
 import { checkAssignment, defaultRole } from "./assign.js";
-import { parseConfig } from "./config.js";
+import { makeRoster, shippedRoster } from "./roster.testutil.js";
 import { renderReport, summon, SummonError } from "./summon.js";
 
-const config = parseConfig(readFileSync(new URL("../../shadow.config.json", import.meta.url), "utf8"));
+const roster = shippedRoster();
 
 function fake(over: Partial<Adapter> & { result?: RunResult } = {}): Adapter & { calls: RunRequest[] } {
   const calls: RunRequest[] = [];
@@ -29,18 +29,28 @@ function fake(over: Partial<Adapter> & { result?: RunResult } = {}): Adapter & {
   };
 }
 
-const base = { config, task: "look around", cwd: "/w" };
+const base = { roster, task: "look around", cwd: "/w" };
 
 describe("assignment rules", () => {
-  it("refuses review for grok", async () => {
+  it("refuses review for a CLI that cannot review, even if the roster grants the role", async () => {
+    // Adapter capabilities are code; the delegate file can restrict them but never grant more.
     const a = fake({ capabilities: { write: true, review: false } });
-    const cfg = parseConfig(
-      JSON.stringify({
-        monarch: { default: "g" },
-        soldiers: { g: { cli: "grok", model: "m", roles: ["build", "review"] } },
-      }),
-    );
-    await expect(summon({ ...base, config: cfg, soldier: "g", role: "review", adapter: a })).rejects.toThrow(/never takes review/);
+    const generous = makeRoster({ g: { cli: "grok", model: "m", roles: ["build", "review"] } });
+    await expect(summon({ ...base, roster: generous, soldier: "g", role: "review", adapter: a })).rejects.toThrow(/never takes review/);
+    expect(a.calls).toHaveLength(0);
+  });
+
+  it("refuses a role the roster forbids, even if the adapter could do it", async () => {
+    const a = fake(); // adapter allows review
+    const r = makeRoster({ g: { cli: "grok", model: "m", roles: ["build"], forbidden: ["review"] } });
+    await expect(summon({ ...base, roster: r, soldier: "g", role: "review", adapter: a })).rejects.toThrow(/never takes review/);
+    expect(a.calls).toHaveLength(0);
+  });
+
+  it("refuses write for a soldier the roster marks read-only, even if the adapter could write", async () => {
+    const a = fake(); // adapter allows write
+    const r = makeRoster({ s: { cli: "x", model: "m", roles: ["research"], write: false } });
+    await expect(summon({ ...base, roster: r, soldier: "s", role: "research", write: true, adapter: a })).rejects.toThrow(/read-only/);
     expect(a.calls).toHaveLength(0);
   });
 
@@ -52,11 +62,11 @@ describe("assignment rules", () => {
   });
 
   it("refuses write outside the build role and orchestrate as a task", () => {
-    const s = config.soldiers["claude-opus"]!;
+    const s = roster.soldiers.get("claude-opus")!;
     const a = fake();
-    expect(checkAssignment("claude-opus", s, a, "review", true)).toMatchObject({ ok: false });
-    expect(checkAssignment("claude-opus", s, a, "orchestrate", false)).toMatchObject({ ok: false });
-    expect(checkAssignment("claude-opus", s, a, "build", true)).toEqual({ ok: true, role: "build", write: true });
+    expect(checkAssignment(s, a, "review", true)).toMatchObject({ ok: false });
+    expect(checkAssignment(s, a, "orchestrate", false)).toMatchObject({ ok: false });
+    expect(checkAssignment(s, a, "build", true)).toEqual({ ok: true, role: "build", write: true });
   });
 
   it("rejects an unknown soldier", async () => {
@@ -64,8 +74,8 @@ describe("assignment rules", () => {
   });
 
   it("defaults to the first non-orchestrate role", () => {
-    expect(defaultRole(config.soldiers["claude-opus"]!)).toBe("review");
-    expect(defaultRole(config.soldiers["agy"]!)).toBe("research");
+    expect(defaultRole(roster.soldiers.get("claude-opus")!)).toBe("review");
+    expect(defaultRole(roster.soldiers.get("agy")!)).toBe("research");
   });
 });
 

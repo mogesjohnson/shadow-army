@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Adapter } from "../adapters/Adapter.js";
 import { checkArmy, renderArmy } from "./army.js";
-import { parseConfig } from "./config.js";
+import { makeRoster } from "./roster.testutil.js";
 
 function fake(id: string, opts: { found: boolean; models?: string[]; source?: "cli" | "static" }): Adapter {
   return {
@@ -18,18 +18,13 @@ function fake(id: string, opts: { found: boolean; models?: string[]; source?: "c
   };
 }
 
-const config = parseConfig(
-  JSON.stringify({
-    monarch: { default: "a" },
-    soldiers: {
-      a: { cli: "one", model: "m1", roles: ["orchestrate"] },
-      b: { cli: "one", model: "ghost", roles: ["build"] },
-      c: { cli: "two", model: "x", roles: ["build"] },
-      d: { cli: "three", model: "opus", roles: ["review"] },
-      e: { cli: "nope", model: "x", roles: ["build"] },
-    },
-  }),
-);
+const config = makeRoster({
+  a: { cli: "one", model: "m1", roles: ["orchestrate"] },
+  b: { cli: "one", model: "ghost", roles: ["build"] },
+  c: { cli: "two", model: "x", roles: ["build"] },
+  d: { cli: "three", model: "opus", roles: ["review"] },
+  e: { cli: "nope", model: "x", roles: ["build"] },
+});
 
 describe("checkArmy", () => {
   it("classifies each soldier's model against its CLI", async () => {

@@ -1,11 +1,10 @@
 {
-  "monarch": { "default": "codex-astra", "fallback": "claude-opus" },
   "soldiers": {
-    "codex-astra": { "cli": "codex", "model": "gpt-6-astra", "roles": ["orchestrate"] },
-    "codex-sol": { "cli": "codex", "model": "gpt-6.1-sol", "roles": ["build"] },
-    "claude-opus": { "cli": "claude", "model": "opus", "roles": ["orchestrate", "review", "build"] },
-    "claude-sonnet": { "cli": "claude", "model": "sonnet", "roles": ["build"] },
-    "grok": { "cli": "grok", "model": "grok-4.7", "roles": ["build"] },
-    "agy": { "cli": "agy", "model": "gemini-3.1-pro-high", "roles": ["research", "test"] }
+    "codex-astra": { "cli": "codex", "model": "gpt-6-astra" },
+    "codex-sol": { "cli": "codex", "model": "gpt-6.1-sol" },
+    "claude-opus": { "cli": "claude", "model": "opus" },
+    "claude-sonnet": { "cli": "claude", "model": "sonnet" },
+    "grok": { "cli": "grok", "model": "grok-4.7" },
+    "agy": { "cli": "agy", "model": "gemini-3.1-pro-high" }
   }
 }
