@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,6 +74,27 @@ describe("notes", () => {
     expect(again.id).toBe(a.id);
     expect(again.status).toBe("rejected");
     expect(await vault.listNotes()).toHaveLength(1);
+  });
+
+  it("keeps one note when many identical ones are added at the same moment", async () => {
+    // Regression: add used to check for a duplicate and then write, so concurrent adds all passed the check.
+    const variants = Array.from({ length: 12 }, (_, i) => (i % 2 ? "  Same   NOTE " : "same note"));
+    const results = await Promise.all(
+      variants.map((text) => vault.addNote({ text, source: "you", status: "accepted" })),
+    );
+    expect(new Set(results.map((n) => n.id)).size).toBe(1);
+    expect(await vault.listNotes()).toHaveLength(1);
+    expect(readdirSync(join(vault.root, "shared", "notes")).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("keeps different notes separate when they are added at the same moment", async () => {
+    const results = await Promise.all(
+      ["alpha", "beta", "gamma", "alpha", "beta"].map((text) =>
+        vault.addNote({ text, source: "grok", status: "proposed" }),
+      ),
+    );
+    expect(new Set(results.map((n) => n.id)).size).toBe(3);
+    expect((await vault.listNotes()).map((n) => n.text).sort()).toEqual(["alpha", "beta", "gamma"]);
   });
 
   it("rejects empty notes and truncates very long ones", async () => {

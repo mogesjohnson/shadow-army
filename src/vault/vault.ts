@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { access, link, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Report } from "../core/types.js";
 
@@ -45,6 +45,41 @@ async function writeAtomic(path: string, data: string): Promise<void> {
   const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
   await writeFile(tmp, data, "utf8");
   await rename(tmp, path);
+}
+
+/**
+ * Publish `data` at `path` only if nothing is there yet; returns false if another writer got there first.
+ * The content goes to a temp file and is then hard-linked into place. That is atomic and fails with
+ * EEXIST for every writer but one, so readers never see a half-written file and concurrent writers
+ * cannot both succeed.
+ */
+async function writeNew(path: string, data: string): Promise<boolean> {
+  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(tmp, data, "utf8");
+  try {
+    await link(tmp, path);
+    return true;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
+    // Filesystems without hard links: fall back to an exclusive create.
+    try {
+      await writeFile(path, data, { encoding: "utf8", flag: "wx" });
+      return true;
+    } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw e2;
+    }
+  } finally {
+    await unlink(tmp).catch(() => undefined);
+  }
+}
+
+async function readNote(path: string): Promise<Note | undefined> {
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as Note;
+  } catch {
+    return undefined;
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -95,6 +130,9 @@ export class Vault {
   /**
    * Add a note. An identical note (any status) is not added twice, so a note you rejected
    * does not keep coming back and an accepted one is not duplicated; the existing note is returned.
+   *
+   * The note's id is a hash of its normalized text and the file is created exclusively, so identical
+   * notes converge on one file even when many are added at the same moment.
    */
   async addNote(input: { text: string; source: string; status: NoteStatus; runId?: string }): Promise<Note> {
     assertSafe("note source", input.source);
@@ -103,19 +141,25 @@ export class Vault {
     if (text.length > MAX_NOTE_CHARS) text = `${text.slice(0, MAX_NOTE_CHARS - 1)}…`;
 
     await this.ensure();
-    const existing = (await this.listNotes()).find((n) => normalize(n.text) === normalize(text));
-    if (existing) return existing;
+    const key = normalize(text);
+    const hash = createHash("sha256").update(key).digest("hex");
 
-    const note: Note = {
-      id: `n-${stamp()}-${randomBytes(3).toString("hex")}`,
-      text,
-      source: input.source,
-      status: input.status,
-      createdAt: new Date().toISOString(),
-      ...(input.runId ? { runId: input.runId } : {}),
-    };
-    await writeAtomic(join(this.notesDir, `${note.id}.json`), JSON.stringify(note, null, 2));
-    return note;
+    // A longer id is only tried if a different text happens to share the shorter prefix.
+    for (let len = 12; len <= 64; len += 12) {
+      const note: Note = {
+        id: `n-${hash.slice(0, len)}`,
+        text,
+        source: input.source,
+        status: input.status,
+        createdAt: new Date().toISOString(),
+        ...(input.runId ? { runId: input.runId } : {}),
+      };
+      const path = join(this.notesDir, `${note.id}.json`);
+      if (await writeNew(path, JSON.stringify(note, null, 2))) return note;
+      const existing = await readNote(path);
+      if (existing && normalize(existing.text) === key) return existing;
+    }
+    throw new VaultError("could not allocate a note id");
   }
 
   /** All notes, oldest first. Unreadable note files are skipped so one bad file cannot block the vault. */
