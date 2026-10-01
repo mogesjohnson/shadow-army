@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -76,6 +76,21 @@ describe("notes", () => {
     expect(await vault.listNotes()).toHaveLength(1);
   });
 
+  it("recognizes an identical note stored with an older random id", async () => {
+    await vault.addNote({ text: "seed", source: "you", status: "accepted" });
+    const old = {
+      id: "n-old-format",
+      text: "Uses ESM modules",
+      source: "grok",
+      status: "rejected",
+      createdAt: new Date().toISOString(),
+    };
+    await writeFile(join(vault.root, "shared", "notes", `${old.id}.json`), JSON.stringify(old), "utf8");
+    const again = await vault.addNote({ text: " uses  esm MODULES ", source: "agy", status: "proposed" });
+    expect(again).toEqual(old);
+    expect(await vault.listNotes()).toHaveLength(2);
+  });
+
   it("keeps one note when many identical ones are added at the same moment", async () => {
     // Regression: add used to check for a duplicate and then write, so concurrent adds all passed the check.
     const variants = Array.from({ length: 12 }, (_, i) => (i % 2 ? "  Same   NOTE " : "same note"));
@@ -114,7 +129,14 @@ describe("notes", () => {
   it("skips a corrupt note file instead of failing the whole vault", async () => {
     await vault.addNote({ text: "good", source: "you", status: "accepted" });
     await writeFile(join(vault.root, "shared", "notes", "n-broken.json"), "{not json", "utf8");
+    await writeFile(join(vault.root, "shared", "notes", "n-empty.json"), "{}", "utf8");
     expect((await vault.listNotes()).map((n) => n.text)).toEqual(["good"]);
+  });
+
+  it("surfaces a note directory read error", async () => {
+    await mkdir(join(vault.root, "shared"), { recursive: true });
+    await writeFile(join(vault.root, "shared", "notes"), "not a directory", "utf8");
+    await expect(vault.acceptedNotes()).rejects.toThrow();
   });
 
   it("returns an empty list for a vault that does not exist yet", async () => {
@@ -151,6 +173,18 @@ describe("runs", () => {
     expect((await vault.listRuns(1)).map((r) => r.id)).toEqual([b.id]);
     expect(await vault.getRun(a.id)).toMatchObject({ soldier: "grok", task: "t1", report: { summary: "done" } });
     await expect(vault.getRun("nope")).rejects.toThrow(/no such run/);
+  });
+
+  it("skips a malformed run and surfaces a run directory read error", async () => {
+    await vault.saveRun({ soldier: "grok", task: "t", role: "build", write: false, report: report() });
+    await writeFile(join(vault.root, "runs", "bad.json"), "{}", "utf8");
+    expect(await vault.listRuns()).toHaveLength(1);
+    await expect(vault.getRun("bad")).rejects.toThrow(/no such run/);
+
+    const other = Vault.forCwd(join(dir, "other"));
+    await mkdir(other.root, { recursive: true });
+    await writeFile(join(other.root, "runs"), "not a directory", "utf8");
+    await expect(other.listRuns()).rejects.toThrow();
   });
 });
 

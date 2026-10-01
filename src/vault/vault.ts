@@ -43,8 +43,12 @@ function assertSafe(kind: string, value: string): void {
 
 async function writeAtomic(path: string, data: string): Promise<void> {
   const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(tmp, data, "utf8");
-  await rename(tmp, path);
+  try {
+    await writeFile(tmp, data, "utf8");
+    await rename(tmp, path);
+  } finally {
+    await unlink(tmp).catch(() => undefined);
+  }
 }
 
 /**
@@ -55,31 +59,70 @@ async function writeAtomic(path: string, data: string): Promise<void> {
  */
 async function writeNew(path: string, data: string): Promise<boolean> {
   const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
-  await writeFile(tmp, data, "utf8");
   try {
+    await writeFile(tmp, data, "utf8");
     await link(tmp, path);
     return true;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
-    // Filesystems without hard links: fall back to an exclusive create.
-    try {
-      await writeFile(path, data, { encoding: "utf8", flag: "wx" });
-      return true;
-    } catch (e2) {
-      if ((e2 as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw e2;
-    }
+    throw e;
   } finally {
     await unlink(tmp).catch(() => undefined);
   }
 }
 
-async function readNote(path: string): Promise<Note | undefined> {
+const missing = (e: unknown): boolean => (e as NodeJS.ErrnoException).code === "ENOENT";
+
+function parseNote(json: string, id: string): Note | undefined {
+  let value: unknown;
   try {
-    return JSON.parse(await readFile(path, "utf8")) as Note;
+    value = JSON.parse(json);
   } catch {
     return undefined;
   }
+  if (!value || typeof value !== "object") return undefined;
+  const note = value as Record<string, unknown>;
+  if (
+    note.id !== id ||
+    typeof note.text !== "string" ||
+    typeof note.source !== "string" ||
+    typeof note.createdAt !== "string" ||
+    !["proposed", "accepted", "rejected"].includes(String(note.status))
+  ) return undefined;
+  return note as unknown as Note;
+}
+
+async function readNote(path: string, id: string): Promise<Note | undefined> {
+  try {
+    return parseNote(await readFile(path, "utf8"), id);
+  } catch (e) {
+    if (missing(e)) return undefined;
+    throw e;
+  }
+}
+
+function parseRun(json: string, id: string): RunRecord | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const run = value as Record<string, unknown>;
+  if (!run.report || typeof run.report !== "object") return undefined;
+  const report = run.report as Record<string, unknown>;
+  if (
+    run.id !== id ||
+    typeof run.createdAt !== "string" ||
+    typeof run.soldier !== "string" ||
+    typeof run.task !== "string" ||
+    typeof run.role !== "string" ||
+    typeof run.write !== "boolean" ||
+    !["ok", "error"].includes(String(report.status)) ||
+    (report.costUsd !== undefined && typeof report.costUsd !== "number")
+  ) return undefined;
+  return run as unknown as RunRecord;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -142,6 +185,9 @@ export class Vault {
 
     await this.ensure();
     const key = normalize(text);
+    // Notes written before content-addressed IDs were introduced still count as duplicates.
+    const old = (await this.listNotes()).find((n) => normalize(n.text) === key);
+    if (old) return old;
     const hash = createHash("sha256").update(key).digest("hex");
 
     // A longer id is only tried if a different text happens to share the shorter prefix.
@@ -156,27 +202,26 @@ export class Vault {
       };
       const path = join(this.notesDir, `${note.id}.json`);
       if (await writeNew(path, JSON.stringify(note, null, 2))) return note;
-      const existing = await readNote(path);
+      const existing = await readNote(path, note.id);
       if (existing && normalize(existing.text) === key) return existing;
+      if (!existing) throw new VaultError(`cannot read existing note: ${note.id}`);
     }
     throw new VaultError("could not allocate a note id");
   }
 
-  /** All notes, oldest first. Unreadable note files are skipped so one bad file cannot block the vault. */
+  /** All notes, oldest first. Malformed files are skipped; I/O errors are reported. */
   async listNotes(status?: NoteStatus): Promise<Note[]> {
     let files: string[];
     try {
       files = await readdir(this.notesDir);
-    } catch {
-      return [];
+    } catch (e) {
+      if (missing(e)) return [];
+      throw e;
     }
     const notes: Note[] = [];
     for (const f of files.filter((f) => f.endsWith(".json"))) {
-      try {
-        notes.push(JSON.parse(await readFile(join(this.notesDir, f), "utf8")) as Note);
-      } catch {
-        // skip corrupt file
-      }
+      const note = await readNote(join(this.notesDir, f), f.slice(0, -5));
+      if (note) notes.push(note);
     }
     notes.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     return status ? notes.filter((n) => n.status === status) : notes;
@@ -185,15 +230,11 @@ export class Vault {
   async setNoteStatus(id: string, status: NoteStatus): Promise<Note> {
     assertSafe("note id", id);
     const path = join(this.notesDir, `${id}.json`);
-    let note: Note;
-    try {
-      note = JSON.parse(await readFile(path, "utf8")) as Note;
-    } catch {
-      throw new VaultError(`no such note: ${id}`);
-    }
-    note = { ...note, status };
-    await writeAtomic(path, JSON.stringify(note, null, 2));
-    return note;
+    const note = await readNote(path, id);
+    if (!note) throw new VaultError(`no such note: ${id}`);
+    const updated = { ...note, status };
+    await writeAtomic(path, JSON.stringify(updated, null, 2));
+    return updated;
   }
 
   /**
@@ -215,13 +256,15 @@ export class Vault {
   async saveRun(input: Omit<RunRecord, "id" | "createdAt">): Promise<RunRecord> {
     assertSafe("soldier name", input.soldier);
     await this.ensure();
-    const record: RunRecord = {
-      ...input,
-      id: `${stamp()}-${input.soldier}-${randomBytes(2).toString("hex")}`,
-      createdAt: new Date().toISOString(),
-    };
-    await writeAtomic(join(this.runsDir, `${record.id}.json`), JSON.stringify(record, null, 2));
-    return record;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const record: RunRecord = {
+        ...input,
+        id: `${stamp()}-${input.soldier}-${randomBytes(8).toString("hex")}`,
+        createdAt: new Date().toISOString(),
+      };
+      if (await writeNew(join(this.runsDir, `${record.id}.json`), JSON.stringify(record, null, 2))) return record;
+    }
+    throw new VaultError("could not allocate a run id");
   }
 
   /** Newest first. */
@@ -229,15 +272,17 @@ export class Vault {
     let files: string[];
     try {
       files = await readdir(this.runsDir);
-    } catch {
-      return [];
+    } catch (e) {
+      if (missing(e)) return [];
+      throw e;
     }
     const runs: RunRecord[] = [];
     for (const f of files.filter((f) => f.endsWith(".json"))) {
       try {
-        runs.push(JSON.parse(await readFile(join(this.runsDir, f), "utf8")) as RunRecord);
-      } catch {
-        // skip corrupt file
+        const run = parseRun(await readFile(join(this.runsDir, f), "utf8"), f.slice(0, -5));
+        if (run) runs.push(run);
+      } catch (e) {
+        if (!missing(e)) throw e;
       }
     }
     runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
@@ -246,10 +291,13 @@ export class Vault {
 
   async getRun(id: string): Promise<RunRecord> {
     assertSafe("run id", id);
+    let run: RunRecord | undefined;
     try {
-      return JSON.parse(await readFile(join(this.runsDir, `${id}.json`), "utf8")) as RunRecord;
-    } catch {
-      throw new VaultError(`no such run: ${id}`);
+      run = parseRun(await readFile(join(this.runsDir, `${id}.json`), "utf8"), id);
+    } catch (e) {
+      if (!missing(e)) throw e;
     }
+    if (!run) throw new VaultError(`no such run: ${id}`);
+    return run;
   }
 }
