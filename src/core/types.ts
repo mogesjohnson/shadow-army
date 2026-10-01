@@ -1,0 +1,33 @@
+import type { Role } from "../adapters/Adapter.js";
+
+/** Everything a soldier is told. Nothing else crosses the boundary. */
+export interface Brief {
+  task: string;
+  role: Role;
+  constraints: string[];
+  /** Curated notes from the Shadow Vault (F4). */
+  vaultNotes: string[];
+  /** Whether the soldier may modify files. */
+  write: boolean;
+}
+
+/** What comes back from a soldier. The soldier's transcript stays private. */
+export interface Report {
+  soldier: string;
+  role: Role;
+  model: string;
+  status: "ok" | "error";
+  summary: string;
+  filesTouched: string[];
+  openQuestions: string[];
+  notes: string[];
+  /** false when the soldier did not return a parseable shadow-report block. */
+  structured: boolean;
+  error?: string;
+  durationMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  /** The model the CLI says actually answered. */
+  resolvedModel?: string;
+}
