@@ -7,7 +7,9 @@
     "shadow": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "shadow.config.json",
+    "orchestratorDelegate.md"
   ],
   "scripts": {
     "build": "tsc",
@@ -21,8 +23,10 @@
   },
   "dependencies": {
     "commander": "^15.0.0",
+    "execa": "^10.0.1",
     "ink": "^7.1.1",
-    "react": "^19.3.0"
+    "react": "^19.3.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
