@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import React from "react";
