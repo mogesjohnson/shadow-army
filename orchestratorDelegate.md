@@ -1,32 +1,34 @@
 ---
 # Machine-readable rules. The router enforces these in code; the prose below guides the monarch's judgment.
 monarch:
-  default: codex:gpt6-astra
-  fallback: claude:opus-5.5
+  default: codex-astra
+  fallback: claude-opus
 soldiers:
   codex-astra:
     cli: codex
-    model: gpt6-astra
+    model: gpt-6-astra
     roles: [orchestrate]
   codex-sol:
     cli: codex
-    model: gpt6.1-sol
+    model: gpt-6.1-sol
     roles: [build]
   claude-opus:
     cli: claude
-    model: opus-5.5
+    model: opus
     roles: [orchestrate, review, build]
     buildFor: [hard]          # high-effort work-horse for hard problems only
   claude-sonnet:
     cli: claude
-    model: sonnet-5.5
+    model: sonnet
     roles: [build]
   grok:
     cli: grok
+    model: grok-4.7
     roles: [build]
     forbidden: [review]       # hard rule
   agy:
     cli: agy
+    model: gemini-3.1-pro-high
     roles: [research, test]
     write: false              # hard rule: launched read-only, claim audit rejects any edit
 ---
