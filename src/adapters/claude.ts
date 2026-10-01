@@ -2,7 +2,7 @@ import type { Adapter } from "./Adapter.js";
 import { detectByVersion } from "./exec.js";
 
 /** Claude Code has no model-list command; it accepts these aliases or full model IDs. */
-const ALIASES = ["opus", "sonnet", "haiku", "fable"];
+const ALIASES = ["opus", "sonnet", "haiku"];
 
 export const claudeAdapter: Adapter = {
   id: "claude",
