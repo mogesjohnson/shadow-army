@@ -14,6 +14,7 @@ function fake(id: string, opts: { found: boolean; models?: string[]; source?: "c
       source: opts.source ?? "cli",
       models: (opts.models ?? []).map((m) => ({ id: m })),
     }),
+    run: async () => ({ text: "", isError: false }),
   };
 }
 
