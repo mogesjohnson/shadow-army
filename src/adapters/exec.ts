@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import type { RunResult } from "./Adapter.js";
 
 export interface CaptureResult {
   ok: boolean;
@@ -27,6 +28,74 @@ export async function capture(
   } catch {
     return { ok: false, stdout: "", stderr: "" };
   }
+}
+
+export interface CliRun {
+  exitCode: number | undefined;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  /** The process could not be started at all (e.g. not on PATH). */
+  spawnFailed: boolean;
+}
+
+/** Run a soldier CLI in `cwd` with a hard timeout. stdin is closed so no CLI waits for input. */
+export async function runCli(
+  command: string,
+  args: string[],
+  opts: { cwd: string; timeoutMs: number },
+): Promise<CliRun> {
+  try {
+    const r = await execa(command, args, {
+      cwd: opts.cwd,
+      timeout: opts.timeoutMs,
+      reject: false,
+      stdin: "ignore",
+      windowsHide: true,
+      maxBuffer: 50 * 1024 * 1024,
+    });
+    return {
+      exitCode: r.exitCode,
+      stdout: String(r.stdout ?? ""),
+      stderr: String(r.stderr ?? ""),
+      timedOut: r.timedOut === true,
+      spawnFailed: false,
+    };
+  } catch (e) {
+    return { exitCode: undefined, stdout: "", stderr: String(e), timedOut: false, spawnFailed: true };
+  }
+}
+
+/** Common failure shapes shared by every adapter's run(). */
+export function failureFor(r: CliRun, command: string, timeoutMs: number): string | undefined {
+  if (r.spawnFailed) return `could not start "${command}": ${r.stderr}`;
+  if (r.timedOut) return `${command} timed out after ${Math.round(timeoutMs / 1000)}s`;
+  return undefined;
+}
+
+/** Turn a finished process into a RunResult: spawn/timeout/exit-code failures win over parsing. */
+export function finishRun(
+  r: CliRun,
+  command: string,
+  timeoutMs: number,
+  parse: (stdout: string) => RunResult,
+): RunResult {
+  const failure = failureFor(r, command, timeoutMs);
+  if (failure) return { text: "", isError: true, errorMessage: failure };
+  const parsed = parse(r.stdout);
+  if (r.exitCode !== 0 && !parsed.isError) {
+    const tail = r.stderr.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
+    return { ...parsed, isError: true, errorMessage: `${command} exited with code ${r.exitCode}${tail ? `: ${tail}` : ""}` };
+  }
+  return parsed;
+}
+
+/** Parse the JSON object in CLI output, tolerating banner or log lines around it. */
+export function extractJson(text: string): unknown {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end < start) throw new Error("no JSON object in output");
+  return JSON.parse(text.slice(start, end + 1));
 }
 
 export async function detectByVersion(
