@@ -1,0 +1,211 @@
+import { randomBytes } from "node:crypto";
+import { access, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { Report } from "../core/types.js";
+
+export type NoteStatus = "proposed" | "accepted" | "rejected";
+
+export interface Note {
+  id: string;
+  text: string;
+  /** A soldier name, or "you" for notes added by hand. */
+  source: string;
+  status: NoteStatus;
+  createdAt: string;
+  runId?: string;
+}
+
+/** What is kept about a run: the brief's essentials and the report. Never the soldier's transcript. */
+export interface RunRecord {
+  id: string;
+  createdAt: string;
+  soldier: string;
+  task: string;
+  role: string;
+  write: boolean;
+  report: Report;
+}
+
+export const MAX_NOTE_CHARS = 500;
+/** Upper bound on accepted-note text injected into one brief. */
+export const DEFAULT_NOTES_BUDGET = 4000;
+
+export class VaultError extends Error {}
+
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Names and ids become path segments, so refuse anything that could point outside the vault. */
+function assertSafe(kind: string, value: string): void {
+  if (!SAFE_NAME.test(value) || value.includes("..")) {
+    throw new VaultError(`invalid ${kind} ${JSON.stringify(value)}`);
+  }
+}
+
+async function writeAtomic(path: string, data: string): Promise<void> {
+  const tmp = `${path}.${randomBytes(4).toString("hex")}.tmp`;
+  await writeFile(tmp, data, "utf8");
+  await rename(tmp, path);
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const normalize = (text: string) => text.trim().replace(/\s+/g, " ").toLowerCase();
+const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+
+export class Vault {
+  constructor(readonly root: string) {}
+
+  /** The vault for a project lives in `<project>/.shadow`. */
+  static forCwd(cwd: string): Vault {
+    return new Vault(join(cwd, ".shadow"));
+  }
+
+  private get notesDir() {
+    return join(this.root, "shared", "notes");
+  }
+  private get runsDir() {
+    return join(this.root, "runs");
+  }
+
+  private async ensure(): Promise<void> {
+    await mkdir(this.notesDir, { recursive: true });
+    await mkdir(this.runsDir, { recursive: true });
+    await mkdir(join(this.root, "soldiers"), { recursive: true });
+    // The vault is working memory, not source: never let it be committed to the user's project.
+    const ignore = join(this.root, ".gitignore");
+    if (!(await exists(ignore))) await writeFile(ignore, "*\n", "utf8");
+  }
+
+  /** A soldier's private directory. Only that soldier's own adapter should ever be pointed at it. */
+  async soldierDir(soldier: string): Promise<string> {
+    assertSafe("soldier name", soldier);
+    await this.ensure();
+    const dir = join(this.root, "soldiers", soldier);
+    await mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  /**
+   * Add a note. An identical note (any status) is not added twice, so a note you rejected
+   * does not keep coming back and an accepted one is not duplicated; the existing note is returned.
+   */
+  async addNote(input: { text: string; source: string; status: NoteStatus; runId?: string }): Promise<Note> {
+    assertSafe("note source", input.source);
+    let text = input.text.trim();
+    if (!text) throw new VaultError("a note cannot be empty");
+    if (text.length > MAX_NOTE_CHARS) text = `${text.slice(0, MAX_NOTE_CHARS - 1)}…`;
+
+    await this.ensure();
+    const existing = (await this.listNotes()).find((n) => normalize(n.text) === normalize(text));
+    if (existing) return existing;
+
+    const note: Note = {
+      id: `n-${stamp()}-${randomBytes(3).toString("hex")}`,
+      text,
+      source: input.source,
+      status: input.status,
+      createdAt: new Date().toISOString(),
+      ...(input.runId ? { runId: input.runId } : {}),
+    };
+    await writeAtomic(join(this.notesDir, `${note.id}.json`), JSON.stringify(note, null, 2));
+    return note;
+  }
+
+  /** All notes, oldest first. Unreadable note files are skipped so one bad file cannot block the vault. */
+  async listNotes(status?: NoteStatus): Promise<Note[]> {
+    let files: string[];
+    try {
+      files = await readdir(this.notesDir);
+    } catch {
+      return [];
+    }
+    const notes: Note[] = [];
+    for (const f of files.filter((f) => f.endsWith(".json"))) {
+      try {
+        notes.push(JSON.parse(await readFile(join(this.notesDir, f), "utf8")) as Note);
+      } catch {
+        // skip corrupt file
+      }
+    }
+    notes.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    return status ? notes.filter((n) => n.status === status) : notes;
+  }
+
+  async setNoteStatus(id: string, status: NoteStatus): Promise<Note> {
+    assertSafe("note id", id);
+    const path = join(this.notesDir, `${id}.json`);
+    let note: Note;
+    try {
+      note = JSON.parse(await readFile(path, "utf8")) as Note;
+    } catch {
+      throw new VaultError(`no such note: ${id}`);
+    }
+    note = { ...note, status };
+    await writeAtomic(path, JSON.stringify(note, null, 2));
+    return note;
+  }
+
+  /**
+   * The only vault content that ever reaches a soldier: accepted notes, newest preferred when the
+   * budget is tight, returned in the order they were written.
+   */
+  async acceptedNotes(budget = DEFAULT_NOTES_BUDGET): Promise<string[]> {
+    const accepted = await this.listNotes("accepted");
+    const picked: string[] = [];
+    let used = 0;
+    for (const n of accepted.reverse()) {
+      if (used + n.text.length > budget) break;
+      picked.push(n.text);
+      used += n.text.length;
+    }
+    return picked.reverse();
+  }
+
+  async saveRun(input: Omit<RunRecord, "id" | "createdAt">): Promise<RunRecord> {
+    assertSafe("soldier name", input.soldier);
+    await this.ensure();
+    const record: RunRecord = {
+      ...input,
+      id: `${stamp()}-${input.soldier}-${randomBytes(2).toString("hex")}`,
+      createdAt: new Date().toISOString(),
+    };
+    await writeAtomic(join(this.runsDir, `${record.id}.json`), JSON.stringify(record, null, 2));
+    return record;
+  }
+
+  /** Newest first. */
+  async listRuns(limit?: number): Promise<RunRecord[]> {
+    let files: string[];
+    try {
+      files = await readdir(this.runsDir);
+    } catch {
+      return [];
+    }
+    const runs: RunRecord[] = [];
+    for (const f of files.filter((f) => f.endsWith(".json"))) {
+      try {
+        runs.push(JSON.parse(await readFile(join(this.runsDir, f), "utf8")) as RunRecord);
+      } catch {
+        // skip corrupt file
+      }
+    }
+    runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    return limit ? runs.slice(0, limit) : runs;
+  }
+
+  async getRun(id: string): Promise<RunRecord> {
+    assertSafe("run id", id);
+    try {
+      return JSON.parse(await readFile(join(this.runsDir, `${id}.json`), "utf8")) as RunRecord;
+    } catch {
+      throw new VaultError(`no such run: ${id}`);
+    }
+  }
+}

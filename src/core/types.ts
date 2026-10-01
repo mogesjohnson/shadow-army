@@ -30,4 +30,8 @@ export interface Report {
   costUsd?: number;
   /** The model the CLI says actually answered. */
   resolvedModel?: string;
+  /** Id of the run record saved in the Vault, when a vault was used. */
+  runId?: string;
+  /** Set when the vault could not be read or written; the report itself is still complete. */
+  vaultError?: string;
 }

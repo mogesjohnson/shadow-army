@@ -1,5 +1,9 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Vault } from "../vault/vault.js";
 import type { Adapter, RunRequest, RunResult } from "../adapters/Adapter.js";
 import { checkAssignment, defaultRole } from "./assign.js";
 import { parseConfig } from "./config.js";
@@ -85,6 +89,76 @@ describe("summon", () => {
     const r = await summon({ ...base, soldier: "grok", adapter: a });
     expect(r).toMatchObject({ status: "error", error: "timed out" });
     expect(renderReport(r)).toContain("Error: timed out");
+  });
+});
+
+describe("summon with a vault", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "shadow-summon-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const withNotes = (notes: string[]): RunResult => ({
+    text: `\`\`\`shadow-report\n${JSON.stringify({ summary: "done", notes })}\n\`\`\``,
+    isError: false,
+  });
+
+  it("records the run and proposes the report's notes without sharing them yet", async () => {
+    const vault = Vault.forCwd(dir);
+    const a = fake({ result: withNotes(["repo uses ESM"]) });
+    const r = await summon({ ...base, soldier: "grok", adapter: a, vault });
+
+    expect(r.runId).toBeTruthy();
+    expect(r.vaultError).toBeUndefined();
+    expect((await vault.getRun(r.runId!)).report.summary).toBe("done");
+    expect(await vault.listNotes("proposed")).toMatchObject([{ text: "repo uses ESM", source: "grok", runId: r.runId }]);
+
+    // A proposed note must not reach the next soldier.
+    const b = fake();
+    await summon({ ...base, soldier: "claude-sonnet", adapter: b, vault });
+    expect(b.calls[0]!.prompt).not.toContain("repo uses ESM");
+  });
+
+  it("gives accepted notes to the next soldier's brief", async () => {
+    const vault = Vault.forCwd(dir);
+    const first = fake({ result: withNotes(["repo uses ESM"]) });
+    await summon({ ...base, soldier: "grok", adapter: first, vault });
+    const [note] = await vault.listNotes();
+    await vault.setNoteStatus(note!.id, "accepted");
+
+    const next = fake();
+    await summon({ ...base, soldier: "claude-sonnet", adapter: next, vault });
+    expect(next.calls[0]!.prompt).toContain("SHARED NOTES FROM THE VAULT");
+    expect(next.calls[0]!.prompt).toContain("- repo uses ESM");
+  });
+
+  it("records failed runs but proposes no notes from them", async () => {
+    const vault = Vault.forCwd(dir);
+    const a = fake({ result: { text: "", isError: true, errorMessage: "boom" } });
+    const r = await summon({ ...base, soldier: "grok", adapter: a, vault });
+    expect(r.status).toBe("error");
+    expect((await vault.getRun(r.runId!)).report.error).toBe("boom");
+    expect(await vault.listNotes()).toEqual([]);
+  });
+
+  it("never loses the report when the vault cannot be written", async () => {
+    const blocker = join(dir, "file");
+    await writeFile(blocker, "i am a file, not a directory", "utf8");
+    const vault = Vault.forCwd(blocker); // .shadow cannot be created under a file
+    const a = fake();
+    const r = await summon({ ...base, soldier: "grok", adapter: a, vault });
+    expect(r).toMatchObject({ status: "ok", summary: "done" });
+    expect(r.vaultError).toMatch(/vault/);
+    expect(r.runId).toBeUndefined();
+    expect(renderReport(r)).toContain("Vault warning");
+  });
+
+  it("does not touch the filesystem without a vault", async () => {
+    await summon({ ...base, soldier: "grok", adapter: fake(), cwd: dir });
+    expect(existsSync(join(dir, ".shadow"))).toBe(false);
   });
 });
 
