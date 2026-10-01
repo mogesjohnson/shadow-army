@@ -10,6 +10,8 @@ export interface SoldierStatus {
   found: boolean;
   version?: string;
   model: string;
+  /** Human-readable name from the CLI's list, when it has one. */
+  modelLabel?: string;
   modelStatus: ModelStatus;
   roles: string[];
   write: boolean;
@@ -66,6 +68,7 @@ export async function checkArmy(
         found: det.found,
         version: det.version,
         model: s.model,
+        modelLabel: list.models.find((m) => m.id === s.model)?.label,
         modelStatus,
         roles: s.roles,
         write: adapter.capabilities.write,
@@ -81,7 +84,7 @@ export function renderArmy(rows: SoldierStatus[]): string {
     r.soldier,
     r.found ? r.cli : `${r.cli} (missing)`,
     r.version ?? "-",
-    r.model,
+    r.modelLabel ? `${r.model} (${r.modelLabel})` : r.model,
     r.modelStatus,
     r.roles.join(","),
   ]);

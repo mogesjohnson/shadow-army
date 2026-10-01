@@ -54,6 +54,18 @@ describe("checkArmy", () => {
   });
 });
 
+describe("model labels", () => {
+  it("shows the CLI's label next to the model id", async () => {
+    const labeled: Adapter = {
+      ...fake("one", { found: true }),
+      listModels: async () => ({ source: "cli", models: [{ id: "m1", label: "Model One" }] }),
+    };
+    const rows = await checkArmy(config, [labeled]);
+    expect(rows.find((r) => r.soldier === "a")!.modelLabel).toBe("Model One");
+    expect(renderArmy(rows)).toContain("m1 (Model One)");
+  });
+});
+
 describe("renderArmy", () => {
   it("renders a header, a rule, and one line per soldier", async () => {
     const rows = await checkArmy(config, [fake("one", { found: true, models: ["m1"] })]);
