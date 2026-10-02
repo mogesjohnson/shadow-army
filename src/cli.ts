@@ -8,6 +8,8 @@ import { plainBanner } from "./ui/art.js";
 import { loadConfig } from "./core/config.js";
 import { checkArmy, renderArmy } from "./core/army.js";
 import { summon, renderReport, SummonError } from "./core/summon.js";
+import { Vault } from "./vault/vault.js";
+import { registerVaultCommands } from "./vault/cli.js";
 import type { Effort, Role } from "./adapters/Adapter.js";
 
 interface SummonCliOptions {
@@ -16,6 +18,7 @@ interface SummonCliOptions {
   write?: boolean;
   effort?: string;
   timeout: string;
+  vault: boolean;
   json?: boolean;
 }
 
@@ -99,6 +102,7 @@ program
   .option("--write", "allow the soldier to modify files (build role only)")
   .addOption(new Option("--effort <level>", "reasoning effort").choices(["low", "medium", "high", "max"]))
   .option("--timeout <seconds>", "give up after this many seconds", "600")
+  .option("--no-vault", "do not read from or write to the Shadow Vault")
   .option("--json", "machine-readable report")
   .action(async (soldier: string, task: string[], opts: SummonCliOptions) => {
     const timeoutMs = Number(opts.timeout) * 1000;
@@ -117,6 +121,7 @@ program
         write: opts.write,
         effort: opts.effort as Effort | undefined,
         timeoutMs,
+        vault: opts.vault ? Vault.forCwd(opts.cwd) : undefined,
       });
       console.log(opts.json ? JSON.stringify(report, null, 2) : renderReport(report));
       if (report.status === "error") process.exitCode = 1;
@@ -129,5 +134,7 @@ program
       throw e;
     }
   });
+
+registerVaultCommands(program);
 
 await program.parseAsync(process.argv);

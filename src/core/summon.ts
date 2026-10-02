@@ -4,6 +4,7 @@ import { checkAssignment, defaultRole } from "./assign.js";
 import { buildPrompt, parseReport } from "./brief.js";
 import type { ShadowConfig } from "./config.js";
 import type { Brief, Report } from "./types.js";
+import type { Vault } from "../vault/vault.js";
 
 export interface SummonOptions {
   config: ShadowConfig;
@@ -16,6 +17,11 @@ export interface SummonOptions {
   constraints?: string[];
   vaultNotes?: string[];
   timeoutMs?: number;
+  /**
+   * When set, accepted vault notes go into the brief, the run is recorded, and the report's notes
+   * are proposed back to the vault.
+   */
+  vault?: Vault;
   /** Override for tests. */
   adapter?: Adapter;
 }
@@ -37,11 +43,21 @@ export async function summon(opts: SummonOptions): Promise<Report> {
   const verdict = checkAssignment(opts.soldier, soldier, adapter, role, opts.write ?? false);
   if (!verdict.ok) throw new SummonError(verdict.reason);
 
+  let vaultError: string | undefined;
+  let acceptedNotes: string[] = [];
+  if (opts.vault) {
+    try {
+      acceptedNotes = await opts.vault.acceptedNotes();
+    } catch (e) {
+      vaultError = `could not read the vault: ${(e as Error).message}`;
+    }
+  }
+
   const brief: Brief = {
     task: opts.task,
     role: verdict.role,
     constraints: opts.constraints ?? [],
-    vaultNotes: opts.vaultNotes ?? [],
+    vaultNotes: [...acceptedNotes, ...(opts.vaultNotes ?? [])],
     write: verdict.write,
   };
   let prompt: string;
@@ -74,19 +90,44 @@ export async function summon(opts: SummonOptions): Promise<Report> {
     resolvedModel: result.resolvedModel,
   };
 
-  if (result.isError) {
-    return {
-      ...base,
-      status: "error",
-      summary: result.text.trim(),
-      filesTouched: [],
-      openQuestions: [],
-      notes: [],
-      structured: false,
-      error: result.errorMessage ?? "soldier reported an error",
-    };
+  const report: Report = result.isError
+    ? {
+        ...base,
+        status: "error",
+        summary: result.text.trim(),
+        filesTouched: [],
+        openQuestions: [],
+        notes: [],
+        structured: false,
+        error: result.errorMessage ?? "soldier reported an error",
+      }
+    : { ...base, status: "ok", ...parseReport(result.text) };
+
+  if (vaultError) report.vaultError = vaultError;
+  if (opts.vault) await record(opts.vault, report, brief, opts.soldier);
+  return report;
+}
+
+/** Save the run and propose the report's notes. A vault failure is attached to the report, never thrown. */
+async function record(vault: Vault, report: Report, brief: Brief, soldier: string): Promise<void> {
+  try {
+    const run = await vault.saveRun({
+      soldier,
+      task: brief.task,
+      role: brief.role,
+      write: brief.write,
+      report,
+    });
+    report.runId = run.id;
+    if (report.status === "ok") {
+      for (const text of report.notes) {
+        await vault.addNote({ text, source: soldier, status: "proposed", runId: run.id });
+      }
+    }
+  } catch (e) {
+    const msg = `could not write to the vault: ${(e as Error).message}`;
+    report.vaultError = report.vaultError ? `${report.vaultError}; ${msg}` : msg;
   }
-  return { ...base, status: "ok", ...parseReport(result.text) };
 }
 
 export function renderReport(r: Report): string {
@@ -96,8 +137,13 @@ export function renderReport(r: Report): string {
   if (r.summary) lines.push(r.summary, "");
   if (r.filesTouched.length) lines.push("Files touched:", ...r.filesTouched.map((f) => `  - ${f}`), "");
   if (r.openQuestions.length) lines.push("Open questions:", ...r.openQuestions.map((q) => `  - ${q}`), "");
-  if (r.notes.length) lines.push("Notes for the Vault:", ...r.notes.map((n) => `  - ${n}`), "");
+  if (r.notes.length) {
+    const hint = r.runId && !r.vaultError ? " (proposed; review with `sa vault`)" : "";
+    lines.push(`Notes for the Vault${hint}:`, ...r.notes.map((n) => `  - ${n}`), "");
+  }
   if (!r.structured && r.status === "ok") lines.push("(no shadow-report block returned; showing the raw reply)", "");
+  if (r.vaultError) lines.push(`Vault warning: ${r.vaultError}`, "");
+  if (r.runId) lines.push(`Run: ${r.runId}`);
   const stats = [`${secs}s`];
   if (r.inputTokens !== undefined) stats.push(`${r.inputTokens} in`);
   if (r.outputTokens !== undefined) stats.push(`${r.outputTokens} out`);
