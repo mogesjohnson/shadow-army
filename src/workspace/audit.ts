@@ -32,6 +32,21 @@ export async function auditWorktree(worktree: string, base: string, claims: stri
   return { touched, ...classify(touched, claims) };
 }
 
+/**
+ * `-c user.name=... -c user.email=...` for whichever of the two the repository does not configure,
+ * so a commit the tool makes cannot fail for want of an identity. The repository's own identity wins.
+ */
+export async function identityFlags(cwd: string): Promise<string[]> {
+  const flags: string[] = [];
+  for (const [key, fallback] of [
+    ["user.name", "Shadow Army"],
+    ["user.email", "shadow-army@users.noreply.github.com"],
+  ] as const) {
+    if (!(await gitOk(cwd, ["config", key]))) flags.push("-c", `${key}=${fallback}`);
+  }
+  return flags;
+}
+
 /** Undo edits outside the claims: restore files that existed at `base`, delete ones that did not. */
 export async function revertPaths(worktree: string, base: string, paths: string[]): Promise<void> {
   const root = resolve(worktree);
@@ -55,17 +70,9 @@ export async function revertPaths(worktree: string, base: string, paths: string[
 export async function commitAll(worktree: string, message: string, base: string): Promise<string | undefined> {
   await git(worktree, ["add", "-A"]);
   if (!(await gitOk(worktree, ["diff", "--cached", "--quiet"]))) {
-    // Use the repository's identity if it has one; otherwise a neutral one so the commit cannot fail.
-    const identity: string[] = [];
-    for (const [key, fallback] of [
-      ["user.name", "Shadow Army"],
-      ["user.email", "shadow-army@users.noreply.github.com"],
-    ] as const) {
-      if (!(await gitOk(worktree, ["config", key]))) identity.push("-c", `${key}=${fallback}`);
-    }
     // --no-verify: these are intermediate commits the tool makes on the soldier's own branch. The
     // target repo's commit hooks apply when that branch is merged back, which is reviewed.
-    await git(worktree, [...identity, "commit", "-q", "--no-verify", "-m", message]);
+    await git(worktree, [...(await identityFlags(worktree)), "commit", "-q", "--no-verify", "-m", message]);
   }
   const head = (await git(worktree, ["rev-parse", "HEAD"])).trim();
   if (head === base) return undefined;

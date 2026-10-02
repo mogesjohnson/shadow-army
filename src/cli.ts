@@ -14,6 +14,7 @@ import { summon, renderReport, SummonError } from "./core/summon.js";
 import { Vault } from "./vault/vault.js";
 import { registerVaultCommands } from "./vault/cli.js";
 import { registerWorkspaceCommands } from "./workspace/cli.js";
+import { registerRunCommand } from "./monarch/cli.js";
 import { getAdapter } from "./adapters/registry.js";
 import type { Effort, Role } from "./adapters/Adapter.js";
 
@@ -213,5 +214,6 @@ program
 
 registerVaultCommands(program);
 registerWorkspaceCommands(program);
+registerRunCommand(program, rosterOrExit);
 
 await program.parseAsync(process.argv);

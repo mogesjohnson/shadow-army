@@ -8,6 +8,8 @@ export interface Brief {
   constraints: string[];
   /** Curated notes from the Shadow Vault (F4). */
   vaultNotes: string[];
+  /** Reports from the tasks this one depends on (F7). Only the reports: never another soldier's transcript. */
+  context?: string[];
   /** Whether the soldier may modify files. */
   write: boolean;
 }

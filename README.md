@@ -74,7 +74,9 @@ sa summon <soldier> "<task>"  # one-off dispatch (read-only)
 sa summon <soldier> --write --claim "src/**" "<task>"
                             # writes, in its own worktree and branch, only inside its claims
 sa route --role <role>      # preview who may take a task, ranked, with reasons
-sa run "<goal>"             # monarch plans, delegates, synthesizes
+sa run "<goal>"             # the Monarch plans, soldiers build in parallel, work lands on one
+                            # branch (shadow/run/<id>) for you to review and merge; asks first
+sa run --plan-only "<goal>" # just show the plan and who would do what
 sa vault                    # inspect shared notes and runs
 sa locks                    # which soldier holds which files
 sa worktrees                # soldier worktrees and their branches

@@ -21,6 +21,10 @@ export interface SummonOptions {
   effort?: Effort;
   constraints?: string[];
   vaultNotes?: string[];
+  /** Reports from the tasks this one depends on, shown to the soldier as context (F7). */
+  context?: string[];
+  /** For write runs: what the soldier's worktree starts from. Default: the current commit. */
+  baseRef?: string;
   timeoutMs?: number;
   /**
    * When set, accepted vault notes go into the brief, the run is recorded, and the report's notes
@@ -61,6 +65,7 @@ export async function summon(opts: SummonOptions): Promise<Report> {
         claims: opts.claims ?? [],
         waitMs: opts.waitMs,
         ttlMs: opts.leaseTtlMs,
+        baseRef: opts.baseRef,
         shadowRoot: opts.shadowRoot,
       });
     } catch (e) {
@@ -93,6 +98,7 @@ export async function summon(opts: SummonOptions): Promise<Report> {
       role: verdict.role,
       constraints,
       vaultNotes: [...acceptedNotes, ...(opts.vaultNotes ?? [])],
+      context: opts.context,
       write: verdict.write,
     };
     let prompt: string;

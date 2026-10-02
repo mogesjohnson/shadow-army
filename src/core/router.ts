@@ -10,6 +10,8 @@ export interface TaskProfile {
   write?: boolean;
   /** The soldier who wrote the change under review; nobody reviews their own work. */
   author?: string;
+  /** Further soldiers who wrote work this task reviews (a review can cover several builders). */
+  authors?: string[];
 }
 
 export interface Candidate {
@@ -47,9 +49,12 @@ export function route(
   roster: Roster,
   getAdapter: (cli: string) => Adapter | undefined,
   profile: TaskProfile,
+  /** Whether a CLI is installed. Defaults to "yes"; `sa run` passes what detection found. */
+  isInstalled: (cli: string) => boolean = () => true,
 ): RouteResult {
   const difficulty = profile.difficulty ?? "routine";
   const write = profile.write ?? profile.role === "build";
+  const authors = new Set([...(profile.author ? [profile.author] : []), ...(profile.authors ?? [])]);
   const excluded: Excluded[] = [];
   const eligible: SoldierSpec[] = [];
 
@@ -64,7 +69,11 @@ export function route(
       excluded.push({ soldier: soldier.key, reason: refusal });
       continue;
     }
-    if (profile.role === "review" && profile.author === soldier.key) {
+    if (!isInstalled(soldier.cli)) {
+      excluded.push({ soldier: soldier.key, reason: `its CLI "${soldier.cli}" is not installed` });
+      continue;
+    }
+    if (profile.role === "review" && authors.has(soldier.key)) {
       excluded.push({ soldier: soldier.key, reason: "wrote the change, so it never reviews its own work" });
       continue;
     }
