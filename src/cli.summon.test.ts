@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   summon: vi.fn(),
   stop: vi.fn(async () => {}),
   startLive: vi.fn(),
+  applyToCheckout: vi.fn(),
 }));
 
 vi.mock("./core/roster.js", async (original) => ({
@@ -21,6 +22,14 @@ vi.mock("./ui/live.js", async (original) => ({
   ...await original<typeof import("./ui/live.js")>(),
   liveScreensFor: () => true,
   startLive: mocks.startLive,
+}));
+vi.mock("./workspace/apply.js", async (original) => ({
+  ...await original<typeof import("./workspace/apply.js")>(),
+  applyToCheckout: mocks.applyToCheckout,
+}));
+vi.mock("./workspace/git.js", async (original) => ({
+  ...await original<typeof import("./workspace/git.js")>(),
+  repoRoot: async () => "REPO",
 }));
 
 const argv = process.argv;
@@ -75,5 +84,51 @@ describe("summon live status", () => {
     expect(console.error).toHaveBeenCalledWith('refused: unknown soldier "missing"');
     expect(mocks.stop).toHaveBeenCalledWith(expect.objectContaining({ done: "error" }));
     expect(process.exitCode).toBe(2);
+  });
+});
+
+describe("summon --write applies its work to the folder", () => {
+  // `changed: false` is a write run whose branch holds nothing, so the workspace has no commit.
+  const writeReport = (status: "ok" | "error", changed = true) => ({
+    soldier: "free", role: "build", model: "m", status, summary: "done",
+    filesTouched: ["x.txt"], openQuestions: [], notes: [], structured: true, durationMs: 1,
+    workspace: {
+      branch: "shadow/free/t1", path: "WT", base: "BASE", claims: ["x.txt"], touched: ["x.txt"], inScope: ["x.txt"],
+      outOfScope: [], reverted: false, commit: changed ? "abc1234" : undefined, leaseLost: false, uncommittedIgnored: false,
+    },
+  });
+  const write = ["--role", "build", "--write", "--claim", "x.txt"];
+  const printed = () => vi.mocked(console.log).mock.calls.map((c) => String(c[0])).join("\n");
+
+  beforeEach(() => {
+    mocks.loadRoster.mockReturnValue(makeRoster({ free: { cli: "fake", model: "m", roles: ["build"] } }));
+    mocks.applyToCheckout.mockResolvedValue({ applied: true, files: [{ change: "A", path: "x.txt" }] });
+  });
+
+  it("applies the soldier's branch to the repository's folder and says how to keep or undo it", async () => {
+    mocks.summon.mockResolvedValue(writeReport("ok"));
+    await run("free", write);
+    expect(mocks.applyToCheckout).toHaveBeenCalledWith("REPO", "BASE", "shadow/free/t1");
+    expect(printed()).toContain("Applied to your folder (not committed):\n  A  x.txt");
+    expect(printed()).toContain("Backup:      shadow/free/t1");
+  });
+
+  it("includes the apply result in --json", async () => {
+    mocks.summon.mockResolvedValue(writeReport("ok"));
+    await run("free", [...write, "--json"]);
+    expect(JSON.parse(printed())).toMatchObject({ status: "ok", applied: { applied: true, files: [{ change: "A", path: "x.txt" }] } });
+  });
+
+  it("applies nothing with --no-apply, after a failed run, or when the soldier changed nothing", async () => {
+    mocks.summon.mockResolvedValue(writeReport("ok"));
+    await run("free", [...write, "--no-apply"]);
+    vi.resetModules();
+    mocks.summon.mockResolvedValue(writeReport("error"));
+    await run("free", write);
+    vi.resetModules();
+    mocks.summon.mockResolvedValue(writeReport("ok", false));
+    await run("free", write);
+    expect(mocks.applyToCheckout).not.toHaveBeenCalled();
+    expect(printed()).not.toContain("Applied to your folder");
   });
 });

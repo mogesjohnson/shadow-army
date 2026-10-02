@@ -1,3 +1,4 @@
+import { renderApply } from "../workspace/apply.js";
 import type { MonarchEvent, PlannedRun, RunResult } from "./monarch.js";
 
 const secs = (ms?: number) => (ms === undefined ? "" : ` in ${(ms / 1000).toFixed(0)}s`);
@@ -59,14 +60,17 @@ export function renderResult(r: RunResult): string {
   for (const o of r.outcomes) counts.set(o.status, (counts.get(o.status) ?? 0) + 1);
   lines.push(`Tasks: ${[...counts].map(([s, n]) => `${n} ${s}`).join(", ") || "none"}`);
   if (r.integration) {
-    if (r.integration.kept) {
+    if (!r.integration.kept) {
+      lines.push("No changes were made, so no branch was kept.");
+    } else if (r.applied?.applied) {
+      lines.push(renderApply(r.applied, r.integration.branch));
+    } else {
       lines.push(
         `Branch: ${r.integration.branch} (${r.integration.commits} commit${r.integration.commits === 1 ? "" : "s"}, ${r.integration.files.length} file${r.integration.files.length === 1 ? "" : "s"} changed)`,
         `  Review it:   git diff ${r.integration.base.slice(0, 7)} ${r.integration.branch}`,
         `  Take it:     git merge ${r.integration.branch}`,
       );
-    } else {
-      lines.push("No changes were made, so no branch was kept.");
+      if (r.applied) lines.push(renderApply(r.applied, r.integration.branch));
     }
   }
   if (r.notes.length) {

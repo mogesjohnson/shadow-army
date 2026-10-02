@@ -8,6 +8,7 @@ import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { listWorktrees } from "../workspace/worktree.js";
 import { fakeArmy, monarchScript, planReply, synthesisReply } from "./fakes.testutil.js";
 import { MonarchError, runGoal, type RunGoalOptions } from "./monarch.js";
+import { renderResult } from "./render.js";
 
 vi.setConfig({ testTimeout: 120_000 });
 
@@ -55,6 +56,8 @@ describe("planning", () => {
     expect(m.prompts[0]!.prompt).toContain("RULES EVERY SOLDIER MUST FOLLOW (never plan a task that needs breaking one):");
     expect(m.prompts[0]!.prompt).toContain("Leave git alone");
     expect(r.git("branch", "--list", "shadow/*")).toBe("");
+    expect(result.applied).toBeUndefined();
+    expect(r.git("status", "--porcelain")).toBe("");
   });
 
   it("feeds an invalid plan's problems back for one corrected attempt", async () => {
@@ -132,6 +135,8 @@ describe("planning", () => {
     expect(result.status).toBe("declined");
     expect(army.seen).toHaveLength(0);
     expect(r.git("branch", "--list", "shadow/*")).toBe("");
+    expect(result.applied).toBeUndefined();
+    expect(r.git("status", "--porcelain")).toBe("");
   });
 });
 
@@ -155,6 +160,10 @@ describe("a whole run", () => {
     expect(r.git("show", `${result.integration!.branch}:src/a.txt`)).toBe("a");
     expect(r.git("show", "HEAD:src/a.txt")).toBe("new checkout commit");
     expect(result.outcomes[0]!.status).toBe("ok");
+    // The checkout moved on in another file, so the run's change still applies on top of it.
+    expect(result.applied).toMatchObject({ applied: true });
+    expect(readFileSync(join(r.dir, "one.txt"), "utf8")).toBe("1\n");
+    expect(readFileSync(join(r.dir, "src/a.txt"), "utf8")).toBe("new checkout commit\n");
   });
 
   it("includes each report's notes in synthesis even without a vault", async () => {
@@ -201,14 +210,43 @@ describe("a whole run", () => {
     expect(result.notes).toMatchObject([{ text: "the repo uses txt files", decision: "accept", applied: false }]);
     expect((await vault.listNotes("proposed")).map((n) => n.text)).toEqual(["the repo uses txt files"]);
 
-    // .shadow/ is ignored from the start, so the run never looks like uncommitted work.
-    expect(r.git("status", "--porcelain")).toBe("");
+    // The work is in the checkout as unstaged edits, HEAD unmoved. .shadow/ ignores itself, so it never shows.
+    expect(result.applied).toEqual({ applied: true, files: [{ change: "A", path: "one.txt" }, { change: "A", path: "two.txt" }] });
+    expect(r.git("diff", "--name-status")).toBe("A\tone.txt\nA\ttwo.txt");
+    expect(r.git("diff", "--cached", "--name-only")).toBe("");
+    expect(r.git("status", "--porcelain", "--untracked-files=all")).not.toContain(".shadow");
+    expect(readFileSync(join(r.dir, "one.txt"), "utf8")).toBe("1\n");
+    expect(renderResult(result)).toContain("Applied to your folder (not committed):\n  A  one.txt\n  A  two.txt");
+    expect(renderResult(result)).toContain(`Backup:      ${branch}`);
     expect(result.uncommittedIgnored).toBe(false);
     expect(result.outcomes.some((o) => o.report?.workspace?.uncommittedIgnored)).toBe(false);
 
     const record = JSON.parse(readFileSync(result.recordPath!, "utf8"));
-    expect(record).toMatchObject({ runId: result.runId, goal: "make two files and review them", status: "completed" });
+    expect(record).toMatchObject({ runId: result.runId, goal: "make two files and review them", status: "completed", applied: { applied: true } });
     expect(result.costUsd).toBeCloseTo(0.03);
+  });
+
+  const oneFile = () => monarchScript({ plans: [planReply([{ id: "a", title: "one", role: "build", claims: ["one.txt"], brief: "write one.txt=1" }])] });
+
+  it("leaves the work only on its branch with --no-apply", async () => {
+    const r = repo();
+    const result = await runGoal(base(r, { getAdapter: oneFile().getAdapter, dispatch: fakeArmy(roster).dispatch, apply: false }));
+    expect(result.applied).toBeUndefined();
+    expect(result.integration!.kept).toBe(true);
+    expect(r.git("status", "--porcelain")).toBe("");
+    expect(renderResult(result)).toContain(`Take it:     git merge ${result.integration!.branch}`);
+  });
+
+  it("does not apply over the owner's own edits to the same file, and says where the work is", async () => {
+    const r = repo();
+    r.write("one.txt", "mine\n");
+    const result = await runGoal(base(r, { getAdapter: oneFile().getAdapter, dispatch: fakeArmy(roster).dispatch }));
+    expect(result.outcomes[0]!.status).toBe("ok");
+    expect(result.applied).toEqual({ applied: false, reason: "you have uncommitted changes to files the run also changed", clashes: ["one.txt"] });
+    expect(readFileSync(join(r.dir, "one.txt"), "utf8")).toBe("mine\n");
+    const text = renderResult(result);
+    expect(text).toContain(`Take it:     git merge ${result.integration!.branch}`);
+    expect(text).toContain("Not applied to your folder: you have uncommitted changes to files the run also changed.\n  one.txt");
   });
 
   it("applies the Monarch's note decisions only with --accept-notes, and only to this run's notes", async () => {
@@ -251,6 +289,7 @@ describe("a whole run", () => {
     const result = await runGoal(base(r, { getAdapter: m.getAdapter, confirm: async () => { throw new Error("should not ask"); } }));
     expect(result.status).toBe("completed");
     expect(result.outcomes).toEqual([]);
+    expect(result.applied).toBeUndefined();
     // No worktree is left behind: not registered with git, and nothing on disk.
     const dir = join(r.dir, ".shadow", "worktrees");
     expect(await listWorktrees(r.dir, join(r.dir, ".shadow"))).toEqual([]);
