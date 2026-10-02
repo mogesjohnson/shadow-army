@@ -108,10 +108,12 @@ sa                          # the chat (in a terminal); the banner otherwise
 sa army                     # detect soldiers, show health and models
 sa summon <soldier> "<task>"  # one-off dispatch (read-only)
 sa summon <soldier> --write --claim "src/**" "<task>"
-                            # writes, in its own worktree and branch, only inside its claims
+                            # writes, in its own worktree and branch, only inside its claims;
+                            # the result is then applied to your folder, uncommitted
 sa route --role <role>      # preview who may take a task, ranked, with reasons
-sa run "<goal>"             # the Monarch plans, soldiers build in parallel, work lands on one
-                            # branch (shadow/run/<id>) for you to review and merge; asks first
+sa run "<goal>"             # the Monarch plans, soldiers build in parallel, and the work is
+                            # applied to your folder, uncommitted, for you to review and commit;
+                            # asks first
 sa run --plan-only "<goal>" # just show the plan and who would do what
 sa vault                    # inspect shared notes and runs
 sa locks                    # which soldier holds which files
@@ -119,6 +121,20 @@ sa worktrees                # soldier worktrees and their branches
 sa formation <name>         # run a saved formation
 sa adapter new <name>       # scaffold a new soldier adapter
 ```
+
+### Where the work ends up
+
+Soldiers never edit your folder while they work. Each works in its own worktree and branch, and `sa run` merges their branches into one branch, `shadow/run/<id>`. When the run is over, that branch's changes are applied to your folder as ordinary **uncommitted** edits. New files are marked intent-to-add, so `git status` and `git diff` show everything. Nothing is committed for you. The report lists the files and the commands to:
+
+- review them (`git diff`)
+- keep them (`git add -- <files> && git commit`)
+- undo them (`git restore --source=HEAD --staged --worktree -- <files>`)
+
+The branch stays as a backup.
+
+Your own work is never overwritten. If you have uncommitted changes to a file the run also changed, or your folder has moved on so the changes no longer apply, nothing is applied. The report then says why and shows how to take the branch with `git merge` instead. `--no-apply` leaves the work only on the branch, as before. `sa summon --write` works the same way for its soldier's branch.
+
+### Live screens
 
 In a terminal, `sa run` shows a live dashboard once you approve the plan. It shows every task with its soldier, a status word (waiting, running, done, failed, refused, conflict, skipped), time taken, progress, reported cost, and the latest activity. The final report prints when the run is over. While a soldier works, `sa summon` shows one live line. `sa --plain <command>` (or `<command> --plain`) prints plain lines instead. Plain output is also used automatically when stdout is not a terminal, and with `--json`.
 

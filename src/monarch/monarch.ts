@@ -7,6 +7,7 @@ import { route } from "../core/router.js";
 import type { Roster } from "../core/roster.js";
 import { summon } from "../core/summon.js";
 import { Vault, type Note } from "../vault/vault.js";
+import { applyToCheckout, type ApplyResult } from "../workspace/apply.js";
 import { git, GitError, repoRoot as findRepoRoot } from "../workspace/git.js";
 import { ensureShadowRoot } from "../workspace/session.js";
 import { assignTasks, type TaskAssignment } from "./assign.js";
@@ -62,6 +63,8 @@ export interface RunResult {
   costUsd: number;
   /** The checkout had uncommitted changes, which the run (working from the last commit) did not see. */
   uncommittedIgnored: boolean;
+  /** Whether the branch's changes were put into the checkout as uncommitted edits; absent when not tried. */
+  applied?: ApplyResult;
   recordPath?: string;
 }
 
@@ -88,6 +91,8 @@ export interface RunGoalOptions {
   useVault?: boolean;
   /** Earlier goals of the same chat session and how they ended, for the Monarch's plan. */
   history?: SessionTurn[];
+  /** At the end, put the run's changes into the checkout as uncommitted edits. Default true. */
+  apply?: boolean;
   onEvent?: (e: MonarchEvent) => void;
   /** Overrides for tests. */
   getAdapter?: (cli: string) => Adapter | undefined;
@@ -242,7 +247,8 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   if (planned.checked.plan.tasks.length === 0) return { ...base, status: "completed" };
   if (!(await opts.confirm(planned))) return { ...base, status: "declined" };
 
-  // Execute on a fresh integration branch. The user's checkout is never changed.
+  // Execute on a fresh integration branch. The user's checkout is not changed until the very end, when
+  // the result is applied to it as uncommitted edits.
   const integration: Integration = await createIntegration(root, shadowRoot, planned.runId, startBase);
   phase(`working on ${integration.branch}`);
   opts.onEvent?.({ type: "branch", branch: integration.branch });
@@ -368,6 +374,13 @@ async function executeAndReport(
   const keepBranch = commits > 0;
   if (!opts.keepWorktrees) await closeIntegration(root, integration, !keepBranch);
 
+  // Bring the work into the owner's folder as uncommitted edits to review and commit; the branch stays.
+  let applied: ApplyResult | undefined;
+  if (keepBranch && opts.apply !== false) {
+    phase("applying the changes to your folder");
+    applied = await applyToCheckout(root, integration.base, integration.branch);
+  }
+
   const result: RunResult = {
     ...base,
     status: "completed",
@@ -376,6 +389,7 @@ async function executeAndReport(
     synthesis,
     notes,
     costUsd,
+    applied,
   };
 
   // The record of the run lives with the vault: goal, plan, assignments, outcomes and the final report.
