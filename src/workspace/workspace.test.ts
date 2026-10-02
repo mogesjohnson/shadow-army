@@ -151,7 +151,7 @@ describe("write session", () => {
     expect((await new Locks(shadowOf(r.dir)).list()).map((l) => l.owner)).toEqual(["grok"]);
 
     const info = await s.finish("shadow(grok): nothing");
-    expect(info).toMatchObject({ touched: [], commit: undefined, reverted: false, leaseLost: false, uncommittedIgnored: false });
+    expect(info).toMatchObject({ touched: [], commit: undefined, reverted: false, leaseLost: false });
     await s.release();
     await s.release(); // twice is fine
     expect(await new Locks(shadowOf(r.dir)).list()).toEqual([]);
@@ -178,11 +178,36 @@ describe("write session", () => {
     expect(await new Locks(shadowOf(r.dir)).list()).toEqual([]);
   });
 
-  it("says when the checkout's uncommitted changes are not visible to the soldier", async () => {
+  it("starts the soldier from the folder as it is: uncommitted edits and new files are there, ignored ones are not", async () => {
     const r = repo();
+    r.write(".gitignore", "secret.txt\n");
     r.write("src/a.ts", "local edit\n");
+    r.write("src/new.ts", "untracked\n");
+    r.write("secret.txt", "ignored\n");
+    const head = r.git("rev-parse", "HEAD");
     const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["src/**"] });
-    expect((await s.finish("m")).uncommittedIgnored).toBe(true);
+    const wt = (p: string) => join(s.cwd, p); // started at the repository root, so this is the worktree's root
+    expect(readFileSync(wt("src/a.ts"), "utf8")).toBe("local edit\n");
+    expect(readFileSync(wt("src/new.ts"), "utf8")).toBe("untracked\n");
+    expect(existsSync(wt("secret.txt"))).toBe(false);
+
+    // Only what the soldier changes is its own: the owner's edits are in its base, not in its branch.
+    writeFileSync(wt("src/b.ts"), "by the soldier\n");
+    const info = await s.finish("m");
+    expect(info.base).not.toBe(head);
+    expect(r.git("rev-parse", `${info.base}^`)).toBe(head);
+    expect(info.touched).toEqual(["src/b.ts"]);
+    expect(r.git("diff", "--name-only", info.base, info.branch)).toBe("src/b.ts");
+    await s.release();
+    // The owner's folder is as it was.
+    expect(readFileSync(join(r.dir, "src/a.ts"), "utf8")).toBe("local edit\n");
+    expect(r.git("rev-parse", "HEAD")).toBe(head);
+  });
+
+  it("starts the soldier from HEAD itself when the folder is clean", async () => {
+    const r = repo();
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["src/**"] });
+    expect((await s.finish("m")).base).toBe(r.git("rev-parse", "HEAD"));
     await s.release();
   });
 

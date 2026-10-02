@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { GitError, repoRoot } from "./git.js";
 import { Locks, type Lease } from "./locks.js";
+import { renderUndo, undoApplied } from "./undo.js";
 import { listWorktrees, removeWorktree } from "./worktree.js";
 import { VaultError } from "../vault/vault.js";
 
@@ -58,6 +59,19 @@ export function registerWorkspaceCommands(program: Command): void {
         const { shadowRoot } = await shadowOf(cwdOf(cmd));
         const n = await new Locks(shadowRoot).releaseOwner(soldier);
         console.log(n ? `released ${n} lease${n === 1 ? "" : "s"} held by ${soldier}` : `${soldier} holds no leases`);
+      }),
+    );
+
+  program
+    .command("undo [id]")
+    .description("take back the work a run or summon applied to your folder (the latest, or the one with this id)")
+    .option("--cwd <dir>", "a directory inside the repository", process.cwd())
+    .action((id: string | undefined, _opts: unknown, cmd: Command) =>
+      guarded(async () => {
+        const { root, shadowRoot } = await shadowOf(cwdOf(cmd));
+        const result = await undoApplied(root, shadowRoot, id);
+        console.log(renderUndo(result));
+        if (!result.undone) process.exitCode = 1;
       }),
     );
 

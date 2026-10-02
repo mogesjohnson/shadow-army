@@ -75,11 +75,11 @@ describe("the waiting lines", () => {
   });
 
   it("keeps the steps already passed above the current one", () => {
-    const steps = { past: ["checking which soldiers are installed", "your checkout has uncommitted changes"], current: { label: "codex-astra is planning", startedAt: 0 } };
+    const steps = { past: ["checking which soldiers are installed", "reading the delegation guide"], current: { label: "codex-astra is planning", startedAt: 0 } };
     const frame = stripVTControlCharacters(renderToString(React.createElement(StepsView, { steps, now: 2_000, tick: 0 })));
     expect(frame.split("\n")).toEqual([
       "· checking which soldiers are installed",
-      "· your checkout has uncommitted changes",
+      "· reading the delegation guide",
       "⠋ codex-astra is planning  0:02",
     ]);
   });

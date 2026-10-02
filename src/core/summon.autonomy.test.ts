@@ -73,6 +73,41 @@ describe("autonomy", () => {
     expect(await listWorktrees(r.dir, join(r.dir, ".shadow"))).toEqual([]);
   });
 
+  it("makes that throwaway copy from the folder as it is: uncommitted work is in it, ignored files are not, and the guard stays quiet", async () => {
+    const r = repo();
+    r.write(".gitignore", "secret.txt\n");
+    r.write("README.md", "uncommitted edit\n");
+    r.write("notes.txt", "untracked\n");
+    r.write("secret.txt", "ignored\n");
+    const head = r.git("rev-parse", "HEAD");
+    const status = r.git("status", "--porcelain");
+    const seen: Record<string, string | undefined> = {};
+    const s = soldier((req) => {
+      for (const p of ["README.md", "notes.txt", "secret.txt", "src/a.ts"]) {
+        seen[p] = existsSync(join(req.cwd, p)) ? readFileSync(join(req.cwd, p), "utf8") : undefined;
+      }
+      put(req.cwd, "README.md", "scribbled\n");
+    });
+    const report = await summon({ roster, soldier: "free", role: "research", task: "look", cwd: r.dir, adapter: s.adapter });
+    expect(seen).toEqual({ "README.md": "uncommitted edit\n", "notes.txt": "untracked\n", "secret.txt": undefined, "src/a.ts": "a\n" });
+    // Taking the snapshot and discarding the copy changed nothing in the folder, so the checkout guard passes.
+    expect(report).toMatchObject({ status: "ok" });
+    expect(report.guard).toBeUndefined();
+    expect(readFileSync(join(r.dir, "README.md"), "utf8")).toBe("uncommitted edit\n");
+    expect(r.git("rev-parse", "HEAD")).toBe(head);
+    expect(r.git("status", "--porcelain")).toBe(status);
+    expect(readFileSync(join(r.dir, "secret.txt"), "utf8")).toBe("ignored\n");
+    expect(await listWorktrees(r.dir, join(r.dir, ".shadow"))).toEqual([]);
+  });
+
+  it("still makes the copy from the commit it was told to, when given a baseRef", async () => {
+    const r = repo();
+    r.write("README.md", "uncommitted edit\n");
+    const s = soldier((req) => expect(readFileSync(join(req.cwd, "README.md"), "utf8")).toBe("hello\n"));
+    const report = await summon({ roster, soldier: "free", role: "research", task: "look", cwd: r.dir, baseRef: "HEAD", adapter: s.adapter });
+    expect(report.status).toBe("ok");
+  });
+
   it("falls back to supervised outside a git repository, where there is no copy to give", async () => {
     const dir = mkdtempSync(join(tmpdir(), "shadow-norepo-"));
     try {

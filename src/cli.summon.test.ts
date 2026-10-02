@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeRoster } from "./core/roster.testutil.js";
 import { SummonError } from "./core/summon.js";
@@ -8,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(async () => {}),
   startLive: vi.fn(),
   applyToCheckout: vi.fn(),
+  recordApplied: vi.fn(),
 }));
 
 vi.mock("./core/roster.js", async (original) => ({
@@ -26,6 +28,10 @@ vi.mock("./ui/live.js", async (original) => ({
 vi.mock("./workspace/apply.js", async (original) => ({
   ...await original<typeof import("./workspace/apply.js")>(),
   applyToCheckout: mocks.applyToCheckout,
+}));
+vi.mock("./workspace/ledger.js", async (original) => ({
+  ...await original<typeof import("./workspace/ledger.js")>(),
+  recordApplied: mocks.recordApplied,
 }));
 vi.mock("./workspace/git.js", async (original) => ({
   ...await original<typeof import("./workspace/git.js")>(),
@@ -94,7 +100,7 @@ describe("summon --write applies its work to the folder", () => {
     filesTouched: ["x.txt"], openQuestions: [], notes: [], structured: true, durationMs: 1,
     workspace: {
       branch: "shadow/free/t1", path: "WT", base: "BASE", claims: ["x.txt"], touched: ["x.txt"], inScope: ["x.txt"],
-      outOfScope: [], reverted: false, commit: changed ? "abc1234" : undefined, leaseLost: false, uncommittedIgnored: false,
+      outOfScope: [], reverted: false, commit: changed ? "abc1234" : undefined, leaseLost: false,
     },
   });
   const write = ["--role", "build", "--write", "--claim", "x.txt"];
@@ -103,6 +109,7 @@ describe("summon --write applies its work to the folder", () => {
   beforeEach(() => {
     mocks.loadRoster.mockReturnValue(makeRoster({ free: { cli: "fake", model: "m", roles: ["build"] } }));
     mocks.applyToCheckout.mockResolvedValue({ applied: true, files: [{ change: "A", path: "x.txt" }] });
+    mocks.recordApplied.mockResolvedValue({});
   });
 
   it("applies the soldier's branch to the repository's folder and says how to keep or undo it", async () => {
@@ -110,7 +117,33 @@ describe("summon --write applies its work to the folder", () => {
     await run("free", write);
     expect(mocks.applyToCheckout).toHaveBeenCalledWith("REPO", "BASE", "shadow/free/t1");
     expect(printed()).toContain("Applied to your folder (not committed):\n  A  x.txt");
+    expect(printed()).toContain("Undo it:     sa undo shadow/free/t1");
     expect(printed()).toContain("Backup:      shadow/free/t1");
+  });
+
+  it("records the apply for `sa undo`, with the branch as its id", async () => {
+    mocks.summon.mockResolvedValue(writeReport("ok"));
+    await run("free", write);
+    expect(mocks.recordApplied).toHaveBeenCalledTimes(1);
+    expect(mocks.recordApplied).toHaveBeenCalledWith("REPO", join("REPO", ".shadow"), {
+      id: "shadow/free/t1", kind: "summon", base: "BASE", branch: "shadow/free/t1", files: [{ change: "A", path: "x.txt" }],
+    });
+  });
+
+  it("still shows the result, with a warning, when the ledger cannot be written", async () => {
+    mocks.summon.mockResolvedValue(writeReport("ok"));
+    mocks.recordApplied.mockRejectedValue(new Error("disk full"));
+    await run("free", write);
+    expect(printed()).toContain("Applied to your folder (not committed):");
+    expect(printed()).toContain("Warning: the changes are in your folder, but could not be recorded for `sa undo`: disk full");
+  });
+
+  it("records nothing when nothing was applied", async () => {
+    mocks.summon.mockResolvedValue(writeReport("ok"));
+    mocks.applyToCheckout.mockResolvedValue({ applied: false, reason: "your folder changed, since the run started, in files the run also changed", clashes: ["x.txt"] });
+    await run("free", write);
+    expect(mocks.recordApplied).not.toHaveBeenCalled();
+    expect(printed()).toContain("Not applied to your folder");
   });
 
   it("includes the apply result in --json", async () => {

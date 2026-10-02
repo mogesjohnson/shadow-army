@@ -4,6 +4,7 @@ import type { Adapter, Autonomy, Effort, Role } from "../adapters/Adapter.js";
 import { getAdapter } from "../adapters/registry.js";
 import { canonicalPath, repoRoot } from "../workspace/git.js";
 import { captureState, diffState } from "../workspace/guard.js";
+import { snapshotFolder } from "../workspace/snapshot.js";
 import { createSnapshot } from "../workspace/worktree.js";
 import { checkAssignment, defaultRole } from "./assign.js";
 import { buildPrompt, parseReport } from "./brief.js";
@@ -28,7 +29,10 @@ export interface SummonOptions {
   vaultNotes?: string[];
   /** Reports from the tasks this one depends on, shown to the soldier as context (F7). */
   context?: string[];
-  /** For write runs: what the soldier's worktree starts from. Default: the current commit. */
+  /**
+   * What a write run's worktree, or a read-only run's throwaway copy, starts from. Default: a snapshot of
+   * the folder as it is, uncommitted work included.
+   */
   baseRef?: string;
   timeoutMs?: number;
   /**
@@ -91,7 +95,7 @@ export async function summon(opts: SummonOptions): Promise<Report> {
     const root = opts.guardRoot ?? (await repoRoot(opts.cwd).catch(() => undefined));
 
     // An unrestricted soldier on a read-only task could still write, so it gets a throwaway copy of the
-    // last commit and whatever it writes is discarded. Outside a repository there is no copy to give,
+    // folder as it is and whatever it writes is discarded. Outside a repository there is no copy to give,
     // so that run falls back to supervised mode.
     let autonomy: Autonomy = opts.autonomy ?? soldier.autonomy;
     let autonomyNote: string | undefined;
@@ -100,7 +104,8 @@ export async function summon(opts: SummonOptions): Promise<Report> {
       if (root) {
         const shadowRoot = opts.shadowRoot ?? join(root, ".shadow");
         await ensureShadowRoot(shadowRoot);
-        lookCopy = await createSnapshot(root, shadowRoot, "HEAD", `look-${opts.soldier}-${randomBytes(3).toString("hex")}`);
+        const from = opts.baseRef ?? (await snapshotFolder(root));
+        lookCopy = await createSnapshot(root, shadowRoot, from, `look-${opts.soldier}-${randomBytes(3).toString("hex")}`);
         cwd = join(lookCopy.path, relative(canonicalPath(root), canonicalPath(opts.cwd)));
       } else {
         autonomyNote = `not in a git repository, so this read-only run used supervised mode instead of ${autonomy}`;
@@ -261,9 +266,6 @@ export function renderReport(r: Report): string {
       lines.push(`SCOPE VIOLATION: edited outside its claims; reverted: ${w.outOfScope.join(", ")}`);
     }
     if (w.leaseLost) lines.push("WARNING: the lease could not be renewed, so the claimed files may have changed hands mid-run");
-    if (w.uncommittedIgnored) {
-      lines.push("Note: your checkout had uncommitted changes; the soldier worked from the last commit and did not see them");
-    }
     lines.push("");
   }
   if (r.openQuestions.length) lines.push("Open questions:", ...r.openQuestions.map((q) => `  - ${q}`), "");

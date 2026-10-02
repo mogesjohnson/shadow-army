@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Command, Option } from "commander";
 import React from "react";
 import { render } from "ink";
@@ -15,8 +16,9 @@ import { defaultRole } from "./core/assign.js";
 import { renderRoute, route, type TaskProfile } from "./core/router.js";
 import { summon, renderReport, SummonError } from "./core/summon.js";
 import { Vault } from "./vault/vault.js";
-import { applyToCheckout, renderApply } from "./workspace/apply.js";
+import { applyToCheckout, renderApply, type ApplyResult } from "./workspace/apply.js";
 import { repoRoot } from "./workspace/git.js";
+import { recordApplied } from "./workspace/ledger.js";
 import { registerVaultCommands } from "./vault/cli.js";
 import { registerWorkspaceCommands } from "./workspace/cli.js";
 import { registerRunCommand } from "./monarch/cli.js";
@@ -189,13 +191,27 @@ program
       await live?.stop({ ...working, done });
       // A good write run's changes go into the folder as uncommitted edits; its branch stays.
       const w = report.workspace;
-      const applied =
-        opts.apply && report.status === "ok" && w?.commit ? await applyToCheckout(await repoRoot(opts.cwd), w.base, w.branch) : undefined;
+      let applied: ApplyResult | undefined;
+      let ledgerWarning: string | undefined;
+      if (opts.apply && report.status === "ok" && w?.commit) {
+        const root = await repoRoot(opts.cwd);
+        applied = await applyToCheckout(root, w.base, w.branch);
+        if (applied.applied && applied.files.length) {
+          // So that `sa undo` can take this summon back out; the branch name is its id.
+          try {
+            await recordApplied(root, join(root, ".shadow"), { id: w.branch, kind: "summon", base: w.base, branch: w.branch, files: applied.files });
+          } catch (e) {
+            ledgerWarning = `the changes are in your folder, but could not be recorded for \`sa undo\`: ${(e as Error).message}`;
+          }
+        }
+      }
       if (opts.json) {
         console.log(JSON.stringify(applied ? { ...report, applied } : report, null, 2));
+        if (ledgerWarning) console.error(`warning: ${ledgerWarning}`);
       } else {
         console.log(renderReport(report));
-        if (applied && w) console.log(`\n${renderApply(applied, w.branch)}`);
+        if (applied && w) console.log(`\n${renderApply(applied, w.branch, w.branch)}`);
+        if (ledgerWarning) console.log(`Warning: ${ledgerWarning}`);
       }
       if (report.status === "error") process.exitCode = 1;
     } catch (e) {

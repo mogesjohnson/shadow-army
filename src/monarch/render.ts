@@ -63,22 +63,19 @@ export function renderResult(r: RunResult): string {
     if (!r.integration.kept) {
       lines.push("No changes were made, so no branch was kept.");
     } else if (r.applied?.applied) {
-      lines.push(renderApply(r.applied, r.integration.branch));
+      lines.push(renderApply(r.applied, r.integration.branch, r.runId));
     } else {
       lines.push(
         `Branch: ${r.integration.branch} (${r.integration.commits} commit${r.integration.commits === 1 ? "" : "s"}, ${r.integration.files.length} file${r.integration.files.length === 1 ? "" : "s"} changed)`,
         `  Review it:   git diff ${r.integration.base.slice(0, 7)} ${r.integration.branch}`,
         `  Take it:     git merge ${r.integration.branch}`,
       );
-      if (r.applied) lines.push(renderApply(r.applied, r.integration.branch));
+      if (r.applied) lines.push(renderApply(r.applied, r.integration.branch, r.runId));
     }
   }
   if (r.notes.length) {
     lines.push("", r.notes.some((n) => n.applied) ? "Vault notes (decided by the Monarch):" : "Vault notes the Monarch recommends (apply with --accept-notes, or `sa vault accept/reject`):");
     for (const n of r.notes) lines.push(`  ${n.decision.padEnd(6)} ${n.id}  ${n.text}${n.reason ? `  (${n.reason})` : ""}`);
-  }
-  if (r.uncommittedIgnored) {
-    lines.push("Note: your checkout had uncommitted changes; the run worked from the last commit and did not see them.");
   }
   if (r.costUsd) lines.push(`Reported cost: $${r.costUsd.toFixed(4)} (CLIs that report it)`);
   if (r.recordPath) lines.push(`Record: ${r.recordPath}`);

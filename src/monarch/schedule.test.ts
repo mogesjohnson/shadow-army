@@ -151,7 +151,7 @@ describe("execute", () => {
       const report: Report = {
         soldier: a.soldier, role: "build", model: "m", status: "ok", summary: "edited", filesTouched: ["README.md"],
         openQuestions: [], notes: [], structured: true, durationMs: 1,
-        workspace: { branch: "stale", path: join(shadowRoot, "worktrees", "none"), base: integration.base, claims: ["README.md"], touched: ["README.md"], inScope: ["README.md"], outOfScope: [], reverted: false, commit: "abc1234", leaseLost: false, uncommittedIgnored: false },
+        workspace: { branch: "stale", path: join(shadowRoot, "worktrees", "none"), base: integration.base, claims: ["README.md"], touched: ["README.md"], inScope: ["README.md"], outOfScope: [], reverted: false, commit: "abc1234", leaseLost: false },
       };
       return report;
     };

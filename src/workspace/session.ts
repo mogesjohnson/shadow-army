@@ -5,6 +5,7 @@ import { auditWorktree, commitAll, revertPaths } from "./audit.js";
 import { validateClaims } from "./claims.js";
 import { canonicalPath, git, GitError, repoRoot } from "./git.js";
 import { DEFAULT_TTL_MS, LockError, Locks } from "./locks.js";
+import { snapshotFolder } from "./snapshot.js";
 import { createWorktree } from "./worktree.js";
 
 /** Anything that stops a write run before the soldier starts: a bad claim, no git repo, a lease conflict. */
@@ -26,8 +27,6 @@ export interface WorkspaceInfo {
   commit?: string;
   /** The heartbeat failed to renew the lease, so the files may have changed hands mid-run. */
   leaseLost: boolean;
-  /** The checkout had uncommitted changes, which the soldier's worktree (made from the last commit) does not contain. */
-  uncommittedIgnored: boolean;
 }
 
 export interface WriteSession {
@@ -73,7 +72,7 @@ export async function openWriteSession(opts: {
   claims: string[];
   waitMs?: number;
   ttlMs?: number;
-  /** Commit or branch the worktree starts from. Default: the current commit. `sa run` uses its integration branch. */
+  /** Commit or branch the worktree starts from. Default: a snapshot of the folder as it is. `sa run` uses its integration branch. */
   baseRef?: string;
   /** Override for tests. Defaults to `<repo>/.shadow`. */
   shadowRoot?: string;
@@ -106,16 +105,14 @@ export async function openWriteSession(opts: {
   }
 
   let wt;
-  let uncommittedIgnored = false;
   try {
-    // .shadow/ ignores itself, so anything listed here is the user's own uncommitted work.
-    uncommittedIgnored = (await git(root, ["status", "--porcelain"])).trim().length > 0;
+    // The soldier starts from the folder as it is, uncommitted work included, not from the last commit.
     wt = await createWorktree({
       repoRoot: root,
       shadowRoot,
       soldier: opts.soldier,
       taskId: newTaskId(),
-      baseRef: opts.baseRef,
+      baseRef: opts.baseRef ?? (await snapshotFolder(root)),
     });
   } catch (e) {
     await locks.release(lease.id);
@@ -165,7 +162,6 @@ export async function openWriteSession(opts: {
         reverted: audit.outOfScope.length > 0,
         commit: sha,
         leaseLost: lost,
-        uncommittedIgnored,
       };
     },
     async discard() {

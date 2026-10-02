@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Adapter, RunRequest, RunResult } from "../adapters/Adapter.js";
 import { getAdapter as realAdapter } from "../adapters/registry.js";
@@ -35,9 +35,10 @@ export function monarchScript(script: { plans: string[]; synthesis?: string; fai
 }
 
 /**
- * A fake soldier for tests, driven by its brief: `write path=content;` writes a file, `fail` fails,
- * `read path` reports the file's content, `slow` waits a little, `note:<text>` proposes a vault note.
- * It records what each run saw and how many ran at once. Test use only.
+ * A fake soldier for tests, driven by its brief: `write path=content;` writes a file, `append path=text;`
+ * adds a line to the end of one (so it only comes out right if the soldier started from the file's
+ * earlier content), `fail` fails, `read path` reports the file's content, `slow` waits a little,
+ * `note:<text>` proposes a vault note. It records what each run saw and how many ran at once. Test use only.
  */
 export function fakeArmy(roster: Roster, vault?: Vault, guardRoot?: string) {
   let active = 0;
@@ -62,6 +63,10 @@ export function fakeArmy(roster: Roster, vault?: Vault, guardRoot?: string) {
         for (const m of task.matchAll(/write ([^=\s]+)=([^;\n]*)/g)) {
           mkdirSync(dirname(join(req.cwd, m[1]!)), { recursive: true });
           writeFileSync(join(req.cwd, m[1]!), m[2]! + "\n");
+        }
+        for (const m of task.matchAll(/append ([^=\s]+)=([^;\n]*)/g)) {
+          mkdirSync(dirname(join(req.cwd, m[1]!)), { recursive: true });
+          appendFileSync(join(req.cwd, m[1]!), m[2]! + "\n");
         }
         let summary = "done";
         const read = /read (\S+)/.exec(task);

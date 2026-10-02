@@ -8,8 +8,10 @@ import type { Roster } from "../core/roster.js";
 import { summon } from "../core/summon.js";
 import { Vault, type Note } from "../vault/vault.js";
 import { applyToCheckout, type ApplyResult } from "../workspace/apply.js";
-import { git, GitError, repoRoot as findRepoRoot } from "../workspace/git.js";
+import { repoRoot as findRepoRoot } from "../workspace/git.js";
+import { recordApplied } from "../workspace/ledger.js";
 import { ensureShadowRoot } from "../workspace/session.js";
+import { snapshotFolder } from "../workspace/snapshot.js";
 import { assignTasks, type TaskAssignment } from "./assign.js";
 import {
   closeIntegration,
@@ -60,8 +62,6 @@ export interface RunResult {
   /** Notes the Monarch decided on, and whether its decision was applied (`--accept-notes`). */
   notes: { id: string; text: string; decision: "accept" | "reject"; reason: string; applied: boolean }[];
   costUsd: number;
-  /** The checkout had uncommitted changes, which the run (working from the last commit) did not see. */
-  uncommittedIgnored: boolean;
   /** Whether the branch's changes were put into the checkout as uncommitted edits; absent when not tried. */
   applied?: ApplyResult;
   recordPath?: string;
@@ -146,19 +146,11 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
     );
   }
 
-  // Everything in the run, the Monarch's planning included, works from the last commit. Say so when
-  // the checkout has uncommitted changes, because nobody in the run will see them.
+  // Everything in the run, the Monarch's planning included, starts from the folder as it is right now:
+  // the last commit plus any uncommitted work, such as what an earlier run applied. A clean folder is
+  // just HEAD. Taking the snapshot changes nothing in the folder.
   await ensureShadowRoot(shadowRoot);
-  let startBase: string;
-  try {
-    startBase = (await git(root, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
-  } catch {
-    throw new GitError("the repository has no commits yet; make one before `sa run`");
-  }
-  const uncommittedIgnored = (await git(root, ["status", "--porcelain"])).trim().length > 0;
-  if (uncommittedIgnored) {
-    phase("your checkout has uncommitted changes; the run works from the last commit and will not see them");
-  }
+  const startBase = await snapshotFolder(root);
   const runId = newRunId();
 
   const acceptedNotes = vault ? await vault.acceptedNotes().catch(() => []) : [];
@@ -178,7 +170,7 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   };
 
   // Plan: each Monarch gets two attempts (the second with the first's problems); then the next Monarch.
-  // It plans in a snapshot of the last commit: exactly what the soldiers will start from.
+  // It plans in a snapshot of the folder: exactly what the soldiers will start from.
   let costUsd = 0;
   let planned: PlannedRun | undefined;
   const rejected: string[][] = [];
@@ -237,7 +229,6 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
     outcomes: [],
     notes: [],
     costUsd,
-    uncommittedIgnored,
   };
   if (opts.planOnly) return base;
   if (planned.checked.plan.tasks.length === 0) return { ...base, status: "completed" };
@@ -375,6 +366,12 @@ async function executeAndReport(
   if (keepBranch && opts.apply !== false) {
     phase("applying the changes to your folder");
     applied = await applyToCheckout(root, integration.base, integration.branch);
+    if (applied.applied && applied.files.length) {
+      // So that `sa undo` can take this run back out.
+      await recordApplied(root, shadowRoot, { id: planned.runId, kind: "run", base: integration.base, branch: integration.branch, files: applied.files }).catch((e) =>
+        phase(`the changes are in your folder, but could not be recorded for \`sa undo\`: ${(e as Error).message}`),
+      );
+    }
   }
 
   const result: RunResult = {
