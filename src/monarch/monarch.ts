@@ -8,7 +8,7 @@ import type { Roster } from "../core/roster.js";
 import { summon } from "../core/summon.js";
 import { Vault, type Note } from "../vault/vault.js";
 import { applyToCheckout, type ApplyResult } from "../workspace/apply.js";
-import { repoRoot as findRepoRoot } from "../workspace/git.js";
+import { git, repoRoot as findRepoRoot } from "../workspace/git.js";
 import { recordApplied } from "../workspace/ledger.js";
 import { ensureShadowRoot } from "../workspace/session.js";
 import { snapshotFolder } from "../workspace/snapshot.js";
@@ -57,7 +57,17 @@ export interface RunResult {
   assignments: TaskAssignment[];
   rejected: string[][];
   outcomes: TaskOutcome[];
-  integration?: { branch: string; base: string; commits: number; files: string[]; kept: boolean };
+  integration?: {
+    branch: string;
+    base: string;
+    commits: number;
+    files: string[];
+    kept: boolean;
+    /** The run started from a snapshot holding uncommitted work, not from a commit, so merging the branch would commit that work too. */
+    fromSnapshot: boolean;
+    /** The repository the run belongs to. */
+    root: string;
+  };
   synthesis?: Synthesis & { fromMonarch: boolean };
   /** Notes the Monarch decided on, and whether its decision was applied (`--accept-notes`). */
   notes: { id: string; text: string; decision: "accept" | "reject"; reason: string; applied: boolean }[];
@@ -151,6 +161,8 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   // just HEAD. Taking the snapshot changes nothing in the folder.
   await ensureShadowRoot(shadowRoot);
   const startBase = await snapshotFolder(root);
+  // A clean folder snapshots to HEAD itself; anything else is a commit of its own.
+  const fromSnapshot = startBase !== (await git(root, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
   const runId = newRunId();
 
   const acceptedNotes = vault ? await vault.acceptedNotes().catch(() => []) : [];
@@ -240,7 +252,7 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   phase(`working on ${integration.branch}`);
   opts.onEvent?.({ type: "branch", branch: integration.branch });
   try {
-    return await executeAndReport(opts, planned, base, integration, root, shadowRoot, vault, callMonarch);
+    return await executeAndReport(opts, planned, base, integration, fromSnapshot, root, shadowRoot, vault, callMonarch);
   } catch (e) {
     // Unexpected failure: keep whatever work the branch holds, but do not leave the worktree behind.
     if (!opts.keepWorktrees) await closeIntegration(root, integration, false).catch(() => undefined);
@@ -253,6 +265,7 @@ async function executeAndReport(
   planned: PlannedRun,
   base: RunResult,
   integration: Integration,
+  fromSnapshot: boolean,
   root: string,
   shadowRoot: string,
   vault: Vault | undefined,
@@ -378,7 +391,7 @@ async function executeAndReport(
     ...base,
     status: "completed",
     outcomes,
-    integration: { branch: integration.branch, base: integration.base, commits, files, kept: keepBranch },
+    integration: { branch: integration.branch, base: integration.base, commits, files, kept: keepBranch, fromSnapshot, root },
     synthesis,
     notes,
     costUsd,

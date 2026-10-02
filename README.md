@@ -120,7 +120,7 @@ Soldiers never edit your folder while they work. Each works in its own worktree 
 
 The branch stays as a backup.
 
-Your own work is never overwritten. A file clashes only if it changed in your folder *since the run started*; the uncommitted work the run started from does not count. If a file the run changed also changed in your folder meanwhile, or your folder has moved on so the changes no longer apply, nothing is applied. The report then says why and shows how to take the branch with `git merge` instead. `--no-apply` leaves the work only on the branch, as before. `sa summon --write` works the same way for its soldier's branch.
+Your own work is never overwritten. A file clashes only if it changed in your folder *since the run started*; the uncommitted work the run started from does not count. If a file the run changed also changed in your folder meanwhile, or your folder has moved on so the changes no longer apply, nothing is applied. The report then says why and shows how to take the branch instead: `git merge` when the run started from HEAD itself, and otherwise a `git diff --binary` plus `git apply` command that takes only the run's own changes, since the branch then descends from a snapshot commit holding your uncommitted work and merging it would commit that too. `--no-apply` leaves the work only on the branch, as before. `sa summon --write` works the same way for its soldier's branch.
 
 ### Undoing a run
 

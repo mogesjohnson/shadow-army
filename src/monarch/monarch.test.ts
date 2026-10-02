@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -275,6 +276,81 @@ describe("a whole run", () => {
     expect(text).toContain(`Take it:     git merge ${result.integration!.branch}`);
     expect(text).toContain("Not applied to your folder: your folder changed, since the run started, in files the run also changed.\n  one.txt");
     expect(await readLedger(join(r.dir, ".shadow"))).toEqual([]);
+  });
+
+  describe("taking a branch that was not applied", () => {
+    const appendPlan = () => monarchScript({ plans: [planReply([
+      { id: "a", title: "extend", role: "build", claims: ["src/a.txt"], brief: "append src/a.txt=the run's line" },
+    ])] });
+    const takeItLine = (text: string) => text.split("\n").find((l) => l.includes("Take it:"))!;
+    /** The `Take it:` command exactly as printed, run in a real shell from the `src` folder (it must not depend on the cwd). */
+    const runTakeIt = (r: ReturnType<typeof repo>, text: string) => {
+      const line = takeItLine(text).split("Take it:")[1]!.trim();
+      const win = process.platform === "win32";
+      execFileSync(win ? "powershell.exe" : "sh", win ? ["-NoProfile", "-Command", line] : ["-c", line], { cwd: join(r.dir, "src"), stdio: "ignore" });
+    };
+
+    it("suggests git merge when the run started from HEAD itself", async () => {
+      const r = repo();
+      const result = await runGoal(base(r, { getAdapter: oneFile().getAdapter, dispatch: fakeArmy(roster).dispatch, apply: false }));
+      expect(result.integration!.fromSnapshot).toBe(false);
+      expect(renderResult(result)).toContain(`  Take it:     git merge ${result.integration!.branch}\n`);
+      expect(renderResult(result)).not.toContain("uncommitted work");
+    });
+
+    it("takes only the run's own changes, not the snapshot of the owner's work, after a clash", async () => {
+      const r = repo();
+      r.write("src/a.txt", "uncommitted edit\n");
+      r.write("notes.txt", "also uncommitted\n");
+      const head = r.git("rev-parse", "HEAD");
+      const result = await runGoal(base(r, {
+        getAdapter: appendPlan().getAdapter,
+        dispatch: fakeArmy(roster).dispatch,
+        confirm: async () => {
+          r.write("src/a.txt", "edited while the run was under way\n");
+          return true;
+        },
+      }));
+      expect(result.integration!.fromSnapshot).toBe(true);
+      expect(result.applied).toMatchObject({ applied: false, clashes: ["src/a.txt"] });
+      const text = renderResult(result);
+      expect(text).not.toContain("Take it:     git merge");
+      expect(text).toContain("Take it:     git -C ");
+      expect(text).toContain("so git merge would commit that too");
+
+      // Nothing happens while the clash remains: git refuses and the file stays as the owner has it.
+      expect(() => runTakeIt(r, text)).toThrow();
+      expect(readFileSync(join(r.dir, "src/a.txt"), "utf8")).toBe("edited while the run was under way\n");
+
+      // Put the file back as the run found it, and the printed command applies the run's change alone.
+      r.write("src/a.txt", "uncommitted edit\n");
+      runTakeIt(r, text);
+      expect(readFileSync(join(r.dir, "src/a.txt"), "utf8")).toBe("uncommitted edit\nthe run's line\n");
+      expect(readFileSync(join(r.dir, "notes.txt"), "utf8")).toBe("also uncommitted\n");
+      expect(r.git("rev-parse", "HEAD")).toBe(head);
+      expect(r.git("diff", "--cached", "--name-only")).toBe("");
+    });
+
+    it("offers the same command after --no-apply, and it works", async () => {
+      const r = repo();
+      r.write("src/a.txt", "uncommitted edit\n");
+      const result = await runGoal(base(r, { getAdapter: appendPlan().getAdapter, dispatch: fakeArmy(roster).dispatch, apply: false }));
+      expect(result.applied).toBeUndefined();
+      const text = renderResult(result);
+      expect(text).not.toContain("Take it:     git merge");
+      runTakeIt(r, text);
+      expect(readFileSync(join(r.dir, "src/a.txt"), "utf8")).toBe("uncommitted edit\nthe run's line\n");
+      expect(r.git("status", "--porcelain")).toBe("M src/a.txt");
+    });
+
+    it("joins the two commands the way each shell needs", async () => {
+      const r = repo();
+      r.write("src/a.txt", "uncommitted edit\n");
+      const result = await runGoal(base(r, { getAdapter: appendPlan().getAdapter, dispatch: fakeArmy(roster).dispatch, apply: false }));
+      const line = (shell: "powershell" | "posix") => takeItLine(renderResult(result, shell));
+      expect(line("posix")).toMatch(/ diff --binary '--output=.*\.patch' [0-9a-f]{10} shadow\/run\/\S+ && git -C .* apply --intent-to-add /);
+      expect(line("powershell")).toMatch(/ diff --binary '--output=.*\.patch' [0-9a-f]{10} shadow\/run\/\S+; if \(\$\?\) \{ git -C .* apply --intent-to-add .* \}$/);
+    });
   });
 
   it("applies over edits the owner made before the run, because the run started from them", async () => {

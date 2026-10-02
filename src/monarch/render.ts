@@ -1,4 +1,5 @@
-import { renderApply } from "../workspace/apply.js";
+import { join } from "node:path";
+import { renderApply, shellArg, type Shell } from "../workspace/apply.js";
 import type { MonarchEvent, PlannedRun, RunResult } from "./monarch.js";
 
 const secs = (ms?: number) => (ms === undefined ? "" : ` in ${(ms / 1000).toFixed(0)}s`);
@@ -48,7 +49,25 @@ export function renderEvent(e: MonarchEvent): string | undefined {
   }
 }
 
-export function renderResult(r: RunResult): string {
+/**
+ * How to take a branch that was not applied, as a command. When the run started from a snapshot of
+ * uncommitted work, `git merge` would commit that work along with the run's own, so the run's changes
+ * alone are written to a patch file (--output, since PowerShell 5.1 would write a redirect as UTF-16)
+ * and applied the way `sa run` itself applies them. `-C` makes it work from any folder.
+ */
+function takeIt(i: NonNullable<RunResult["integration"]>, runId: string, shell: Shell): string[] {
+  if (!i.fromSnapshot) return [`  Take it:     git merge ${i.branch}`];
+  const git = `git -C ${shellArg(i.root, shell)}`;
+  const patch = join(i.root, ".shadow", `${runId}.patch`);
+  const [then, end] = shell === "powershell" ? ["; if ($?) { ", " }"] : [" && ", ""];
+  return [
+    `  Take it:     ${git} diff --binary ${shellArg(`--output=${patch}`, shell)} ${i.base.slice(0, 10)} ${i.branch}${then}${git} apply --intent-to-add ${shellArg(patch, shell)}${end}`,
+    "               (the run started from your uncommitted work, so git merge would commit that too; this takes only the run's own",
+    "               changes, and works while the files it changed are still as the run found them)",
+  ];
+}
+
+export function renderResult(r: RunResult, shell: Shell = process.platform === "win32" ? "powershell" : "posix"): string {
   if (r.status === "planned") return "Plan only; nothing was run.";
   if (r.status === "declined") return "Not run.";
   const lines: string[] = [];
@@ -68,8 +87,8 @@ export function renderResult(r: RunResult): string {
       lines.push(
         `Branch: ${r.integration.branch} (${r.integration.commits} commit${r.integration.commits === 1 ? "" : "s"}, ${r.integration.files.length} file${r.integration.files.length === 1 ? "" : "s"} changed)`,
         `  Review it:   git diff ${r.integration.base.slice(0, 7)} ${r.integration.branch}`,
-        `  Take it:     git merge ${r.integration.branch}`,
       );
+      lines.push(...takeIt(r.integration, r.runId, shell));
       if (r.applied) lines.push(renderApply(r.applied, r.integration.branch, r.runId));
     }
   }

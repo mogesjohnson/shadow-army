@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyToCheckout } from "./apply.js";
 import { GitError } from "./git.js";
 import { changedSince, snapshotFolder } from "./snapshot.js";
 import { makeRepo } from "./testRepo.testutil.js";
@@ -90,6 +91,33 @@ describe("snapshotFolder", () => {
     const sha = await snapshotFolder(r.dir);
     expect(r.git("show", `${sha}:ignored.txt`)).toBe("left by an earlier run");
     expect(r.git("ls-files", "--stage")).toBe(entries); // the real index still has it as intent-to-add
+  });
+
+  it("includes an ignored file that a run applied (so it is intent-to-add), with its content, and leaves the real index alone", async () => {
+    const r = repo();
+    const base = await snapshotFolder(r.dir);
+    r.branchFrom(base, "shadow/run/one", { "ignored.txt": "made by the run\n" });
+    expect(await applyToCheckout(r.dir, base, "shadow/run/one")).toMatchObject({ applied: true });
+    expect(r.git("status", "--porcelain", "--ignored")).toContain("A ignored.txt");
+
+    const entries = r.git("ls-files", "--stage");
+    const indexBefore = indexFile(r);
+    const sha = await snapshotFolder(r.dir);
+    expect(indexFile(r)).toBe(indexBefore);
+    expect(r.git("ls-files", "--stage")).toBe(entries);
+    expect(r.git("show", `${sha}:ignored.txt`)).toBe("made by the run");
+    expect(r.git("rev-parse", `${sha}^`)).toBe(r.git("rev-parse", "HEAD"));
+  });
+
+  it("falls back to HEAD's tree when there is no index file to copy", async () => {
+    const r = repo();
+    r.write("src/a.txt", "edited\n");
+    r.write("new.txt", "untracked\n");
+    rmSync(join(r.dir, ".git", "index"));
+    const sha = await snapshotFolder(r.dir);
+    expect(r.git("ls-tree", "-r", "--name-only", sha).split("\n")).toEqual([".gitignore", "README.md", "new.txt", "src/a.txt", "src/b.txt"]);
+    expect(r.git("show", `${sha}:src/a.txt`)).toBe("edited");
+    expect(existsSync(join(r.dir, ".git", "index"))).toBe(false); // and no index was made for the owner
   });
 
   it("does not record a skip-worktree file that is missing from the folder as deleted", async () => {

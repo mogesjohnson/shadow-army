@@ -87,9 +87,9 @@ export async function applyToCheckout(root: string, base: string, branch: string
   return { applied: true, files };
 }
 
-type Shell = "powershell" | "posix";
+export type Shell = "powershell" | "posix";
 /** A path as a shell argument: bare when it is plainly safe, quoted otherwise. */
-const shellArg = (p: string, shell: Shell) =>
+export const shellArg = (p: string, shell: Shell) =>
   /^[\w./+-]+$/.test(p) ? p : `'${p.replace(/'/g, shell === "powershell" ? "''" : "'\"'\"'")}'`;
 
 /**

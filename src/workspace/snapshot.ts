@@ -60,7 +60,7 @@ async function startFromRealIndex(root: string, head: string, env: Record<string
   try {
     const real = resolve(root, (await git(root, ["rev-parse", "--git-path", "index"])).trim());
     await copyFile(real, env.GIT_INDEX_FILE!);
-    await git(root, ["ls-files", "--stage", "-z"], { env }); // a split index, say, cannot be read from elsewhere
+    await git(root, ["ls-files", "--stage", "-z"], { env }); // make sure git can read the copy
   } catch {
     await rm(env.GIT_INDEX_FILE!, { force: true });
     await git(root, ["read-tree", head], { env });

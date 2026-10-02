@@ -56,6 +56,7 @@ Follow `.github/pull_request_template.md` exactly.
 - Writes need the build role and `--write`, and always happen in the soldier's own worktree under its claims.
 - `autonomy` (supervised / auto / full) only chooses each vendor's own flags (see each adapter's `*Access`/permission-mode function). Commands are governed by the vendor at that level; Shadow Army never adds or removes a vendor safeguard on its own.
 - With `auto` or `full`, a read-only task runs in a throwaway snapshot (its writes are discarded), and the checkout guard (`src/workspace/guard.ts`) fails any task during which something outside Shadow Army's `shadow/*` branches and worktrees changed. Keep both whenever autonomy is involved.
+- Runs, write summons and read-only throwaway copies start from `snapshotFolder` (`src/workspace/snapshot.ts`): the folder as it is, uncommitted and untracked-but-not-ignored files included, built in a private index. Never read or write the owner's real index for it. Every apply is recorded in `.shadow/applied.jsonl` so `sa undo` can reverse it; keep both.
 - `rules.md` (every soldier) and `agent.md` (`## <soldier>` sections) go into every brief, and `rules.md` into the Monarch's plan prompt. They are instructions; the guard and the claim audit are the parts that are enforced.
 - The Monarch's own calls stay read-only whatever a soldier's autonomy.
 - A Claude Code session's safety classifier refuses to launch soldiers in `full` mode. Do not try to work around that; leave live `full`-mode runs to the owner.
