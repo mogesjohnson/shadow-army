@@ -120,6 +120,7 @@ export function buildSynthesisPrompt(opts: {
     if (r.filesTouched.length) lines.push(`  files: ${r.filesTouched.join(", ")}`);
     if (r.workspace?.outOfScope.length) lines.push(`  reverted, outside its claims: ${r.workspace.outOfScope.join(", ")}`);
     if (r.openQuestions.length) lines.push(`  open questions: ${r.openQuestions.map((q) => clip(q, 200)).join(" | ")}`);
+    if (r.notes.length) lines.push(`  proposed notes: ${r.notes.map((n) => clip(n, 500)).join(" | ")}`);
   }
   lines.push(
     "",

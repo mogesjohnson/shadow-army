@@ -11,10 +11,10 @@ export interface Integration {
   base: string;
 }
 
-export async function createIntegration(repoRoot: string, shadowRoot: string, runId: string): Promise<Integration> {
+export async function createIntegration(repoRoot: string, shadowRoot: string, runId: string, baseRef = "HEAD"): Promise<Integration> {
   let base: string;
   try {
-    base = (await git(repoRoot, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+    base = (await git(repoRoot, ["rev-parse", "--verify", `${baseRef}^{commit}`])).trim();
   } catch {
     throw new GitError("the repository has no commits yet; make one before `sa run`");
   }

@@ -141,8 +141,9 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   // Everything in the run, the Monarch's planning included, works from the last commit. Say so when
   // the checkout has uncommitted changes, because nobody in the run will see them.
   await ensureShadowRoot(shadowRoot);
+  let startBase: string;
   try {
-    await git(root, ["rev-parse", "--verify", "HEAD^{commit}"]);
+    startBase = (await git(root, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
   } catch {
     throw new GitError("the repository has no commits yet; make one before `sa run`");
   }
@@ -174,7 +175,7 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   let planned: PlannedRun | undefined;
   const rejected: string[][] = [];
   const failures: string[] = [];
-  const planView = await createSnapshot(root, shadowRoot, "HEAD", `plan-${runId}`);
+  const planView = await createSnapshot(root, shadowRoot, startBase, `plan-${runId}`);
   try {
   for (const m of monarchs) {
     let previousErrors: string[] | undefined;
@@ -235,7 +236,7 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   if (!(await opts.confirm(planned))) return { ...base, status: "declined" };
 
   // Execute on a fresh integration branch. The user's checkout is never changed.
-  const integration: Integration = await createIntegration(root, shadowRoot, planned.runId);
+  const integration: Integration = await createIntegration(root, shadowRoot, planned.runId, startBase);
   phase(`working on ${integration.branch}`);
   try {
     return await executeAndReport(opts, planned, base, integration, root, shadowRoot, vault, callMonarch);
