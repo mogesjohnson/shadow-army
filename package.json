@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "node scripts/setup-hooks.mjs"
   },
   "license": "MIT",
   "private": true,

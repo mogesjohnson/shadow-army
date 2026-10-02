@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { Brief } from "./types.js";
 
-/** Windows caps a command line near 32k characters and briefs are passed as an argument. */
+/**
+ * agy takes the brief as a command-line argument, and Windows caps a command line near 32k characters.
+ * The other CLIs read it from stdin or a file, but one limit for every soldier keeps briefs portable.
+ */
 export const MAX_PROMPT_CHARS = 24_000;
 
 const FENCE = "shadow-report";
