@@ -86,13 +86,15 @@ Rules in a brief are instructions; the guard and the claim audit are what is enf
 
 ## The chat
 
-In a terminal, `sa` (or `shadow`) on its own clears the screen and opens a chat session in the style of Claude Code:
+In a terminal, `sa` (or `shadow`) on its own clears the screen and its scrollback, like `cls`, and opens a chat session in the style of Claude Code:
 
 - **The screen:** the banner, a welcome box with the folder and the Monarch, a prompt box at the bottom, and a status line with the mode, branch, ready soldiers and the session's cost.
 - **A goal:** type it and press Enter. The Monarch plans it, and the plan appears in the chat.
-- **Running it:** what happens next depends on the mode. Approve the plan with `y`/Enter, and the live dashboard plays in the session. When the run ends, the dashboard's last frame and the report stay in the transcript.
-- **Follow-ups:** a later goal can build on earlier ones ("now add tests for it"). The Monarch is told this session's earlier goals and how each ended: only those reports, never a soldier's transcript.
-- **Slash commands:** `/help`, `/plan <goal>`, `/mode`, `/army`, `/summon <soldier> <task>`, `/route <role>`, `/vault`, `/locks`, `/worktrees`, `/clear`, `/exit`. Typing `/` opens a menu; Tab completes.
+- **Running it:** what happens next depends on the mode. Approve the plan with `y`/Enter, and the live dashboard plays in the session. When the run ends, the dashboard's last frame and the report stay in the transcript, and the changes are in your folder as uncommitted edits (see "Where the work ends up" below).
+- **A question:** a goal that is only a question the Monarch can answer by reading the repository gets no soldiers. The Monarch plans zero tasks and its answer appears in the chat, followed by a dim "answered by ...; no soldiers were needed" line. The answer counts as an earlier turn, so a follow-up can build on it.
+- **Your changes:** `/diff` shows your folder's uncommitted changes, `git status --short` and then `git diff`, so the files a run applied show up too, new ones included. It runs git itself, so it is instant and free: no Monarch, no soldiers. Long output is cut at about 400 lines, with a line saying how many more there are and to run `git diff` for them all.
+- **Follow-ups:** a later goal can build on earlier ones ("now add tests for it"). The Monarch is told this session's earlier goals and how each ended, including which files were applied to your folder: only those reports, never a soldier's transcript.
+- **Slash commands:** `/help`, `/plan <goal>`, `/mode`, `/army`, `/summon <soldier> <task>`, `/route <role>`, `/vault`, `/locks`, `/worktrees`, `/diff`, `/clear`, `/exit`. Typing `/` opens a menu; Tab completes.
 - **Keys:**
   - Shift+Tab cycles the mode: ask before running, run without asking, plan only.
   - Up/Down recall earlier inputs.
