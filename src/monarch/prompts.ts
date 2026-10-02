@@ -24,6 +24,16 @@ export function describeRoster(roster: Roster, isInstalled: (cli: string) => boo
   return lines;
 }
 
+/** An earlier goal in the same chat session and how it ended. Only this crosses between goals. */
+export interface SessionTurn {
+  goal: string;
+  outcome: string;
+}
+
+/** How many earlier turns, and how much of each outcome, the Monarch is shown. */
+export const HISTORY_TURNS = 6;
+const HISTORY_OUTCOME_CHARS = 1200;
+
 export function buildPlanPrompt(opts: {
   goal: string;
   roster: Roster;
@@ -31,6 +41,7 @@ export function buildPlanPrompt(opts: {
   maxTasks: number;
   vaultNotes?: string[];
   previousErrors?: string[];
+  history?: SessionTurn[];
 }): string {
   const lines = [
     "You are the Monarch of Shadow Army. You plan; soldiers do the work.",
@@ -39,9 +50,19 @@ export function buildPlanPrompt(opts: {
     "GOAL:",
     opts.goal.trim(),
     "",
+  ];
+  const history = opts.history?.slice(-HISTORY_TURNS) ?? [];
+  if (history.length) {
+    lines.push(
+      "EARLIER IN THIS SESSION (the owner's previous goals, oldest first, and how each ended; the goal above may build on them):",
+      ...history.flatMap((h, i) => [`${i + 1}. GOAL: ${clip(h.goal, 400)}`, `   OUTCOME: ${clip(h.outcome, HISTORY_OUTCOME_CHARS)}`]),
+      "",
+    );
+  }
+  lines.push(
     "YOUR SOLDIERS (code enforces who may do what; anything else is overridden):",
     ...describeRoster(opts.roster, opts.isInstalled),
-  ];
+  );
   if (opts.roster.guide) lines.push("", "DELEGATION GUIDE:", opts.roster.guide.trim());
   if (opts.roster.rules.all.trim()) {
     lines.push(

@@ -84,10 +84,27 @@ The shipped config runs codex-sol, grok and agy at `full`, and claude-opus and c
 
 Rules in a brief are instructions; the guard and the claim audit are what is enforced. Actions outside the repository (other folders, the network) are only contained by running Shadow Army in a container or VM, which is what the vendors recommend for their unrestricted modes.
 
+## The chat
+
+In a terminal, `sa` (or `shadow`) on its own clears the screen and opens a chat session in the style of Claude Code:
+
+- **The screen:** the banner, a welcome box with the folder and the Monarch, a prompt box at the bottom, and a status line with the mode, branch, ready soldiers and the session's cost.
+- **A goal:** type it and press Enter. The Monarch plans it, and the plan appears in the chat.
+- **Running it:** what happens next depends on the mode. Approve the plan with `y`/Enter, and the live dashboard plays in the session. When the run ends, the dashboard's last frame and the report stay in the transcript.
+- **Follow-ups:** a later goal can build on earlier ones ("now add tests for it"). The Monarch is told this session's earlier goals and how each ended: only those reports, never a soldier's transcript.
+- **Slash commands:** `/help`, `/plan <goal>`, `/mode`, `/army`, `/summon <soldier> <task>`, `/route <role>`, `/vault`, `/locks`, `/worktrees`, `/clear`, `/exit`. Typing `/` opens a menu; Tab completes.
+- **Keys:**
+  - Shift+Tab cycles the mode: ask before running, run without asking, plan only.
+  - Up/Down recall earlier inputs.
+  - Esc clears the input.
+  - Ctrl+C clears the input; pressed twice on an empty prompt, it exits. During a run, the soldiers stop with it.
+
+`sa --plain`, or a `sa` whose input or output is not a terminal, prints the banner instead.
+
 ## Planned commands
 
 ```bash
-sa                          # banner + status
+sa                          # the chat (in a terminal); the banner otherwise
 sa army                     # detect soldiers, show health and models
 sa summon <soldier> "<task>"  # one-off dispatch (read-only)
 sa summon <soldier> --write --claim "src/**" "<task>"

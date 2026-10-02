@@ -6,7 +6,7 @@ import { createRunUi } from "../ui/runUi.js";
 import { GitError } from "../workspace/git.js";
 import { MonarchError, runGoal, type PlannedRun, type RunResult } from "./monarch.js";
 import { DEFAULT_MAX_TASKS } from "./plan.js";
-import { renderPlan, renderResult } from "./render.js";
+import { planOf, renderPlan, renderResult } from "./render.js";
 
 interface RunCliOptions {
   cwd: string;
@@ -111,7 +111,7 @@ export function registerRunCommand(program: Command, loadRoster: () => Roster | 
         throw e;
       }
       await ui.finish();
-      if (result.status === "planned") log(`\n${renderPlan({ monarch: result.monarch, checked: { plan: result.plan, order: result.order }, assignments: new Map(result.assignments.map((a) => [a.taskId, a])), rejected: result.rejected })}`);
+      if (result.status === "planned") log(`\n${renderPlan(planOf(result))}`);
       if (opts.json) console.log(JSON.stringify(result, null, 2));
       else console.log(`\n${renderResult(result)}`);
       if (result.status === "declined") process.exitCode = 2;

@@ -25,6 +25,7 @@ import {
   mechanicalSynthesis,
   parseSynthesis,
   type OutcomeForSynthesis,
+  type SessionTurn,
   type Synthesis,
 } from "./prompts.js";
 import { execute, type Dispatch, type RunEvent, type TaskOutcome } from "./schedule.js";
@@ -85,6 +86,8 @@ export interface RunGoalOptions {
   keepWorktrees?: boolean;
   /** Read accepted notes into briefs and record each task in the vault. Default true. */
   useVault?: boolean;
+  /** Earlier goals of the same chat session and how they ended, for the Monarch's plan. */
+  history?: SessionTurn[];
   onEvent?: (e: MonarchEvent) => void;
   /** Overrides for tests. */
   getAdapter?: (cli: string) => Adapter | undefined;
@@ -192,6 +195,7 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
           maxTasks,
           vaultNotes: acceptedNotes,
           previousErrors,
+          history: opts.history,
         });
         const reply = await callMonarch(m, prompt, planView.path);
         costUsd += reply.cost;
