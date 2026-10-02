@@ -1,13 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Adapter, RunRequest, RunResult } from "../adapters/Adapter.js";
-import { getAdapter as realAdapter } from "../adapters/registry.js";
+import type { RunRequest } from "../adapters/Adapter.js";
 import { shippedRoster } from "../core/roster.testutil.js";
 import { Vault } from "../vault/vault.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { listWorktrees } from "../workspace/worktree.js";
-import { fakeArmy } from "./fakes.testutil.js";
+import { fakeArmy, monarchScript, planReply, synthesisReply } from "./fakes.testutil.js";
 import { MonarchError, runGoal, type RunGoalOptions } from "./monarch.js";
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -17,33 +16,6 @@ const repos: ReturnType<typeof makeRepo>[] = [];
 afterEach(() => {
   while (repos.length) repos.pop()!.cleanup();
 });
-
-const planReply = (tasks: unknown[], summary = "the plan") => "My plan.\n```shadow-plan\n" + JSON.stringify({ summary, tasks }) + "\n```";
-const synthesisReply = (obj: unknown) => "Done.\n```shadow-synthesis\n" + JSON.stringify(obj) + "\n```";
-
-/**
- * Fake CLIs with the real adapters' capabilities (so the hard rules are the real ones). Monarch calls
- * are answered from a script; a CLI listed in `failing` returns an error instead.
- */
-function monarchScript(script: { plans: string[]; synthesis?: string; failing?: string[] }) {
-  const prompts: { cli: string; prompt: string; cwd: string }[] = [];
-  let planIndex = 0;
-  const getAdapter = (cli: string): Adapter | undefined => {
-    const real = realAdapter(cli);
-    if (!real) return undefined;
-    return {
-      ...real,
-      detect: async () => ({ found: true }),
-      async run(req: RunRequest): Promise<RunResult> {
-        prompts.push({ cli, prompt: req.prompt, cwd: req.cwd });
-        if (script.failing?.includes(cli)) return { text: "", isError: true, errorMessage: `${cli} is down` };
-        if (req.prompt.includes("Your soldiers have finished")) return { text: script.synthesis ?? "no block", isError: false };
-        return { text: script.plans[Math.min(planIndex++, script.plans.length - 1)]!, isError: false };
-      },
-    };
-  };
-  return { getAdapter, prompts };
-}
 
 function repo() {
   const r = makeRepo({ "README.md": "hello\n", "src/a.txt": "a\n" });

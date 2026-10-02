@@ -1,10 +1,12 @@
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import type { Roster } from "../core/roster.js";
+import { liveScreensFor } from "../ui/live.js";
+import { createRunUi } from "../ui/runUi.js";
 import { GitError } from "../workspace/git.js";
-import { MonarchError, runGoal, type PlannedRun } from "./monarch.js";
+import { MonarchError, runGoal, type PlannedRun, type RunResult } from "./monarch.js";
 import { DEFAULT_MAX_TASKS } from "./plan.js";
-import { renderEvent, renderPlan, renderResult } from "./render.js";
+import { renderPlan, renderResult } from "./render.js";
 
 interface RunCliOptions {
   cwd: string;
@@ -59,7 +61,7 @@ export function registerRunCommand(program: Command, loadRoster: () => Roster | 
     .option("--keep-worktrees", "keep the worktrees after the run (branches are always kept)")
     .option("--no-vault", "do not read from or record into the Shadow Vault")
     .option("--json", "print the whole result as JSON")
-    .action(async (goalWords: string[], opts: RunCliOptions) => {
+    .action(async (goalWords: string[], opts: RunCliOptions, cmd: Command) => {
       const roster = loadRoster();
       if (!roster) return;
       let parallel: number, maxTasks: number, taskTimeoutMs: number, waitMs: number;
@@ -74,9 +76,17 @@ export function registerRunCommand(program: Command, loadRoster: () => Roster | 
         return;
       }
       const log = (line: string) => (opts.json ? console.error(line) : console.log(line));
+      const goal = goalWords.join(" ");
+      const ui = createRunUi({
+        goal,
+        live: liveScreensFor(process.stdout, { plain: cmd.optsWithGlobals<{ plain?: boolean }>().plain, json: opts.json }),
+        log,
+        ask: (planned) => askToRun(planned, opts),
+      });
+      let result: RunResult;
       try {
-        const result = await runGoal({
-          goal: goalWords.join(" "),
+        result = await runGoal({
+          goal,
           cwd: opts.cwd,
           roster,
           monarch: opts.monarch,
@@ -88,18 +98,11 @@ export function registerRunCommand(program: Command, loadRoster: () => Roster | 
           acceptNotes: opts.acceptNotes,
           keepWorktrees: opts.keepWorktrees,
           useVault: opts.vault,
-          onEvent: (e) => log(renderEvent(e)),
-          confirm: async (planned) => {
-            log(`\n${renderPlan(planned)}`);
-            return askToRun(planned, opts);
-          },
+          onEvent: ui.onEvent,
+          confirm: ui.confirm,
         });
-        if (result.status === "planned") log(`\n${renderPlan({ monarch: result.monarch, checked: { plan: result.plan, order: result.order }, assignments: new Map(result.assignments.map((a) => [a.taskId, a])), rejected: result.rejected })}`);
-        if (opts.json) console.log(JSON.stringify(result, null, 2));
-        else console.log(`\n${renderResult(result)}`);
-        if (result.status === "declined") process.exitCode = 2;
-        if (result.outcomes.some((o) => o.status !== "ok")) process.exitCode = 1;
       } catch (e) {
+        await ui.finish(true);
         if (e instanceof MonarchError || e instanceof GitError) {
           console.error(`error: ${e.message}`);
           process.exitCode = 2;
@@ -107,5 +110,11 @@ export function registerRunCommand(program: Command, loadRoster: () => Roster | 
         }
         throw e;
       }
+      await ui.finish();
+      if (result.status === "planned") log(`\n${renderPlan({ monarch: result.monarch, checked: { plan: result.plan, order: result.order }, assignments: new Map(result.assignments.map((a) => [a.taskId, a])), rejected: result.rejected })}`);
+      if (opts.json) console.log(JSON.stringify(result, null, 2));
+      else console.log(`\n${renderResult(result)}`);
+      if (result.status === "declined") process.exitCode = 2;
+      if (result.outcomes.some((o) => o.status !== "ok")) process.exitCode = 1;
     });
 }

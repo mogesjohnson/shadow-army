@@ -1,5 +1,4 @@
-import type { PlannedRun, RunResult } from "./monarch.js";
-import type { RunEvent } from "./schedule.js";
+import type { MonarchEvent, PlannedRun, RunResult } from "./monarch.js";
 
 const secs = (ms?: number) => (ms === undefined ? "" : ` in ${(ms / 1000).toFixed(0)}s`);
 
@@ -24,8 +23,11 @@ export function renderPlan(planned: Pick<PlannedRun, "monarch" | "checked" | "as
   return lines.join("\n");
 }
 
-export function renderEvent(e: RunEvent | { type: "phase"; message: string }): string {
+/** One line of plain progress, or undefined for events the plain output does not show (the branch is in the phase line). */
+export function renderEvent(e: MonarchEvent): string | undefined {
   switch (e.type) {
+    case "branch":
+      return undefined;
     case "phase":
       return `.. ${e.message}`;
     case "start":
