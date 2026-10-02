@@ -14,6 +14,22 @@ describe("reading the prompt", () => {
     expect(parseInput("/zzzzzz")).toEqual({ kind: "unknown", typed: "zzzzzz", suggestion: undefined });
   });
 
+  it("groups quoted slash arguments and preserves Windows paths and ordinary apostrophes", () => {
+    expect(parseInput('/summon grok --write --claim "src/my file.ts" \'fix it\'')).toMatchObject({
+      kind: "command", args: ["grok", "--write", "--claim", "src/my file.ts", "fix it"],
+    });
+    expect(parseInput(String.raw`/summon grok --claim="src\my file.ts" don't change it`)).toMatchObject({
+      kind: "command", args: ["grok", "--claim=src\\my file.ts", "don't", "change", "it"],
+    });
+    expect(parseInput(String.raw`/summon grok "say \"hello\""`)).toMatchObject({
+      kind: "command", args: ["grok", 'say "hello"'],
+    });
+  });
+
+  it("reports an unfinished quoted argument", () => {
+    expect(parseInput('/summon grok "fix it')).toEqual({ kind: "error", message: "Unclosed quote in /summon arguments." });
+  });
+
   it("offers matching commands only while the first word is typed", () => {
     expect(menuFor("/").map((c) => c.name)).toEqual(COMMANDS.map((c) => c.name));
     expect(menuFor("/p").map((c) => c.name)).toEqual(["plan"]);

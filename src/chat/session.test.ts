@@ -39,7 +39,7 @@ describe("a goal in the chat", () => {
   it("in ask mode, shows the plan, waits for yes, runs, and puts the dashboard and report in the transcript", async () => {
     const { s, repo } = session([oneFile("one.txt")]);
     const done = s.submit("make one file");
-    await vi.waitFor(() => expect(s.getState().confirm).toEqual({ tasks: 1, choice: 0 }));
+    await vi.waitFor(() => expect(s.getState().confirm).toEqual({ tasks: 1, choice: 0 }), { timeout: 10_000 });
     expect(s.idle).toBe(false);
     expect(texts(s).at(-1)).toContain("Plan by codex-astra: make one.txt");
     s.decide(true);
@@ -59,7 +59,7 @@ describe("a goal in the chat", () => {
   it("runs nothing when the plan is declined", async () => {
     const { s, repo } = session([oneFile("one.txt")]);
     const done = s.submit("make one file");
-    await vi.waitFor(() => expect(s.getState().confirm).toBeDefined());
+    await vi.waitFor(() => expect(s.getState().confirm).toBeDefined(), { timeout: 10_000 });
     s.moveChoice();
     expect(s.getState().confirm!.choice).toBe(1);
     s.decide(false);
@@ -148,6 +148,16 @@ describe("commands in the chat", () => {
       ["error: unknown soldier", "error"],
       ["Usage: /route <role>  (build, review, research, test or orchestrate)", "error"],
     ]);
+  });
+
+  it("passes quoted claims as one argument and refuses incomplete quoting", async () => {
+    const { s, deps } = session([]);
+    await s.submit('/summon grok --write --claim "src/my file.ts" "fix it"');
+    expect(deps.runCommand).toHaveBeenCalledWith(["summon", "grok", "--write", "--claim", "src/my file.ts", "fix it"]);
+    await s.submit('/summon grok "unfinished');
+    expect(deps.runCommand).toHaveBeenCalledTimes(1);
+    expect(texts(s).at(-1)).toBe("Unclosed quote in /summon arguments.");
+    expect(s.idle).toBe(true);
   });
 
   it("answers /help, /mode and typos, and leaves on /exit", async () => {

@@ -167,6 +167,8 @@ export class ChatSession {
     this.clearNotice();
     this.add({ kind: "user", text: text.trim() });
     switch (input.kind) {
+      case "error":
+        return this.say(input.message, "error");
       case "goal":
         return this.runTurn(input.goal, this.state.mode);
       case "unknown":

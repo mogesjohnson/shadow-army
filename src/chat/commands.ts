@@ -24,6 +24,7 @@ export const COMMANDS: SlashCommand[] = [
 export type ChatInput =
   | { kind: "empty" }
   | { kind: "goal"; goal: string }
+  | { kind: "error"; message: string }
   | { kind: "command"; name: string; args: string[]; rest: string }
   | { kind: "unknown"; typed: string; suggestion?: string };
 
@@ -38,7 +39,39 @@ export function parseInput(text: string): ChatInput {
     return { kind: "unknown", typed: name, suggestion: closestName(name, COMMANDS.map((c) => c.name)) };
   }
   const rest = t.slice(1 + head.length).trim();
-  return { kind: "command", name, args: rest ? rest.split(/\s+/) : [], rest };
+  const args = argumentWords(rest);
+  if (!args) return { kind: "error", message: `Unclosed quote in /${name} arguments.` };
+  return { kind: "command", name, args, rest };
+}
+
+/** Quotes group command arguments without shell expansion; ordinary Windows paths stay literal. */
+function argumentWords(text: string): string[] | undefined {
+  const words: string[] = [];
+  let word = "";
+  let started = false;
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const next = text[i + 1];
+    if (quote) {
+      if (c === quote) quote = undefined;
+      else if (quote === '"' && c === "\\" && next === '"') word += text[++i];
+      else word += c;
+    } else if (/\s/.test(c)) {
+      if (started) words.push(word);
+      word = "";
+      started = false;
+    } else {
+      // An apostrophe within an ordinary word (don't) is text, as is a quote within a task word.
+      if ((c === '"' || c === "'") && (!started || word.endsWith("="))) quote = c;
+      else if (c === "\\" && next && (/\s/.test(next) || next === '"' || next === "'")) word += text[++i];
+      else word += c;
+      started = true;
+    }
+  }
+  if (quote) return undefined;
+  if (started) words.push(word);
+  return words;
 }
 
 /** The commands to offer while the first word of a /command is being typed. */

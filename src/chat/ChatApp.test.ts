@@ -104,6 +104,12 @@ describe("the chat screen", () => {
     expect(term.text()).toContain("ran sa worktrees");
   });
 
+  it("deletes the character under the cursor with Delete", async () => {
+    const { press, deps } = chat();
+    await press("/arxmy", "\x1b[D", "\x1b[D", "\x1b[D", "\x1b[3~", KEY.enter);
+    await vi.waitFor(() => expect(deps.runCommand).toHaveBeenCalledWith(["army"]));
+  });
+
   it("cycles the mode with Shift+Tab", async () => {
     const { press, sees, session } = chat();
     await press(KEY.shiftTab);

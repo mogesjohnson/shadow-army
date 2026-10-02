@@ -252,7 +252,11 @@ export function ChatApp({
     if (key.home || (key.ctrl && input === "a")) return setCursor(0);
     if (key.end || (key.ctrl && input === "e")) return setCursor(value.length);
     if (key.escape) return edit("");
-    if (key.backspace || key.delete) {
+    if (key.delete) {
+      if (cursor < value.length) edit(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
+      return;
+    }
+    if (key.backspace) {
       if (cursor > 0) edit(value.slice(0, cursor - 1) + value.slice(cursor), cursor - 1);
       return;
     }
