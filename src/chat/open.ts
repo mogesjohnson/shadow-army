@@ -8,9 +8,11 @@ import { git } from "../workspace/git.js";
 import { ChatApp, type StatusInfo } from "./ChatApp.js";
 import { ChatSession } from "./session.js";
 
-/** Clear the visible screen and put the cursor at the top, as Claude Code does on start. */
-export const CLEAR_SCREEN = "\x1b[2J\x1b[H";
-/** /clear also drops the scrollback. */
+/**
+ * Clear the screen and the scrollback, and put the cursor at the top, like `cls`. Clearing only the
+ * visible screen leaves the old output behind it: in Windows Terminal it just slides up. The chat
+ * clears like this when it starts and on /clear.
+ */
 export const CLEAR_ALL = "\x1b[2J\x1b[3J\x1b[H";
 
 /** Run `sa <args> --plain` as a child of this same CLI, the way it was started, and capture its output. */
@@ -39,7 +41,7 @@ async function loadStatus(cwd: string, roster: Roster): Promise<StatusInfo> {
 /** `sa` in a terminal: clear the screen and chat until the owner exits. */
 export async function openChat(opts: { version: string; roster: Roster; cwd: string }): Promise<void> {
   const stdout = process.stdout;
-  stdout.write(CLEAR_SCREEN);
+  stdout.write(CLEAR_ALL);
   let app: Instance | undefined;
   const session = new ChatSession({
     cwd: opts.cwd,
