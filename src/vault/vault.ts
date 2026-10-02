@@ -35,7 +35,7 @@ export class VaultError extends Error {}
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Names and ids become path segments, so refuse anything that could point outside the vault. */
-function assertSafe(kind: string, value: string): void {
+export function assertSafe(kind: string, value: string): void {
   if (!SAFE_NAME.test(value) || value.includes("..")) {
     throw new VaultError(`invalid ${kind} ${JSON.stringify(value)}`);
   }

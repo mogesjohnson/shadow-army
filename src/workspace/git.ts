@@ -1,0 +1,38 @@
+import { execa } from "execa";
+
+export class GitError extends Error {}
+
+/** Run git in `cwd`; returns stdout, throws GitError with git's own message on failure. */
+export async function git(cwd: string, args: string[]): Promise<string> {
+  let r;
+  try {
+    r = await execa("git", args, { cwd, reject: false, stdin: "ignore", windowsHide: true });
+  } catch (e) {
+    throw new GitError(`could not run git: ${(e as Error).message}`);
+  }
+  if (r.exitCode !== 0) {
+    throw new GitError(`git ${args.join(" ")} failed: ${String(r.stderr || r.stdout).trim()}`);
+  }
+  return String(r.stdout);
+}
+
+/** Like git(), but returns whether it exited 0 instead of throwing. */
+export async function gitOk(cwd: string, args: string[]): Promise<boolean> {
+  try {
+    const r = await execa("git", args, { cwd, reject: false, stdin: "ignore", windowsHide: true });
+    return r.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** NUL-separated git output (the -z flag) to a list; avoids git's quoting of unusual file names. */
+export const splitZ = (out: string): string[] => out.split("\0").filter(Boolean);
+
+export async function repoRoot(cwd: string): Promise<string> {
+  try {
+    return (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+  } catch {
+    throw new GitError(`${cwd} is not inside a git repository`);
+  }
+}

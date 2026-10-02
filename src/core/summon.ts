@@ -5,6 +5,7 @@ import { buildPrompt, parseReport } from "./brief.js";
 import type { Roster } from "./roster.js";
 import type { Brief, Report } from "./types.js";
 import type { Vault } from "../vault/vault.js";
+import { openWriteSession, WorkspaceError, type WriteSession } from "../workspace/session.js";
 
 export interface SummonOptions {
   roster: Roster;
@@ -13,6 +14,10 @@ export interface SummonOptions {
   role?: Role;
   cwd: string;
   write?: boolean;
+  /** Files a writing soldier may touch: paths or globs relative to the repo root. Required with `write`. */
+  claims?: string[];
+  /** How long a write run queues for a conflicting lease before giving up. Default: fail immediately. */
+  waitMs?: number;
   effort?: Effort;
   constraints?: string[];
   vaultNotes?: string[];
@@ -22,8 +27,10 @@ export interface SummonOptions {
    * are proposed back to the vault.
    */
   vault?: Vault;
-  /** Override for tests. */
+  /** Overrides for tests. */
   adapter?: Adapter;
+  shadowRoot?: string;
+  leaseTtlMs?: number;
 }
 
 export class SummonError extends Error {}
@@ -43,69 +50,120 @@ export async function summon(opts: SummonOptions): Promise<Report> {
   const verdict = checkAssignment(soldier, adapter, role, opts.write ?? false);
   if (!verdict.ok) throw new SummonError(verdict.reason);
 
-  let vaultError: string | undefined;
-  let acceptedNotes: string[] = [];
-  if (opts.vault) {
+  // A writing soldier gets its own worktree and a lease on the files it claims. Read-only runs take
+  // neither: reading is never blocked.
+  let session: WriteSession | undefined;
+  if (verdict.write) {
     try {
-      acceptedNotes = await opts.vault.acceptedNotes();
+      session = await openWriteSession({
+        cwd: opts.cwd,
+        soldier: opts.soldier,
+        claims: opts.claims ?? [],
+        waitMs: opts.waitMs,
+        ttlMs: opts.leaseTtlMs,
+        shadowRoot: opts.shadowRoot,
+      });
     } catch (e) {
-      vaultError = `could not read the vault: ${(e as Error).message}`;
+      if (e instanceof WorkspaceError) throw new SummonError(e.message);
+      throw e;
     }
   }
 
-  const brief: Brief = {
-    task: opts.task,
-    role: verdict.role,
-    constraints: opts.constraints ?? [],
-    vaultNotes: [...acceptedNotes, ...(opts.vaultNotes ?? [])],
-    write: verdict.write,
-  };
-  let prompt: string;
+  // Set just before the soldier starts. A write run that fails before that point leaves nothing behind.
+  let started = false;
   try {
-    prompt = buildPrompt(brief);
-  } catch (e) {
-    throw new SummonError((e as Error).message);
-  }
-
-  const timeoutMs = opts.timeoutMs ?? 600_000;
-  const started = Date.now();
-  const result = await adapter.run({
-    prompt,
-    model: soldier.model,
-    cwd: opts.cwd,
-    write: verdict.write,
-    effort: opts.effort,
-    timeoutMs,
-  });
-  const durationMs = Date.now() - started;
-
-  const base = {
-    soldier: opts.soldier,
-    role: verdict.role,
-    model: soldier.model,
-    durationMs,
-    inputTokens: result.usage?.inputTokens,
-    outputTokens: result.usage?.outputTokens,
-    costUsd: result.costUsd,
-    resolvedModel: result.resolvedModel,
-  };
-
-  const report: Report = result.isError
-    ? {
-        ...base,
-        status: "error",
-        summary: result.text.trim(),
-        filesTouched: [],
-        openQuestions: [],
-        notes: [],
-        structured: false,
-        error: result.errorMessage ?? "soldier reported an error",
+    let vaultError: string | undefined;
+    let acceptedNotes: string[] = [];
+    if (opts.vault) {
+      try {
+        acceptedNotes = await opts.vault.acceptedNotes();
+      } catch (e) {
+        vaultError = `could not read the vault: ${(e as Error).message}`;
       }
-    : { ...base, status: "ok", ...parseReport(result.text) };
+    }
 
-  if (vaultError) report.vaultError = vaultError;
-  if (opts.vault) await record(opts.vault, report, brief, opts.soldier);
-  return report;
+    const constraints = [...(opts.constraints ?? [])];
+    if (session) {
+      constraints.push(
+        `You may only create or change files matching: ${session.claims.join(", ")}. Edits to anything else are automatically reverted.`,
+      );
+    }
+    const brief: Brief = {
+      task: opts.task,
+      role: verdict.role,
+      constraints,
+      vaultNotes: [...acceptedNotes, ...(opts.vaultNotes ?? [])],
+      write: verdict.write,
+    };
+    let prompt: string;
+    try {
+      prompt = buildPrompt(brief);
+    } catch (e) {
+      throw new SummonError((e as Error).message);
+    }
+
+    const timeoutMs = opts.timeoutMs ?? 600_000;
+    const startedAt = Date.now();
+    started = true;
+    const result = await adapter.run({
+      prompt,
+      model: soldier.model,
+      cwd: session?.cwd ?? opts.cwd,
+      write: verdict.write,
+      effort: opts.effort,
+      timeoutMs,
+    });
+    const durationMs = Date.now() - startedAt;
+
+    const base = {
+      soldier: opts.soldier,
+      role: verdict.role,
+      model: soldier.model,
+      durationMs,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      costUsd: result.costUsd,
+      resolvedModel: result.resolvedModel,
+    };
+
+    const report: Report = result.isError
+      ? {
+          ...base,
+          status: "error",
+          summary: result.text.trim(),
+          filesTouched: [],
+          openQuestions: [],
+          notes: [],
+          structured: false,
+          error: result.errorMessage ?? "soldier reported an error",
+        }
+      : { ...base, status: "ok", ...parseReport(result.text) };
+
+    if (session) {
+      // The audit, not the soldier's own account, decides what was touched. Edits outside the claims
+      // are reverted and what is left is committed to the soldier's branch, whether or not the run
+      // succeeded; the report's status says whether that branch is worth merging.
+      const firstLine = opts.task.trim().split("\n")[0]!.slice(0, 72);
+      const failed = report.status === "error" ? " [failed run]" : "";
+      try {
+        const workspace = await session.finish(`shadow(${opts.soldier})${failed}: ${firstLine}`);
+        report.workspace = workspace;
+        report.filesTouched = workspace.inScope;
+      } catch (e) {
+        // Without a completed audit nothing can be said about scope, so the run cannot count as ok.
+        const msg = `workspace audit failed, so the soldier's branch was not checked: ${(e as Error).message}`;
+        report.status = "error";
+        report.error = report.error ? `${report.error}; ${msg}` : msg;
+      }
+    }
+
+    if (vaultError) report.vaultError = vaultError;
+    if (opts.vault) await record(opts.vault, report, brief, opts.soldier);
+    return report;
+  } finally {
+    if (session && !started) await session.discard();
+    await session?.release();
+  }
 }
 
 /** Save the run and propose the report's notes. A vault failure is attached to the report, never thrown. */
@@ -136,6 +194,20 @@ export function renderReport(r: Report): string {
   if (r.error) lines.push(`Error: ${r.error}`, "");
   if (r.summary) lines.push(r.summary, "");
   if (r.filesTouched.length) lines.push("Files touched:", ...r.filesTouched.map((f) => `  - ${f}`), "");
+  if (r.workspace) {
+    const w = r.workspace;
+    lines.push(`Branch: ${w.branch} ${w.commit ? `(at ${w.commit})` : "(no changes)"}`);
+    lines.push(`Worktree: ${w.path}`);
+    lines.push(`Claims: ${w.claims.join(", ")}`);
+    if (w.outOfScope.length) {
+      lines.push(`SCOPE VIOLATION: edited outside its claims; reverted: ${w.outOfScope.join(", ")}`);
+    }
+    if (w.leaseLost) lines.push("WARNING: the lease could not be renewed, so the claimed files may have changed hands mid-run");
+    if (w.uncommittedIgnored) {
+      lines.push("Note: your checkout had uncommitted changes; the soldier worked from the last commit and did not see them");
+    }
+    lines.push("");
+  }
   if (r.openQuestions.length) lines.push("Open questions:", ...r.openQuestions.map((q) => `  - ${q}`), "");
   if (r.notes.length) {
     const hint = r.runId && !r.vaultError ? " (proposed; review with `sa vault`)" : "";
