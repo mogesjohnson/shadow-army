@@ -53,6 +53,18 @@ describe("checkout guard", () => {
     expect(await changesWhile(r, () => r.git("branch", "-D", "main"))).toEqual(["refs/heads/main was deleted"]);
   });
 
+  it("catches changed staged content when status and working file content stay the same", async () => {
+    const r = repo();
+    r.write("src/a.ts", "first staged content\n");
+    r.git("add", "src/a.ts");
+    r.write("src/a.ts", "working content\n");
+    expect(await changesWhile(r, () => {
+      r.write("src/a.ts", "different staged content\n");
+      r.git("add", "src/a.ts");
+      r.write("src/a.ts", "working content\n");
+    })).toEqual(["files in your checkout changed: src/a.ts"]);
+  });
+
   it("ignores Shadow Army's own shadow/* branches, which change during a run by design", async () => {
     const r = repo();
     expect(await changesWhile(r, () => r.git("branch", "shadow/grok/t1"))).toEqual([]);

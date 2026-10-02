@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -83,6 +83,27 @@ describe("autonomy", () => {
       expect(report.autonomyNote).toMatch(/not in a git repository.*instead of full/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps read-only snapshots inside their worktree when cwd is reached through a link", async () => {
+    const r = repo();
+    const link = `${r.dir}-link`;
+    symlinkSync(r.dir, link, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const s = soldier((req) => {
+        const path = realpathSync.native(req.cwd).replace(/\\/g, "/");
+        expect(path).toContain("/.shadow/worktrees/look-free-");
+        expect(path.endsWith("/src")).toBe(true);
+        expect(readFileSync(join(req.cwd, "a.ts"), "utf8")).toBe("a\n");
+        put(req.cwd, "a.ts", "discarded\n");
+      });
+      const report = await summon({ roster, soldier: "free", role: "research", task: "look", cwd: join(link, "src"), adapter: s.adapter });
+      expect(report.status).toBe("ok");
+      expect(readFileSync(join(r.dir, "src/a.ts"), "utf8")).toBe("a\n");
+      expect(await listWorktrees(r.dir, join(r.dir, ".shadow"))).toEqual([]);
+    } finally {
+      rmSync(link, { recursive: false, force: true });
     }
   });
 

@@ -9,6 +9,8 @@ export interface RepoState {
   branch: string;
   /** path -> git status code and a hash of its content, for every file `git status` lists. */
   dirty: Map<string, string>;
+  /** path -> tracked mode, blob ids and merge stages; catches changes to staged content. */
+  index: Map<string, string>;
   /** ref -> object id, for every ref except Shadow Army's own `shadow/*` branches. */
   refs: Map<string, string>;
 }
@@ -37,12 +39,20 @@ export async function captureState(root: string): Promise<RepoState> {
     dirty.set(path, `${code} ${hash}`);
   }
 
+  const index = new Map<string, string>();
+  for (const entry of splitZ(await git(root, ["ls-files", "--stage", "-z"]))) {
+    const tab = entry.indexOf("\t");
+    const path = entry.slice(tab + 1);
+    const metadata = entry.slice(0, tab);
+    index.set(path, `${index.get(path) ?? ""}${metadata}\n`);
+  }
+
   const refs = new Map<string, string>();
   for (const line of (await git(root, ["for-each-ref", "--format=%(refname) %(objectname)"])).split("\n")) {
     const [name, oid] = line.trim().split(" ");
     if (name && oid && !OURS.test(name)) refs.set(name, oid);
   }
-  return { head, branch, dirty, refs };
+  return { head, branch, dirty, index, refs };
 }
 
 /** Plain-language differences between two states; empty when nothing outside Shadow Army's own branches changed. */
@@ -54,8 +64,8 @@ export function diffState(before: RepoState, after: RepoState): string[] {
     changes.push(`${before.branch || "HEAD"} moved from ${before.head.slice(0, 7) || "nothing"} to ${after.head.slice(0, 7)}`);
   }
 
-  const files = new Set([...before.dirty.keys(), ...after.dirty.keys()]);
-  const touched = [...files].filter((f) => before.dirty.get(f) !== after.dirty.get(f)).sort();
+  const files = new Set([...before.dirty.keys(), ...after.dirty.keys(), ...before.index.keys(), ...after.index.keys()]);
+  const touched = [...files].filter((f) => before.dirty.get(f) !== after.dirty.get(f) || before.index.get(f) !== after.index.get(f)).sort();
   if (touched.length) changes.push(`files in your checkout changed: ${touched.join(", ")}`);
 
   for (const [name, oid] of after.refs) {

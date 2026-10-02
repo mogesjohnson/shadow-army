@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { join, relative } from "node:path";
 import type { Adapter, Autonomy, Effort, Role } from "../adapters/Adapter.js";
 import { getAdapter } from "../adapters/registry.js";
-import { repoRoot } from "../workspace/git.js";
+import { canonicalPath, repoRoot } from "../workspace/git.js";
 import { captureState, diffState } from "../workspace/guard.js";
 import { createSnapshot } from "../workspace/worktree.js";
 import { checkAssignment, defaultRole } from "./assign.js";
@@ -101,7 +101,7 @@ export async function summon(opts: SummonOptions): Promise<Report> {
         const shadowRoot = opts.shadowRoot ?? join(root, ".shadow");
         await ensureShadowRoot(shadowRoot);
         lookCopy = await createSnapshot(root, shadowRoot, "HEAD", `look-${opts.soldier}-${randomBytes(3).toString("hex")}`);
-        cwd = join(lookCopy.path, relative(root, opts.cwd));
+        cwd = join(lookCopy.path, relative(canonicalPath(root), canonicalPath(opts.cwd)));
       } else {
         autonomyNote = `not in a git repository, so this read-only run used supervised mode instead of ${autonomy}`;
         autonomy = "supervised";
