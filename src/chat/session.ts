@@ -5,6 +5,7 @@ import { planOf, renderPlan, renderResult } from "../monarch/render.js";
 import type { Steps, Working } from "../ui/Dashboard.js";
 import { applyEvent, viewFromPlan, type RunView } from "../ui/runView.js";
 import { cliArgsFor, helpText, parseInput } from "./commands.js";
+import { folderChanges } from "./diff.js";
 
 export type Mode = "ask" | "auto" | "plan";
 export const MODES: Mode[] = ["ask", "auto", "plan"];
@@ -61,16 +62,36 @@ export const EXIT_WINDOW_MS = 2000;
 
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
+/** A plan with no tasks and a summary is the Monarch answering a question itself: the summary is the answer. */
+const answerOf = (r: RunResult): string | undefined => (r.order.length ? undefined : r.plan.summary.trim() || undefined);
+
+const CHANGE_WORD: Record<string, string> = { A: "added", M: "modified", D: "deleted" };
+const NAMED_FILES = 10;
+
+/** Where a run's work ended up, so a follow-up knows whether it is in the owner's folder or only on the branch. */
+function whereWorkIs(r: RunResult): string {
+  if (!r.integration?.kept) return "";
+  const { branch } = r.integration;
+  if (r.applied?.applied && r.applied.files.length) {
+    const files = r.applied.files.map((f) => `${CHANGE_WORD[f.change] ?? "changed"} ${f.path}`);
+    const named = files.length > NAMED_FILES ? [...files.slice(0, NAMED_FILES), `and ${files.length - NAMED_FILES} more`] : files;
+    return ` The changes were applied to the owner's folder as uncommitted edits (${named.join(", ")}); the work is also on ${branch}.`;
+  }
+  const notApplied = r.applied && !r.applied.applied ? ` It was not applied to the folder: ${r.applied.reason}.` : "";
+  return ` The work is on ${branch}.${notApplied}`;
+}
+
 /** What the Monarch is told about a finished goal when the next one comes. */
 function outcomeOf(r: RunResult): string {
+  const answer = answerOf(r);
+  if (answer) return `the Monarch answered it directly, with no soldiers. Answer: ${answer}`;
   if (r.status === "planned") return `planned only, not run. Plan: ${r.plan.summary}`;
   if (r.status === "declined") return `the owner declined the plan: ${r.plan.summary}`;
   if (!r.outcomes.length) return `nothing to do. ${r.plan.summary}`;
   const counts = new Map<string, number>();
   for (const o of r.outcomes) counts.set(o.status, (counts.get(o.status) ?? 0) + 1);
   const tasks = [...counts].map(([s, n]) => `${n} ${s}`).join(", ");
-  const where = r.integration?.kept ? ` The work is on ${r.integration.branch}.` : "";
-  return `${r.synthesis?.summary.trim() ?? r.plan.summary} (tasks: ${tasks}).${where}`;
+  return `${r.synthesis?.summary.trim() ?? r.plan.summary} (tasks: ${tasks}).${whereWorkIs(r)}`;
 }
 
 /**
@@ -198,13 +219,21 @@ export class ChatSession {
       }
       case "plan":
         return rest ? this.runTurn(rest, "plan") : this.say("Usage: /plan <goal>", "error");
+      case "diff":
+        // Free: git runs here, with no `sa` child and no Monarch or soldier.
+        return this.working(name, "/diff", async () => ({ output: await folderChanges(this.deps.cwd), ok: true }));
     }
     const cli = cliArgsFor(name, args);
     if (!cli) return;
     if ("usage" in cli) return this.say(`Usage: ${cli.usage}`, "error");
-    this.set({ busy: { kind: "command", work: { label: `/${name}${rest ? ` ${clip(rest, 60)}` : ""}`, startedAt: this.clock() } } });
+    return this.working(name, `/${name}${rest ? ` ${clip(rest, 60)}` : ""}`, () => this.deps.runCommand(cli));
+  }
+
+  /** Show `label` as the live line while `work` runs, then its output in the transcript. */
+  private async working(name: string, label: string, work: () => Promise<{ output: string; ok: boolean }>) {
+    this.set({ busy: { kind: "command", work: { label, startedAt: this.clock() } } });
     try {
-      const r = await this.deps.runCommand(cli);
+      const r = await work();
       this.say(r.output.trimEnd() || "(no output)", r.ok ? "normal" : "error");
     } catch (e) {
       this.say(`/${name} failed: ${(e as Error).message}`, "error");
@@ -266,8 +295,15 @@ export class ChatSession {
       });
       endSteps(false);
       if (view) this.add({ kind: "dashboard", view: { ...view, ended: "done" }, now: this.clock() });
-      if (!planShown) this.say(renderPlan(planOf(result)));
-      if (result.status !== "planned" && (result.status !== "completed" || result.outcomes.length)) this.say(renderResult(result));
+      const answer = answerOf(result);
+      if (answer) {
+        // No tasks: the Monarch answered the question itself, so its summary is the answer, not a plan.
+        this.say(answer);
+        this.say(`answered by ${result.monarch}; no soldiers were needed`, "dim");
+      } else {
+        if (!planShown) this.say(renderPlan(planOf(result)));
+        if (result.status !== "planned" && (result.status !== "completed" || result.outcomes.length)) this.say(renderResult(result));
+      }
       this.history.push({ goal, outcome: outcomeOf(result) });
       this.set({ sessionCostUsd: this.state.sessionCostUsd + result.costUsd });
     } catch (e) {

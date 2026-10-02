@@ -96,6 +96,7 @@ describe("the chat screen", () => {
     const { press, sees, deps, term } = chat();
     await press("/");
     await sees("/summon <soldier> <task>  send one brief to one soldier");
+    await sees(/\/diff\s+your folder's uncommitted changes/);
     await press("pl", KEY.tab);
     await sees("> /plan");
     await press(KEY.ctrlC);

@@ -17,6 +17,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "vault", args: "[notes|runs]", help: "the Shadow Vault's shared notes or run records" },
   { name: "locks", args: "", help: "which soldier holds which files" },
   { name: "worktrees", args: "", help: "the soldiers' worktrees and branches" },
+  { name: "diff", args: "", help: "your folder's uncommitted changes" },
   { name: "clear", args: "", help: "clear the screen and forget this session's goals" },
   { name: "exit", args: "", help: "leave Shadow Army" },
 ];
@@ -103,6 +104,7 @@ export function helpText(): string {
   const width = Math.max(...COMMANDS.map((c) => `/${c.name} ${c.args}`.trim().length));
   return [
     "Type a goal and press Enter: the Monarch plans it, soldiers carry it out, and the changes land in your folder uncommitted.",
+    "A question the Monarch can answer from the repository is answered right there, with no soldiers.",
     "",
     "Commands:",
     ...COMMANDS.map((c) => `  ${`/${c.name} ${c.args}`.trim().padEnd(width)}  ${c.help}`),

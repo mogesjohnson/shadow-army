@@ -83,6 +83,7 @@ export function buildPlanPrompt(opts: {
     '- dependsOn: ids of the tasks that must succeed first. The task then starts from their merged work and sees their reports. A review task should depend on the build tasks it reviews.',
     '- difficulty: "hard" only for genuinely hard or risky changes.',
     '- soldier: optional; your preferred soldier for the task.',
+    '- If the goal is only a question that you can answer by reading the repository yourself, plan no tasks: use an empty "tasks" list and put the complete answer in "summary" as plain text. Do not plan a research task for it. Plan tasks only when something must be changed, run or checked by a soldier.',
   );
   if (opts.previousErrors?.length) {
     lines.push("", "YOUR PREVIOUS PLAN WAS REJECTED. Fix every one of these and return a corrected plan:", ...opts.previousErrors.map((e) => `- ${e}`));
@@ -91,7 +92,7 @@ export function buildPlanPrompt(opts: {
     "",
     "Reply with a short explanation of your plan, then end with exactly one fenced block in this form:",
     "```" + PLAN_FENCE,
-    '{"summary": "the plan in one or two sentences", "tasks": [{"id": "t1", "title": "short title", "role": "build", "difficulty": "routine", "soldier": "grok", "claims": ["src/example.ts"], "dependsOn": [], "brief": "complete instructions for the soldier"}]}',
+    '{"summary": "the plan in one or two sentences, or, when you plan no tasks because you are answering a question, the whole answer (a JSON string: write line breaks as \\n)", "tasks": [{"id": "t1", "title": "short title", "role": "build", "difficulty": "routine", "soldier": "grok", "claims": ["src/example.ts"], "dependsOn": [], "brief": "complete instructions for the soldier"}]}',
     "```",
   );
   return lines.join("\n");

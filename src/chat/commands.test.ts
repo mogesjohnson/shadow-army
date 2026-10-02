@@ -56,4 +56,13 @@ describe("reading the prompt", () => {
     expect(text).toContain("Shift+Tab");
     expect(text).toContain("Ctrl+C");
   });
+
+  it("has /diff, which takes no arguments, shows in the menu and /help, and is not handed to sa", () => {
+    expect(COMMANDS.find((c) => c.name === "diff")).toEqual({ name: "diff", args: "", help: "your folder's uncommitted changes" });
+    expect(parseInput("/diff")).toEqual({ kind: "command", name: "diff", args: [], rest: "" });
+    expect(menuFor("/di").map((c) => c.name)).toEqual(["diff"]);
+    expect(menuFor("/").map((c) => c.name)).toContain("diff");
+    expect(helpText()).toMatch(/\/diff\s+your folder's uncommitted changes/);
+    expect(cliArgsFor("diff", [])).toBeUndefined();
+  });
 });

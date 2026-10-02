@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { shippedRoster } from "../core/roster.testutil.js";
 import { fakeArmy, monarchScript, planReply, synthesisReply } from "../monarch/fakes.testutil.js";
@@ -92,14 +95,18 @@ describe("a goal in the chat", () => {
   });
 
   it("tells the Monarch about the session's earlier goals, and forgets them after /clear", async () => {
-    const { s, m, deps } = session([oneFile("one.txt"), oneFile("two.txt"), oneFile("three.txt")]);
+    const { s, m, deps, repo } = session([oneFile("one.txt"), oneFile("two.txt"), oneFile("three.txt")]);
     s.cycleMode(); // auto
     await s.submit("make one file");
+    expect(repo.git("status", "--short")).toContain("one.txt"); // applied to the folder, uncommitted
     await s.submit("now make another");
     const second = m.prompts.find((p) => p.prompt.includes("GOAL:\nnow make another"))!.prompt;
     expect(second).toContain("EARLIER IN THIS SESSION");
     expect(second).toContain("1. GOAL: make one file");
-    expect(second).toMatch(/OUTCOME: The file is there\. \(tasks: 1 ok\)\. The work is on shadow\/run\//);
+    // The changes are in the folder now, not only on the branch, and the Monarch is told which files.
+    expect(second).toMatch(
+      /OUTCOME: The file is there\. \(tasks: 1 ok\)\. The changes were applied to the owner's folder as uncommitted edits \(added one\.txt\); the work is also on shadow\/run\//,
+    );
 
     await s.submit("/clear");
     expect(deps.clearScreen).toHaveBeenCalled();
@@ -108,6 +115,57 @@ describe("a goal in the chat", () => {
     expect(s.turns()).toEqual([]);
     await s.submit("a fresh start");
     expect(m.prompts.find((p) => p.prompt.includes("GOAL:\na fresh start"))!.prompt).not.toContain("EARLIER IN THIS SESSION");
+  });
+
+  it("tells the Monarch the work is only on the branch when it could not be applied to the folder", async () => {
+    const { s, m, repo } = session([oneFile("one.txt"), oneFile("two.txt")]);
+    repo.write("one.txt", "my own work\n"); // a local change to a file the run will also add
+    s.cycleMode(); // auto
+    await s.submit("make one file");
+    expect(repo.git("status", "--short")).toBe("?? one.txt"); // still only the owner's own file
+    await s.submit("now make another");
+    const second = m.prompts.find((p) => p.prompt.includes("GOAL:\nnow make another"))!.prompt;
+    expect(second).toMatch(
+      /OUTCOME: The file is there\. \(tasks: 1 ok\)\. The work is on shadow\/run\/\S+\. It was not applied to the folder: you have uncommitted changes to files the run also changed\./,
+    );
+    expect(second).not.toContain("The changes were applied");
+  });
+
+  it("shows a question the Monarch answered itself as its answer, with no plan and no soldiers", async () => {
+    const answer = "The CLI starts in src/cli.ts.\nIt uses commander.";
+    const { s, m, repo } = session([planReply([], answer), planReply([], "Yes, it does.")]);
+    await s.submit("where does the CLI start?");
+
+    // Ask mode, yet nothing to approve: the answer is plain transcript text, then a dim note.
+    expect(kinds(s)).toEqual(["welcome", "user", "steps", "text", "text"]);
+    const [said, note] = s.getState().entries.slice(-2);
+    expect(said).toMatchObject({ kind: "text", text: answer, tone: "normal" });
+    expect(note).toMatchObject({ kind: "text", text: "answered by codex-astra; no soldiers were needed", tone: "dim" });
+    expect(texts(s).join("\n")).not.toContain("Nothing to do.");
+    expect(texts(s).join("\n")).not.toContain("Plan by");
+    const steps = s.getState().entries[2]!;
+    expect(steps.kind === "steps" && steps.steps.current.done).toBe("ok");
+    expect(s.getState()).toMatchObject({ busy: undefined, confirm: undefined });
+    expect(m.prompts).toHaveLength(1); // only the plan call: no soldier, no final report
+    expect(repo.git("branch", "--list", "shadow/*")).toBe("");
+
+    // The next goal's plan prompt knows the answer.
+    expect(s.turns()).toEqual([{ goal: "where does the CLI start?", outcome: expect.stringContaining(`Answer: ${answer}`) }]);
+    await s.submit("does it use anything else?");
+    const second = m.prompts.find((p) => p.prompt.includes("GOAL:\ndoes it use anything else?"))!.prompt;
+    expect(second).toContain("1. GOAL: where does the CLI start?");
+    expect(second).toContain("OUTCOME: the Monarch answered it directly, with no soldiers. Answer: The CLI starts in src/cli.ts. It uses commander.");
+  });
+
+  it("shows the answer in plan mode too, and still shows a plan with tasks as a plan", async () => {
+    const { s } = session([planReply([], "It is in src/cli.ts."), oneFile("one.txt")]);
+    s.cycleMode();
+    s.cycleMode();
+    expect(s.getState().mode).toBe("plan");
+    await s.submit("where is the CLI?");
+    expect(texts(s)).toEqual(["It is in src/cli.ts.", "answered by codex-astra; no soldiers were needed"]);
+    await s.submit("make one file");
+    expect(texts(s).at(-1)).toContain("Plan by codex-astra: make one.txt");
   });
 
   it("keeps the session going when the Monarch fails, and says why", async () => {
@@ -174,6 +232,58 @@ describe("commands in the chat", () => {
     expect(deps.exit).toHaveBeenCalledTimes(1);
   });
 
+  it("/diff says so when the folder has no uncommitted changes", async () => {
+    const { s, deps, m } = session([]);
+    await s.submit("/diff");
+    expect(texts(s)).toEqual(["No uncommitted changes."]);
+    expect(deps.runCommand).not.toHaveBeenCalled(); // git runs in the chat itself: no `sa`, no Monarch, no soldier
+    expect(m.prompts).toEqual([]);
+    expect(s.idle).toBe(true);
+  });
+
+  it("/diff shows git status and git diff, new files marked intent-to-add included", async () => {
+    const { s, deps, m, repo } = session([]);
+    repo.write("README.md", "hello\nworld\n");
+    repo.write("new.txt", "brand new\n");
+    repo.git("add", "-N", "new.txt");
+    await s.submit("/diff");
+    const out = texts(s).at(-1)!;
+    expect(out).toMatch(/^ M README\.md\n A new\.txt\n\ndiff --git a\/README\.md b\/README\.md/);
+    expect(out).toContain("+world");
+    expect(out).toContain("diff --git a/new.txt b/new.txt");
+    expect(out).toContain("+brand new");
+    expect(out).not.toContain("\x1b"); // no colors, whatever the user's git config says
+    expect(deps.runCommand).not.toHaveBeenCalled();
+    expect(m.prompts).toEqual([]);
+  });
+
+  it("/diff cuts very long output and says how to see the rest", async () => {
+    const { s, repo } = session([]);
+    repo.write("README.md", Array.from({ length: 700 }, (_, i) => `line ${i}`).join("\n") + "\n");
+    await s.submit("/diff");
+    const lines = texts(s).at(-1)!.split("\n");
+    expect(lines).toHaveLength(401);
+    expect(lines[0]).toBe(" M README.md");
+    expect(lines.at(-1)).toMatch(/^… \d+ more lines; run git diff to see them all$/);
+    // The count in the last line is what was left out: status, a blank line, and the diff, less the 400 shown.
+    const all = repo.git("status", "--short").split("\n").length + 1 + repo.git("diff").split("\n").length;
+    expect(lines.at(-1)).toBe(`… ${all - 400} more lines; run git diff to see them all`);
+  });
+
+  it("/diff says when the folder is not in a git repository", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sa-nogit-"));
+    try {
+      const { s } = session([], { cwd: dir });
+      await s.submit("/diff");
+      const entry = s.getState().entries.at(-1)!;
+      expect(entry).toMatchObject({ kind: "text", tone: "error" });
+      expect(entry.kind === "text" && entry.text).toMatch(/^\/diff failed: .* is not inside a git repository/);
+      expect(s.idle).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("ignores input while something runs", async () => {
     let finish!: () => void;
     const { s, deps } = session([], { runCommand: vi.fn(() => new Promise<{ output: string; ok: boolean }>((r) => (finish = () => r({ output: "x", ok: true })))) });
@@ -211,6 +321,15 @@ describe("leaving", () => {
 });
 
 describe("the Monarch's view of the session", () => {
+  it("is told to answer a plain question itself, with no tasks and the whole answer in the summary", () => {
+    const prompt = buildPlanPrompt({ goal: "where does the CLI start?", roster, isInstalled: () => true, maxTasks: 6 });
+    expect(prompt).toContain("only a question that you can answer by reading the repository yourself, plan no tasks");
+    expect(prompt).toContain('put the complete answer in "summary" as plain text');
+    // The example block no longer limits the summary to a sentence or two.
+    expect(prompt).toContain("or, when you plan no tasks because you are answering a question, the whole answer");
+    expect(prompt).not.toContain('{"summary": "the plan in one or two sentences", ');
+  });
+
   it("shows only the last few turns, clipped", () => {
     const history = Array.from({ length: HISTORY_TURNS + 2 }, (_, i) => ({ goal: `goal ${i}`, outcome: "x".repeat(5000) }));
     const prompt = buildPlanPrompt({ goal: "next", roster, isInstalled: () => true, maxTasks: 6, history });
