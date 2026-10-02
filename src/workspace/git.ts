@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { execa } from "execa";
 
 export class GitError extends Error {}
@@ -29,10 +31,27 @@ export async function gitOk(cwd: string, args: string[]): Promise<boolean> {
 /** NUL-separated git output (the -z flag) to a list; avoids git's quoting of unusual file names. */
 export const splitZ = (out: string): string[] => out.split("\0").filter(Boolean);
 
-export async function repoRoot(cwd: string): Promise<string> {
+/**
+ * The real, absolute form of a path: symlinks resolved (on macOS the temp folder /var is really
+ * /private/var) and Windows 8.3 short names expanded (RUNNER~1 is runneradmin). Git reports real paths,
+ * so anything compared with git's paths must go through this first. A path that does not exist yet
+ * is just made absolute.
+ */
+export function canonicalPath(p: string): string {
   try {
-    return (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
+    return realpathSync.native(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** The top of the repository containing `cwd`, in canonical form. */
+export async function repoRoot(cwd: string): Promise<string> {
+  let top: string;
+  try {
+    top = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
   } catch {
     throw new GitError(`${cwd} is not inside a git repository`);
   }
+  return canonicalPath(top);
 }

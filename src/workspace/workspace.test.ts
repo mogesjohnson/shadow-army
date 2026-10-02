@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { auditWorktree, commitAll, revertPaths, touchedFiles } from "./audit.js";
@@ -114,6 +114,31 @@ describe("audit", () => {
     const r = repo();
     const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: shadowOf(r.dir), soldier: "grok", taskId: "t1" });
     expect(await commitAll(wt.path, "nothing", wt.base)).toBeUndefined();
+  });
+});
+
+describe("paths reached through a link", () => {
+  // Regression: git reports real paths, so a repo reached through a symlink (macOS's /var is
+  // /private/var) or a Windows short name gave the soldier a nonsense working directory.
+  it("still puts the soldier inside its own worktree, and still lists the worktree", async () => {
+    const r = repo();
+    const link = join(dirname(r.dir), `${r.dir.split(/[\\/]/).pop()}-link`);
+    symlinkSync(r.dir, link, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const s = await openWriteSession({ cwd: join(link, "src"), soldier: "grok", claims: ["src/**"] });
+      try {
+        const real = realpathSync.native(r.dir).replace(/\\/g, "/");
+        const cwd = s.cwd.replace(/\\/g, "/");
+        expect(cwd.startsWith(`${real}/.shadow/worktrees/grok-`)).toBe(true);
+        expect(cwd.endsWith("/src")).toBe(true);
+        expect(existsSync(s.cwd)).toBe(true);
+        expect((await listWorktrees(link, join(link, ".shadow"))).map((w) => w.branch)).toEqual([s.branch]);
+      } finally {
+        await s.release();
+      }
+    } finally {
+      rmSync(link, { recursive: false, force: true });
+    }
   });
 });
 

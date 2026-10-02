@@ -1,7 +1,8 @@
 import { rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { assertSafe } from "../vault/vault.js";
-import { git, GitError } from "./git.js";
+import { CASE_INSENSITIVE_FS } from "./claims.js";
+import { canonicalPath, git, GitError } from "./git.js";
 
 export interface Worktree {
   /** `<soldier>-<taskId>`, the directory name under `<shadowRoot>/worktrees`. */
@@ -46,7 +47,11 @@ export interface WorktreeInfo {
   branch?: string;
 }
 
-const normalize = (p: string) => resolve(p).replace(/\\/g, "/").toLowerCase();
+/** Comparable form of a path: canonical (git lists real paths), forward slashes, case folded where the file system ignores case. */
+const normalize = (p: string) => {
+  const c = canonicalPath(p).replace(/\\/g, "/");
+  return CASE_INSENSITIVE_FS ? c.toLowerCase() : c;
+};
 
 /** Soldier worktrees only: those under `<shadowRoot>/worktrees`. */
 export async function listWorktrees(repoRoot: string, shadowRoot: string): Promise<WorktreeInfo[]> {
