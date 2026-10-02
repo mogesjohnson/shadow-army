@@ -15,6 +15,8 @@ import { defaultRole } from "./core/assign.js";
 import { renderRoute, route, type TaskProfile } from "./core/router.js";
 import { summon, renderReport, SummonError } from "./core/summon.js";
 import { Vault } from "./vault/vault.js";
+import { applyToCheckout, renderApply } from "./workspace/apply.js";
+import { repoRoot } from "./workspace/git.js";
 import { registerVaultCommands } from "./vault/cli.js";
 import { registerWorkspaceCommands } from "./workspace/cli.js";
 import { registerRunCommand } from "./monarch/cli.js";
@@ -44,6 +46,7 @@ interface SummonCliOptions {
   effort?: string;
   timeout: string;
   vault: boolean;
+  apply: boolean;
   json?: boolean;
 }
 
@@ -138,6 +141,7 @@ program
   .addOption(new Option("--effort <level>", "reasoning effort").choices(["low", "medium", "high", "max"]))
   .option("--timeout <seconds>", "give up after this many seconds", "600")
   .option("--no-vault", "do not read from or write to the Shadow Vault")
+  .option("--no-apply", "with --write, leave the work only on its branch instead of applying it to your folder as uncommitted edits")
   .option("--json", "machine-readable report")
   .action(async (soldier: string, task: string[], opts: SummonCliOptions, cmd: Command) => {
     const timeoutMs = Number(opts.timeout) * 1000;
@@ -183,7 +187,16 @@ program
       });
       if (report.status !== "error") done = "ok";
       await live?.stop({ ...working, done });
-      console.log(opts.json ? JSON.stringify(report, null, 2) : renderReport(report));
+      // A good write run's changes go into the folder as uncommitted edits; its branch stays.
+      const w = report.workspace;
+      const applied =
+        opts.apply && report.status === "ok" && w?.commit ? await applyToCheckout(await repoRoot(opts.cwd), w.base, w.branch) : undefined;
+      if (opts.json) {
+        console.log(JSON.stringify(applied ? { ...report, applied } : report, null, 2));
+      } else {
+        console.log(renderReport(report));
+        if (applied && w) console.log(`\n${renderApply(applied, w.branch)}`);
+      }
       if (report.status === "error") process.exitCode = 1;
     } catch (e) {
       await live?.stop({ ...working, done });

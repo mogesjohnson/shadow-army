@@ -20,6 +20,7 @@ interface RunCliOptions {
   acceptNotes?: boolean;
   keepWorktrees?: boolean;
   vault: boolean;
+  apply: boolean;
   json?: boolean;
 }
 
@@ -60,6 +61,7 @@ export function registerRunCommand(program: Command, loadRoster: () => Roster | 
     .option("--accept-notes", "apply the Monarch's accept/reject decisions to this run's proposed vault notes")
     .option("--keep-worktrees", "keep the worktrees after the run (branches are always kept)")
     .option("--no-vault", "do not read from or record into the Shadow Vault")
+    .option("--no-apply", "leave the work only on its branch instead of applying it to your folder as uncommitted edits")
     .option("--json", "print the whole result as JSON")
     .action(async (goalWords: string[], opts: RunCliOptions, cmd: Command) => {
       const roster = loadRoster();
@@ -98,6 +100,7 @@ export function registerRunCommand(program: Command, loadRoster: () => Roster | 
           acceptNotes: opts.acceptNotes,
           keepWorktrees: opts.keepWorktrees,
           useVault: opts.vault,
+          apply: opts.apply,
           onEvent: ui.onEvent,
           confirm: ui.confirm,
         });
