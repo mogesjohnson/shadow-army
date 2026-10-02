@@ -86,8 +86,13 @@ describe("contention", () => {
     const results = await Promise.allSettled(
       Array.from({ length: 10 }, (_, i) => new Locks(root).acquire({ owner: `s${i}`, claims: ["src/**"] })),
     );
+    // Every caller but one is refused because of the winner's lease; anything else (a file-system error
+    // under contention, a timeout) is a bug, and is listed here so a failure says what happened.
+    const unexpected = results
+      .filter((r): r is PromiseRejectedResult => r.status === "rejected" && !(r.reason instanceof LockConflict))
+      .map((r) => String(r.reason));
+    expect(unexpected).toEqual([]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((r) => r.status === "rejected").every((r) => (r as PromiseRejectedResult).reason instanceof LockConflict)).toBe(true);
     expect(leaseFiles()).toHaveLength(1);
   });
 
