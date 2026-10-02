@@ -10,7 +10,9 @@
   "files": [
     "dist",
     "shadow.config.json",
-    "orchestratorDelegate.md"
+    "orchestratorDelegate.md",
+    "rules.md",
+    "agent.md"
   ],
   "scripts": {
     "build": "tsc",

@@ -52,5 +52,10 @@ Follow `.github/pull_request_template.md` exactly.
 
 - Adapters stay isolated. Only briefs and reports cross between soldiers.
 - Hard rules: Grok never reviews, `agy` never writes. They live in `src/core/assign.ts` and in each adapter's `capabilities`. A delegate file can only restrict an adapter, never grant it more.
-- Routing policy (roles, cost, `forbidden`, `write`) lives in the front-matter of `orchestratorDelegate.md`; runtime settings (`cli`, `model`) live in `shadow.config.json`. Both files must list the same soldiers.
-- Soldiers run read-only by default. Writes need the build role and `--write`.
+- Routing policy (roles, cost, `forbidden`, `write`) lives in the front-matter of `orchestratorDelegate.md`; runtime settings (`cli`, `model`, `autonomy`) live in `shadow.config.json`. Both files must list the same soldiers.
+- Writes need the build role and `--write`, and always happen in the soldier's own worktree under its claims.
+- `autonomy` (supervised / auto / full) only chooses each vendor's own flags (see each adapter's `*Access`/permission-mode function). Commands are governed by the vendor at that level; Shadow Army never adds or removes a vendor safeguard on its own.
+- With `auto` or `full`, a read-only task runs in a throwaway snapshot (its writes are discarded), and the checkout guard (`src/workspace/guard.ts`) fails any task during which something outside Shadow Army's `shadow/*` branches and worktrees changed. Keep both whenever autonomy is involved.
+- `rules.md` (every soldier) and `agent.md` (`## <soldier>` sections) go into every brief, and `rules.md` into the Monarch's plan prompt. They are instructions; the guard and the claim audit are the parts that are enforced.
+- The Monarch's own calls stay read-only whatever a soldier's autonomy.
+- A Claude Code session's safety classifier refuses to launch soldiers in `full` mode. Do not try to work around that; leave live `full`-mode runs to the owner.

@@ -4,12 +4,14 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 /**
- * Runtime settings only: which CLI and model each soldier uses. Who may do what lives in
- * orchestratorDelegate.md; the two are merged into a roster (see roster.ts).
+ * Runtime settings only: which CLI and model each soldier uses, and how freely it acts. Who may do
+ * what lives in orchestratorDelegate.md; the two are merged into a roster (see roster.ts).
  */
 const SoldierConfig = z.object({
   cli: z.string().min(1),
   model: z.string().min(1),
+  /** supervised (default), auto (the vendor's classifier), or full (the vendor's unrestricted mode). */
+  autonomy: z.enum(["supervised", "auto", "full"]).default("supervised"),
 });
 
 export const ConfigSchema = z.object({

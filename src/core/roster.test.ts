@@ -14,7 +14,7 @@ describe("buildRoster", () => {
   it("merges runtime settings with policy and carries the prose guide", () => {
     const r = buildRoster(config(runtime), delegate(policy));
     expect(r.soldiers.get("b")).toEqual({
-      key: "b", cli: "two", model: "m2", roles: ["build"], cost: 1, buildFor: undefined, forbidden: [], write: true,
+      key: "b", cli: "two", model: "m2", roles: ["build"], cost: 1, buildFor: undefined, forbidden: [], write: true, autonomy: "supervised",
     });
     expect(r.monarch).toEqual({ default: "m" });
     expect(r.guide).toBe("prose");

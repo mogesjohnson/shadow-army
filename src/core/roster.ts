@@ -1,6 +1,7 @@
-import type { Role } from "../adapters/Adapter.js";
+import type { Autonomy, Role } from "../adapters/Adapter.js";
 import { loadConfig, type ShadowConfig } from "./config.js";
 import { loadDelegate, type Delegate, type Difficulty } from "./delegate.js";
+import { checkRules, loadRules, RulesError, type Rules } from "./rules.js";
 
 /** Everything known about one soldier: how to run it (config) and what it may do (delegate). */
 export interface SoldierSpec {
@@ -12,6 +13,7 @@ export interface SoldierSpec {
   buildFor?: Difficulty[];
   forbidden: Role[];
   write: boolean;
+  autonomy: Autonomy;
 }
 
 export interface Roster {
@@ -19,15 +21,20 @@ export interface Roster {
   soldiers: Map<string, SoldierSpec>;
   /** Delegate prose for the Monarch. */
   guide: string;
+  /** rules.md and agent.md: put into every brief. */
+  rules: Rules;
 }
 
 export class RosterError extends Error {}
 
+const NO_RULES: Rules = { all: "", perSoldier: new Map() };
+
 /**
- * Merge config and delegate policy. A soldier in only one of the two files is an error: one with
- * no policy would run without its rules, and one with no CLI or model cannot run at all.
+ * Merge config, delegate policy and rules. A soldier in only one of config and delegate is an error:
+ * one with no policy would run without its rules, and one with no CLI or model cannot run at all.
+ * So is an agent.md section for a soldier that does not exist.
  */
-export function buildRoster(config: ShadowConfig, delegate: Delegate): Roster {
+export function buildRoster(config: ShadowConfig, delegate: Delegate, rules: Rules = NO_RULES): Roster {
   const problems: string[] = [];
   const soldiers = new Map<string, SoldierSpec>();
 
@@ -51,15 +58,24 @@ export function buildRoster(config: ShadowConfig, delegate: Delegate): Roster {
       buildFor: policy.buildFor,
       forbidden: policy.forbidden,
       write: policy.write,
+      autonomy: runtime.autonomy,
     });
   }
+  problems.push(...checkRules(rules, Object.keys(delegate.policy.soldiers)));
 
   if (problems.length) {
-    throw new RosterError(`shadow.config.json and orchestratorDelegate.md disagree:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+    throw new RosterError(`the configuration files disagree:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
   }
-  return { monarch: delegate.policy.monarch, soldiers, guide: delegate.guide };
+  return { monarch: delegate.policy.monarch, soldiers, guide: delegate.guide, rules };
 }
 
 export function loadRoster(cwd = process.cwd()): Roster {
-  return buildRoster(loadConfig(cwd), loadDelegate(cwd));
+  let rules: Rules;
+  try {
+    rules = loadRules(cwd);
+  } catch (e) {
+    if (e instanceof RulesError) throw new RosterError(e.message);
+    throw e;
+  }
+  return buildRoster(loadConfig(cwd), loadDelegate(cwd), rules);
 }

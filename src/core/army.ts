@@ -16,6 +16,8 @@ export interface SoldierStatus {
   roles: string[];
   write: boolean;
   review: boolean;
+  /** How freely it acts: supervised, auto, or full (shadow.config.json). */
+  autonomy: string;
 }
 
 interface Probe {
@@ -55,7 +57,7 @@ export async function checkArmy(
       const soldier = s.key;
       const adapter = byId.get(s.cli);
       if (!adapter) {
-        return { soldier, cli: s.cli, found: false, model: s.model, modelStatus: "n/a", roles: s.roles, write: false, review: false };
+        return { soldier, cli: s.cli, found: false, model: s.model, modelStatus: "n/a", roles: s.roles, write: false, review: false, autonomy: s.autonomy };
       }
       const { det, list } = await probe(adapter);
       let modelStatus: ModelStatus = "n/a";
@@ -74,19 +76,21 @@ export async function checkArmy(
         roles: s.roles,
         write: adapter.capabilities.write,
         review: adapter.capabilities.review,
+        autonomy: s.autonomy,
       };
     }),
   );
 }
 
 export function renderArmy(rows: SoldierStatus[]): string {
-  const head = ["SOLDIER", "CLI", "VERSION", "MODEL", "MODEL CHECK", "ROLES"];
+  const head = ["SOLDIER", "CLI", "VERSION", "MODEL", "MODEL CHECK", "AUTONOMY", "ROLES"];
   const body = rows.map((r) => [
     r.soldier,
     r.found ? r.cli : `${r.cli} (missing)`,
     r.version ?? "-",
     r.modelLabel ? `${r.model} (${r.modelLabel})` : r.model,
     r.modelStatus,
+    r.autonomy,
     r.roles.join(","),
   ]);
   const widths = head.map((h, i) => Math.max(h.length, ...body.map((b) => b[i]!.length)));

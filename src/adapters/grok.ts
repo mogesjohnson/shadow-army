@@ -3,6 +3,18 @@ import { capture, detectByVersion, finishRun, runCli, withPromptFile } from "./e
 import { parseGrokModels } from "./parsers.js";
 import { parseGrokRun } from "./runParsers.js";
 
+/** Grok's permission flags for each autonomy level; `full` is its always-approve mode. */
+export function grokAccess(req: RunRequest): string[] {
+  switch (req.autonomy ?? "supervised") {
+    case "full":
+      return ["--always-approve"];
+    case "auto":
+      return ["--permission-mode", "auto"];
+    default:
+      return ["--permission-mode", req.write ? "acceptEdits" : "plan"];
+  }
+}
+
 /** The brief is read from `promptFile` (`--prompt-file`), never passed on the command line. */
 export function grokArgs(req: RunRequest, promptFile: string): string[] {
   const args = [
@@ -12,8 +24,7 @@ export function grokArgs(req: RunRequest, promptFile: string): string[] {
     "json",
     "-m",
     req.model,
-    "--permission-mode",
-    req.write ? "acceptEdits" : "plan",
+    ...grokAccess(req),
     "--cwd",
     req.cwd,
   ];

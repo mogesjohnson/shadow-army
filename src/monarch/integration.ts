@@ -56,26 +56,8 @@ export async function integrationCommits(integration: Integration): Promise<numb
   return Number((await git(integration.path, ["rev-list", "--count", `${integration.base}..HEAD`])).trim());
 }
 
-/**
- * A read-only copy of `ref` in its own detached worktree, for soldiers that read but do not write
- * (and for the Monarch's final look). Remove it when done.
- */
-export async function createSnapshot(
-  repoRoot: string,
-  shadowRoot: string,
-  ref: string,
-  name: string,
-): Promise<{ path: string; remove: () => Promise<void> }> {
-  const path = join(shadowRoot, "worktrees", name);
-  await git(repoRoot, ["worktree", "add", "-q", "--detach", path, ref]);
-  return {
-    path,
-    async remove() {
-      await gitOk(repoRoot, ["worktree", "remove", "--force", path]);
-      await rm(path, { recursive: true, force: true });
-    },
-  };
-}
+// Snapshots now live with the other worktree helpers; re-exported for the Monarch's callers.
+export { createSnapshot } from "../workspace/worktree.js";
 
 /** Remove the integration worktree. The branch stays, unless the run produced nothing. */
 export async function closeIntegration(repoRoot: string, integration: Integration, deleteBranch: boolean): Promise<void> {

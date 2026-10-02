@@ -4,15 +4,22 @@ import { parseAgyModels } from "./parsers.js";
 import { parseAgyRun } from "./runParsers.js";
 
 /**
- * Hard rule: agy is research and testing only, so it always runs in plan mode regardless of req.write.
- *
+ * agy's permission flags. It has no classifier mode, so `auto` stays supervised (plan mode); `full` is
+ * its skip-permissions mode. agy never gets a write task (a hard rule), so under `full` Shadow Army runs
+ * it in a throwaway copy and anything it writes is discarded.
+ */
+export function agyAccess(req: RunRequest): string[] {
+  return req.autonomy === "full" ? ["--dangerously-skip-permissions"] : ["--mode", "plan"];
+}
+
+/**
  * Unlike the other adapters, the brief is passed as an argument: agy only accepts a prompt as the value
  * of `-p` (it does not read one from stdin). That is safe because agy ships as a native executable, not
  * a Windows `.cmd` shim, which is what cannot take a multi-line argument. The `-p=` form keeps a brief
  * that starts with `-` from being read as a flag.
  */
 export function agyArgs(req: RunRequest): string[] {
-  const args = [`-p=${req.prompt}`, "--output-format", "json", "--mode", "plan", "--model", req.model];
+  const args = [`-p=${req.prompt}`, "--output-format", "json", ...agyAccess(req), "--model", req.model];
   if (req.effort) args.push("--effort", req.effort);
   return args;
 }

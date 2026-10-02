@@ -1,11 +1,16 @@
-import type { Adapter, Effort, Role } from "../adapters/Adapter.js";
+import { randomBytes } from "node:crypto";
+import { join, relative } from "node:path";
+import type { Adapter, Autonomy, Effort, Role } from "../adapters/Adapter.js";
 import { getAdapter } from "../adapters/registry.js";
+import { canonicalPath, repoRoot } from "../workspace/git.js";
+import { captureState, diffState } from "../workspace/guard.js";
+import { createSnapshot } from "../workspace/worktree.js";
 import { checkAssignment, defaultRole } from "./assign.js";
 import { buildPrompt, parseReport } from "./brief.js";
 import type { Roster } from "./roster.js";
 import type { Brief, Report } from "./types.js";
 import type { Vault } from "../vault/vault.js";
-import { openWriteSession, WorkspaceError, type WriteSession } from "../workspace/session.js";
+import { ensureShadowRoot, openWriteSession, WorkspaceError, type WriteSession } from "../workspace/session.js";
 
 export interface SummonOptions {
   roster: Roster;
@@ -31,8 +36,13 @@ export interface SummonOptions {
    * are proposed back to the vault.
    */
   vault?: Vault;
+  /** The working directory is already a throwaway copy (the Monarch's read-only snapshots). */
+  isolated?: boolean;
+  /** The repository the checkout guard watches. Default: the one containing `cwd`. */
+  guardRoot?: string;
   /** Overrides for tests. */
   adapter?: Adapter;
+  autonomy?: Autonomy;
   shadowRoot?: string;
   leaseTtlMs?: number;
 }
@@ -76,7 +86,28 @@ export async function summon(opts: SummonOptions): Promise<Report> {
 
   // Set just before the soldier starts. A write run that fails before that point leaves nothing behind.
   let started = false;
+  let lookCopy: { path: string; remove: () => Promise<void> } | undefined;
   try {
+    const root = opts.guardRoot ?? (await repoRoot(opts.cwd).catch(() => undefined));
+
+    // An unrestricted soldier on a read-only task could still write, so it gets a throwaway copy of the
+    // last commit and whatever it writes is discarded. Outside a repository there is no copy to give,
+    // so that run falls back to supervised mode.
+    let autonomy: Autonomy = opts.autonomy ?? soldier.autonomy;
+    let autonomyNote: string | undefined;
+    let cwd = session?.cwd ?? opts.cwd;
+    if (!verdict.write && autonomy !== "supervised" && !opts.isolated) {
+      if (root) {
+        const shadowRoot = opts.shadowRoot ?? join(root, ".shadow");
+        await ensureShadowRoot(shadowRoot);
+        lookCopy = await createSnapshot(root, shadowRoot, "HEAD", `look-${opts.soldier}-${randomBytes(3).toString("hex")}`);
+        cwd = join(lookCopy.path, relative(canonicalPath(root), canonicalPath(opts.cwd)));
+      } else {
+        autonomyNote = `not in a git repository, so this read-only run used supervised mode instead of ${autonomy}`;
+        autonomy = "supervised";
+      }
+    }
+
     let vaultError: string | undefined;
     let acceptedNotes: string[] = [];
     if (opts.vault) {
@@ -99,6 +130,8 @@ export async function summon(opts: SummonOptions): Promise<Report> {
       constraints,
       vaultNotes: [...acceptedNotes, ...(opts.vaultNotes ?? [])],
       context: opts.context,
+      rules: opts.roster.rules.all,
+      soldierRules: opts.roster.rules.perSoldier.get(opts.soldier),
       write: verdict.write,
     };
     let prompt: string;
@@ -108,18 +141,24 @@ export async function summon(opts: SummonOptions): Promise<Report> {
       throw new SummonError((e as Error).message);
     }
 
+    // The checkout guard: the repository as it is now, to compare with afterwards. Only Shadow Army's
+    // own shadow/* branches may change while a soldier works.
+    const before = root ? await captureState(root) : undefined;
+
     const timeoutMs = opts.timeoutMs ?? 600_000;
     const startedAt = Date.now();
     started = true;
     const result = await adapter.run({
       prompt,
       model: soldier.model,
-      cwd: session?.cwd ?? opts.cwd,
+      cwd,
       write: verdict.write,
+      autonomy,
       effort: opts.effort,
       timeoutMs,
     });
     const durationMs = Date.now() - startedAt;
+    const guard = before && root ? diffState(before, await captureState(root)) : [];
 
     const base = {
       soldier: opts.soldier,
@@ -144,6 +183,16 @@ export async function summon(opts: SummonOptions): Promise<Report> {
           error: result.errorMessage ?? "soldier reported an error",
         }
       : { ...base, status: "ok", ...parseReport(result.text) };
+    report.autonomy = autonomy;
+    if (autonomyNote) report.autonomyNote = autonomyNote;
+    if (guard.length) {
+      // Something outside the soldier's own workspace changed while it ran. That breaks the rules
+      // whatever the task's outcome, so the task fails and the changes are listed for the user.
+      const msg = `RULE BROKEN: changes outside the soldier's own workspace while it ran: ${guard.join("; ")}`;
+      report.guard = guard;
+      report.status = "error";
+      report.error = report.error ? `${report.error}; ${msg}` : msg;
+    }
 
     if (session) {
       // The audit, not the soldier's own account, decides what was touched. Edits outside the claims
@@ -169,6 +218,7 @@ export async function summon(opts: SummonOptions): Promise<Report> {
   } finally {
     if (session && !started) await session.discard();
     await session?.release();
+    await lookCopy?.remove();
   }
 }
 
@@ -196,8 +246,10 @@ async function record(vault: Vault, report: Report, brief: Brief, soldier: strin
 
 export function renderReport(r: Report): string {
   const secs = (r.durationMs / 1000).toFixed(1);
-  const lines = [`${r.soldier} [${r.role}] on ${r.resolvedModel ?? r.model} - ${r.status.toUpperCase()}`, ""];
+  const mode = r.autonomy && r.autonomy !== "supervised" ? ` (${r.autonomy} autonomy)` : "";
+  const lines = [`${r.soldier} [${r.role}] on ${r.resolvedModel ?? r.model}${mode} - ${r.status.toUpperCase()}`, ""];
   if (r.error) lines.push(`Error: ${r.error}`, "");
+  if (r.autonomyNote) lines.push(`Note: ${r.autonomyNote}`, "");
   if (r.summary) lines.push(r.summary, "");
   if (r.filesTouched.length) lines.push("Files touched:", ...r.filesTouched.map((f) => `  - ${f}`), "");
   if (r.workspace) {
