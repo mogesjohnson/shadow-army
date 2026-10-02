@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { execa } from "execa";
 import type { RunResult } from "./Adapter.js";
 
@@ -39,18 +42,24 @@ export interface CliRun {
   spawnFailed: boolean;
 }
 
-/** Run a soldier CLI in `cwd` with a hard timeout. stdin is closed so no CLI waits for input. */
+/**
+ * Run a soldier CLI in `cwd` with a hard timeout. `input`, when given, is written to the CLI's stdin
+ * and stdin is then closed; otherwise stdin is closed at once so no CLI waits for input.
+ *
+ * Send briefs through `input` (or a file), not as an argument: on Windows a CLI installed as a `.cmd`
+ * shim (npm's way) cannot be given an argument that contains a line break, and every brief has one.
+ */
 export async function runCli(
   command: string,
   args: string[],
-  opts: { cwd: string; timeoutMs: number },
+  opts: { cwd: string; timeoutMs: number; input?: string },
 ): Promise<CliRun> {
   try {
     const r = await execa(command, args, {
       cwd: opts.cwd,
       timeout: opts.timeoutMs,
       reject: false,
-      stdin: "ignore",
+      ...(opts.input === undefined ? { stdin: "ignore" as const } : { input: opts.input }),
       windowsHide: true,
       maxBuffer: 50 * 1024 * 1024,
     });
@@ -63,6 +72,21 @@ export async function runCli(
     };
   } catch (e) {
     return { exitCode: undefined, stdout: "", stderr: String(e), timedOut: false, spawnFailed: true };
+  }
+}
+
+/**
+ * Write `text` to a private temporary file for the duration of `fn`, then delete it, even if `fn` throws.
+ * For CLIs that read their prompt from a file.
+ */
+export async function withPromptFile<T>(text: string, fn: (path: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(join(tmpdir(), "shadow-prompt-"));
+  const path = join(dir, "prompt.txt");
+  try {
+    await writeFile(path, text, "utf8");
+    return await fn(path);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 }
 

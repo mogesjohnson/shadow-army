@@ -1,12 +1,13 @@
 import type { Adapter, RunRequest } from "./Adapter.js";
-import { capture, detectByVersion, finishRun, runCli } from "./exec.js";
+import { capture, detectByVersion, finishRun, runCli, withPromptFile } from "./exec.js";
 import { parseGrokModels } from "./parsers.js";
 import { parseGrokRun } from "./runParsers.js";
 
-export function grokArgs(req: RunRequest): string[] {
+/** The brief is read from `promptFile` (`--prompt-file`), never passed on the command line. */
+export function grokArgs(req: RunRequest, promptFile: string): string[] {
   const args = [
-    "-p",
-    req.prompt,
+    "--prompt-file",
+    promptFile,
     "--output-format",
     "json",
     "-m",
@@ -32,7 +33,9 @@ export const grokAdapter: Adapter = {
     return { source: "cli", models: r.ok ? parseGrokModels(r.stdout) : [] };
   },
   async run(req) {
-    const r = await runCli("grok", grokArgs(req), { cwd: req.cwd, timeoutMs: req.timeoutMs });
+    const r = await withPromptFile(req.prompt, (file) =>
+      runCli("grok", grokArgs(req, file), { cwd: req.cwd, timeoutMs: req.timeoutMs }),
+    );
     return finishRun(r, "grok", req.timeoutMs, parseGrokRun);
   },
 };
