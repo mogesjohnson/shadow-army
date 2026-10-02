@@ -1,10 +1,10 @@
 {
   "soldiers": {
     "codex-astra": { "cli": "codex", "model": "gpt-6-astra" },
-    "codex-sol": { "cli": "codex", "model": "gpt-6.1-sol" },
+    "codex-sol": { "cli": "codex", "model": "gpt-6.1-sol", "autonomy": "full" },
     "claude-opus": { "cli": "claude", "model": "opus" },
     "claude-sonnet": { "cli": "claude", "model": "sonnet" },
-    "grok": { "cli": "grok", "model": "grok-4.7" },
-    "agy": { "cli": "agy", "model": "gemini-3.1-pro-high" }
+    "grok": { "cli": "grok", "model": "grok-4.7", "autonomy": "full" },
+    "agy": { "cli": "agy", "model": "gemini-3.1-pro-high", "autonomy": "full" }
   }
 }

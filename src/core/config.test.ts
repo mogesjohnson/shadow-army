@@ -7,7 +7,8 @@ describe("parseConfig", () => {
     const json = readFileSync(new URL("../../shadow.config.json", import.meta.url), "utf8");
     const cfg = parseConfig(json);
     expect(Object.keys(cfg.soldiers)).toEqual(["codex-astra", "codex-sol", "claude-opus", "claude-sonnet", "grok", "agy"]);
-    expect(cfg.soldiers["codex-sol"]).toEqual({ cli: "codex", model: "gpt-6.1-sol" });
+    expect(cfg.soldiers["codex-sol"]).toEqual({ cli: "codex", model: "gpt-6.1-sol", autonomy: "full" });
+    expect(cfg.soldiers["claude-opus"]!.autonomy).toBe("supervised"); // the default
   });
 
   it("holds runtime settings only: roles and rules live in orchestratorDelegate.md", () => {

@@ -80,6 +80,8 @@ describe("planning", () => {
     expect(m.prompts[0]!.prompt).toContain("make two files and review them");
     expect(m.prompts[0]!.prompt).toContain("- grok: roles build; cost 1; never does review");
     expect(m.prompts[0]!.prompt).toContain("DELEGATION GUIDE");
+    expect(m.prompts[0]!.prompt).toContain("RULES EVERY SOLDIER MUST FOLLOW (never plan a task that needs breaking one):");
+    expect(m.prompts[0]!.prompt).toContain("Leave git alone");
     expect(r.git("branch", "--list", "shadow/*")).toBe("");
   });
 

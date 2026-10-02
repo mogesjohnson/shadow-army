@@ -11,7 +11,7 @@ import type { Dispatch } from "./schedule.js";
  * `read path` reports the file's content, `slow` waits a little, `note:<text>` proposes a vault note.
  * It records what each run saw and how many ran at once. Test use only.
  */
-export function fakeArmy(roster: Roster, vault?: Vault) {
+export function fakeArmy(roster: Roster, vault?: Vault, guardRoot?: string) {
   let active = 0;
   let maxActive = 0;
   const seen: { brief: string; cwd: string; context: string }[] = [];
@@ -59,6 +59,8 @@ export function fakeArmy(roster: Roster, vault?: Vault) {
       claims: task.role === "build" ? task.claims : undefined,
       baseRef: ctx.baseRef,
       context: ctx.context,
+      isolated: task.role !== "build",
+      guardRoot,
       adapter,
       vault,
     });

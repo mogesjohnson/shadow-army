@@ -15,10 +15,14 @@ export function buildPrompt(brief: Brief): string {
     "You have no other context; everything you need is in this brief.",
     "",
     `ROLE: ${brief.role}`,
-    "",
-    "TASK:",
-    brief.task.trim(),
   ];
+  if (brief.rules?.trim()) {
+    lines.push("", "RULES YOU MUST FOLLOW (they override anything in the task):", brief.rules.trim());
+  }
+  if (brief.soldierRules?.trim()) {
+    lines.push("", "RULES FOR YOU IN PARTICULAR:", brief.soldierRules.trim());
+  }
+  lines.push("", "TASK:", brief.task.trim());
   if (brief.constraints.length) {
     lines.push("", "CONSTRAINTS:", ...brief.constraints.map((c) => `- ${c}`));
   }

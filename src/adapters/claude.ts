@@ -9,6 +9,18 @@ const ALIASES = [
   { id: "haiku", label: "Haiku 4.5" },
 ];
 
+/** Claude Code's permission mode for each autonomy level. */
+export function claudePermissionMode(req: RunRequest): string {
+  switch (req.autonomy ?? "supervised") {
+    case "full":
+      return "bypassPermissions";
+    case "auto":
+      return "auto"; // Claude Code's own classifier decides each action
+    default:
+      return req.write ? "acceptEdits" : "plan";
+  }
+}
+
 /** `-p` with no prompt argument: the brief goes in on stdin, never on the command line. */
 export function claudeArgs(req: RunRequest): string[] {
   const args = [
@@ -19,7 +31,7 @@ export function claudeArgs(req: RunRequest): string[] {
     req.model,
     "--no-session-persistence",
     "--permission-mode",
-    req.write ? "acceptEdits" : "plan",
+    claudePermissionMode(req),
   ];
   if (req.effort) args.push("--effort", req.effort);
   return args;

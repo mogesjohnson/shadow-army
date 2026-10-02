@@ -25,6 +25,15 @@ export interface ModelList {
 
 export type Effort = "low" | "medium" | "high" | "max";
 
+/**
+ * How freely a soldier acts, set per soldier in shadow.config.json. What it may actually run is decided
+ * by the vendor's own controls at each level:
+ *  supervised  the CLI's guarded modes (plan / accept-edits / sandbox); commands that need approval are refused
+ *  auto        the vendor's own classifier or auto-review decides each action
+ *  full        the vendor's unrestricted mode: no approval at all
+ */
+export type Autonomy = "supervised" | "auto" | "full";
+
 export interface RunRequest {
   prompt: string;
   model: string;
@@ -32,6 +41,8 @@ export interface RunRequest {
   cwd: string;
   /** false = read-only (plan mode / read-only sandbox). Adapters that cannot write ignore true. */
   write: boolean;
+  /** Default: supervised. Under `auto` and `full`, `write` no longer limits the CLI; Shadow Army isolates read-only work instead. */
+  autonomy?: Autonomy;
   effort?: Effort;
   timeoutMs: number;
 }

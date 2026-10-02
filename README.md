@@ -65,6 +65,25 @@ v1 uses four layers:
 
 Pre-write hooks (blocking a write at the moment of the attempt) are on the roadmap, per adapter, for CLIs that support them.
 
+## Autonomy and rules
+
+Each soldier's `autonomy` in `shadow.config.json` picks how freely it acts. What it may actually run is decided by the vendor's own controls at that level:
+
+| Level | claude | codex | grok | agy |
+|---|---|---|---|---|
+| `supervised` (default) | plan / acceptEdits | read-only / workspace-write sandbox | plan / acceptEdits | plan |
+| `auto` | its classifier (`auto`) | automatic review | `auto` | plan (no classifier mode) |
+| `full` | `bypassPermissions` | full access, never asks | `--always-approve` | `--dangerously-skip-permissions` |
+
+The shipped config runs codex-sol, grok and agy at `full`. Around that, Shadow Army keeps its own environment strict:
+
+- **`rules.md`**: rules every soldier must follow, at the top of every brief (and given to the Monarch so it plans within them).
+- **`agent.md`**: a `## <soldier>` section of extra rules for each soldier.
+- **Checkout guard**: after every task, anything outside the soldier's own worktree that changed in the repository (your files, HEAD, branches, tags, remote-tracking refs) fails the task and is listed.
+- **Throwaway copies**: an unrestricted soldier on a read-only task works in a snapshot that is deleted afterwards.
+
+Rules in a brief are instructions; the guard and the claim audit are what is enforced. Actions outside the repository (other folders, the network) are only contained by running Shadow Army in a container or VM, which is what the vendors recommend for their unrestricted modes.
+
 ## Planned commands
 
 ```bash

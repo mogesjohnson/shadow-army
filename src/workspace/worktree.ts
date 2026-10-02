@@ -40,6 +40,28 @@ export async function createWorktree(opts: {
   return { name, branch, path, base };
 }
 
+/**
+ * A throwaway copy of `ref` in its own detached worktree: for soldiers that read but do not write, and
+ * for the Monarch's planning and final look. Anything written into it is discarded by `remove()`.
+ */
+export async function createSnapshot(
+  repoRoot: string,
+  shadowRoot: string,
+  ref: string,
+  name: string,
+): Promise<{ path: string; remove: () => Promise<void> }> {
+  assertSafe("snapshot name", name);
+  const path = join(shadowRoot, "worktrees", name);
+  await git(repoRoot, ["worktree", "add", "-q", "--detach", path, ref]);
+  return {
+    path,
+    async remove() {
+      await git(repoRoot, ["worktree", "remove", "--force", path]).catch(() => undefined);
+      await rm(path, { recursive: true, force: true });
+    },
+  };
+}
+
 export interface WorktreeInfo {
   name: string;
   path: string;

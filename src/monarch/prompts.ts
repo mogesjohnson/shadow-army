@@ -43,6 +43,13 @@ export function buildPlanPrompt(opts: {
     ...describeRoster(opts.roster, opts.isInstalled),
   ];
   if (opts.roster.guide) lines.push("", "DELEGATION GUIDE:", opts.roster.guide.trim());
+  if (opts.roster.rules.all.trim()) {
+    lines.push(
+      "",
+      "RULES EVERY SOLDIER MUST FOLLOW (never plan a task that needs breaking one):",
+      opts.roster.rules.all.trim(),
+    );
+  }
   if (opts.vaultNotes?.length) lines.push("", "SHARED NOTES FROM THE VAULT:", ...opts.vaultNotes.map((n) => `- ${n}`));
   lines.push(
     "",

@@ -272,6 +272,9 @@ async function executeAndReport(
         claims: task.role === "build" ? task.claims : undefined,
         baseRef: ctx.baseRef,
         context: ctx.context,
+        // Readers already run in a throwaway snapshot; the guard watches the real repository.
+        isolated: task.role !== "build",
+        guardRoot: root,
         effort: assignment.effort,
         timeoutMs: taskTimeoutMs,
         waitMs: opts.waitMs ?? 120_000,

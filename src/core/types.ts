@@ -1,4 +1,4 @@
-import type { Role } from "../adapters/Adapter.js";
+import type { Autonomy, Role } from "../adapters/Adapter.js";
 import type { WorkspaceInfo } from "../workspace/session.js";
 
 /** Everything a soldier is told. Nothing else crosses the boundary. */
@@ -10,6 +10,10 @@ export interface Brief {
   vaultNotes: string[];
   /** Reports from the tasks this one depends on (F7). Only the reports: never another soldier's transcript. */
   context?: string[];
+  /** rules.md: what every soldier must follow. */
+  rules?: string;
+  /** This soldier's section of agent.md. */
+  soldierRules?: string;
   /** Whether the soldier may modify files. */
   write: boolean;
 }
@@ -39,4 +43,10 @@ export interface Report {
   vaultError?: string;
   /** For write runs: the branch, what git says was touched, and what the audit reverted. */
   workspace?: WorkspaceInfo;
+  /** The autonomy level the soldier actually ran at. */
+  autonomy?: Autonomy;
+  /** Why it differs from the configured level, if it does. */
+  autonomyNote?: string;
+  /** The checkout guard's findings: changes outside the soldier's own workspace. Any makes the task an error. */
+  guard?: string[];
 }
