@@ -3,9 +3,16 @@ import { capture, detectByVersion, finishRun, runCli } from "./exec.js";
 import { parseAgyModels } from "./parsers.js";
 import { parseAgyRun } from "./runParsers.js";
 
-/** Hard rule: agy is research and testing only, so it always runs in plan mode regardless of req.write. */
+/**
+ * Hard rule: agy is research and testing only, so it always runs in plan mode regardless of req.write.
+ *
+ * Unlike the other adapters, the brief is passed as an argument: agy only accepts a prompt as the value
+ * of `-p` (it does not read one from stdin). That is safe because agy ships as a native executable, not
+ * a Windows `.cmd` shim, which is what cannot take a multi-line argument. The `-p=` form keeps a brief
+ * that starts with `-` from being read as a flag.
+ */
 export function agyArgs(req: RunRequest): string[] {
-  const args = ["-p", req.prompt, "--output-format", "json", "--mode", "plan", "--model", req.model];
+  const args = [`-p=${req.prompt}`, "--output-format", "json", "--mode", "plan", "--model", req.model];
   if (req.effort) args.push("--effort", req.effort);
   return args;
 }
