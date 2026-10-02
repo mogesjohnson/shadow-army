@@ -51,7 +51,7 @@ async function writeAtomic(path: string, data: string): Promise<void> {
  * step. It is a file created exclusively; one left behind by a crashed process is stolen after `staleMs`
  * (the critical section is a few file operations, so anything older than that is a crash).
  */
-async function withMutex<T>(dir: string, fn: () => Promise<T>, timeoutMs = 5_000, staleMs = 10_000): Promise<T> {
+async function withMutex<T>(dir: string, fn: () => Promise<T>, timeoutMs = 10_000, staleMs = 10_000): Promise<T> {
   const path = join(dir, ".mutex");
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -61,11 +61,11 @@ async function withMutex<T>(dir: string, fn: () => Promise<T>, timeoutMs = 5_000
       await handle.close();
       break;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      if (!BUSY.has((e as NodeJS.ErrnoException).code ?? "")) throw e;
       try {
         const info = await stat(path);
         if (Date.now() - info.mtimeMs > staleMs) {
-          await rm(path, { force: true });
+          await removeFile(path);
           continue;
         }
       } catch {
@@ -78,7 +78,26 @@ async function withMutex<T>(dir: string, fn: () => Promise<T>, timeoutMs = 5_000
   try {
     return await fn();
   } finally {
-    await rm(path, { force: true });
+    await removeFile(path);
+  }
+}
+
+/**
+ * "Someone else has it right now". Besides EEXIST, Windows answers EPERM, EACCES or EBUSY while a file
+ * is being deleted or is open elsewhere, so under contention those mean "try again", not "fail".
+ */
+const BUSY = new Set(["EEXIST", "EPERM", "EACCES", "EBUSY"]);
+
+/** Delete a file, riding out Windows' brief sharing violations; a file that is already gone is fine. */
+async function removeFile(path: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rm(path, { force: true });
+      return;
+    } catch (e) {
+      if (attempt >= 50 || !BUSY.has((e as NodeJS.ErrnoException).code ?? "")) throw e;
+      await sleep(10);
+    }
   }
 }
 
@@ -117,7 +136,7 @@ export class Locks {
       try {
         const lease = JSON.parse(await readFile(path, "utf8")) as Lease;
         if (lease.expiresAt <= this.now()) {
-          if (prune) await rm(path, { force: true });
+          if (prune) await removeFile(path);
         } else live.push(lease);
       } catch {
         // unreadable or half-gone file: another process is mid-release; ignore it
@@ -196,7 +215,7 @@ export class Locks {
   async release(id: string): Promise<void> {
     assertSafe("lease id", id);
     await this.ensure();
-    await withMutex(this.dir, () => rm(join(this.leasesDir, `${id}.json`), { force: true }));
+    await withMutex(this.dir, () => removeFile(join(this.leasesDir, `${id}.json`)));
   }
 
   /** Free every live lease an owner holds; returns how many. */

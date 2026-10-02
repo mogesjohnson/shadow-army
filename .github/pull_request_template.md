@@ -10,6 +10,6 @@ Checklist:
 - [ ] Adapters stay isolated: only briefs and reports cross between soldiers.
 - [ ] Hard routing rules (Grok never reviews, `agy` never writes) are enforced and tested.
 - [ ] Dashboard and `--plain` output both work (for UI changes).
-- [ ] Paths and shell calls work on Windows and POSIX.
+- [ ] Paths and shell calls work on Windows and POSIX (the CI job passes on ubuntu, macos and windows).
 - [ ] `npm run build`, `npx tsc --noEmit`, and `npm test` pass.
 - [ ] Draft until required evidence or human acceptance is available.

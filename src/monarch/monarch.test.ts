@@ -164,6 +164,36 @@ describe("planning", () => {
 });
 
 describe("a whole run", () => {
+  it("keeps the planned base when the checkout advances while confirming", async () => {
+    const r = repo();
+    const plannedBase = r.git("rev-parse", "HEAD");
+    const m = monarchScript({ plans: [planReply([
+      { id: "a", title: "one", role: "build", claims: ["one.txt"], brief: "write one.txt=1" },
+    ])] });
+    const result = await runGoal(base(r, {
+      getAdapter: m.getAdapter,
+      dispatch: fakeArmy(roster).dispatch,
+      confirm: async () => {
+        r.write("src/a.txt", "new checkout commit\n");
+        r.git("commit", "-qam", "advance checkout");
+        return true;
+      },
+    }));
+    expect(result.integration!.base).toBe(plannedBase);
+    expect(r.git("show", `${result.integration!.branch}:src/a.txt`)).toBe("a");
+    expect(r.git("show", "HEAD:src/a.txt")).toBe("new checkout commit");
+    expect(result.outcomes[0]!.status).toBe("ok");
+  });
+
+  it("includes each report's notes in synthesis even without a vault", async () => {
+    const r = repo();
+    const m = monarchScript({ plans: [planReply([
+      { id: "a", title: "one", role: "build", claims: ["one.txt"], brief: "write one.txt=1; note:the repo uses txt files" },
+    ])] });
+    await runGoal(base(r, { getAdapter: m.getAdapter, dispatch: fakeArmy(roster).dispatch, useVault: false }));
+    expect(m.prompts.at(-1)!.prompt).toContain("the repo uses txt files");
+  });
+
   it("plans, builds in parallel, reviews the merged work, reports, and leaves one branch", async () => {
     const r = repo();
     const head = r.git("rev-parse", "HEAD");
