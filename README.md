@@ -75,7 +75,7 @@ Each soldier's `autonomy` in `shadow.config.json` picks how freely it acts. What
 | `auto` | its classifier (`auto`) | automatic review | `auto` | plan (no classifier mode) |
 | `full` | `bypassPermissions` | full access, never asks | `--always-approve` | `--dangerously-skip-permissions` |
 
-The shipped config runs codex-sol, grok and agy at `full`. Around that, Shadow Army keeps its own environment strict:
+The shipped config runs codex-sol, grok and agy at `full`, and claude-opus and claude-sonnet at `auto`. Around that, Shadow Army keeps its own environment strict:
 
 - **`rules.md`**: rules every soldier must follow, at the top of every brief (and given to the Monarch so it plans within them).
 - **`agent.md`**: a `## <soldier>` section of extra rules for each soldier.

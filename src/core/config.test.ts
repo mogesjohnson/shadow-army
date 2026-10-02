@@ -8,7 +8,13 @@ describe("parseConfig", () => {
     const cfg = parseConfig(json);
     expect(Object.keys(cfg.soldiers)).toEqual(["codex-astra", "codex-sol", "claude-opus", "claude-sonnet", "grok", "agy"]);
     expect(cfg.soldiers["codex-sol"]).toEqual({ cli: "codex", model: "gpt-6.1-sol", autonomy: "full" });
-    expect(cfg.soldiers["claude-opus"]!.autonomy).toBe("supervised"); // the default
+    expect(cfg.soldiers["claude-opus"]!.autonomy).toBe("auto");
+    expect(cfg.soldiers["claude-sonnet"]!.autonomy).toBe("auto");
+    expect(cfg.soldiers["codex-astra"]!.autonomy).toBe("supervised"); // the default when unset
+  });
+
+  it("defaults a soldier without an autonomy setting to supervised", () => {
+    expect(parseConfig(JSON.stringify({ soldiers: { a: { cli: "x", model: "m" } } })).soldiers["a"]!.autonomy).toBe("supervised");
   });
 
   it("holds runtime settings only: roles and rules live in orchestratorDelegate.md", () => {

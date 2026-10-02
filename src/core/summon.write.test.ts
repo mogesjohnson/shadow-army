@@ -144,10 +144,10 @@ describe("summon --write", () => {
 });
 
 describe("read-only summon", () => {
-  it("takes no lease and makes no worktree", async () => {
+  it("for a supervised soldier, takes no lease and makes no worktree", async () => {
     const r = repo();
     const { adapter, calls } = writer({});
-    await summon({ roster, soldier: "claude-sonnet", task: "look", cwd: r.dir, adapter });
+    await summon({ roster, soldier: "claude-sonnet", task: "look", cwd: r.dir, autonomy: "supervised", adapter });
     expect(calls[0]!.cwd).toBe(r.dir);
     expect(existsSync(shadow(r.dir))).toBe(false);
   });
