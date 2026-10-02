@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, GitError, gitOk, splitZ } from "./git.js";
+import { git, GitError, splitZ } from "./git.js";
 
 export interface AppliedFile {
   /** As git's --name-status says it: A added, M modified, D deleted, T type changed. */
@@ -66,27 +66,28 @@ export async function applyToCheckout(root: string, base: string, branch: string
       };
     }
     // git apply is all or nothing: if it fails, no file has changed.
-    await git(root, ["apply", "--whitespace=nowarn", patch]);
+    // Add new paths to the index as intent-to-add within the same operation. This includes ignored
+    // additions and acquires the index lock before editing files, so an index failure changes nothing.
+    await git(root, ["apply", "--intent-to-add", "--whitespace=nowarn", patch]);
   } catch (e) {
     if (!(e instanceof GitError)) throw e;
     return { applied: false, reason: e.message, clashes: [] };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-  // The edits are in. Marking new files only lets `git diff` show them; not worth failing the apply over.
-  const added = files.filter((f) => f.change === "A").map((f) => f.path);
-  if (added.length) await gitOk(root, ["add", "--intent-to-add", "--", ...added]);
   return { applied: true, files };
 }
 
+type Shell = "powershell" | "posix";
 /** A path as a shell argument: bare when it is plainly safe, quoted otherwise. */
-const shellArg = (p: string) => (/^[\w./@+-]+$/.test(p) ? p : `"${p.replace(/(["\\$`])/g, "\\$1")}"`);
+const shellArg = (p: string, shell: Shell) =>
+  /^[\w./+-]+$/.test(p) ? p : `'${p.replace(/'/g, shell === "powershell" ? "''" : "'\"'\"'")}'`;
 
 /**
  * What to say after applying: the files, and how to review, keep or undo them. After declining to: why,
  * and which files clashed; the work is still on `branch`.
  */
-export function renderApply(result: ApplyResult, branch: string): string {
+export function renderApply(result: ApplyResult, branch: string, shell: Shell = process.platform === "win32" ? "powershell" : "posix"): string {
   if (!result.applied) {
     const lines = [`Not applied to your folder: ${result.reason}.`];
     if (result.clashes.length) lines.push(...result.clashes.map((p) => `  ${p}`));
@@ -94,13 +95,15 @@ export function renderApply(result: ApplyResult, branch: string): string {
     return lines.join("\n");
   }
   if (!result.files.length) return "Nothing to apply to your folder.";
-  const paths = result.files.map((f) => shellArg(f.path)).join(" ");
+  const paths = result.files.map((f) => shellArg(f.path, shell)).join(" ");
+  // Git pathspec metacharacters are valid filename characters, so these commands address literal paths.
+  const keep = `git --literal-pathspecs add -- ${paths}`;
   return [
     "Applied to your folder (not committed):",
     ...result.files.map((f) => `  ${f.change.padEnd(2)} ${f.path}`),
     "  Review it:   git diff",
-    `  Keep it:     git add -- ${paths} && git commit`,
-    `  Undo it:     git restore --source=HEAD --staged --worktree -- ${paths}`,
+    `  Keep it:     ${keep}${shell === "powershell" ? "; if ($?) { git commit }" : " && git commit"}`,
+    `  Undo it:     git --literal-pathspecs restore --source=HEAD --staged --worktree -- ${paths}`,
     `  Backup:      ${branch}`,
   ].join("\n");
 }

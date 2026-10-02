@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyToCheckout, renderApply } from "./apply.js";
@@ -106,29 +107,73 @@ describe("applying a run to the checkout", () => {
     expect(r.git("status", "--porcelain")).toBe("");
   });
 
+  it("includes ignored additions in git diff as intent-to-add", async () => {
+    const r = makeRepo({ ".gitignore": "generated.txt\n", "keep.txt": "a\n" });
+    repos.push(r);
+    const base = r.git("rev-parse", "HEAD");
+    r.git("checkout", "-q", "-b", BRANCH);
+    r.write("generated.txt", "from the run\n");
+    r.git("add", "-f", "--", "generated.txt");
+    r.git("commit", "-q", "-m", "run");
+    r.git("checkout", "-q", "main");
+    expect((await applyToCheckout(r.dir, base, BRANCH)).applied).toBe(true);
+    expect(r.git("diff", "--name-status")).toBe("A\tgenerated.txt");
+    expect(r.git("diff", "--cached", "--name-only")).toBe("");
+  });
+
+  it("changes no files when the index cannot be locked", async () => {
+    const { r, base, read, has } = repoWithRun();
+    writeFileSync(join(r.dir, ".git", "index.lock"), "owner's lock");
+    const result = await applyToCheckout(r.dir, base, BRANCH);
+    expect(result.applied).toBe(false);
+    expect(!result.applied && result.reason).toContain("index.lock");
+    expect(read("keep.txt")).toBe("a\n");
+    expect(has("old.txt")).toBe(true);
+    expect(has("dir/hello.txt")).toBe(false);
+    expect(r.git("status", "--porcelain")).toBe("");
+  });
+
   it("prints an undo command that puts the checkout back exactly", async () => {
     const { r, base, read } = repoWithRun();
     r.write("notes.txt", "untracked\n");
     const result = await applyToCheckout(r.dir, base, BRANCH);
     const undo = renderApply(result, BRANCH).split("\n").find((l) => l.includes("Undo it:"))!.split("Undo it:")[1]!.trim();
-    expect(undo).toBe("git restore --source=HEAD --staged --worktree -- dir/hello.txt keep.txt old.txt");
+    expect(undo).toBe("git --literal-pathspecs restore --source=HEAD --staged --worktree -- dir/hello.txt keep.txt old.txt");
     r.git(...undo.split(" ").slice(1));
     expect(r.git("status", "--porcelain")).toBe("?? notes.txt");
     expect(read("keep.txt")).toBe("a\n");
     expect(read("old.txt")).toBe("gone\n");
   });
+
+  it.each(["cost$price`'[1].txt", "@price.txt"])("runs the printed undo for %s without expanding filenames or pathspecs", async (literal) => {
+    const matched = "cost$price`'1.txt";
+    const r = makeRepo({ [literal]: "before\n", [matched]: "owner original\n" });
+    repos.push(r);
+    const base = r.git("rev-parse", "HEAD");
+    r.git("checkout", "-q", "-b", BRANCH);
+    r.write(literal, "after\n");
+    r.git("commit", "-q", "-am", "run");
+    r.git("checkout", "-q", "main");
+    r.write(matched, "owner local edit\n");
+    const result = await applyToCheckout(r.dir, base, BRANCH);
+    expect(result.applied).toBe(true);
+    const undo = renderApply(result, BRANCH).split("\n").find((l) => l.includes("Undo it:"))!.split("Undo it:")[1]!.trim();
+    execFileSync(process.platform === "win32" ? "powershell.exe" : "sh", process.platform === "win32" ? ["-NoProfile", "-Command", undo] : ["-c", undo], { cwd: r.dir });
+    expect(readFileSync(join(r.dir, literal), "utf8")).toBe("before\n");
+    expect(readFileSync(join(r.dir, matched), "utf8")).toBe("owner local edit\n");
+  });
 });
 
 describe("what the report says", () => {
   it("lists the files and how to review, keep and undo them, with the branch as a backup", () => {
-    const text = renderApply({ applied: true, files: [{ change: "A", path: "hello.txt" }, { change: "M", path: "src/my file.ts" }] }, BRANCH);
+    const text = renderApply({ applied: true, files: [{ change: "A", path: "hello.txt" }, { change: "M", path: "src/my file.ts" }] }, BRANCH, "posix");
     expect(text.split("\n")).toEqual([
       "Applied to your folder (not committed):",
       "  A  hello.txt",
       "  M  src/my file.ts",
       "  Review it:   git diff",
-      '  Keep it:     git add -- hello.txt "src/my file.ts" && git commit',
-      '  Undo it:     git restore --source=HEAD --staged --worktree -- hello.txt "src/my file.ts"',
+      "  Keep it:     git --literal-pathspecs add -- hello.txt 'src/my file.ts' && git commit",
+      "  Undo it:     git --literal-pathspecs restore --source=HEAD --staged --worktree -- hello.txt 'src/my file.ts'",
       `  Backup:      ${BRANCH}`,
     ]);
   });
