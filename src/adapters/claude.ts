@@ -9,10 +9,10 @@ const ALIASES = [
   { id: "haiku", label: "Haiku 4.5" },
 ];
 
+/** `-p` with no prompt argument: the brief goes in on stdin, never on the command line. */
 export function claudeArgs(req: RunRequest): string[] {
   const args = [
     "-p",
-    req.prompt,
     "--output-format",
     "json",
     "--model",
@@ -35,7 +35,7 @@ export const claudeAdapter: Adapter = {
     return { source: "static", models: ALIASES };
   },
   async run(req) {
-    const r = await runCli("claude", claudeArgs(req), { cwd: req.cwd, timeoutMs: req.timeoutMs });
+    const r = await runCli("claude", claudeArgs(req), { cwd: req.cwd, timeoutMs: req.timeoutMs, input: req.prompt });
     return finishRun(r, "claude", req.timeoutMs, parseClaudeRun);
   },
 };
