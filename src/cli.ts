@@ -11,6 +11,7 @@ import { ConfigError } from "./core/config.js";
 import { DelegateError } from "./core/delegate.js";
 import { loadRoster, RosterError, type Roster } from "./core/roster.js";
 import { checkArmy, renderArmy } from "./core/army.js";
+import { defaultRole } from "./core/assign.js";
 import { renderRoute, route, type TaskProfile } from "./core/router.js";
 import { summon, renderReport, SummonError } from "./core/summon.js";
 import { Vault } from "./vault/vault.js";
@@ -159,7 +160,9 @@ program
     const roster = rosterOrExit();
     if (!roster) return;
     // One live line while the soldier works.
-    const working: Working = { label: `${soldier}${opts.role ? ` [${opts.role}]` : ""} is working`, startedAt: Date.now() };
+    const spec = roster.soldiers.get(soldier);
+    const role = (opts.role as Role | undefined) ?? (spec ? defaultRole(spec) : undefined);
+    const working: Working = { label: `${soldier}${role ? ` [${role}]` : ""} is working`, startedAt: Date.now() };
     const live = liveScreensFor(process.stdout, { plain: cmd.optsWithGlobals<{ plain?: boolean }>().plain, json: opts.json })
       ? startLive(working, (w, now, tick) => React.createElement(WorkingLine, { work: w, now, tick }))
       : undefined;
@@ -169,7 +172,7 @@ program
         roster,
         soldier,
         task: task.join(" "),
-        role: opts.role as Role | undefined,
+        role,
         cwd: opts.cwd,
         write: opts.write,
         claims: opts.claim,
