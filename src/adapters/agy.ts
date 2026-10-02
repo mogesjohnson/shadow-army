@@ -37,6 +37,6 @@ export const agyAdapter: Adapter = {
   },
   async run(req) {
     const r = await runCli("agy", agyArgs(req), { cwd: req.cwd, timeoutMs: req.timeoutMs });
-    return finishRun(r, "agy", req.timeoutMs, parseAgyRun);
+    return finishRun(r, "agy", req.timeoutMs, (stdout) => parseAgyRun(stdout, r.stderr));
   },
 };

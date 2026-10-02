@@ -98,8 +98,33 @@ export function parseGrokRun(stdout: string): RunResult {
   };
 }
 
-/** `agy -p --output-format json`: one object with status, response, usage. */
-export function parseAgyRun(stdout: string): RunResult {
+const clip = (s: string, max: number) => {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/** agy's own reason for an error: the first present of `error`, `error.message`, `message`, `response`. */
+function agyReason(o: Obj): string | undefined {
+  const err = o.error;
+  const candidates = [
+    str(err),
+    err && typeof err === "object" ? str((err as Obj).message) : undefined,
+    str(o.message),
+    str(o.response),
+  ];
+  for (const c of candidates) {
+    const reason = clip(c ?? "", 300);
+    if (reason) return reason;
+  }
+  return undefined;
+}
+
+/**
+ * `agy -p --output-format json`: one object with status, response, usage. A status other than SUCCESS
+ * is an error whose message carries agy's own reason when the JSON has one, else the last non-empty
+ * line of `stderr` (the adapter passes it in), else just the status.
+ */
+export function parseAgyRun(stdout: string, stderr = ""): RunResult {
   let o: Obj;
   try {
     o = extractJson(stdout) as Obj;
@@ -109,10 +134,12 @@ export function parseAgyRun(stdout: string): RunResult {
   const u = (o.usage ?? {}) as Obj;
   const status = str(o.status);
   const isError = status !== undefined && status !== "SUCCESS";
+  const stderrTail = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-1)[0];
+  const reason = isError ? (agyReason(o) ?? (stderrTail ? clip(stderrTail, 300) : undefined)) : undefined;
   return {
     text: str(o.response) ?? "",
     isError,
-    errorMessage: isError ? `agy status ${status}` : undefined,
+    errorMessage: isError ? `agy status ${status}${reason ? `: ${reason}` : ""}` : undefined,
     usage: { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens) },
     sessionId: str(o.conversation_id),
   };
