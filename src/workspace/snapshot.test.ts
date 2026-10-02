@@ -82,6 +82,36 @@ describe("snapshotFolder", () => {
     expect({ ...untouched(r), files: files.map((f) => readFileSync(join(r.dir, f), "utf8")) }).toEqual(before);
   });
 
+  it("keeps an ignored file that is intent-to-add in the real index, as an earlier apply leaves it", async () => {
+    const r = repo();
+    r.write("ignored.txt", "left by an earlier run\n");
+    r.git("add", "--intent-to-add", "--force", "ignored.txt");
+    const entries = r.git("ls-files", "--stage");
+    const sha = await snapshotFolder(r.dir);
+    expect(r.git("show", `${sha}:ignored.txt`)).toBe("left by an earlier run");
+    expect(r.git("ls-files", "--stage")).toBe(entries); // the real index still has it as intent-to-add
+  });
+
+  it("does not record a skip-worktree file that is missing from the folder as deleted", async () => {
+    const r = repo();
+    r.git("update-index", "--skip-worktree", "src/b.txt");
+    rmSync(join(r.dir, "src/b.txt"));
+    r.write("src/a.txt", "edited\n");
+    const sha = await snapshotFolder(r.dir);
+    expect(r.git("show", `${sha}:src/b.txt`)).toBe("b");
+    expect(r.git("show", `${sha}:src/a.txt`)).toBe("edited");
+  });
+
+  it("takes the folder's content for a file that was staged and then edited again", async () => {
+    const r = repo();
+    r.write("src/a.txt", "staged\n");
+    r.git("add", "src/a.txt");
+    r.write("src/a.txt", "staged, then edited\n");
+    const sha = await snapshotFolder(r.dir);
+    expect(r.git("show", `${sha}:src/a.txt`)).toBe("staged, then edited");
+    expect(r.git("show", ":src/a.txt")).toBe("staged"); // the owner's index is as it was
+  });
+
   it("works while the owner's index is locked, since it never writes the real one", async () => {
     const r = repo();
     r.write("src/a.txt", "edited\n");
