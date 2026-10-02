@@ -2,12 +2,12 @@ import type { Adapter, Effort, Role } from "../adapters/Adapter.js";
 import { getAdapter } from "../adapters/registry.js";
 import { checkAssignment, defaultRole } from "./assign.js";
 import { buildPrompt, parseReport } from "./brief.js";
-import type { ShadowConfig } from "./config.js";
+import type { Roster } from "./roster.js";
 import type { Brief, Report } from "./types.js";
 import type { Vault } from "../vault/vault.js";
 
 export interface SummonOptions {
-  config: ShadowConfig;
+  roster: Roster;
   soldier: string;
   task: string;
   role?: Role;
@@ -30,17 +30,17 @@ export class SummonError extends Error {}
 
 /** Send one brief to one soldier and return its report. Throws SummonError for refused assignments. */
 export async function summon(opts: SummonOptions): Promise<Report> {
-  const soldier = opts.config.soldiers[opts.soldier];
+  const soldier = opts.roster.soldiers.get(opts.soldier);
   if (!soldier) {
     throw new SummonError(
-      `unknown soldier "${opts.soldier}" (known: ${Object.keys(opts.config.soldiers).join(", ")})`,
+      `unknown soldier "${opts.soldier}" (known: ${[...opts.roster.soldiers.keys()].join(", ")})`,
     );
   }
   const adapter = opts.adapter ?? getAdapter(soldier.cli);
   if (!adapter) throw new SummonError(`no adapter for CLI "${soldier.cli}"`);
 
   const role = opts.role ?? defaultRole(soldier);
-  const verdict = checkAssignment(opts.soldier, soldier, adapter, role, opts.write ?? false);
+  const verdict = checkAssignment(soldier, adapter, role, opts.write ?? false);
   if (!verdict.ok) throw new SummonError(verdict.reason);
 
   let vaultError: string | undefined;

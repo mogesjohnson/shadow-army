@@ -1,22 +1,26 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseConfig } from "./config.js";
+import { ConfigError, parseConfig } from "./config.js";
 
 describe("parseConfig", () => {
   it("accepts the shipped shadow.config.json", () => {
     const json = readFileSync(new URL("../../shadow.config.json", import.meta.url), "utf8");
     const cfg = parseConfig(json);
-    expect(cfg.soldiers["grok"]!.roles).not.toContain("review");
-    expect(cfg.soldiers["agy"]!.roles).toEqual(["research", "test"]);
+    expect(Object.keys(cfg.soldiers)).toEqual(["codex-astra", "codex-sol", "claude-opus", "claude-sonnet", "grok", "agy"]);
+    expect(cfg.soldiers["codex-sol"]).toEqual({ cli: "codex", model: "gpt-6.1-sol" });
   });
 
-  it("rejects a monarch that is not a soldier", () => {
-    const bad = { monarch: { default: "ghost" }, soldiers: { a: { cli: "x", model: "m", roles: ["build"] } } };
-    expect(() => parseConfig(JSON.stringify(bad))).toThrow(/not a configured soldier/);
+  it("holds runtime settings only: roles and rules live in orchestratorDelegate.md", () => {
+    const json = readFileSync(new URL("../../shadow.config.json", import.meta.url), "utf8");
+    expect(json).not.toMatch(/roles|forbidden|monarch/);
   });
 
-  it("rejects an unknown role", () => {
-    const bad = { monarch: { default: "a" }, soldiers: { a: { cli: "x", model: "m", roles: ["bake"] } } };
-    expect(() => parseConfig(JSON.stringify(bad))).toThrow();
+  it("rejects a soldier with no model", () => {
+    expect(() => parseConfig(JSON.stringify({ soldiers: { a: { cli: "x" } } }))).toThrow(ConfigError);
+    expect(() => parseConfig(JSON.stringify({ soldiers: { a: { cli: "x" } } }))).toThrow(/soldiers\.a\.model/);
+  });
+
+  it("reports invalid JSON as a config error", () => {
+    expect(() => parseConfig("{nope")).toThrow(/not valid JSON/);
   });
 });

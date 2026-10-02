@@ -1,6 +1,6 @@
 import type { Adapter, Detection, ModelList } from "../adapters/Adapter.js";
 import { allAdapters } from "../adapters/registry.js";
-import type { ShadowConfig } from "./config.js";
+import type { Roster } from "./roster.js";
 
 export type ModelStatus = "ok" | "unknown" | "unlisted" | "n/a";
 
@@ -31,7 +31,7 @@ interface Probe {
  *  n/a      the CLI is not installed
  */
 export async function checkArmy(
-  config: ShadowConfig,
+  roster: Roster,
   adapters: Adapter[] = allAdapters(),
 ): Promise<SoldierStatus[]> {
   const byId = new Map(adapters.map((a) => [a.id, a]));
@@ -51,7 +51,8 @@ export async function checkArmy(
   };
 
   return Promise.all(
-    Object.entries(config.soldiers).map(async ([soldier, s]): Promise<SoldierStatus> => {
+    [...roster.soldiers.values()].map(async (s): Promise<SoldierStatus> => {
+      const soldier = s.key;
       const adapter = byId.get(s.cli);
       if (!adapter) {
         return { soldier, cli: s.cli, found: false, model: s.model, modelStatus: "n/a", roles: s.roles, write: false, review: false };

@@ -1,35 +1,32 @@
 ---
-# Machine-readable rules. The router enforces these in code; the prose below guides the monarch's judgment.
+# Routing policy, enforced in code (src/core/assign.ts and src/core/router.ts). Keys are strict: a typo is an error.
+# shadow.config.json holds each soldier's cli and model; both files must list the same soldiers.
+# cost: 1 cheap, 2 medium, 3 expensive. Routine work goes to the cheapest soldier that qualifies.
+# A rule here can only restrict an adapter, never grant it more: Grok never reviews and agy never writes regardless.
 monarch:
   default: codex-astra
   fallback: claude-opus
 soldiers:
   codex-astra:
-    cli: codex
-    model: gpt-6-astra
     roles: [orchestrate]
+    cost: 3
   codex-sol:
-    cli: codex
-    model: gpt-6.1-sol
     roles: [build]
+    cost: 2
   claude-opus:
-    cli: claude
-    model: opus
     roles: [orchestrate, review, build]
+    cost: 3
     buildFor: [hard]          # high-effort work-horse for hard problems only
   claude-sonnet:
-    cli: claude
-    model: sonnet
     roles: [build]
+    cost: 1
   grok:
-    cli: grok
-    model: grok-4.7
     roles: [build]
+    cost: 1
     forbidden: [review]       # hard rule
   agy:
-    cli: agy
-    model: gemini-3.1-pro-high
     roles: [research, test]
+    cost: 1
     write: false              # hard rule: launched read-only, claim audit rejects any edit
 ---
 
@@ -39,11 +36,11 @@ The monarch reads this file before every dispatch. Pick the soldier whose streng
 their weaknesses, and match effort level to difficulty. Model IDs are config values and may need adjusting
 to what each CLI actually lists.
 
-## codex (gpt6-astra): primary orchestrator
+## codex (gpt-6-astra): primary orchestrator
 - **Strong:** planning, decomposition, choosing who does what, synthesizing reports.
 - **Weak:** don't spend it on heavy implementation; hand that to a work-horse.
 
-## codex (gpt6.1-sol): work-horse
+## codex (gpt-6.1-sol): work-horse
 - **Strong:** building features end to end, sustained implementation.
 - **Weak:** not the final reviewer of its own work.
 

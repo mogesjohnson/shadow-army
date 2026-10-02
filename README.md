@@ -71,6 +71,7 @@ Pre-write hooks (blocking a write at the moment of the attempt) are on the roadm
 sa                          # banner + status
 sa army                     # detect soldiers, show health and models
 sa summon <soldier> "<task>"  # one-off dispatch
+sa route --role <role>      # preview who may take a task, ranked, with reasons
 sa run "<goal>"             # monarch plans, delegates, synthesizes
 sa vault                    # inspect shared notes and runs
 sa locks                    # show leases and queue
