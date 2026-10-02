@@ -88,10 +88,20 @@ describe("summon", () => {
     expect(r).toMatchObject({ status: "ok", summary: "done", structured: true, costUsd: 0.01 });
   });
 
-  it("allows writing only when asked for the build role", async () => {
+  it("refuses a write run without claims or outside a git repository, before any soldier starts", async () => {
     const a = fake();
-    await summon({ ...base, soldier: "claude-sonnet", role: "build", write: true, adapter: a });
-    expect(a.calls[0]!.write).toBe(true);
+    await expect(summon({ ...base, soldier: "claude-sonnet", role: "build", write: true, adapter: a })).rejects.toThrow(
+      /at least one claim/,
+    );
+    const notRepo = await mkdtemp(join(tmpdir(), "shadow-norepo-"));
+    try {
+      await expect(
+        summon({ ...base, cwd: notRepo, soldier: "claude-sonnet", role: "build", write: true, claims: ["x"], adapter: a }),
+      ).rejects.toThrow(/needs a git repository/);
+    } finally {
+      await rm(notRepo, { recursive: true, force: true });
+    }
+    expect(a.calls).toHaveLength(0);
   });
 
   it("returns an error report when the soldier fails", async () => {

@@ -1,4 +1,5 @@
 import type { Role } from "../adapters/Adapter.js";
+import type { WorkspaceInfo } from "../workspace/session.js";
 
 /** Everything a soldier is told. Nothing else crosses the boundary. */
 export interface Brief {
@@ -34,4 +35,6 @@ export interface Report {
   runId?: string;
   /** Set when the vault could not be read or written; the report itself is still complete. */
   vaultError?: string;
+  /** For write runs: the branch, what git says was touched, and what the audit reverted. */
+  workspace?: WorkspaceInfo;
 }

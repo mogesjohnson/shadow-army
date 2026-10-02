@@ -70,11 +70,14 @@ Pre-write hooks (blocking a write at the moment of the attempt) are on the roadm
 ```bash
 sa                          # banner + status
 sa army                     # detect soldiers, show health and models
-sa summon <soldier> "<task>"  # one-off dispatch
+sa summon <soldier> "<task>"  # one-off dispatch (read-only)
+sa summon <soldier> --write --claim "src/**" "<task>"
+                            # writes, in its own worktree and branch, only inside its claims
 sa route --role <role>      # preview who may take a task, ranked, with reasons
 sa run "<goal>"             # monarch plans, delegates, synthesizes
 sa vault                    # inspect shared notes and runs
-sa locks                    # show leases and queue
+sa locks                    # which soldier holds which files
+sa worktrees                # soldier worktrees and their branches
 sa formation <name>         # run a saved formation
 sa adapter new <name>       # scaffold a new soldier adapter
 ```

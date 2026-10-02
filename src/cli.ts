@@ -13,6 +13,7 @@ import { renderRoute, route, type TaskProfile } from "./core/router.js";
 import { summon, renderReport, SummonError } from "./core/summon.js";
 import { Vault } from "./vault/vault.js";
 import { registerVaultCommands } from "./vault/cli.js";
+import { registerWorkspaceCommands } from "./workspace/cli.js";
 import { getAdapter } from "./adapters/registry.js";
 import type { Effort, Role } from "./adapters/Adapter.js";
 
@@ -34,6 +35,8 @@ interface SummonCliOptions {
   role?: string;
   cwd: string;
   write?: boolean;
+  claim: string[];
+  wait: string;
   effort?: string;
   timeout: string;
   vault: boolean;
@@ -89,7 +92,14 @@ program
     ]),
   )
   .option("--cwd <dir>", "directory the soldier works in", process.cwd())
-  .option("--write", "allow the soldier to modify files (build role only)")
+  .option("--write", "let the soldier modify files, in its own worktree and branch (build role only)")
+  .option(
+    "--claim <path-or-glob>",
+    "a file, directory or glob the writing soldier may change, relative to the repo root (repeatable; required with --write)",
+    (value: string, previous: string[]) => [...previous, value],
+    [] as string[],
+  )
+  .option("--wait <seconds>", "with --write, queue this long for another soldier's lease on the same files", "0")
   .addOption(new Option("--effort <level>", "reasoning effort").choices(["low", "medium", "high", "max"]))
   .option("--timeout <seconds>", "give up after this many seconds", "600")
   .option("--no-vault", "do not read from or write to the Shadow Vault")
@@ -98,6 +108,17 @@ program
     const timeoutMs = Number(opts.timeout) * 1000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       console.error("error: --timeout must be a positive number of seconds");
+      process.exitCode = 2;
+      return;
+    }
+    const waitMs = Number(opts.wait) * 1000;
+    if (!Number.isFinite(waitMs) || waitMs < 0) {
+      console.error("error: --wait must be zero or a positive number of seconds");
+      process.exitCode = 2;
+      return;
+    }
+    if (opts.claim.length && !opts.write) {
+      console.error("error: --claim only applies to --write runs");
       process.exitCode = 2;
       return;
     }
@@ -111,6 +132,8 @@ program
         role: opts.role as Role | undefined,
         cwd: opts.cwd,
         write: opts.write,
+        claims: opts.claim,
+        waitMs,
         effort: opts.effort as Effort | undefined,
         timeoutMs,
         vault: opts.vault ? Vault.forCwd(opts.cwd) : undefined,
@@ -159,5 +182,6 @@ program
   });
 
 registerVaultCommands(program);
+registerWorkspaceCommands(program);
 
 await program.parseAsync(process.argv);
