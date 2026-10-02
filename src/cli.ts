@@ -4,6 +4,8 @@ import { Command, Option } from "commander";
 import React from "react";
 import { render } from "ink";
 import { Banner } from "./ui/Banner.js";
+import { WorkingLine, type Working } from "./ui/Dashboard.js";
+import { liveScreensFor, startLive } from "./ui/live.js";
 import { plainBanner } from "./ui/art.js";
 import { ConfigError } from "./core/config.js";
 import { DelegateError } from "./core/delegate.js";
@@ -77,7 +79,8 @@ program
   .name("sa")
   .description("Shadow Army: command other AI CLIs as an army with isolated context")
   .version(pkg.version)
-  .option("--plain", "plain text output (automatic when not a TTY)")
+  .configureHelp({ showGlobalOptions: true })
+  .option("--plain", "plain text output, no banner art or live screens (automatic when not a TTY)")
   // The banner is the root command's action, so commander would report a mistyped command as
   // "too many arguments". Accept the extra word here and report it as the unknown command it is.
   .allowExcessArguments(true)
@@ -135,7 +138,7 @@ program
   .option("--timeout <seconds>", "give up after this many seconds", "600")
   .option("--no-vault", "do not read from or write to the Shadow Vault")
   .option("--json", "machine-readable report")
-  .action(async (soldier: string, task: string[], opts: SummonCliOptions) => {
+  .action(async (soldier: string, task: string[], opts: SummonCliOptions, cmd: Command) => {
     const timeoutMs = Number(opts.timeout) * 1000;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       console.error("error: --timeout must be a positive number of seconds");
@@ -155,6 +158,12 @@ program
     }
     const roster = rosterOrExit();
     if (!roster) return;
+    // One live line while the soldier works.
+    const working: Working = { label: `${soldier}${opts.role ? ` [${opts.role}]` : ""} is working`, startedAt: Date.now() };
+    const live = liveScreensFor(process.stdout, { plain: cmd.optsWithGlobals<{ plain?: boolean }>().plain, json: opts.json })
+      ? startLive(working, (w, now, tick) => React.createElement(WorkingLine, { work: w, now, tick }))
+      : undefined;
+    let done: Working["done"] = "error";
     try {
       const report = await summon({
         roster,
@@ -169,9 +178,12 @@ program
         timeoutMs,
         vault: opts.vault ? Vault.forCwd(opts.cwd) : undefined,
       });
+      if (report.status !== "error") done = "ok";
+      await live?.stop({ ...working, done });
       console.log(opts.json ? JSON.stringify(report, null, 2) : renderReport(report));
       if (report.status === "error") process.exitCode = 1;
     } catch (e) {
+      await live?.stop({ ...working, done });
       if (e instanceof SummonError) {
         console.error(`refused: ${e.message}`);
         process.exitCode = 2;

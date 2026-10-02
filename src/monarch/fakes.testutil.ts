@@ -1,10 +1,38 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Adapter, RunRequest, RunResult } from "../adapters/Adapter.js";
+import { getAdapter as realAdapter } from "../adapters/registry.js";
 import type { Roster } from "../core/roster.js";
 import { summon } from "../core/summon.js";
 import type { Vault } from "../vault/vault.js";
 import type { Dispatch } from "./schedule.js";
+
+export const planReply = (tasks: unknown[], summary = "the plan") => "My plan.\n```shadow-plan\n" + JSON.stringify({ summary, tasks }) + "\n```";
+export const synthesisReply = (obj: unknown) => "Done.\n```shadow-synthesis\n" + JSON.stringify(obj) + "\n```";
+
+/**
+ * Fake CLIs with the real adapters' capabilities (so the hard rules are the real ones). Monarch calls
+ * are answered from a script; a CLI listed in `failing` returns an error instead.
+ */
+export function monarchScript(script: { plans: string[]; synthesis?: string; failing?: string[] }) {
+  const prompts: { cli: string; prompt: string; cwd: string }[] = [];
+  let planIndex = 0;
+  const getAdapter = (cli: string): Adapter | undefined => {
+    const real = realAdapter(cli);
+    if (!real) return undefined;
+    return {
+      ...real,
+      detect: async () => ({ found: true }),
+      async run(req: RunRequest): Promise<RunResult> {
+        prompts.push({ cli, prompt: req.prompt, cwd: req.cwd });
+        if (script.failing?.includes(cli)) return { text: "", isError: true, errorMessage: `${cli} is down` };
+        if (req.prompt.includes("Your soldiers have finished")) return { text: script.synthesis ?? "no block", isError: false };
+        return { text: script.plans[Math.min(planIndex++, script.plans.length - 1)]!, isError: false };
+      },
+    };
+  };
+  return { getAdapter, prompts };
+}
 
 /**
  * A fake soldier for tests, driven by its brief: `write path=content;` writes a file, `fail` fails,

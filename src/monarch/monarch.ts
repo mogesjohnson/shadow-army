@@ -29,6 +29,9 @@ import {
 } from "./prompts.js";
 import { execute, type Dispatch, type RunEvent, type TaskOutcome } from "./schedule.js";
 
+/** Everything a run reports while it works: task events, phase changes, and the branch it works on. */
+export type MonarchEvent = RunEvent | { type: "phase"; message: string } | { type: "branch"; branch: string };
+
 /** The run cannot go ahead: no Monarch is available, or none produced a valid plan. */
 export class MonarchError extends Error {}
 
@@ -82,7 +85,7 @@ export interface RunGoalOptions {
   keepWorktrees?: boolean;
   /** Read accepted notes into briefs and record each task in the vault. Default true. */
   useVault?: boolean;
-  onEvent?: (e: RunEvent | { type: "phase"; message: string }) => void;
+  onEvent?: (e: MonarchEvent) => void;
   /** Overrides for tests. */
   getAdapter?: (cli: string) => Adapter | undefined;
   isInstalled?: (cli: string) => boolean;
@@ -238,6 +241,7 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   // Execute on a fresh integration branch. The user's checkout is never changed.
   const integration: Integration = await createIntegration(root, shadowRoot, planned.runId, startBase);
   phase(`working on ${integration.branch}`);
+  opts.onEvent?.({ type: "branch", branch: integration.branch });
   try {
     return await executeAndReport(opts, planned, base, integration, root, shadowRoot, vault, callMonarch);
   } catch (e) {

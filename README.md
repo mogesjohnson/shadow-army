@@ -103,7 +103,7 @@ sa formation <name>         # run a saved formation
 sa adapter new <name>       # scaffold a new soldier adapter
 ```
 
-Add `--plain` for log output without the dashboard (also automatic when not attached to a TTY).
+In a terminal, `sa run` shows a live dashboard once you approve the plan. It shows every task with its soldier, a status word (waiting, running, done, failed, refused, conflict, skipped), time taken, progress, reported cost, and the latest activity. The final report prints when the run is over. While a soldier works, `sa summon` shows one live line. `sa --plain <command>` (or `<command> --plain`) prints plain lines instead. Plain output is also used automatically when stdout is not a terminal, and with `--json`.
 
 ## Tech
 
