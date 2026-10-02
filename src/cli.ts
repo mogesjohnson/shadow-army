@@ -22,6 +22,29 @@ interface SummonCliOptions {
   json?: boolean;
 }
 
+/** The known command within edit distance 2 of `typed`, if there is one. */
+function closestCommand(typed: string, names: string[]): string | undefined {
+  const distance = (a: string, b: string): number => {
+    const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      let prev = row[0]!;
+      row[0] = i;
+      for (let j = 1; j <= b.length; j++) {
+        const cur = row[j]!;
+        row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+        prev = cur;
+      }
+    }
+    return row[b.length]!;
+  };
+  let best: { name: string; d: number } | undefined;
+  for (const name of names) {
+    const d = distance(typed, name);
+    if (d <= 2 && (!best || d < best.d)) best = { name, d };
+  }
+  return best?.name;
+}
+
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ) as { version: string };
@@ -33,7 +56,14 @@ program
   .description("Shadow Army: command other AI CLIs as an army with isolated context")
   .version(pkg.version)
   .option("--plain", "plain text output (automatic when not a TTY)")
-  .action((opts: { plain?: boolean }) => {
+  // The banner is the root command's action, so commander would report a mistyped command as
+  // "too many arguments". Accept the extra word here and report it as the unknown command it is.
+  .allowExcessArguments(true)
+  .action((opts: { plain?: boolean }, cmd: Command) => {
+    if (cmd.args.length) {
+      const hint = closestCommand(cmd.args[0]!, cmd.commands.map((c) => c.name()));
+      cmd.error(`error: unknown command '${cmd.args[0]}'${hint ? ` (Did you mean ${hint}?)` : ""}\nRun "sa --help" to see the commands.`);
+    }
     if (opts.plain || !process.stdout.isTTY) {
       console.log(plainBanner(pkg.version));
       return;

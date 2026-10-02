@@ -1,0 +1,17 @@
+#!/bin/sh
+# Rejects commit subjects that are not "#<issue> <action>" or "[F<n>] <action>".
+# Same rule as scripts/pr-format.mjs. Enabled by `npm install` (see scripts/setup-hooks.mjs).
+subject=$(head -n 1 "$1")
+
+case "$subject" in
+  "Merge "*|"fixup! "*|"squash! "*|"Revert "*) exit 0 ;;
+esac
+
+if printf '%s' "$subject" | grep -Eq '^(#[0-9]+|\[F[0-9]+\]) [^ ]'; then
+  exit 0
+fi
+
+echo "commit rejected: the subject must look like '#<issue> <action>' or '[F<n>] <action>'." >&2
+echo "  got: $subject" >&2
+echo "  see CLAUDE.md. Do not bypass with --no-verify." >&2
+exit 1
