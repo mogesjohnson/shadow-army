@@ -49,8 +49,11 @@ export interface WriteSession {
 const newTaskId = () =>
   `${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}-${randomBytes(2).toString("hex")}`;
 
-/** `.shadow/` is working memory, never source: give it a .gitignore so it cannot be committed. */
-async function ensureShadowRoot(shadowRoot: string): Promise<void> {
+/**
+ * `.shadow/` is working memory, never source: give it a .gitignore so it cannot be committed, and so
+ * worktrees made inside it never show up as the user's uncommitted changes.
+ */
+export async function ensureShadowRoot(shadowRoot: string): Promise<void> {
   await mkdir(shadowRoot, { recursive: true });
   const ignore = join(shadowRoot, ".gitignore");
   try {
@@ -70,6 +73,8 @@ export async function openWriteSession(opts: {
   claims: string[];
   waitMs?: number;
   ttlMs?: number;
+  /** Commit or branch the worktree starts from. Default: the current commit. `sa run` uses its integration branch. */
+  baseRef?: string;
   /** Override for tests. Defaults to `<repo>/.shadow`. */
   shadowRoot?: string;
 }): Promise<WriteSession> {
@@ -105,7 +110,13 @@ export async function openWriteSession(opts: {
   try {
     // .shadow/ ignores itself, so anything listed here is the user's own uncommitted work.
     uncommittedIgnored = (await git(root, ["status", "--porcelain"])).trim().length > 0;
-    wt = await createWorktree({ repoRoot: root, shadowRoot, soldier: opts.soldier, taskId: newTaskId() });
+    wt = await createWorktree({
+      repoRoot: root,
+      shadowRoot,
+      soldier: opts.soldier,
+      taskId: newTaskId(),
+      baseRef: opts.baseRef,
+    });
   } catch (e) {
     await locks.release(lease.id);
     if (e instanceof GitError) throw new WorkspaceError(e.message);

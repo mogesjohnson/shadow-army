@@ -25,6 +25,13 @@ export function buildPrompt(brief: Brief): string {
   if (brief.vaultNotes.length) {
     lines.push("", "SHARED NOTES FROM THE VAULT:", ...brief.vaultNotes.map((n) => `- ${n}`));
   }
+  if (brief.context?.length) {
+    lines.push(
+      "",
+      "WHAT THE TASKS BEFORE YOURS REPORTED (their work is already in your working directory):",
+      ...brief.context.map((c) => `- ${c}`),
+    );
+  }
   lines.push(
     "",
     brief.write
