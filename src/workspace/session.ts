@@ -3,7 +3,7 @@ import { access, mkdir, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { auditWorktree, commitAll, revertPaths } from "./audit.js";
 import { validateClaims } from "./claims.js";
-import { git, GitError, repoRoot } from "./git.js";
+import { canonicalPath, git, GitError, repoRoot } from "./git.js";
 import { DEFAULT_TTL_MS, LockError, Locks } from "./locks.js";
 import { createWorktree } from "./worktree.js";
 
@@ -133,7 +133,8 @@ export async function openWriteSession(opts: {
   timer.unref();
 
   return {
-    cwd: join(wt.path, relative(root, opts.cwd)),
+    // Both sides canonical, or a symlinked or short-named path gives a nonsense relative path.
+    cwd: join(wt.path, relative(root, canonicalPath(opts.cwd))),
     claims,
     branch: wt.branch,
     async finish(message) {
