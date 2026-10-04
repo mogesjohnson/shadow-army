@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.7, 2026-10-04 |
+| **Version** | 0.8, 2026-10-04 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
 | **Decisions** | Interview decisions Q1–Q26 (§20), and the owner's review decisions D1–D18 of 2026-10-04 (§0.2) |
-| **Review** | Five rounds. Appendix A records every disposition, and Appendix B defines traceability. |
+| **Review** | Six rounds. Appendix A records every disposition, and Appendix B defines traceability. |
 
 **Conventions.**
 - MUST, SHOULD and MAY follow RFC 2119.
@@ -81,7 +81,7 @@ The owner answered every question on 2026-10-04 (`mogesanswers.md`). The tables 
 - **D14 (B):** `/auto-approve writes` stays on until turned off, across resumes, and covers every write, lead tasks and execution-bearing paths included. Hard-denied claims and non-write cards (attribution, policy trust, quota, cold wake, memory, resume) still apply (SAFE-3). One safety exception: an apply that adds or retargets a symlink or gitlink still needs the typed `yes` (WS-8), because a link can point outside the repository.
 - **D15 (updated A):** resuming a cold Monarch over 100k asks each time, with "start from handoff" pre-selected and both costs shown (LEAD-9).
 - **D16 (C, modified):** a check-in never stops a wake. The Monarch gets check-ins and can steer, stop or give more room. Only a high safety ceiling stops a runaway, and the Monarch can raise it (WAKE-9, WAKE-15, MCP-5).
-  - *Why this is safe for heavy work left running:* a check-in never stops work by itself. A soldier's writes stay in its own workspace and are applied only after a clean finish. The worst case is spent quota, never half-done edits in your folder.
+  - *Why this is safe for heavy work left running:* a check-in never stops work by itself. A soldier's own writes go to its workspace and are applied only after a clean finish, so for most soldiers the worst case is spent quota. A `full` soldier (codex-sol, grok and agy in your config) runs as you and can still edit your folder directly during a long wake. The guard shows you any such change afterwards (GUARD-4), but cannot prevent it (§0.1).
 - **O1 (A):** fix v1's junction bug now, in its own issue. Done as #36, with draft PR #37 (milestone M0a).
 - **O2 (B):** post to GitHub directly.
 - **O3 (A):** run critique round 4 after applying these answers.
@@ -145,7 +145,7 @@ The design matches Claude Code's harness where that serves the goal (§5), and g
 
 *Adversaries:*
 - repository content that prompt-injects a soldier or the Monarch
-- a sandboxed soldier (supervised or `auto`) trying to make the harness act outside its sandbox, as a confused deputy
+- a sandboxed soldier (supervised or `auto`) trying to make the harness act outside its sandbox, as a confused deputy. On native Windows, claude has no OS sandbox (F41): a claude soldier's commands there are gated by Claude Code's permission checks, not confined.
 - a `full` soldier running with your OS rights
 
 *Prevented:*
@@ -156,6 +156,8 @@ The design matches Claude Code's harness where that serves the goal (§5), and g
 - policy files changing silently (POL)
 
 *Detected, not prevented:* anything a `full` soldier does directly as you. That includes editing files, reading other processes' environments or memory, and using the network. The guard (GUARD) and the sentinel set show it to you. `sa doctor` warns when a `full` soldier runs outside a container or VM.
+
+*Also detected, not prevented:* a git config change that a running soldier without an OS sandbox makes between GIT-3's check and the git command that reads it. GIT-1's overrides and GIT-2's pinned settings still stop the hook, monitor, pager, signing and diff programs and your existing filters, and GIT-3's re-check reports the change afterwards.
 
 ## 3. Glossary
 
@@ -237,7 +239,8 @@ The design matches Claude Code's harness where that serves the goal (§5), and g
 | F42 | **v1 today:** `git worktree remove --force` empties a junction's target (`worktree.ts:60,105`, `session.ts:172`, `integration.ts:64`), and the audit's revert `rm` follows links (`audit.ts:60`). | Critic E3 tests t5, t10 | Confirmed |
 | F43 | `TodoWrite` is unavailable on Opus and Sonnet 5.x, unless `CLAUDE_CODE_ENABLE_TASKS=0`. | Tools reference | Confirmed |
 | F44 | In `-p`, `ANTHROPIC_API_KEY` in the environment takes precedence over the subscription login. | Authentication docs | Confirmed |
-| F45 | A tampered `.git/worktrees/<n>/commondir` redirects configuration. A `filter.*.clean` planted in config runs on `git add`. | Critic E3 tests t7, t9 | Confirmed |
+| F45 | A tampered `.git/worktrees/<n>/commondir` redirects configuration. A `filter.*.clean` planted in config runs on `git add`. A planted `gpg.program` with `commit.gpgSign` runs on `git commit --no-verify`, and with `log.showSignature` on `git log`. | Critic E3 tests t7, t9; round-6 gate E | Confirmed |
+| F46 | `git apply` removes the old copy of every modified file before writing any new one. If a write fails after `--check` passed, later files stay deleted and added files are missing. v1's apply then reports "Your folder is unchanged" (#53). | Round-6 gate E; reproduced with Git 2.52 on Windows | Confirmed |
 
 ## 5. Reference design: Claude Code parity
 
@@ -312,7 +315,7 @@ At 140 columns or wider:
 - **UX-6** On exit, the normal screen shows the chat id and `sa --resume <id>`.
 - **UX-7** An ASCII profile applies in legacy consoles or with `SA_ASCII=1`. `SA_REDUCED_MOTION=1` freezes animation.
 - **UX-8** All UI text, glyphs and word lists are original. Status words are checked against Claude Code's verb list before release.
-- **UX-9** A soldier always appears as `<Shadow> · <id> · <model>`, in every layout, every view and plain mode (Q8). The model may be truncated, but never dropped.
+- **UX-9** A soldier always appears with its shadow name, id and model (Q8): as `<Shadow> · <id> · <model>` in every layout and view, and as PLAIN-1 writes it in plain mode. The model may be truncated, but never dropped.
 
 ### 6.3 Keys (KEY)
 
@@ -615,7 +618,7 @@ At 140 columns or wider:
 
 - **MCP-1** Every call passes `authorize()` (SAFE-5).
 - **MCP-2** There are at most 6 tools, with schemas totalling at most 1,500 tokens.
-- **MCP-3** `git_read` builds git's argument list itself. It never passes `--output`, `-c`, `--no-index` or `--ext-diff`, refuses paths that match `SECRET_GLOBS`, and runs under GIT-1 and GIT-2. A diff returns `--stat` plus hunks up to 6k tokens, else a summary.
+- **MCP-3** `git_read` builds git's argument list itself. It never passes `--output`, `-c`, `--no-index`, `--ext-diff`, `--show-signature` or a `%G` format, and runs under GIT-1 and GIT-2. It refuses paths that match `SECRET_GLOBS`, including in `show <rev>:<path>`, and adds `:(exclude,glob)<glob>` for every entry to each `diff`, `log` and `show`, so a secret file's content never appears, even from history. A diff returns `--stat` plus hunks up to 6k tokens, else a summary.
 - **MCP-4** `wake` is idempotent per `requestId`. Fields whose milestone hasn't landed yet are refused with a reason: `mode: write`, `claims` and `continueFrom` (→M5), and `mode: plan` and `after` (→M8).
 - **MCP-5** `control` acts on a queued or running task:
   - `cancel` stops it (SOLD-4).
@@ -807,11 +810,12 @@ These are part of the Monarch's static prompt.
   3. record the tip (WS-6)
   4. **apply, only if** the status is `ok`, the lease is intact, and there was no guard finding, `link-escape` or `read-violation`
 
-  Otherwise the work stays on its ref and the Monarch is told. The lease heartbeat runs until the apply finishes (F39).
+  Otherwise the work stays on its ref and the Monarch is told. Every step runs only while GIT-3 passes: a GIT-3 finding ends the task with status `guard`, commits and applies nothing, and shows the git-metadata card. The lease heartbeat runs until the apply finishes (F39).
 - **WS-8** **Apply** is all-or-nothing:
   - Every file in `base..tip` must match its base blob in your checkout (`git hash-object --path`, GIT-2). Otherwise nothing is applied.
   - Changes to symlinks, gitlinks, modes, `.gitmodules` or `.gitattributes` need an apply-review card with typed `yes`. Auto-approve covers mode, `.gitmodules` and `.gitattributes` changes, but never a symlink or gitlink that is added or retargeted (SAFE-3, →M6).
   - The patch is written to the runtime directory and re-hashed between `--check` and apply.
+  - **If the apply fails** after `--check` passed (a file is held open, the disk is full), `git apply` can leave some files changed and others deleted (F46). The harness puts every path in the patch back to its base blob, which each one matched, deletes files the apply created, marks the journal entry failed, and names the files. If that restore fails too, it prints `git restore --source=<base> -- <paths>`. A failed undo (WS-9) is put back the same way, to the tip's blobs.
 - **WS-9** **Undo**, extending #32's `sa undo` (§0.3). `/undo <task>` checks every hunk with `git apply -R --check`. If all of them still reverse cleanly, it reverses them and runs `git rm --cached` on the intent-to-add paths it created; otherwise it refuses and shows which hunks changed. Your edits in other hunks survive. This replaces #32's per-file refusal. It runs under the mutex, is journaled, and is announced in the soldier's next brief.
 - **WS-10** `sa chats prune [--older-than]` removes the workspaces (SAFE-8) and refs of ended chats. Refs of tasks that were never applied are kept unless `--force` is given.
 - **WS-11** Building a base takes at most 1 s for 10,000 files with 100 changed [S11]. **Fallback:** an incremental base.
@@ -981,16 +985,16 @@ These are part of the Monarch's static prompt.
     - an apply that adds or retargets a symlink or gitlink, which still needs the typed `yes` (WS-8)
     - any card that is not a write approval: attribution, policy trust, quota, quota gate, cold wake, memory, resume and git metadata
   - Only the typed command or the Shift+Tab mode key toggles it; pasted text never does.
-- **SAFE-4** The source zip stays out of the repository folder. It was removed on 2026-10-04, and the reference copy is in `~/Downloads`. `sa doctor` warns if one reappears.
+- **SAFE-4** The source zip stays out of the repository folder. It was removed on 2026-10-04, and the reference copy is in `~/Downloads`. From M6, `sa doctor` warns if one reappears (DOC-1, →M6).
 - **SAFE-5** A single `authorize(principal, soldier, role, mode, claims, autonomy, quota)` serves every entry point.
 - **SAFE-6** A single `redact()` runs on every write to logs, events, briefs, reports and fixtures. Logs are pruned after 30 days.
 - **SAFE-7** Every model, vendor and config string shown in the UI is stripped of C0 and C1 controls (except newline and tab) and of ESC, CSI and OSC sequences.
 - **SAFE-8** **Link-safe deletion, everywhere, v1 included** (F42). To delete a workspace or snapshot, the harness:
   1. walks it with `lstat` and unlinks every symlink and junction without following it
   2. deletes it with Node `fs.rm`
-  3. runs `git worktree prune`
+  3. deletes its own record, `worktrees/<name>` in the git common dir, after checking that the record's `gitdir` file names this workspace
 
-  It never uses `git worktree remove --force` on a populated tree. The v1 call sites (`worktree.ts`, `session.ts`, `integration.ts`) are fixed by #36 (draft PR #37, milestone M0a).
+  It never uses `git worktree remove --force` on a populated tree, and never runs `git worktree prune`, which would also drop the records of your other worktrees whose folders are missing. The v1 call sites (`worktree.ts`, `session.ts`, `integration.ts`) are fixed by #36 (draft PR #37, milestone M0a).
 - **SAFE-9** **Link walk before every harness git command** (F37). Before any harness git command in a workspace or snapshot (reset, checkout, add, commit, rm, status, diff, apply):
   - Every symlink and junction outside the keep folders is unlinked, except base entries of mode 120000 whose target is unchanged.
   - A link used as a folder on the path to a tracked path fails the wake as `link-escape`, and you are told.
@@ -998,16 +1002,15 @@ These are part of the Monarch's static prompt.
 - **SAFE-10** Autonomy only chooses each vendor's flags. Shadow Army never removes a vendor safeguard, and may add restrictions.
 - **SAFE-11** **No soldier code runs during harness git.** On Windows, each soldier turn runs in a kill-on-close Job Object; on POSIX, in its own process group. The whole group is killed at the end of the turn, before any harness git touches that workspace. Vendor daemons outside the group (F34) are a stated residual risk [S12]. **Fallback:** SOLD-4's tree walk plus a survivor check that blocks harness git while any survivor is alive.
 - **SAFE-12** **v1's claim audit never writes or deletes through a link** (F42). Before the audit, the write session unlinks the links the soldier left, keeping links the base tracks. `revertPaths` refuses any path that passes through a link, and the report names the links removed. This is implemented by #36 (draft PR #37).
-- **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`. Diffs add `--no-ext-diff --no-textconv`. At chat start, the harness records `<gitdir>` and `<common>` from `git rev-parse --path-format=absolute --git-dir --git-common-dir`; in a linked worktree or a submodule, `<repo>/.git` is a file, not a folder. After that, harness git never discovers its repository. It passes `--git-dir=<gitdir> --work-tree=<repo>` in your checkout, and `--git-dir=<common>/worktrees/<name> --work-tree=<workspace>` in a workspace or snapshot, where `<name>` is recorded when the workspace is created. A rewritten `.git` file therefore cannot redirect it. Each workspace's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2). In GIT-3 and GUARD-2 (→M5), `.git/` means `<common>/`.
+- **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= -c commit.gpgSign=false -c tag.gpgSign=false -c log.showSignature=false --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`, so no hook, monitor, pager, signing or verification program runs. Diffs add `--no-ext-diff --no-textconv`. At chat start, the harness records `<gitdir>` and `<common>` from `git rev-parse --path-format=absolute --git-dir --git-common-dir`; in a linked worktree or a submodule, `<repo>/.git` is a file, not a folder. After that, harness git never discovers its repository. It passes `--git-dir=<gitdir> --work-tree=<repo>` in your checkout, and `--git-dir=<common>/worktrees/<name> --work-tree=<workspace>` in a workspace or snapshot, where `<name>` is recorded when the workspace is created. A rewritten `.git` file therefore cannot redirect it. Each workspace's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2). In GIT-3 and GUARD-2 (→M5), `.git/` means `<common>/`.
 - **GIT-2** **Pinned config.** At chat start, the harness reads your effective `core.autocrlf`, `core.eol`, `core.safecrlf`, `core.symlinks`, `core.ignorecase` and `filter.*` settings and passes them explicitly with `-c`.
 - **GIT-3** **Metadata check.** Before every harness git command, the harness compares the config and metadata git will read with a baseline, taken at chat start or when the workspace is created:
-  - system config, including `%PROGRAMDATA%\Git\config` on Windows, and global config
-  - the `core.*`, `filter.*`, `include*`, `diff.*` and `merge.*` sections of `.git/config` (`git push -u` changing `branch.*` doesn't count)
+  - the effective config for that git dir, from `git config --list --show-scope`: every scope except the command line, with includes followed. This covers system config (with `%PROGRAMDATA%\Git\config` on Windows), global config, `.git/config` and any `config.worktree`. Changes to `branch.*` and `remote.*`, such as `git push -u` makes, don't count.
   - `.git/info/**`
   - `.git/worktrees/<n>/{gitdir,commondir,config.worktree}`
   - each workspace's `.git` file
 
-  A workspace's `HEAD` is checked against the commit the harness expects, not hashed. Any other change blocks harness git (F45). Before M5, a plain git-metadata card asks you to attribute it; from M5, the git-metadata card works as GUARD-4 does (→M5).
+  A workspace's `HEAD` is checked against the commit the harness expects, not hashed. Any other change blocks harness git (F45). The check runs again after each command, so a change made while the command ran is reported too. Before M5, a plain git-metadata card asks you to attribute it; from M5, the git-metadata card works as GUARD-4 does (→M5).
 - **GIT-4** Harness commits use `--no-verify` and v1's identity flags.
 - **GUARD-1** Hashes are batched (`git hash-object --stdin-paths`), with no 500-file cap. Over `guard.maxDirty` (20,000) dirty files, wakes are refused.
 - **GUARD-2** The **sentinel set**, hashed even when ignored:
@@ -1112,7 +1115,7 @@ soldiers:
 - CI passes on ubuntu, macos and windows.
 - A Windows walkthrough is recorded.
 - The README, `CLAUDE.md`, delegate prose and ADR statuses are updated for any rule the milestone changes.
-- TRACE-1 passes.
+- TRACE-1 passes, from M1a, which adds it. For M0 and M0a, its rules are checked by hand.
 - POSIX is reported as unverified by hand unless tested.
 
 ### M0: Spikes (Q25)
@@ -1153,7 +1156,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **integration:** SAFE-8, SAFE-12
 
 **ACs:**
-- **M0a-AC1** Removing a snapshot or soldier worktree whose tracked folder was replaced by a junction leaves the target intact (covers SAFE-8).
+- **M0a-AC1** Removing a snapshot or soldier worktree whose tracked folder was replaced by a junction leaves the target intact. It also leaves the records of your other worktrees alone, even one whose folder is missing (covers SAFE-8).
 - **M0a-AC2** The claim audit's revert refuses a path through a link, and the report names the removed links (covers SAFE-12).
 
 ### M1a: Monarch runtime, confinement and safe git
@@ -1171,7 +1174,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **live:** CONF-4, CONF-8, LEADRT-10
 
 **ACs:**
-- **M1a-AC1** The CONF-6 suite passes in CI, including the positive control, and `git_read` refuses `--output` and secret paths (covers CONF-1, CONF-2, CONF-3, CONF-6, MCP-3).
+- **M1a-AC1** The CONF-6 suite passes in CI, including the positive control, and `git_read` refuses `--output` and secret paths, and never shows a `.env` that was committed and later deleted (covers CONF-1, CONF-2, CONF-3, CONF-6, MCP-3).
 - **M1a-AC2** The Monarch is launched with `--effort high` and `--autocompact 200000` (D4) (covers LEADRT-1).
 - **M1a-AC3** No file holds the token, and a token-less request is rejected (covers ARCH-2, ARCH-3).
 - **M1a-AC4** With `ANTHROPIC_API_KEY` set in your shell, the Monarch still starts on your subscription, and `claude auth status` gating refuses an API-key-only login (covers ARCH-4, LEADRT-10).
@@ -1219,7 +1222,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
   - the 80% check-in arrives even within 5 minutes of the last one, and after `extend` the run passes the old ceiling
   - the safety ceiling stops it with status `ceiling`, and nothing is applied
   - a 4th subagent start stops the turn
-- **M2-AC5** At the end of a turn, no soldier process survives. A changed `.git/config` stops harness git, and a rewritten `.git` file does not redirect it, also when your checkout is a linked worktree (covers SAFE-11, GIT-1, GIT-3).
+- **M2-AC5** At the end of a turn, no soldier process survives. A changed `.git/config` stops harness git, including a planted `gpg.program` with `commit.gpgSign`, which never runs. A rewritten `.git` file does not redirect harness git, also when your checkout is a linked worktree (covers SAFE-11, GIT-1, GIT-3).
 
 ### M3: Ink shell
 
@@ -1281,6 +1284,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M5-AC5** Your edit during a turn raises one shared attribution card, while our refs, our undo and our applies raise none (covers GUARD-3, GUARD-4, GUARD-6).
 - **M5-AC6** `sa summon --write` refuses under the chat lock, and a second `sa` in the folder exits naming the open chat (D11) (covers GUARD-5).
 - **M5-AC7** Changing `rules.md` mid-chat pauses wakes and shows the policy-trust card (D9) (covers POL-1, POL-2).
+- **M5-AC8** An apply that fails partway (on Windows, a file held open by another process) leaves your checkout byte-identical to before and names the files (covers WS-8).
 
 ### M6: The whole army
 
@@ -1358,7 +1362,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 **ACs:**
 - **M9-AC1** Notices appear at 30, 50 and 70% of the ceiling. At 90%, either the Monarch extends the ceiling (up to 200k, D1), or a warm soldier writes a summary after its task and continues primed in a new session; a cold one gets a digest (Q9) (covers CTX-3, CTX-5, CMP-2, CMP-3).
 - **M9-AC2** In a fixture with vendor compaction at 85%, Shadow compaction runs first (Q16) (covers CMP-4).
-- **M9-AC3** The 80% card offers the four options in order (Q17), and `/switch` works (covers LIM-2, LEAD-7).
+- **M9-AC3** The 80% card offers the four options in order (Q17), and `/switch` works. `/switch codex-astra` starts a codex lead from a handoff, launched with codex's read-only sandbox (D13, D17) (covers LIM-2, LEAD-7).
 - **M9-AC4** The reference chat passes the EFF-8 gate (covers EFF-3, EFF-8, EFF-9).
 - **M9-AC5** Resuming a chat whose Monarch is cold, at 100k or more, shows the resume card with both costs and the handoff pre-selected (D15) (covers LEAD-9).
 
@@ -1467,6 +1471,10 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 | D17 | The lead can be handed to codex | LEAD-7 | M9-AC3 |
 | D18 | The Monarch reviews diffs up to 6k itself | LEAD-5 | M10-AC3 |
 | O1 | The v1 link fix | SAFE-8, SAFE-12 | M0a-AC1, M0a-AC2 |
+| O2 | Post to GitHub directly | §18 | #38, #40–#53 and PR #39 exist |
+| O3 | Critique round 4 after the answers | Appendix A | Appendix A, round 4 |
+| O4 | No zip in the repository; look in Downloads when stuck | SAFE-4, DOC-1 | M5 walkthrough SAFE-4; M6 live DOC-1 |
+| O5 | The zip is the reference design | §5, ADR-0001 | The §5 parity table |
 
 ## 21. References
 
@@ -1541,6 +1549,22 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | R5·4: §13.1 kept the old ceiling | 150 calls and 3M QU, as in WAKE-15 |
 | R5·5: "unanswered" undefined, so one ignored check-in blocked every later one | WAKE-9 defines answered and exempts the 80% check-in; M2-AC4 |
 | R5·6 (found while fixing R5·2): WAKE-15 said partial work is never applied | "never applied on its own" |
+
+**Round 6** (gates E and Q, on v0.7; 1 critical and 9 high, one of them rejected): the rest were fixed in v0.8.
+
+| Finding | Disposition |
+|---|---|
+| R6·E1, Critical: a soldier's `git config` in its workspace writes the shared config; GIT-3 hashed five sections, so harness `git commit` ran a planted `gpg.program` (reproduced) | GIT-1 turns signing and verification off; GIT-3 compares the whole effective config and re-checks after each command; WS-7 stops on a GIT-3 finding; the threat model states the remaining race; F45; M2-AC5 |
+| R6·E2: a `git apply` that fails partway leaves files deleted, in v1 too (reproduced) | WS-8 restores every path on failure; F46; M5-AC8; v1 fix tracked as #53 |
+| R6·E3: `git_read diff`, `log` and `show` returned secret files' content from history | MCP-3 adds exclude pathspecs and refuses `show <rev>:<path>`; M1a-AC1 |
+| R6·E4: `git worktree prune` also drops the records of your other worktrees whose folders are missing | SAFE-8 deletes only its own record; M0a-AC1; PR #37 |
+| R6·Q1: D15 should also ask before a cold soldier wake | Rejected: D15 is about resuming a chat whose Monarch is cold (`mogesreview.md`, and the updated option as explained on 2026-10-04). Cold soldiers follow D1: they start fresh with a digest (SESS-1). |
+| R6·Q2: §0.2's D16 note claimed no half-done edits, which is false for `full` soldiers | Reworded |
+| R6·Q3: no AC proved D13 or D17 | M9-AC3 |
+| R6·Q4: SAFE-4 needed `sa doctor` before M6; O2–O5 had no §20 rows | SAFE-4 marked →M6; §20 rows O2–O5 |
+| R6·Q5: UX-9 contradicted PLAIN-1's ASCII grammar | UX-9 defers to PLAIN-1 in plain mode |
+| R6·Q6: the definition of done required TRACE-1 before M1a adds it | It applies from M1a |
+| R6·Q (issues): issue text stale against §18, and AC sub-bullets dropped | Issues re-posted from §18 |
 
 ## Appendix B. Traceability
 
