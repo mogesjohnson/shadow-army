@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.10, 2026-10-04 |
+| **Version** | 0.11, 2026-10-04 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
 | **Decisions** | Interview decisions Q1–Q26 (§20), and the owner's review decisions D1–D18 of 2026-10-04 (§0.2) |
-| **Review** | Eight rounds. Appendix A records every disposition, and Appendix B defines traceability. |
+| **Review** | Nine rounds; the ninth found no critical or high problem. Appendix A records every disposition, and Appendix B defines traceability. |
 
 **Conventions.**
 - MUST, SHOULD and MAY follow RFC 2119.
@@ -87,6 +87,7 @@ The owner answered every question on 2026-10-04 (`mogesanswers.md`). The tables 
 - **O3 (A):** run critique round 4 after applying these answers.
 - **O4 (A):** the zip was removed from the repo folder. The only copy is `~/Downloads/collection-claude-code-source-code-main.zip`; look there when stuck.
 - **O5:** that zip is the reference for ideas and for how the pieces connect. Shadow Army is the same idea, more ambitious. The other Downloads files are ignored.
+- **O6 (2026-10-04, spike first):** Claude Code mods (F47) could draw Shadow Army's screen inside your normal Claude Code session. Before choosing between that and the Ink shell (§6), M0 runs spike S13, and you decide from the result.
 
 ### 0.3 Work already in flight
 
@@ -241,6 +242,8 @@ The design matches Claude Code's harness where that serves the goal (§5), and g
 | F44 | In `-p`, `ANTHROPIC_API_KEY` in the environment takes precedence over the subscription login. | Authentication docs | Confirmed |
 | F45 | A tampered `.git/worktrees/<n>/commondir` redirects configuration. A `filter.*.clean` planted in config runs on `git add`. A planted `gpg.program` with `commit.gpgSign` runs on `git commit --no-verify`, and with `log.showSignature` on `git log`. | Critic E3 tests t7, t9; round-6 gate E | Confirmed |
 | F46 | `git apply` removes the old copy of every modified file before writing any new one. If a write fails after `--check` passed, later files stay deleted and added files are missing. v1's apply then reports "Your folder is unchanged" (#53). | Round-6 gate E; reproduced with Git 2.52 on Windows | Confirmed |
+| F47 | Claude Code mods (v2.1.287 and later) are plugin code that runs inside Claude Code, also under `claude -p`. Without managed settings or a Team or Enterprise plan, an installed mod can approve a tool call that a deny rule refuses, and can override settings hooks and auto mode's classifier. `--restricted` loads only managed settings and `--settings`. `--safe-mode` and `--bare` stop installed mods but not built-in ones, such as the one that loads `AGENTS.md`. A mod can draw a pane (on the right, or above the prompt), a band above the prompt, and commands. | Mods, permissions and CLI reference docs | Docs; our flags [S3, S5] |
+| F48 | `git add -A` with an exclude pathspec that names an already-ignored folder, such as `:(exclude).shadow`, exits 1 with "paths are ignored", though it stages everything else. A glob exclude that matches an ignored folder does the same. | Codex's review of PR #35; reproduced with Git 2.52 | Confirmed |
 
 ## 5. Reference design: Claude Code parity
 
@@ -620,7 +623,7 @@ At 140 columns or wider:
 
 - **MCP-1** Every call passes `authorize()` (SAFE-5).
 - **MCP-2** There are at most 6 tools, with schemas totalling at most 1,500 tokens.
-- **MCP-3** `git_read` builds git's argument list itself and runs under GIT-1 and GIT-2. It accepts only `--stat`, `--name-only`, `--name-status`, `--oneline`, `--short`, `-p`, `-U<n>`, `-n <N>`, `--cached` and `--no-patch`, plus revision and path operands, and refuses any other option. `show` takes a commit or `<rev>:<path>`, never anything that resolves to a blob or tree, such as a blob id or a tag that names one. `SECRET_GLOBS` match case-insensitively: a matching path is refused, also in `show <rev>:<path>` after `./` and `..` are resolved, and each `diff`, `log` and `show` gets `:(top,exclude,glob,icase)<glob>` for every entry. So a secret file's content never appears, even from history. Each reply also lists by name the paths the excludes withheld (`withheld by SECRET_GLOBS: …`), so the Monarch knows when its review is partial and can hand those files to a reviewer soldier (LEAD-5, →M10). A diff returns `--stat` plus hunks up to 6k tokens, else a summary.
+- **MCP-3** `git_read` builds git's argument list itself and runs under GIT-1 and GIT-2. It accepts only `--stat`, `--name-only`, `--name-status`, `--oneline`, `--short`, `-p`, `-U<n>`, `-n <N>`, `--cached` and `--no-patch`, plus revision and path operands, and refuses any other option. `show` takes a commit, or `<rev>:<path>` for a path that passes the secret check. Any other revision that resolves to a blob or tree, such as a blob id or a tag that names one, is refused. `SECRET_GLOBS` match case-insensitively: a matching path is refused, also in `show <rev>:<path>` after `./` and `..` are resolved, and each `diff`, `log` and `show` gets `:(top,exclude,glob,icase)<glob>` for every entry. So a secret file's content never appears, even from history. Each reply also lists by name the paths the excludes withheld (`withheld by SECRET_GLOBS: …`), so the Monarch knows when its review is partial and can hand those files to a reviewer soldier (LEAD-5, →M10). A diff returns `--stat` plus hunks up to 6k tokens, else a summary.
 - **MCP-4** `wake` is idempotent per `requestId`. Fields whose milestone hasn't landed yet are refused with a reason: `mode: write`, `claims` and `continueFrom` (→M5), and `mode: plan` and `after` (→M8).
 - **MCP-5** `control` acts on a queued or running task:
   - `cancel` stops it (SOLD-4).
@@ -657,6 +660,7 @@ At 140 columns or wider:
   It adds `--session-id` or `--resume`, with env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
   - **Supervised and `auto`** add `--restricted`.
   - **`full`** adds `--setting-sources ""` instead (F19) [S5].
+  - **Mods:** neither launch may load an installed plugin or mod, which could approve calls past every deny rule (F47). S5 checks the debug log. **Fallback:** `--settings` with `disableAllHooks` set.
   - **Check:** after `system/init`, the wake fails as `failed (profile)` if the tools or MCP servers differ from the profile.
   - **Fallback:** v1 flags plus `--strict-mcp-config`, with the extra prefix recorded.
 - **SOLD-3** `sa doctor --tokens` measures each CLI's first-call prefix. It costs one tiny call per CLI, which you are asked about first.
@@ -797,12 +801,12 @@ These are part of the Monarch's static prompt.
 - **WS-4** Dependencies live in the kept folders, and soldiers install them there.
 - **WS-5** The **working-state base** extends #32's `snapshot.ts` (§0.3):
   1. Copy the real index into a temporary index.
-  2. Run `git add -A`, excluding `.shadow/`, untracked files over `chat.baseMaxUntrackedBytes` (1 MB), and `SECRET_GLOBS`, matched case-insensitively (`:(top,exclude,glob,icase)`).
+  2. List your changed, deleted and untracked paths (`ls-files -m -d -o --exclude-standard -z`). Drop `.shadow/`, untracked files over `chat.baseMaxUntrackedBytes` (1 MB) and `SECRET_GLOBS` matches, compared case-insensitively. Stage exactly the rest with `add --pathspec-from-file --pathspec-file-nul`. An excluded file is never hashed, and no ignored path is ever named, which would make `git add` fail (F48).
   3. `write-tree`.
   4. `commit-tree -p HEAD` with the harness identity.
   5. Check that `.shadow/` is absent.
 
-  It runs under GIT-1…3 and the mutex. The excluded files are listed on the chat's first write card. A tracked file matching `SECRET_GLOBS` enters the base as staged, not as your working copy, and an untracked one is left out. So soldiers never see your uncommitted edits to such a file, and WS-8 refuses an apply to it while your copy differs. The base is refused during a merge, rebase, cherry-pick, revert or bisect, and in sparse checkouts. Submodules are carried as gitlinks and LFS files as pointers.
+  It runs under GIT-1…3 and the mutex. The excluded files are listed on the chat's first write card. A tracked file matching `SECRET_GLOBS` enters the base as staged, not as your working copy, and an untracked one is left out. So soldiers see such a file only as you last staged it, and WS-8 refuses an apply to it while your copy differs. The base is refused during a merge, rebase, cherry-pick, revert or bisect, and in sparse checkouts. Submodules are carried as gitlinks and LFS files as pointers.
 - **WS-6** Bases and task tips live under `refs/shadow-army/<chatId>/`. Their oids are written to `chat.json` first, then `update-ref` runs, under the mutex.
 
   **Continuing** (WAKE-15). `wake(continueFrom: <taskId>)` accepts only a write task that ended `ceiling`, `timeout` or `limit` and was never applied; a task you or the Monarch cancelled cannot be continued. The new task keeps that task's base, and its claims must include that task's claims. WS-2's step 3 resets the workspace to that task's tip instead of the base. At the end, WS-7 audits and WS-8 applies `base..newTip`, so the work of both tasks lands as one change or not at all. The `session` field works as usual (SESS-8).
@@ -853,7 +857,8 @@ These are part of the Monarch's static prompt.
 - **CONF-2** The Monarch runs in `dontAsk` with `--permission-prompts none`. The allow rules are the exact MCP tool names (`mcp__army__wake`, `mcp__army__control`, `mcp__army__git_read`, plus each later tool when its milestone lands) and reads of `<runtime>/reports/**` through `--add-dir`. Anything else that would ask is denied.
 - **CONF-3** Deny rules, each written as `Read(<glob>)`, from one `SECRET_GLOBS` list shared with WS-5 (→M5) and MCP-3:
   - `**/.env*`, `**/*.pem`, `**/*.key`, `**/id_rsa*`, `**/id_dsa*`, `**/id_ecdsa*`, `**/id_ed25519*`, `**/*.pfx`, `**/*.p12`
-  - `**/.npmrc`, `**/.netrc`, `**/.pypirc`, `**/credentials`, `**/credentials.json`
+  - `**/.npmrc`, `**/.netrc`, `**/.pypirc`, `**/.git-credentials`, `**/*.ppk`, `**/id_xmss*`
+  - `**/credentials`, `**/credentials.json`, `**/credentials.csv`, `**/credentials.y*ml`, `**/credentials.tfrc.json`, `**/*service-account*.json`
   - `.git/**` and `.shadow/**`
 
   The list names secret files exactly, so source files such as `credentials.ts` or `id_gen.ts` stay readable. It uses no bracket classes, which Claude's `Grep` and `Glob` skip. The lead workspace is in the runtime directory, so these rules never block it. The rules must match case-insensitively, as the file system does on Windows and macOS: the CONF-6 suite reads `.ENV` and `Credentials.json` through `Read`, `Grep` and `Glob`, and each read must be denied [S3].
@@ -864,6 +869,7 @@ These are part of the Monarch's static prompt.
   - secret and `.git` reads are denied
   - path tricks: `..`, junctions, 8.3 names, case variants, `\\?\`, alternate data streams, trailing dots and spaces
   - deleting the hook opens nothing
+  - an installed mod that approves every tool call never loads into the Monarch (F47): the debug log shows no such hooks module, and its approvals open nothing
   - a **positive control**: reads in the repository succeed
 
   **Fallback:** a live run, recorded.
@@ -1005,7 +1011,7 @@ These are part of the Monarch's static prompt.
   - Every gitlink folder is emptied link-safely (SAFE-8), keeping the empty folder, so no nested repository a soldier made can run its own filters or hooks. The gitlinks come from the index (`ls-files -s -z`, mode 160000), which also lists any the soldier added with `git add`; the listing only reads the index. Workspaces never check submodules out, and this is never done in your checkout. If the listing or an emptying fails, the wake fails as `guard` and no other harness git runs there.
 - **SAFE-10** Autonomy only chooses each vendor's flags. Shadow Army never removes a vendor safeguard, and may add restrictions.
 - **SAFE-11** **No soldier code runs during harness git.** On Windows, each soldier turn runs in a kill-on-close Job Object; on POSIX, in its own process group. The whole group is killed at the end of the turn, before any harness git touches that workspace. Vendor daemons outside the group (F34) are a stated residual risk [S12]. **Fallback:** SOLD-4's tree walk plus a survivor check that blocks harness git while any survivor is alive.
-- **SAFE-12** **v1's claim audit never writes or deletes through a link** (F42). Before the audit, the write session unlinks the links the soldier left, keeping links the base tracks. `revertPaths` refuses any path that passes through a link, and the report names the links removed. This is implemented by #36 (draft PR #37).
+- **SAFE-12** **v1's claim audit never writes or deletes through a link** (F42). Before the audit, the write session unlinks the links the soldier left, keeping links the base tracks. If the worktree folder itself was replaced by a link, the session refuses to finish, so no audit, revert or commit runs wherever the link points. `revertPaths` refuses any path that passes through a link, the root included, and the report names the links removed. This is implemented by #36 (draft PR #37).
 - **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= -c format.pretty=medium -c commit.gpgSign=false -c tag.gpgSign=false -c log.showSignature=false --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`, so no hook, monitor, pager, signing or verification program runs. In a workspace or snapshot it also passes `-c diff.ignoreSubmodules=dirty`, but only as a second layer for `status` and `diff`: a `.gitmodules` entry with `ignore = none` overrides it, and `git add` and plumbing such as `diff-files` never read it. The first layer is SAFE-9, which empties every gitlink folder there before harness git runs, so no nested repository is left to start; a changed gitlink is still reported. In your checkout, `status` does look inside your submodules, so the guard sees edits there, and GIT-3 checks their config. Diffs add `--no-ext-diff --no-textconv`. At chat start, the harness records `<gitdir>` and `<common>` from `git rev-parse --path-format=absolute --git-dir --git-common-dir`; in a linked worktree or a submodule, `<repo>/.git` is a file, not a folder. After that, harness git never discovers its repository. It passes `--git-dir=<gitdir> --work-tree=<repo>` in your checkout, and `--git-dir=<common>/worktrees/<name> --work-tree=<workspace>` in a workspace or snapshot, where `<name>` is recorded when the workspace is created. A rewritten `.git` file therefore cannot redirect it. Each workspace's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2). In GIT-3 and GUARD-2 (→M5), `.git/` means `<common>/`.
 - **GIT-2** **Pinned config.** At chat start, the harness reads your effective `core.autocrlf`, `core.eol`, `core.safecrlf`, `core.symlinks`, `core.ignorecase` and `filter.*` settings and passes them explicitly with `-c`.
 - **GIT-3** **Metadata check.** Before every harness git command, the harness compares the config and metadata git will read with a baseline, taken at chat start or when the workspace is created:
@@ -1017,7 +1023,7 @@ These are part of the Monarch's static prompt.
 
   A workspace's `HEAD` is checked against the commit the harness expects, not hashed. Any other change blocks harness git (F45). The check runs again after each command, so a change made while the command ran is reported too. Before M5, a plain git-metadata card asks you to attribute it; from M5, the git-metadata card works as GUARD-4 does (→M5).
 - **GIT-4** Harness commits use `--no-verify` and v1's identity flags.
-- **GUARD-1** Hashes are batched (`git hash-object --stdin-paths`), with no 500-file cap. Over `guard.maxDirty` (20,000) dirty files, wakes are refused.
+- **GUARD-1** Hashes are batched (`git hash-object --stdin-paths`), with no 500-file cap. A gitlink path is compared by its checked-out commit instead, since `hash-object` cannot hash it. Over `guard.maxDirty` (20,000) dirty files, wakes are refused.
 - **GUARD-2** The **sentinel set**, hashed even when ignored:
   - `.git/config`, `.git/hooks/**`, `.git/info/**` and `.git/worktrees/**` metadata, where `.git/` is `<common>/` (GIT-1), and your checkout's `.git` when it is a file
   - `.githooks/**`, `.claude/**`, `.mcp.json` and `.env*`
@@ -1135,18 +1141,19 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 |---|---|---|---|---|
 | S1 | The Monarch's protocol: multi-turn stdin; uuid and replay; priority; state events; the interrupt receipt; `get_context_usage`; `mcp_status`; `set_model` keeping history; `--append-system-prompt-file`; the env flags in LEADRT-1 | Behaves as F20 describes | Each requirement's fallback | M1a |
 | S2 | HTTP MCP with the `${SA_ARMY_SESSION}` header and session replacement | Works, and the token is never on disk | The stdio fallback | M1a |
-| S3 | The CONF-6 suite with the pinned binary and a fake server, and which instruction files load | All denials hold, and the positive control passes | Block M1a | M1a |
+| S3 | The CONF-6 suite with the pinned binary and a fake server; which instruction files load; that no installed mod loads (F47) | All denials hold, the positive control passes, and an installed mod that approves everything never loads | Block M1a | M1a |
 | S9 | `--effort`, `--autocompact` and `/compact <instructions>`, headless | Take effect | A handoff restart | M1a |
 | S12 | Job Object kill-on-close from Node (native helper), the codex sandbox service, and the grok leader | No survivors | The SOLD-4 fallback and a survivor block | M2 |
 | S5 | Each CLI as a soldier: auth under lean launch (claude `full` with `--setting-sources ""`; codex with `windows.sandbox`); tool names per OS; usage semantics; subagent and compaction events; resume; memory switches; windows | A table and fixtures per CLI | The SOLD-2 and SOLD-7 fallbacks | M2 (claude), M6 (others) |
 | S8 | Windows Terminal: KEY-4, the mouse, Shift+drag, glyphs, render cost | All work | The KEY-4 and UX-5 fallbacks | M3 |
+| S13 | A Claude Code mod as Shadow Army's screen (O6): a roster band above the prompt, a soldier pane with tabs and a direct-chat field, and `/wake` calling the army tools, in Windows Terminal | You see it working and choose between the mod and the Ink shell | The Ink shell, as specified | M3 |
 | S11 | Base timing, and CRLF fidelity under GIT-2 | WS-11 met; blobs equal the index blobs | The incremental base | M5 |
 | S4 | Quota signals per vendor | Found, or confirmed absent | Estimates only | M6 |
 | S6 | codex resume with the parent `-s`/`-C` options | A read-only resume cannot write | Two sessions | M6 |
 | S7 | Instruction-file loading in a worktree | A table | `AGENTS.md` inlined | M6 |
 | S10 | codex as the Monarch, read-only | It runs read-only, receives army updates, calls the army tools and can be interrupted | Claude models only | M9 |
 
-- **M0-AC1** Every spike has a recorded result and evidence, and §4 and every dependent requirement are updated (covers spikes S1–S12; evidence: findings note).
+- **M0-AC1** Every spike has a recorded result and evidence, and §4 and every dependent requirement are updated (covers spikes S1–S13; evidence: findings note).
 - **M0-AC2** Fixtures pass the redaction scan (covers fixture redaction; evidence: CI).
 
 ### M0a: v1 link-safety fix (#36)
@@ -1162,7 +1169,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **ACs:**
 - **M0a-AC1** Removing a snapshot or soldier worktree whose tracked folder was replaced by a junction leaves the target intact. It also leaves your other worktrees and their records alone, even one whose folder is missing, or one the soldier's worktree folder was replaced with a link to (covers SAFE-8).
-- **M0a-AC2** The claim audit's revert refuses a path through a link, and the report names the removed links (covers SAFE-12).
+- **M0a-AC2** The claim audit's revert refuses a path through a link, finishing refuses a worktree whose folder was replaced by a link (your files stay untouched and nothing is committed), and the report names the removed links (covers SAFE-12).
 
 ### M1a: Monarch runtime, confinement and safe git
 
@@ -1235,7 +1242,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **Out of scope:** cards and the roster (M4), the tree and views (M8).
 
-**Prerequisite:** PR #31 (#30's chat) merged.
+**Prerequisite:** PR #31 (#30's chat) merged, and your choice after spike S13 (O6).
 
 **Implements:** UX-1, UX-2, UX-3, UX-4, UX-5, UX-6, UX-7, UX-8, UX-9, KEY-3, KEY-4, KEY-6, PROMPT-1, PROMPT-2, PROMPT-3, PROMPT-4, PROMPT-5, PROMPT-6, CHAT-1, CHAT-2, CHAT-3, NFR-1, NFR-2, NFR-3, NFR-5
 
@@ -1282,7 +1289,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **walkthrough:** SAFE-4
 
 **ACs:**
-- **M5-AC1** The base excludes `.shadow/`, a 37 MB file and `.env`, and `push --all` sends no `refs/shadow-army` refs (covers WS-5, WS-6).
+- **M5-AC1** The base excludes `.shadow/`, a 37 MB file and an untracked `.env`, also in a repository whose `.gitignore` names `.shadow/` and a `.env/` folder, and `push --all` sends no `refs/shadow-army` refs (covers WS-5, WS-6).
 - **M5-AC2** A fix wake sees the soldier's applied, uncommitted work, and a CRLF file round-trips unchanged (covers WS-5, WS-7).
 - **M5-AC3** A cancelled or ceiling-stopped write is not applied on its own. Continued with `continueFrom`, a ceiling-stopped write and its continuation apply as one change from the original base, and `continueFrom` on a cancelled or applied task is refused. Apply refuses everything when any file changed since the base, and `/undo` keeps your edit in another hunk (covers WS-6, WS-7, WS-8, WS-9, SESS-8).
 - **M5-AC4** A write card approval (Q19) gates the apply (covers WAKE-8).
@@ -1481,6 +1488,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 | O3 | Critique round 4 after the answers | Appendix A | Appendix A, round 4 |
 | O4 | No zip in the repository; look in Downloads when stuck | SAFE-4, DOC-1 | M5 walkthrough SAFE-4; M6 live DOC-1 |
 | O5 | The zip is the reference design | §5, ADR-0001 | The §5 parity table |
+| O6 | Mods: spike before choosing the screen | S13 | M0-AC1 |
 
 ## 21. References
 
@@ -1597,6 +1605,17 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | R8·Q2: D17 promised a way back to Claude, and nothing proved the codex lead works | LEAD-7 adds the switch back; S10's pass criteria; M9-AC3 |
 | R8·Q (issues): #40, #44 and #46 lacked M0's run notes and the prerequisites; #53 restored from the base; #36 lacked the record check | Issues re-posted; #53 restores from the pre-apply copy |
 | R8·Codex (review of PR #37): a worktree folder replaced by a link to another worktree matched that worktree's record, and its contents were walked; a relative `gitdir` was read from the wrong folder (both reproduced) | SAFE-8; M0a-AC1; fixed in PR #37 |
+
+**Round 9** (one gate, verifying only the round-8 changes on v0.10): no critical or high problem. The spec meets the review bar. Smaller points were taken in v0.11:
+
+| Finding | Disposition |
+|---|---|
+| R9 (outside the changes): a soldier that swaps its worktree folder for a link into your checkout aimed v1's `finish()` at your repository, whose revert deleted your untracked file (reproduced; needs `full` autonomy or POSIX) | Fixed in PR #37: `finish()` refuses a worktree folder that is a link, and `crossesLink` checks the root; M0a-AC2 |
+| R9 (medium): narrowing `SECRET_GLOBS` reopened `credentials.csv`, `.yml`, `.tfrc.json` and `id_xmss`; `.git-credentials`, `*.ppk` and service-account keys were never covered | CONF-3 names them |
+| R9 (medium): `hash-object` cannot hash a gitlink | GUARD-1 compares a gitlink by its commit |
+| R9 (low): WS-5 overstated what soldiers see; MCP-3's blob wording clashed with `<rev>:<path>`; M5-AC1's `.env` must be untracked | Reworded |
+| Owner question (2026-10-04): Claude Code mods | F47; CONF-6 and SOLD-2 prove no installed mod loads into the Monarch or a soldier; spike S13 before choosing the screen (O6) |
+| Codex's review of PR #35 (P1): `git add -A` with an exclude naming an ignored folder fails | WS-5 stages an explicit list and never names an ignored path; F48; M5-AC1 |
 
 ## Appendix B. Traceability
 
