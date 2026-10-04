@@ -1,5 +1,5 @@
 import { lstat, readdir, readFile, rm, rmdir, unlink } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { CASE_INSENSITIVE_FS } from "./claims.js";
 import { canonicalPath, git, splitZ } from "./git.js";
 
@@ -69,9 +69,14 @@ export async function crossesLink(root: string, rel: string): Promise<boolean> {
   return false;
 }
 
-/** A path in comparable form: canonical, forward slashes, case folded where the file system ignores case. */
-const comparable = (p: string) => {
-  const c = canonicalPath(p).replace(/\\/g, "/");
+/**
+ * A worktree path in comparable form: its parent folder canonical (git records real paths), its own
+ * name as written, forward slashes, case folded where the file system ignores case. The worktree
+ * itself is never resolved: a soldier can replace its worktree folder with a link to another
+ * worktree, and resolving that link would match the other worktree's record.
+ */
+const comparableWorktree = (p: string) => {
+  const c = `${canonicalPath(dirname(p)).replace(/\\/g, "/")}/${basename(p)}`;
   return CASE_INSENSITIVE_FS ? c.toLowerCase() : c;
 };
 
@@ -83,11 +88,13 @@ const comparable = (p: string) => {
 async function worktreeRecords(repoRoot: string, path: string): Promise<string[]> {
   const common = resolve(repoRoot, (await git(repoRoot, ["rev-parse", "--git-common-dir"])).trim());
   const dir = join(common, "worktrees");
-  const want = comparable(path);
+  const want = comparableWorktree(path);
   const found: string[] = [];
   for (const name of await readdir(dir).catch(() => [] as string[])) {
-    const gitdir = (await readFile(join(dir, name, "gitdir"), "utf8").catch(() => "")).trim();
-    if (gitdir && comparable(dirname(gitdir)) === want) found.push(join(dir, name));
+    const record = join(dir, name);
+    const gitdir = (await readFile(join(record, "gitdir"), "utf8").catch(() => "")).trim();
+    // With worktree.useRelativePaths, gitdir is relative to the record's own folder.
+    if (gitdir && comparableWorktree(dirname(resolve(record, gitdir))) === want) found.push(record);
   }
   return found;
 }
@@ -99,9 +106,14 @@ async function worktreeRecords(repoRoot: string, path: string): Promise<string[]
  * records of the owner's other worktrees whose folders are missing, so neither is used.
  */
 export async function removeWorktreeSafely(repoRoot: string, path: string): Promise<void> {
-  // Look the record up while the worktree exists, so both paths compare in canonical form.
   const records = await worktreeRecords(repoRoot, path).catch(() => [] as string[]);
-  await unlinkLinks(path).catch(() => undefined);
-  await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  const root = await lstat(path).catch(() => undefined);
+  if (root?.isSymbolicLink()) {
+    // The worktree folder itself was replaced by a link: remove the link, never what it points to.
+    await removeLink(path);
+  } else if (root) {
+    await unlinkLinks(path).catch(() => undefined);
+    await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
   for (const record of records) await rm(record, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }

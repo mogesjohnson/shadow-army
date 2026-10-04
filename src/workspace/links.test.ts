@@ -91,6 +91,45 @@ describe("removing a worktree never follows a link inside it", () => {
     renameSync(`${own}-away`, own);
     expect(r.git("-C", own, "status", "--porcelain")).toBe("");
   });
+
+  it("removes only the link when a soldier swaps its worktree folder for a link to yours", async () => {
+    const r = repo();
+    const target = outside();
+    // One of your own worktrees, holding a link of its own.
+    const own = mkdtempSync(join(tmpdir(), "shadow-own-"));
+    cleanups.push(() => rmSync(own, { recursive: true, force: true }));
+    r.git("worktree", "add", "-q", "--detach", own, "HEAD");
+    linkFolder(target, join(own, "linked"));
+
+    const snap = await createSnapshot(r.dir, join(r.dir, ".shadow"), "HEAD", "look-swap");
+    // The soldier moves its worktree aside and puts a link to yours in its place.
+    renameSync(snap.path, `${snap.path}-moved`);
+    linkFolder(own, snap.path);
+
+    await snap.remove();
+
+    expect(existsSync(snap.path)).toBe(false);
+    expect(existsSync(join(r.dir, ".git", "worktrees", "look-swap"))).toBe(false);
+    // Your worktree, its record and its own link are untouched.
+    expect(existsSync(join(r.dir, ".git", "worktrees", basename(own)))).toBe(true);
+    expect(readFileSync(join(own, "linked", "precious.txt"), "utf8")).toBe("keep me\n");
+    expect(() => r.git("-C", own, "status")).not.toThrow();
+  });
+
+  it("finds the record when git stores relative worktree paths", async () => {
+    const r = repo();
+    r.git("config", "worktree.useRelativePaths", "true");
+    const shadowRoot = join(r.dir, ".shadow");
+    const snap = await createSnapshot(r.dir, shadowRoot, "HEAD", "look-relative");
+    expect(readFileSync(join(r.dir, ".git", "worktrees", "look-relative", "gitdir"), "utf8")).toMatch(/^\.\./);
+
+    await snap.remove();
+
+    expect(existsSync(join(r.dir, ".git", "worktrees", "look-relative"))).toBe(false);
+    // The same snapshot can be made again.
+    const again = await createSnapshot(r.dir, shadowRoot, "HEAD", "look-relative");
+    await again.remove();
+  });
 });
 
 describe("the claim audit's revert never writes or deletes through a link", () => {
