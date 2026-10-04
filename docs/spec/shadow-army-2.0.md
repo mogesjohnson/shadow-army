@@ -2,13 +2,13 @@
 
 | | |
 |---|---|
-| **Status** | Draft for review, round 5 |
-| **Version** | 0.6, 2026-10-04 |
+| **Status** | Draft for review |
+| **Version** | 0.7, 2026-10-04 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
 | **Decisions** | Interview decisions Q1–Q26 (§20), and the owner's review decisions D1–D18 of 2026-10-04 (§0.2) |
-| **Review** | Three rounds so far. Appendix A records every disposition, and Appendix B defines traceability. |
+| **Review** | Five rounds. Appendix A records every disposition, and Appendix B defines traceability. |
 
 **Conventions.**
 - MUST, SHOULD and MAY follow RFC 2119.
@@ -728,13 +728,13 @@ At 140 columns or wider:
   - loop, off-brief and stalled items go at once with `priority: next`
   - the others go with `priority: later` as soon as the Monarch is idle
 
-  A task has at most one unanswered check-in, and at most one per 5 minutes. The Monarch may do nothing (the default), steer the soldier, stop it, or extend its ceiling (MCP-5).
+  A check-in is answered when the Monarch turn that received it ends, whatever the Monarch did. A task has at most one unanswered check-in, and at most one per 5 minutes; the 80% check-in skips both limits, once per ceiling dimension. The Monarch may do nothing (the default), steer the soldier, stop it, or extend its ceiling (MCP-5).
 - **WAKE-10** At most `chat.maxConcurrentWakes` soldiers (3) are awake at once.
 - **WAKE-11** The subagent cap is `chat.subagentCap` (3 per task, Q22). Where the CLI has a flag, the flag enforces it; otherwise the harness counts subagent starts in the stream and stops the turn when one exceeds the cap. The cap is stated in priming.
 - **WAKE-12** `mode: plan` returns a plan. Approving its plan card starts the write wake with that plan attached.
 - **WAKE-13** For a second opinion (Q3), a plan wake to codex-astra (orchestrate role) returns a plan report. `assign.ts` allows read wakes in the orchestrate role.
 - **WAKE-14** Priming also happens after a rollover, a Shadow compaction, or an observed vendor compaction.
-- **WAKE-15** **Safety ceiling** (D16). A wake stops at `chat.wakeCeiling` (`{maxCalls: 150, maxQU: 3000000, maxMinutes: 60}`) with status `ceiling`, keeping its partial result. Partial work stays on its ref and is never applied. `wake(continueFrom: <taskId>)` (→M5) starts a new wake from that tip, so heavy work can carry on. The Monarch can raise one task's ceiling once, up to twice the default (MCP-5).
+- **WAKE-15** **Safety ceiling** (D16). A wake stops at `chat.wakeCeiling` (`{maxCalls: 150, maxQU: 3000000, maxMinutes: 60}`) with status `ceiling`, keeping its partial result. Partial work stays on its ref and is never applied on its own. `wake(continueFrom: <taskId>)` (WS-6, →M5) starts a new wake from that tip, so heavy work can carry on and lands as one change. The Monarch can raise one task's ceiling once, up to twice the default (MCP-5).
 
 ### 8.2 Orchestration rules (ORCH)
 
@@ -777,7 +777,7 @@ These are part of the Monarch's static prompt.
   - no file it read or touched differs between the tree it produced (its tip, or the base for a read) and the new base
   - no undo or refused apply has happened since
 
-  Otherwise the wake starts fresh. The brief announces any undo or refused apply.
+  Otherwise the wake starts fresh. The brief announces any undo or refused apply. For a `continueFrom` wake (WS-6), the continued tip counts as applied and stands in for the new base, so the soldier that produced it can keep its session.
 
 ### 9.2 Workspaces, base, apply and undo (WS)
 
@@ -799,6 +799,8 @@ These are part of the Monarch's static prompt.
 
   It runs under GIT-1…3 and the mutex. The excluded files are listed on the chat's first write card. The base is refused during a merge, rebase, cherry-pick, revert or bisect, and in sparse checkouts. Submodules are carried as gitlinks and LFS files as pointers.
 - **WS-6** Bases and task tips live under `refs/shadow-army/<chatId>/`. Their oids are written to `chat.json` first, then `update-ref` runs, under the mutex.
+
+  **Continuing** (WAKE-15). `wake(continueFrom: <taskId>)` accepts only a write task that ended `ceiling`, `timeout` or `limit` and was never applied; a task you or the Monarch cancelled cannot be continued. The new task keeps that task's base, and its claims must include that task's claims. WS-2's step 3 resets the workspace to that task's tip instead of the base. At the end, WS-7 audits and WS-8 applies `base..newTip`, so the work of both tasks lands as one change or not at all. The `session` field works as usual (SESS-8).
 - **WS-7** A write wake ends in this order:
   1. the claim audit, with reverts (F39)
   2. commit
@@ -930,7 +932,7 @@ These are part of the Monarch's static prompt.
 | Monarch prefix | ≤20k tokens | CONF-1, CONF-4 |
 | Soldier prefix, first call | claude ≤15k, codex ≤20k, grok ≤17k, agy ≤20k | SOLD-2, SOLD-7 |
 | Cold re-reads | None without a card | SESS-1, LIM-3 |
-| Long wakes | Check-ins at 15 min, 30 calls and 400k QU; ceiling at 60 min, 90 calls and 1.2M QU | WAKE-9, WAKE-15 |
+| Long wakes | Check-ins at 15 min, 30 calls and 400k QU; ceiling at 60 min, 150 calls and 3M QU | WAKE-9, WAKE-15 |
 | Priming | ≤1.5k tokens of rules, plus ≤4 KB of memory | WAKE-3 |
 | Subagents | ≤3 per task | WAKE-11 |
 
@@ -973,7 +975,7 @@ These are part of the Monarch's static prompt.
 - **SAFE-3** **Full-autonomy notice and auto-approve** (D10, D14).
   - A `full` soldier's first wake in a chat posts a notice, not a card: it runs with your account's rights and no vendor prompts, and Shadow Army detects changes outside its workspace but cannot prevent them.
   - `/auto-approve writes on`, or the `auto` mode (KEY-7), stays on until you turn it off, including across `--resume`. The footer shows it, and turning it on posts a notice.
-  - It covers every write approval: soldier writes, direct writes, lead tasks (→M10) and execution-bearing paths, including the apply-review card for mode, `.gitmodules` and `.gitattributes` changes.
+  - It covers every write approval: soldier writes, direct writes (→M8), lead tasks (→M10) and execution-bearing paths, including the apply-review card for mode, `.gitmodules` and `.gitattributes` changes.
   - It never covers:
     - hard-denied claims (POL-3)
     - an apply that adds or retargets a symlink or gitlink, which still needs the typed `yes` (WS-8)
@@ -996,7 +998,7 @@ These are part of the Monarch's static prompt.
 - **SAFE-10** Autonomy only chooses each vendor's flags. Shadow Army never removes a vendor safeguard, and may add restrictions.
 - **SAFE-11** **No soldier code runs during harness git.** On Windows, each soldier turn runs in a kill-on-close Job Object; on POSIX, in its own process group. The whole group is killed at the end of the turn, before any harness git touches that workspace. Vendor daemons outside the group (F34) are a stated residual risk [S12]. **Fallback:** SOLD-4's tree walk plus a survivor check that blocks harness git while any survivor is alive.
 - **SAFE-12** **v1's claim audit never writes or deletes through a link** (F42). Before the audit, the write session unlinks the links the soldier left, keeping links the base tracks. `revertPaths` refuses any path that passes through a link, and the report names the links removed. This is implemented by #36 (draft PR #37).
-- **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`. Diffs add `--no-ext-diff --no-textconv`. Harness git in a workspace or snapshot always passes `--git-dir=<repo>/.git/worktrees/<name> --work-tree=<workspace>`, so a rewritten `<workspace>/.git` file cannot redirect it. That file's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2).
+- **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`. Diffs add `--no-ext-diff --no-textconv`. At chat start, the harness records `<gitdir>` and `<common>` from `git rev-parse --path-format=absolute --git-dir --git-common-dir`; in a linked worktree or a submodule, `<repo>/.git` is a file, not a folder. After that, harness git never discovers its repository. It passes `--git-dir=<gitdir> --work-tree=<repo>` in your checkout, and `--git-dir=<common>/worktrees/<name> --work-tree=<workspace>` in a workspace or snapshot, where `<name>` is recorded when the workspace is created. A rewritten `.git` file therefore cannot redirect it. Each workspace's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2). In GIT-3 and GUARD-2 (→M5), `.git/` means `<common>/`.
 - **GIT-2** **Pinned config.** At chat start, the harness reads your effective `core.autocrlf`, `core.eol`, `core.safecrlf`, `core.symlinks`, `core.ignorecase` and `filter.*` settings and passes them explicitly with `-c`.
 - **GIT-3** **Metadata check.** Before every harness git command, the harness compares the config and metadata git will read with a baseline, taken at chat start or when the workspace is created:
   - system config, including `%PROGRAMDATA%\Git\config` on Windows, and global config
@@ -1009,7 +1011,7 @@ These are part of the Monarch's static prompt.
 - **GIT-4** Harness commits use `--no-verify` and v1's identity flags.
 - **GUARD-1** Hashes are batched (`git hash-object --stdin-paths`), with no 500-file cap. Over `guard.maxDirty` (20,000) dirty files, wakes are refused.
 - **GUARD-2** The **sentinel set**, hashed even when ignored:
-  - `.git/config`, `.git/hooks/**`, `.git/info/**` and `.git/worktrees/**` metadata
+  - `.git/config`, `.git/hooks/**`, `.git/info/**` and `.git/worktrees/**` metadata, where `.git/` is `<common>/` (GIT-1), and your checkout's `.git` when it is a file
   - `.githooks/**`, `.claude/**`, `.mcp.json` and `.env*`
   - `AGENTS.md`, `CLAUDE.md` and the policy files
   - `.github/workflows/**`
@@ -1211,12 +1213,13 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M2-AC1** One read wake produces one update, and its logged brief has no chat text (covers WAKE-3, UPD-1, EFF-2).
 - **M2-AC2** SESS-1's table holds under a fake clock. In `keep`, a cold session at or above 100k shows the cold-wake card (Q13) (covers SESS-1, LIM-3).
 - **M2-AC3** A report containing `</army-update` and ANSI escapes arrives inert (covers UPD-1, UPD-2).
-- **M2-AC4** Check-ins and the ceiling behave as specified (covers WAKE-9, WAKE-15, WAKE-11):
+- **M2-AC4** Check-ins and the ceiling behave as specified (covers WAKE-9, WAKE-15, WAKE-11, MCP-5):
   - three identical calls send a `next`-priority check-in
-  - a long run sends check-ins at 30 calls and 15 minutes without being stopped
+  - a long run sends check-ins at 30 calls and 15 minutes without being stopped, while the Monarch does nothing
+  - the 80% check-in arrives even within 5 minutes of the last one, and after `extend` the run passes the old ceiling
   - the safety ceiling stops it with status `ceiling`, and nothing is applied
   - a 4th subagent start stops the turn
-- **M2-AC5** At the end of a turn, no soldier process survives, and a changed `.git/config` stops harness git (covers SAFE-11, GIT-3).
+- **M2-AC5** At the end of a turn, no soldier process survives. A changed `.git/config` stops harness git, and a rewritten `.git` file does not redirect it, also when your checkout is a linked worktree (covers SAFE-11, GIT-1, GIT-3).
 
 ### M3: Ink shell
 
@@ -1273,7 +1276,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 **ACs:**
 - **M5-AC1** The base excludes `.shadow/`, a 37 MB file and `.env`, and `push --all` sends no `refs/shadow-army` refs (covers WS-5, WS-6).
 - **M5-AC2** A fix wake sees the soldier's applied, uncommitted work, and a CRLF file round-trips unchanged (covers WS-5, WS-7).
-- **M5-AC3** A cancelled or ceiling-stopped write is not applied. Apply refuses everything when any file changed since the base, and `/undo` keeps your edit in another hunk (covers WS-7, WS-8, WS-9).
+- **M5-AC3** A cancelled or ceiling-stopped write is not applied on its own. Continued with `continueFrom`, a ceiling-stopped write and its continuation apply as one change from the original base, and `continueFrom` on a cancelled or applied task is refused. Apply refuses everything when any file changed since the base, and `/undo` keeps your edit in another hunk (covers WS-6, WS-7, WS-8, WS-9, SESS-8).
 - **M5-AC4** A write card approval (Q19) gates the apply (covers WAKE-8).
 - **M5-AC5** Your edit during a turn raises one shared attribution card, while our refs, our undo and our applies raise none (covers GUARD-3, GUARD-4, GUARD-6).
 - **M5-AC6** `sa summon --write` refuses under the chat lock, and a second `sa` in the folder exits naming the open chat (D11) (covers GUARD-5).
@@ -1296,7 +1299,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M6-AC1** Each CLI completes a read wake and a second wake, and a 30,000-character brief reaches agy (covers SOLD-7).
 - **M6-AC2** Full autonomy and auto-approve behave as decided (covers SAFE-3):
   - a `full` soldier's first wake shows the full-autonomy notice without blocking (D10)
-  - with auto-approve on, a soldier write and a direct write to `package.json` apply without a card, and the setting persists across `--resume` (D14)
+  - with auto-approve on, a soldier write to `package.json` applies without a card, and the setting persists across `--resume` (D14). Direct writes are checked in M8-AC2.
   - a hard-denied claim is still refused, and an added symlink still asks for a typed `yes`
 - **M6-AC3** The roster shows codex's quota, and the 90% gate skips codex for routine work (covers LIM-1, LIM-5).
 
@@ -1334,7 +1337,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **ACs:**
 - **M8-AC1** Soldiers animate with live tokens, two subagents show as branches that fold when done, and a click or key toggles them (covers TREE-3, TREE-4).
-- **M8-AC2** A view shows the soldier's chat. Typing there sends a direct turn: a write-capable soldier shows a write card first unless auto-approve is on, and agy runs read-only. Its VIEW-4 line reaches the Monarch with no model call (covers VIEW-2, VIEW-3, VIEW-4).
+- **M8-AC2** A view shows the soldier's chat. Typing there sends a direct turn: a write-capable soldier shows a write card first, and with auto-approve on, a direct write to `package.json` applies without one (D14). agy runs read-only. Its VIEW-4 line reaches the Monarch with no model call (covers VIEW-2, VIEW-3, VIEW-4, SAFE-3).
 - **M8-AC3** The full Esc ladder never stops a soldier (covers KEY-2).
 - **M8-AC4** `wake(after)` waits for its predecessor and cancels with it (covers ORCH-7).
 
@@ -1458,7 +1461,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 | D11 | A new chat per `sa`; `/resume`; one open chat per folder | CHAT-1, GUARD-5 | M3 pty CHAT-1, M5-AC6 |
 | D12 | No shell for the Monarch | CONF-1 | M10-AC4 |
 | D13 | A codex Monarch is read-only | LEAD-7 | M9-AC3 |
-| D14 | Auto-approve persists and covers every write | SAFE-3 | M6-AC2, M10-AC5 |
+| D14 | Auto-approve persists and covers every write | SAFE-3 | M6-AC2, M8-AC2, M10-AC5 |
 | D15 | A resume card for a cold Monarch | LEAD-9 | M9-AC5 |
 | D16 | Check-ins and a safety ceiling | WAKE-9, WAKE-15 | M2-AC4 |
 | D17 | The lead can be handed to codex | LEAD-7 | M9-AC3 |
@@ -1527,6 +1530,17 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | R4·Q7: decisions without ACs | §20 rows D1–D18 and O1; M1a-AC2, M5-AC7, M9-AC5, M10-AC5; M3-AC1 rescoped |
 | R4·Q8: prerequisites | M3 needs PR #31; M5 needs PR #35 |
 | R4·Q9: stale ADRs | ADR-0003 and ADR-0005 corrected |
+
+**Round 5** (gate E, verifying v0.6; 5 high, no critical, plus one found while fixing): all were fixed in v0.7.
+
+| Finding | Disposition |
+|---|---|
+| R5·1: `<repo>/.git` is a file in a linked worktree or a submodule, so `<repo>/.git/worktrees/<name>` does not exist | GIT-1 records `<gitdir>` and `<common>` and never discovers the repository; GIT-3 and GUARD-2 read `.git/` as `<common>/`; M2-AC5 |
+| R5·2: `continueFrom` had no base, so a continued write dropped or refused its earlier work | WS-6 keeps the original base and applies `base..newTip` as one change; SESS-8; M5-AC3 |
+| R5·3: M6-AC2 tested direct writes, which arrive in M8 | The direct-write check moved to M8-AC2; SAFE-3 marks direct writes →M8; §20 D14 |
+| R5·4: §13.1 kept the old ceiling | 150 calls and 3M QU, as in WAKE-15 |
+| R5·5: "unanswered" undefined, so one ignored check-in blocked every later one | WAKE-9 defines answered and exempts the 80% check-in; M2-AC4 |
+| R5·6 (found while fixing R5·2): WAKE-15 said partial work is never applied | "never applied on its own" |
 
 ## Appendix B. Traceability
 
