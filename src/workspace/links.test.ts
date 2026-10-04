@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderReport } from "../core/summon.js";
 import type { Report } from "../core/types.js";
@@ -70,6 +70,26 @@ describe("removing a worktree never follows a link inside it", () => {
     const snap = await createSnapshot(r.dir, join(r.dir, ".shadow"), "HEAD", "plain");
     await snap.remove();
     expect(existsSync(snap.path)).toBe(false);
+    expect(existsSync(join(r.dir, ".git", "worktrees", "plain"))).toBe(false);
+  });
+
+  it("leaves the records of your other worktrees alone, even one whose folder is missing", async () => {
+    const r = repo();
+    // One of your own worktrees, whose folder is away for a while (an unplugged drive, a rename).
+    const own = mkdtempSync(join(tmpdir(), "shadow-own-"));
+    cleanups.push(() => rmSync(own, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(`${own}-away`, { recursive: true, force: true }));
+    r.git("worktree", "add", "-q", "--detach", own, "HEAD");
+    renameSync(own, `${own}-away`);
+
+    const snap = await createSnapshot(r.dir, join(r.dir, ".shadow"), "HEAD", "look-other");
+    await snap.remove();
+
+    expect(existsSync(join(r.dir, ".git", "worktrees", "look-other"))).toBe(false);
+    expect(existsSync(join(r.dir, ".git", "worktrees", basename(own)))).toBe(true);
+    // Back in place, your worktree still works.
+    renameSync(`${own}-away`, own);
+    expect(r.git("-C", own, "status", "--porcelain")).toBe("");
   });
 });
 

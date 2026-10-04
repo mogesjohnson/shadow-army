@@ -1,6 +1,7 @@
-import { lstat, readdir, rm, rmdir, unlink } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
-import { git, gitOk, splitZ } from "./git.js";
+import { lstat, readdir, readFile, rm, rmdir, unlink } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { CASE_INSENSITIVE_FS } from "./claims.js";
+import { canonicalPath, git, splitZ } from "./git.js";
 
 /*
  * A soldier can replace a folder in its worktree with a symbolic link or a Windows junction that
@@ -68,13 +69,39 @@ export async function crossesLink(root: string, rel: string): Promise<boolean> {
   return false;
 }
 
+/** A path in comparable form: canonical, forward slashes, case folded where the file system ignores case. */
+const comparable = (p: string) => {
+  const c = canonicalPath(p).replace(/\\/g, "/");
+  return CASE_INSENSITIVE_FS ? c.toLowerCase() : c;
+};
+
+/**
+ * git's record of the worktree at `path`: the folders under the common git dir's `worktrees/` whose
+ * `gitdir` file names `<path>/.git`. Found through those files, never through the worktree's own
+ * `.git` file, which a soldier can rewrite.
+ */
+async function worktreeRecords(repoRoot: string, path: string): Promise<string[]> {
+  const common = resolve(repoRoot, (await git(repoRoot, ["rev-parse", "--git-common-dir"])).trim());
+  const dir = join(common, "worktrees");
+  const want = comparable(path);
+  const found: string[] = [];
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const gitdir = (await readFile(join(dir, name, "gitdir"), "utf8").catch(() => "")).trim();
+    if (gitdir && comparable(dirname(gitdir)) === want) found.push(join(dir, name));
+  }
+  return found;
+}
+
 /**
  * Delete a Shadow Army worktree without following links: unlink every link inside it, delete it with
- * Node (whose rm never follows links either), then let git forget it. `git worktree remove --force`
- * follows a junction and empties its target, so it is not used.
+ * Node (whose rm never follows links either), then delete git's record of it. `git worktree remove
+ * --force` follows a junction and empties its target, and `git worktree prune` would also drop the
+ * records of the owner's other worktrees whose folders are missing, so neither is used.
  */
 export async function removeWorktreeSafely(repoRoot: string, path: string): Promise<void> {
+  // Look the record up while the worktree exists, so both paths compare in canonical form.
+  const records = await worktreeRecords(repoRoot, path).catch(() => [] as string[]);
   await unlinkLinks(path).catch(() => undefined);
   await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-  await gitOk(repoRoot, ["worktree", "prune"]);
+  for (const record of records) await rm(record, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
