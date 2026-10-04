@@ -1,7 +1,8 @@
 import { rm } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import { git, gitOk, splitZ } from "./git.js";
+import { git, GitError, gitOk, splitZ } from "./git.js";
 import { matchesClaims } from "./claims.js";
+import { crossesLink } from "./links.js";
 
 export interface AuditResult {
   /** Every file the soldier changed relative to the base commit, from git, not from its own account. */
@@ -51,6 +52,10 @@ export async function identityFlags(cwd: string): Promise<string[]> {
 export async function revertPaths(worktree: string, base: string, paths: string[]): Promise<void> {
   const root = resolve(worktree);
   for (const p of paths) {
+    // git checkout and rm both follow a link in a folder on the way; such a path may lead outside.
+    if (await crossesLink(root, p)) {
+      throw new GitError(`refusing to revert ${p}: a folder on its path is a link that could lead outside the worktree`);
+    }
     if (await gitOk(worktree, ["cat-file", "-e", `${base}:${p}`])) {
       await git(worktree, ["checkout", base, "--", p]);
     } else {

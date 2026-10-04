@@ -1,7 +1,7 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { identityFlags } from "../workspace/audit.js";
 import { git, GitError, gitOk, splitZ } from "../workspace/git.js";
+import { removeWorktreeSafely } from "../workspace/links.js";
 
 /** The branch a run merges its soldiers' work into. The user's own branch is never touched. */
 export interface Integration {
@@ -61,7 +61,6 @@ export { createSnapshot } from "../workspace/worktree.js";
 
 /** Remove the integration worktree. The branch stays, unless the run produced nothing. */
 export async function closeIntegration(repoRoot: string, integration: Integration, deleteBranch: boolean): Promise<void> {
-  await gitOk(repoRoot, ["worktree", "remove", "--force", integration.path]);
-  await rm(integration.path, { recursive: true, force: true });
+  await removeWorktreeSafely(repoRoot, integration.path);
   if (deleteBranch) await gitOk(repoRoot, ["branch", "-D", integration.branch]);
 }
