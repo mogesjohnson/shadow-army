@@ -993,9 +993,9 @@ These are part of the Monarch's static prompt.
 - **SAFE-6** A single `redact()` runs on every write to logs, events, briefs, reports and fixtures. Logs are pruned after 30 days.
 - **SAFE-7** Every model, vendor and config string shown in the UI is stripped of C0 and C1 controls (except newline and tab) and of ESC, CSI and OSC sequences.
 - **SAFE-8** **Link-safe deletion, everywhere, v1 included** (F42). To delete a workspace or snapshot, the harness:
-  1. walks it with `lstat` and unlinks every symlink and junction without following it
+  1. walks it with `lstat` and unlinks every symlink and junction without following it. If the workspace folder itself has been replaced by a link, only that link is removed.
   2. deletes it with Node `fs.rm`
-  3. deletes its own record, `worktrees/<name>` in the git common dir, after checking that the record's `gitdir` file names this workspace
+  3. deletes its own record, `worktrees/<name>` in the git common dir, after checking that the record's `gitdir` file names this workspace. A relative `gitdir` is read from the record's folder, and a link standing at the workspace path is never resolved, so it cannot match another worktree's record.
 
   It never uses `git worktree remove --force` on a populated tree, and never runs `git worktree prune`, which would also drop the records of your other worktrees whose folders are missing. The v1 call sites (`worktree.ts`, `session.ts`, `integration.ts`) are fixed by #36 (draft PR #37, milestone M0a).
 - **SAFE-9** **Link walk before every harness git command** (F37). Before any harness git command in a workspace or snapshot (reset, checkout, add, commit, rm, status, diff, apply):
@@ -1161,7 +1161,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **integration:** SAFE-8, SAFE-12
 
 **ACs:**
-- **M0a-AC1** Removing a snapshot or soldier worktree whose tracked folder was replaced by a junction leaves the target intact. It also leaves the records of your other worktrees alone, even one whose folder is missing (covers SAFE-8).
+- **M0a-AC1** Removing a snapshot or soldier worktree whose tracked folder was replaced by a junction leaves the target intact. It also leaves your other worktrees and their records alone, even one whose folder is missing, or one the soldier's worktree folder was replaced with a link to (covers SAFE-8).
 - **M0a-AC2** The claim audit's revert refuses a path through a link, and the report names the removed links (covers SAFE-12).
 
 ### M1a: Monarch runtime, confinement and safe git
@@ -1596,6 +1596,7 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | R8·Q1: the secret excludes and the submodule flag narrowed D18, D7f and D7e without saying so | `git_read` names withheld paths; `SECRET_GLOBS` name secret files exactly, so `credentials.ts` and `id_gen.ts` stay readable; WS-5 says how a tracked secret-named file enters the base; the submodule flag applies only in workspaces, and GIT-3 checks your submodules' config, so the guard still sees edits inside them |
 | R8·Q2: D17 promised a way back to Claude, and nothing proved the codex lead works | LEAD-7 adds the switch back; S10's pass criteria; M9-AC3 |
 | R8·Q (issues): #40, #44 and #46 lacked M0's run notes and the prerequisites; #53 restored from the base; #36 lacked the record check | Issues re-posted; #53 restores from the pre-apply copy |
+| R8·Codex (review of PR #37): a worktree folder replaced by a link to another worktree matched that worktree's record, and its contents were walked; a relative `gitdir` was read from the wrong folder (both reproduced) | SAFE-8; M0a-AC1; fixed in PR #37 |
 
 ## Appendix B. Traceability
 
