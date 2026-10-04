@@ -6,6 +6,7 @@ import { renderReport } from "../core/summon.js";
 import type { Report } from "../core/types.js";
 import { revertPaths } from "./audit.js";
 import { crossesLink, trackedLinks, unlinkLinks } from "./links.js";
+import { openWriteSession } from "./session.js";
 import { makeRepo } from "./testRepo.testutil.js";
 import { createSnapshot, createWorktree, removeWorktree } from "./worktree.js";
 
@@ -159,6 +160,28 @@ describe("the claim audit's revert never writes or deletes through a link", () =
     expect(readFileSync(join(wt.path, "src", "a.ts"), "utf8")).toBe("a\n");
     expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
     expect(existsSync(join(target, "a.ts"))).toBe(false);
+  });
+
+  it("refuses to finish when a soldier swaps its worktree folder for a link into your checkout", async () => {
+    const r = repo();
+    r.write("src/scratch.ts", "mine\n"); // untracked, yours
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["docs/**"] });
+    try {
+      // The soldier moves its worktree aside and puts a link to your src folder in its place.
+      renameSync(s.cwd, `${s.cwd}-moved`);
+      linkFolder(join(r.dir, "src"), s.cwd);
+
+      await expect(s.finish("shadow(grok): swap")).rejects.toThrow(/replaced by a link/);
+      expect(await crossesLink(s.cwd, "scratch.ts")).toBe(true);
+
+      // Your file is still there and still untracked, and nothing was committed to your branch.
+      expect(readFileSync(join(r.dir, "src", "scratch.ts"), "utf8")).toBe("mine\n");
+      expect(r.git("status", "--porcelain")).toContain("src/scratch.ts");
+      expect(r.git("rev-list", "--count", "HEAD")).toBe("1");
+    } finally {
+      await s.discard();
+      await s.release();
+    }
   });
 
   // Committing a symlink needs core.symlinks, which Windows lacks without special rights.

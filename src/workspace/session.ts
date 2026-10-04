@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { auditWorktree, commitAll, revertPaths } from "./audit.js";
 import { validateClaims } from "./claims.js";
@@ -154,6 +154,11 @@ export async function openWriteSession(opts: {
     async finish(message) {
       clearInterval(timer);
       await inflight;
+      // A worktree folder replaced by a link would aim the audit, the revert and the commit below at
+      // whatever the link names, such as a folder in the owner's checkout, where git finds their repo.
+      if ((await lstat(wt.path)).isSymbolicLink()) {
+        throw new GitError(`refusing to finish ${wt.branch}: its worktree folder was replaced by a link`);
+      }
       // A link the soldier left could point outside the worktree, and git and the revert below would
       // follow it, so links go first, unfollowed. Links the base itself tracks stay.
       const linksRemoved = await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base));

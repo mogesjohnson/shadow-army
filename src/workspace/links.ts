@@ -54,8 +54,14 @@ export async function unlinkLinks(dir: string, keep: ReadonlySet<string> = new S
   return removed.sort();
 }
 
-/** Whether any existing folder between `root` and `rel` (not `rel` itself) is a link. */
+/** Whether `root` itself, or any existing folder between it and `rel` (not `rel` itself), is a link. */
 export async function crossesLink(root: string, rel: string): Promise<boolean> {
+  // A worktree folder replaced by a link leads wherever the link points.
+  try {
+    if ((await lstat(root)).isSymbolicLink()) return true;
+  } catch {
+    return false; // no root, nothing to follow
+  }
   const parts = rel.split(/[\\/]/).filter(Boolean);
   let current = root;
   for (const part of parts.slice(0, -1)) {
