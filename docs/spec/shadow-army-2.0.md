@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.8, 2026-10-04 |
+| **Version** | 0.9, 2026-10-04 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
 | **Decisions** | Interview decisions Q1–Q26 (§20), and the owner's review decisions D1–D18 of 2026-10-04 (§0.2) |
-| **Review** | Six rounds. Appendix A records every disposition, and Appendix B defines traceability. |
+| **Review** | Seven rounds. Appendix A records every disposition, and Appendix B defines traceability. |
 
 **Conventions.**
 - MUST, SHOULD and MAY follow RFC 2119.
@@ -310,17 +310,18 @@ At 140 columns or wider:
   | 60–79 | Strip: shadow name, truncated model and % | No tokens or time |
   | <60 | Hidden; `/army` lists it | The Monarch plus a count |
 
-  The minimum height is 24 rows. Below 30 rows, the tree shows at most 3 rows.
+  The strip lists the Monarch, then every awake or waiting soldier as `<glyph><Shadow> <model> <%>`, then `+N` for the dormant ones; `/army` lists them all. The minimum height is 24 rows. Below 30 rows, the tree shows at most 3 rows.
 - **UX-5** The mouse is on where the terminal reports it (D6). A click toggles a tree row, selects a roster row, or follows again from the pill, and the wheel scrolls. Shift+drag keeps the terminal's own selection [S8]. **Fallback:** the mouse is off by default. `/mouse off` turns capture off. `/copy [n]` copies a message to the clipboard: `Set-Clipboard` on Windows, `pbcopy` on macOS, `wl-copy` or `xclip` on Linux, otherwise OSC 52.
 - **UX-6** On exit, the normal screen shows the chat id and `sa --resume <id>`.
 - **UX-7** An ASCII profile applies in legacy consoles or with `SA_ASCII=1`. `SA_REDUCED_MOTION=1` freezes animation.
 - **UX-8** All UI text, glyphs and word lists are original. Status words are checked against Claude Code's verb list before release.
-- **UX-9** A soldier always appears with its shadow name, id and model (Q8): as `<Shadow> · <id> · <model>` in every layout and view, and as PLAIN-1 writes it in plain mode. The model may be truncated, but never dropped.
+- **UX-9** A soldier always appears with its shadow name and model (Q8): as `<Shadow> · <id> · <model>` in the roster pane, the tree and views, as `<Shadow> <model>` in the strip (UX-4), and as PLAIN-1 writes it in plain mode. The model may be truncated, but never dropped.
 
 ### 6.3 Keys (KEY)
 
 - **KEY-1** Pressing `↓` on an empty prompt focuses the army panel. In it:
-  - `↑`/`↓` move between rows.
+  - `↑`/`↓` move between rows, including tree rows (→M8).
+  - `→` opens a folded `+N agents` row and `←` folds it (TREE-4).
   - `Enter` opens a soldier view (→M8).
   - `x` stops that soldier's turn, after a stop-confirm card for a write.
   - `Esc` returns focus to the prompt.
@@ -364,9 +365,10 @@ At 140 columns or wider:
 
 ### 6.5 Cards and attention (CARD, ATTN)
 
-- **CARD-1** A card MUST NOT take focus while the draft is non-empty or within 700 ms of a keystroke. The strip shows `N waiting · send or clear your message to review`, and `/cards` lists them.
+- **CARD-1** A card MUST NOT take focus while the draft is non-empty or within 700 ms of a keystroke. The footer shows `N waiting · send or clear your message to review`, and `/cards` lists them.
 - **CARD-2** The keys on a focused card:
   - `y` approves and `n` rejects. `Enter` alone never approves.
+  - A card with more than two outcomes numbers them: `1`–`9` picks one, and `↑`/`↓` move a highlight that `y` picks. The suggested option starts highlighted. `Enter` alone never picks, and `n` picks the cancel option where there is one.
   - `v` shows everything.
   - `e` edits claims, where the card has them.
   - `Esc` sets the card aside.
@@ -396,7 +398,7 @@ At 140 columns or wider:
   | git metadata | GIT-3 |
 
   Kinds whose requirement is in a later milestone appear when that milestone lands.
-- **ATTN-1** Notices go into a priority queue: they show above the prompt for 8 s, and as dim lines in the transcript. A compaction summary is a notice that can be expanded.
+- **ATTN-1** Notices go into a priority queue: they show above the prompt for 8 s, and as dim lines in the transcript. A compaction summary is a notice that can be expanded: a click, or the transcript screen (`ctrl+o`, CHAT-2), shows it in full.
 - **ATTN-2** When a card has waited and you have been idle for 6 s, `sa` rings the bell, plus OSC 9 where supported. `/notify off` turns both off.
 - **ATTN-3** The terminal title shows the chat's state.
 
@@ -418,7 +420,7 @@ At 140 columns or wider:
 - **ROS-3** State is never shown by color alone.
 - **ROS-4** The meter's color steps at 30%, 50%, 70% and 90%.
 - **ROS-5** Status words (Q5): dormant phrases rotate every 30 s; working rows show a role verb (`marching`, `inspecting`, `scouting`, `probing`) until the first activity, then the activity. The lists are configurable.
-- **ROS-6** The Monarch's row shows its context and Claude quota.
+- **ROS-6** The Monarch's row shows its context, and from M6 its Claude quota (LIM-1, →M6).
 - **ROS-7** Each soldier has a stable color from an 8-color palette. A second config entry for the same CLI and model is named `<id>-2`.
 
 ### 6.7 Live tree (TREE)
@@ -618,7 +620,7 @@ At 140 columns or wider:
 
 - **MCP-1** Every call passes `authorize()` (SAFE-5).
 - **MCP-2** There are at most 6 tools, with schemas totalling at most 1,500 tokens.
-- **MCP-3** `git_read` builds git's argument list itself. It never passes `--output`, `-c`, `--no-index`, `--ext-diff`, `--show-signature` or a `%G` format, and runs under GIT-1 and GIT-2. It refuses paths that match `SECRET_GLOBS`, including in `show <rev>:<path>`, and adds `:(exclude,glob)<glob>` for every entry to each `diff`, `log` and `show`, so a secret file's content never appears, even from history. A diff returns `--stat` plus hunks up to 6k tokens, else a summary.
+- **MCP-3** `git_read` builds git's argument list itself and runs under GIT-1 and GIT-2. It accepts only `--stat`, `--name-only`, `--name-status`, `--oneline`, `--short`, `-p`, `-U<n>`, `-n <N>`, `--cached` and `--no-patch`, plus revision and path operands, and refuses any other option. `show` takes a commit or `<rev>:<path>`, never a bare blob or tree id. `SECRET_GLOBS` match case-insensitively: a matching path is refused, also in `show <rev>:<path>` after `./` and `..` are resolved, and each `diff`, `log` and `show` gets `:(top,exclude,glob,icase)<glob>` for every entry. So a secret file's content never appears, even from history. A diff returns `--stat` plus hunks up to 6k tokens, else a summary.
 - **MCP-4** `wake` is idempotent per `requestId`. Fields whose milestone hasn't landed yet are refused with a reason: `mode: write`, `claims` and `continueFrom` (→M5), and `mode: plan` and `after` (→M8).
 - **MCP-5** `control` acts on a queued or running task:
   - `cancel` stops it (SOLD-4).
@@ -789,13 +791,13 @@ These are part of the Monarch's static prompt.
   1. SAFE-9
   2. GIT-3
   3. `reset --hard <base>`
-  4. `clean -ffdx -e <keep>`, where keep is `chat.keepIgnored`: `node_modules/`, `.venv/`, `target/`, `.gradle/`
+  4. `clean -ffdx -e <keep>`, where keep is `chat.keepIgnored`: `node_modules/`, `.venv/`, `target/`, `.gradle/`. Every gitlink path is then emptied link-safely (SAFE-8): workspaces never check submodules out, and `reset` and `clean` leave a nested repository there alone.
   5. `status --porcelain --ignored` must list only keep paths; otherwise the wake fails as `dirty workspace`
 - **WS-3** A non-ignored change after a read wake is a `read-violation`, and it is discarded.
 - **WS-4** Dependencies live in the kept folders, and soldiers install them there.
 - **WS-5** The **working-state base** extends #32's `snapshot.ts` (§0.3):
   1. Copy the real index into a temporary index.
-  2. Run `git add -A`, excluding `.shadow/`, untracked files over `chat.baseMaxUntrackedBytes` (1 MB), and `SECRET_GLOBS`.
+  2. Run `git add -A`, excluding `.shadow/`, untracked files over `chat.baseMaxUntrackedBytes` (1 MB), and `SECRET_GLOBS`, matched case-insensitively (`:(top,exclude,glob,icase)`).
   3. `write-tree`.
   4. `commit-tree -p HEAD` with the harness identity.
   5. Check that `.shadow/` is absent.
@@ -815,7 +817,7 @@ These are part of the Monarch's static prompt.
   - Every file in `base..tip` must match its base blob in your checkout (`git hash-object --path`, GIT-2). Otherwise nothing is applied.
   - Changes to symlinks, gitlinks, modes, `.gitmodules` or `.gitattributes` need an apply-review card with typed `yes`. Auto-approve covers mode, `.gitmodules` and `.gitattributes` changes, but never a symlink or gitlink that is added or retargeted (SAFE-3, →M6).
   - The patch is written to the runtime directory and re-hashed between `--check` and apply.
-  - **If the apply fails** after `--check` passed (a file is held open, the disk is full), `git apply` can leave some files changed and others deleted (F46). The harness puts every path in the patch back to its base blob, which each one matched, deletes files the apply created, marks the journal entry failed, and names the files. If that restore fails too, it prints `git restore --source=<base> -- <paths>`. A failed undo (WS-9) is put back the same way, to the tip's blobs.
+  - **If an apply or an undo fails** after `--check` passed (a file is held open, the disk is full), `git apply` can leave some files changed and others deleted (F46). So before either one writes anything, the harness copies the current bytes of every path the patch touches to `<runtime>/journal/<task>/pre/`, noting the paths that don't exist. On failure, it restores each path from that copy, never from a blob, deletes files the patch created, marks the journal entry failed, and names the files. If that restore fails too, it prints where the copy is. Your edits in other hunks (WS-9) survive either way.
 - **WS-9** **Undo**, extending #32's `sa undo` (§0.3). `/undo <task>` checks every hunk with `git apply -R --check`. If all of them still reverse cleanly, it reverses them and runs `git rm --cached` on the intent-to-add paths it created; otherwise it refuses and shows which hunks changed. Your edits in other hunks survive. This replaces #32's per-file refusal. It runs under the mutex, is journaled, and is announced in the soldier's next brief.
 - **WS-10** `sa chats prune [--older-than]` removes the workspaces (SAFE-8) and refs of ended chats. Refs of tasks that were never applied are kept unless `--force` is given.
 - **WS-11** Building a base takes at most 1 s for 10,000 files with 100 changed [S11]. **Fallback:** an incremental base.
@@ -853,9 +855,9 @@ These are part of the Monarch's static prompt.
   - `**/.npmrc`, `**/.netrc`, `**/.pypirc`, `**/credentials*`
   - `.git/**` and `.shadow/**`
 
-  The lead workspace is in the runtime directory, so these rules never block it.
+  The lead workspace is in the runtime directory, so these rules never block it. The rules must match case-insensitively, as the file system does on Windows and macOS: the CONF-6 suite reads `.ENV` and `Credentials.json` through `Read`, `Grep` and `Glob`, and each read must be denied [S3].
 - **CONF-4** User, project and local settings, hooks and MCP servers do not load. S3 records which instruction files load, and POL-1 pins them (→M5) [S3]. **Fallback:** pinned CLAUDE.md content is sent as the first message.
-- **CONF-5** A PreToolUse hook is a second layer. Its script lives in the runtime directory and is hash-checked. It denies edits outside the lead workspace, and exits 2 on any error.
+- **CONF-5** A PreToolUse hook is a second layer. Its script lives in the runtime directory and is hash-checked. It denies edits outside the lead workspace, and any `Read`, `Grep` or `Glob` whose path matches `SECRET_GLOBS` case-insensitively, and exits 2 on any error.
 - **CONF-6** **The permission suite** runs in CI against the pinned real `claude` binary, with a placeholder API key and a fake Messages server (ARCH-4) issuing scripted tool calls, and asserts `permission_denials` [S3]. It covers:
   - the shell is absent
   - secret and `.git` reads are denied
@@ -883,7 +885,7 @@ These are part of the Monarch's static prompt.
 - **MEM-3** An entry derived from a soldier goes to `.pending/`. The Monarch sees it marked "unverified", and no soldier is primed with it until you approve it.
 - **MEM-4** Hashes are checked at chat start and before every read. A file changed outside `remember` is quarantined.
 - **MEM-5** The Monarch gets the index as the first message of each session and after each compaction. Soldiers get the filtered index (≤4 KB) at priming, and topic files inline when a brief names them. Soldiers never read the folder.
-- **MEM-6** The memory delta per wake is at most 1.5 KB. Larger changes are listed by name.
+- **MEM-6** A wake's memory delta holds the entries saved or changed since that soldier session's last brief. So each fact reaches a session once, in its priming index or in one delta, and again only when a rollover or compaction primes it afresh (WAKE-14, →M9). The delta is at most 1.5 KB; larger changes are listed by name.
 - **MEM-7** `remember` rejects secrets before writing.
 - **MEM-8** `remember` rejects facts already in `AGENTS.md` or `CLAUDE.md`.
 - **MEM-9** The index is capped at 200 lines and 25 KB, with a soft target of 8 KB.
@@ -1002,7 +1004,7 @@ These are part of the Monarch's static prompt.
 - **SAFE-10** Autonomy only chooses each vendor's flags. Shadow Army never removes a vendor safeguard, and may add restrictions.
 - **SAFE-11** **No soldier code runs during harness git.** On Windows, each soldier turn runs in a kill-on-close Job Object; on POSIX, in its own process group. The whole group is killed at the end of the turn, before any harness git touches that workspace. Vendor daemons outside the group (F34) are a stated residual risk [S12]. **Fallback:** SOLD-4's tree walk plus a survivor check that blocks harness git while any survivor is alive.
 - **SAFE-12** **v1's claim audit never writes or deletes through a link** (F42). Before the audit, the write session unlinks the links the soldier left, keeping links the base tracks. `revertPaths` refuses any path that passes through a link, and the report names the links removed. This is implemented by #36 (draft PR #37).
-- **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= -c commit.gpgSign=false -c tag.gpgSign=false -c log.showSignature=false --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`, so no hook, monitor, pager, signing or verification program runs. Diffs add `--no-ext-diff --no-textconv`. At chat start, the harness records `<gitdir>` and `<common>` from `git rev-parse --path-format=absolute --git-dir --git-common-dir`; in a linked worktree or a submodule, `<repo>/.git` is a file, not a folder. After that, harness git never discovers its repository. It passes `--git-dir=<gitdir> --work-tree=<repo>` in your checkout, and `--git-dir=<common>/worktrees/<name> --work-tree=<workspace>` in a workspace or snapshot, where `<name>` is recorded when the workspace is created. A rewritten `.git` file therefore cannot redirect it. Each workspace's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2). In GIT-3 and GUARD-2 (→M5), `.git/` means `<common>/`.
+- **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= -c diff.ignoreSubmodules=dirty -c format.pretty=medium -c commit.gpgSign=false -c tag.gpgSign=false -c log.showSignature=false --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`, so no hook, monitor, pager, signing or verification program runs. `diff.ignoreSubmodules=dirty` also keeps `status`, `diff` and `commit` from starting git inside a nested repository, whose config a soldier controls; a changed gitlink is still reported. Diffs add `--no-ext-diff --no-textconv`. At chat start, the harness records `<gitdir>` and `<common>` from `git rev-parse --path-format=absolute --git-dir --git-common-dir`; in a linked worktree or a submodule, `<repo>/.git` is a file, not a folder. After that, harness git never discovers its repository. It passes `--git-dir=<gitdir> --work-tree=<repo>` in your checkout, and `--git-dir=<common>/worktrees/<name> --work-tree=<workspace>` in a workspace or snapshot, where `<name>` is recorded when the workspace is created. A rewritten `.git` file therefore cannot redirect it. Each workspace's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2). In GIT-3 and GUARD-2 (→M5), `.git/` means `<common>/`.
 - **GIT-2** **Pinned config.** At chat start, the harness reads your effective `core.autocrlf`, `core.eol`, `core.safecrlf`, `core.symlinks`, `core.ignorecase` and `filter.*` settings and passes them explicitly with `-c`.
 - **GIT-3** **Metadata check.** Before every harness git command, the harness compares the config and metadata git will read with a baseline, taken at chat start or when the workspace is created:
   - the effective config for that git dir, from `git config --list --show-scope`: every scope except the command line, with includes followed. This covers system config (with `%PROGRAMDATA%\Git\config` on Windows), global config, `.git/config` and any `config.worktree`. Changes to `branch.*` and `remote.*`, such as `git push -u` makes, don't count.
@@ -1174,7 +1176,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **live:** CONF-4, CONF-8, LEADRT-10
 
 **ACs:**
-- **M1a-AC1** The CONF-6 suite passes in CI, including the positive control, and `git_read` refuses `--output` and secret paths, and never shows a `.env` that was committed and later deleted (covers CONF-1, CONF-2, CONF-3, CONF-6, MCP-3).
+- **M1a-AC1** The CONF-6 suite passes in CI, including the positive control, and `git_read` refuses `--output`, `--full-diff` and secret paths. It never shows a `.env` that was committed and later deleted, nor an upper-case `.ENV` (covers CONF-1, CONF-2, CONF-3, CONF-6, MCP-3).
 - **M1a-AC2** The Monarch is launched with `--effort high` and `--autocompact 200000` (D4) (covers LEADRT-1).
 - **M1a-AC3** No file holds the token, and a token-less request is rejected (covers ARCH-2, ARCH-3).
 - **M1a-AC4** With `ANTHROPIC_API_KEY` set in your shell, the Monarch still starts on your subscription, and `claude auth status` gating refuses an API-key-only login (covers ARCH-4, LEADRT-10).
@@ -1222,7 +1224,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
   - the 80% check-in arrives even within 5 minutes of the last one, and after `extend` the run passes the old ceiling
   - the safety ceiling stops it with status `ceiling`, and nothing is applied
   - a 4th subagent start stops the turn
-- **M2-AC5** At the end of a turn, no soldier process survives. A changed `.git/config` stops harness git, including a planted `gpg.program` with `commit.gpgSign`, which never runs. A rewritten `.git` file does not redirect harness git, also when your checkout is a linked worktree (covers SAFE-11, GIT-1, GIT-3).
+- **M2-AC5** At the end of a turn, no soldier process survives. A changed `.git/config` stops harness git, including a planted `gpg.program` with `commit.gpgSign`, which never runs. Neither does the `filter.*.clean` of a nested repository a soldier creates at a gitlink path. A rewritten `.git` file does not redirect harness git, also when your checkout is a linked worktree (covers SAFE-11, GIT-1, GIT-3).
 
 ### M3: Ink shell
 
@@ -1257,8 +1259,8 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **pty:** CARD-1, CARD-2, ATTN-1, ATTN-2, ATTN-3, ROS-2, ROS-3, ROS-4, ROS-6, KEY-1, KEY-7, CHAT-4
 
 **ACs:**
-- **M4-AC1** A card never takes keystrokes while you type, and `Enter` never approves (covers CARD-1, CARD-2).
-- **M4-AC2** Glyph-only golden frames at 60, 80, 110 and 160 columns show the roster as UX-4 sets out and distinguish every state, and status words rotate (Q5) (covers ROS-2, ROS-3, ROS-5).
+- **M4-AC1** A card never takes keystrokes while you type, and `Enter` never approves. A three-option card, such as the quit card (CHAT-4), is answered with `2` (covers CARD-1, CARD-2).
+- **M4-AC2** Glyph-only golden frames at 60, 80, 110 and 160 columns show the roster as UX-4 sets out: at 110 and 160 every soldier's state is distinct, and at 60 and 80 the strip shows the Monarch and every awake or waiting soldier. Status words rotate (Q5) (covers ROS-2, ROS-3, ROS-5).
 
 ### M5: Workspaces, base, apply, undo and guard
 
@@ -1284,7 +1286,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M5-AC5** Your edit during a turn raises one shared attribution card, while our refs, our undo and our applies raise none (covers GUARD-3, GUARD-4, GUARD-6).
 - **M5-AC6** `sa summon --write` refuses under the chat lock, and a second `sa` in the folder exits naming the open chat (D11) (covers GUARD-5).
 - **M5-AC7** Changing `rules.md` mid-chat pauses wakes and shows the policy-trust card (D9) (covers POL-1, POL-2).
-- **M5-AC8** An apply that fails partway (on Windows, a file held open by another process) leaves your checkout byte-identical to before and names the files (covers WS-8).
+- **M5-AC8** An apply that fails partway (on Windows, a file held open by another process) leaves your checkout byte-identical to before and names the files. So does an undo that fails partway, keeping your edits in other hunks (covers WS-8, WS-9).
 
 ### M6: The whole army
 
@@ -1325,6 +1327,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M7-AC2** A soldier-derived entry is never primed before approval (covers MEM-3).
 - **M7-AC3** A file edited outside `remember` is quarantined (covers MEM-4).
 - **M7-AC4** Live: no CLI process touches your everyday memory directories (covers MEM-2).
+- **M7-AC5** One fact saved with `remember` reaches claude, codex, grok and agy once each: it is in each one's next brief, and in none of its later briefs in that session (covers MEM-5, MEM-6).
 
 ### M8: Live tree, soldier views and direct chat
 
@@ -1340,7 +1343,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **fixture:** TREE-6, VIEW-6
 
 **ACs:**
-- **M8-AC1** Soldiers animate with live tokens, two subagents show as branches that fold when done, and a click or key toggles them (covers TREE-3, TREE-4).
+- **M8-AC1** Soldiers animate with live tokens, two subagents show as branches that fold when done, and a click or `→`/`←` toggles them (covers TREE-3, TREE-4).
 - **M8-AC2** A view shows the soldier's chat. Typing there sends a direct turn: a write-capable soldier shows a write card first, and with auto-approve on, a direct write to `package.json` applies without one (D14). agy runs read-only. Its VIEW-4 line reaches the Monarch with no model call (covers VIEW-2, VIEW-3, VIEW-4, SAFE-3).
 - **M8-AC3** The full Esc ladder never stops a soldier (covers KEY-2).
 - **M8-AC4** `wake(after)` waits for its predecessor and cancels with it (covers ORCH-7).
@@ -1360,7 +1363,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **live:** EFF-4, EFF-11
 
 **ACs:**
-- **M9-AC1** Notices appear at 30, 50 and 70% of the ceiling. At 90%, either the Monarch extends the ceiling (up to 200k, D1), or a warm soldier writes a summary after its task and continues primed in a new session; a cold one gets a digest (Q9) (covers CTX-3, CTX-5, CMP-2, CMP-3).
+- **M9-AC1** Notices appear at 30, 50 and 70% of the ceiling. At 90%, either the Monarch extends the ceiling (up to 200k, D1), or a warm soldier writes a summary after its task and continues primed in a new session; a cold one gets a digest (Q9). `compact <shadow name>` compacts that soldier by hand (covers CTX-3, CTX-5, CMP-2, CMP-3, CMD-2).
 - **M9-AC2** In a fixture with vendor compaction at 85%, Shadow compaction runs first (Q16) (covers CMP-4).
 - **M9-AC3** The 80% card offers the four options in order (Q17), and `/switch` works. `/switch codex-astra` starts a codex lead from a handoff, launched with codex's read-only sandbox (D13, D17) (covers LIM-2, LEAD-7).
 - **M9-AC4** The reference chat passes the EFF-8 gate (covers EFF-3, EFF-8, EFF-9).
@@ -1565,6 +1568,21 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | R6·Q5: UX-9 contradicted PLAIN-1's ASCII grammar | UX-9 defers to PLAIN-1 in plain mode |
 | R6·Q6: the definition of done required TRACE-1 before M1a adds it | It applies from M1a |
 | R6·Q (issues): issue text stale against §18, and AC sub-bullets dropped | Issues re-posted from §18 |
+
+**Round 7** (gates E and U, on v0.8; 2 critical and 6 high): all were fixed in v0.9.
+
+| Finding | Disposition |
+|---|---|
+| R7·E1, Critical: v0.8 restored a failed undo from the tip's blobs, which would erase your later edits in other hunks (reproduced) | WS-8 copies every touched path before an apply or undo and restores from that copy; M5-AC8 |
+| R7·E2, Critical: a nested repository a soldier creates at a gitlink path ran its own `filter.*.clean` during harness `status`, and survived `reset` and `clean` (reproduced) | GIT-1 adds `diff.ignoreSubmodules=dirty` (tested: nothing runs, and gitlink changes still show); WS-2 empties gitlink paths; M2-AC5 |
+| R7·E3: secret matching was case-sensitive, `--full-diff` bypassed the excludes, and pathspecs were relative to the working directory | MCP-3 allows only listed options and uses `top` and `icase` magic; WS-5; CONF-3 and CONF-5 match case-insensitively; M1a-AC1 |
+| R7·E (medium, taken): a planted `format.pretty` with `%G?` still verifies signatures | GIT-1 adds `format.pretty=medium` |
+| R7·U1: cards with more than two outcomes had no keys | CARD-2 numbers them; M4-AC1 |
+| R7·U2: no key folded a tree row, and expanding a notice had no key | KEY-1 adds `→`/`←`; ATTN-1; M8-AC1 |
+| R7·U3: "tell all four once" had no requirement or AC | MEM-6 defines the delta; M7-AC5 |
+| R7·U4: the one-line strip could not hold the army, and CARD-1 named a strip that wide layouts lack | UX-4 lists awake soldiers and `+N`; UX-9; CARD-1 uses the footer; M4-AC2 |
+| R7·U5: the Monarch's Claude quota has no source before M6 | ROS-6 shows it from M6 |
+| R7·U (weak proof): no AC proved `compact <name>` | M9-AC1 |
 
 ## Appendix B. Traceability
 
