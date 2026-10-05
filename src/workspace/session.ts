@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { access, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { auditWorktree, commitAll, revertPaths } from "./audit.js";
 import { validateClaims } from "./claims.js";
 import { canonicalPath, git, GitError, repoRoot } from "./git.js";
+import { removeWorktreeSafely, trackedLinks, unlinkLinks } from "./links.js";
 import { DEFAULT_TTL_MS, LockError, Locks } from "./locks.js";
 import { createWorktree } from "./worktree.js";
 
@@ -28,6 +29,8 @@ export interface WorkspaceInfo {
   leaseLost: boolean;
   /** The checkout had uncommitted changes, which the soldier's worktree (made from the last commit) does not contain. */
   uncommittedIgnored: boolean;
+  /** Links (or Windows junctions) the soldier left in its worktree, removed unfollowed before the audit. */
+  linksRemoved?: string[];
 }
 
 export interface WriteSession {
@@ -151,6 +154,14 @@ export async function openWriteSession(opts: {
     async finish(message) {
       clearInterval(timer);
       await inflight;
+      // A worktree folder replaced by a link would aim the audit, the revert and the commit below at
+      // whatever the link names, such as a folder in the owner's checkout, where git finds their repo.
+      if ((await lstat(wt.path)).isSymbolicLink()) {
+        throw new GitError(`refusing to finish ${wt.branch}: its worktree folder was replaced by a link`);
+      }
+      // A link the soldier left could point outside the worktree, and git and the revert below would
+      // follow it, so links go first, unfollowed. Links the base itself tracks stay.
+      const linksRemoved = await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base));
       const audit = await auditWorktree(wt.path, wt.base, claims);
       if (audit.outOfScope.length) await revertPaths(wt.path, wt.base, audit.outOfScope);
       const sha = await commitAll(wt.path, message, wt.base);
@@ -166,11 +177,11 @@ export async function openWriteSession(opts: {
         commit: sha,
         leaseLost: lost,
         uncommittedIgnored,
+        linksRemoved,
       };
     },
     async discard() {
-      await git(root, ["worktree", "remove", "--force", wt.path]).catch(() => undefined);
-      await rm(wt.path, { recursive: true, force: true });
+      await removeWorktreeSafely(root, wt.path);
       await git(root, ["branch", "-D", wt.branch]).catch(() => undefined);
     },
     async release() {

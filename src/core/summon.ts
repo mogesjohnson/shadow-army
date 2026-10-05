@@ -257,6 +257,9 @@ export function renderReport(r: Report): string {
     lines.push(`Branch: ${w.branch} ${w.commit ? `(at ${w.commit})` : "(no changes)"}`);
     lines.push(`Worktree: ${w.path}`);
     lines.push(`Claims: ${w.claims.join(", ")}`);
+    if (w.linksRemoved?.length) {
+      lines.push(`LINKS REMOVED: the soldier left links in its worktree; removed without following them: ${w.linksRemoved.join(", ")}`);
+    }
     if (w.outOfScope.length) {
       lines.push(`SCOPE VIOLATION: edited outside its claims; reverted: ${w.outOfScope.join(", ")}`);
     }

@@ -1,8 +1,8 @@
-import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { assertSafe } from "../vault/vault.js";
 import { CASE_INSENSITIVE_FS } from "./claims.js";
 import { canonicalPath, git, GitError } from "./git.js";
+import { removeWorktreeSafely } from "./links.js";
 
 export interface Worktree {
   /** `<soldier>-<taskId>`, the directory name under `<shadowRoot>/worktrees`. */
@@ -57,8 +57,7 @@ export async function createSnapshot(
   return {
     path,
     async remove() {
-      await git(repoRoot, ["worktree", "remove", "--force", path]).catch(() => undefined);
-      await rm(path, { recursive: true, force: true });
+      await removeWorktreeSafely(repoRoot, path);
     },
   };
 }
@@ -102,8 +101,7 @@ export async function removeWorktree(opts: {
   assertSafe("worktree name", opts.name);
   const target = (await listWorktrees(opts.repoRoot, opts.shadowRoot)).find((w) => w.name === opts.name);
   if (!target) throw new GitError(`no soldier worktree named "${opts.name}"`);
-  await git(opts.repoRoot, ["worktree", "remove", "--force", target.path]);
-  await rm(target.path, { recursive: true, force: true });
+  await removeWorktreeSafely(opts.repoRoot, target.path);
   if (opts.deleteBranch && target.branch) await git(opts.repoRoot, ["branch", "-D", target.branch]);
   return target;
 }

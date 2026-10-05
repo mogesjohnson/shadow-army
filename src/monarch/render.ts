@@ -41,7 +41,8 @@ export function renderEvent(e: MonarchEvent): string | undefined {
         const files = o.report?.filesTouched.length ?? 0;
         const merged = o.merged ? `, merged (${files} file${files === 1 ? "" : "s"})` : e.task.role === "build" ? ", no changes" : "";
         const scope = o.report?.workspace?.outOfScope.length ? `, reverted out-of-scope edits: ${o.report.workspace.outOfScope.join(", ")}` : "";
-        return `ok ${e.task.id} ${o.soldier}${secs(o.durationMs)}${merged}${scope}`;
+        const links = o.report?.workspace?.linksRemoved?.length ? `, removed links: ${o.report.workspace.linksRemoved.join(", ")}` : "";
+        return `ok ${e.task.id} ${o.soldier}${secs(o.durationMs)}${merged}${scope}${links}`;
       }
       return `!! ${e.task.id} ${o.soldier} ${o.status}${secs(o.durationMs)}: ${o.reason ?? ""}`;
     }
