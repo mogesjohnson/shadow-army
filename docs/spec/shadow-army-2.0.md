@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.11, 2026-10-04 |
+| **Version** | 0.12, 2026-10-05 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
@@ -74,7 +74,7 @@ The owner answered every question on 2026-10-04 (`mogesanswers.md`). The tables 
 
 - **Recommended option taken:** D2, D3, D5, D6, D7b–D7f, D8, D9, D12, D13, D17, D18.
 - **D1 (updated A):** smart sessions with a 100k base ceiling. At 90%, the Monarch may extend a soldier's ceiling up to 200k while the work continues (CTX-5).
-- **D4 (B):** the Monarch runs at **high** effort, compacting at 200k.
+- **D4 (B):** the Monarch runs at **high** effort, compacting at 200k. Since D19, high is only the suggestion for work: you pick the effort for each turn.
 - **D7a (B):** direct turns can write. Each direct message to a soldier that can write shows a write card first, unless auto-approve is on (VIEW-3).
 - **D10 (A, modified):** a `full` soldier's first wake shows a **notice**, not a question (SAFE-3).
 - **D11 (updated A):** every `sa` (or `shadow`) starts a new chat. `/resume` and `sa --resume` open a picker, and `sa --continue` jumps to the latest chat. Only one chat is open per folder at a time (CHAT-1, CMD-5, GUARD-5).
@@ -88,6 +88,7 @@ The owner answered every question on 2026-10-04 (`mogesanswers.md`). The tables 
 - **O4 (A):** the zip was removed from the repo folder. The only copy is `~/Downloads/collection-claude-code-source-code-main.zip`; look there when stuck.
 - **O5:** that zip is the reference for ideas and for how the pieces connect. Shadow Army is the same idea, more ambitious. The other Downloads files are ignored.
 - **O6 (2026-10-04, spike first):** Claude Code mods (F47) could draw Shadow Army's screen inside your normal Claude Code session. Before choosing between that and the Ink shell (§6), M0 runs spike S13, and you decide from the result.
+- **D19 (2026-10-05, you choose):** each job shows its model with a suggested effort, and you pick the effort before it runs. Tokens and effort show for every model. Basic questions shouldn't run at top effort, and hard work shouldn't get too little (EFF-13). v1's chat gets the same in #54.
 
 ### 0.3 Work already in flight
 
@@ -963,6 +964,12 @@ These are part of the Monarch's static prompt.
 - **EFF-10** Every brief and update is logged, redacted.
 - **EFF-11** **Live:** on a recorded real chat of at least 20 messages, the Monarch makes at most 2.0 calls per message you send.
 - **EFF-12** **Live:** the Monarch's first-turn prefix (`get_context_usage`) is at most 20k tokens.
+- **EFF-13** **You choose effort** (D19). Each job shows its model and a suggested effort, and you pick the effort:
+  - the Monarch's for a turn, in a picker before the turn starts: low suggested for a short question, high for anything else. A different effort from the running one restarts the Monarch with `--resume` (LEAD-6). S9 checks whether stream-json can change it without a restart [S9].
+  - a write wake's on its write card (WAKE-8), and each planned wake's on the plan card (WAKE-12, →M8): high suggested for reviews and hard builds, medium otherwise
+  - read wakes run at the suggestion, which the tree shows, unless `/effort <soldier> <level>` pins that soldier's effort for the chat
+
+  In auto mode (KEY-7), suggestions are used and shown. Every roster row, tree row and report shows each soldier's effort and its tokens in and out.
 
 **13.3 Expected effect.** This is critic B's model of the reference chat, an estimate until calibration (LIM-1):
 - **Total:** 1.29M QU → about 0.77M QU.
@@ -1364,13 +1371,14 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **Out of scope:** lead tasks.
 
-**Implements:** SESS-3, CTX-3, CTX-4, CTX-5, CMP-1, CMP-2, CMP-3, CMP-4, CMP-5, LIM-2, LEAD-6, LEAD-7, LEAD-9, LEAD-10, WAKE-14, MCP-7, CFG-8, EFF-3, EFF-4, EFF-8, EFF-9, EFF-11
+**Implements:** SESS-3, CTX-3, CTX-4, CTX-5, CMP-1, CMP-2, CMP-3, CMP-4, CMP-5, LIM-2, LEAD-6, LEAD-7, LEAD-9, LEAD-10, WAKE-14, MCP-7, CFG-8, EFF-3, EFF-4, EFF-8, EFF-9, EFF-11, EFF-13
 
 **Evidence:**
 - **unit:** SESS-3, CTX-3, CTX-4, CTX-5, CMP-1, CMP-2, CMP-4, LIM-2, LEAD-6, LEAD-9, MCP-7, CFG-8
 - **fixture:** CMP-3, CMP-5, LEAD-7, LEAD-10, WAKE-14
 - **integration:** EFF-3, EFF-8, EFF-9
 - **live:** EFF-4, EFF-11
+- **pty:** EFF-13
 
 **ACs:**
 - **M9-AC1** Notices appear at 30, 50 and 70% of the ceiling. At 90%, either the Monarch extends the ceiling (up to 200k, D1), or a warm soldier writes a summary after its task and continues primed in a new session; a cold one gets a digest (Q9). `compact <shadow name>` compacts that soldier by hand (covers CTX-3, CTX-5, CMP-2, CMP-3, CMD-2).
@@ -1378,6 +1386,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M9-AC3** The 80% card offers the four options in order (Q17), and `/switch` works. `/switch codex-astra` starts a codex lead from a handoff, launched with codex's read-only sandbox, and that lead calls `wake` and `git_read`. A `/switch` to a Claude entry hands the lead back from a handoff (D13, D17) (covers LIM-2, LEAD-7).
 - **M9-AC4** The reference chat passes the EFF-8 gate (covers EFF-3, EFF-8, EFF-9).
 - **M9-AC5** Resuming a chat whose Monarch is cold, at 100k or more, shows the resume card with both costs and the handoff pre-selected (D15) (covers LEAD-9).
+- **M9-AC6** Before a turn, the effort picker suggests low for a question and high for work, and the Monarch runs at the effort picked. A write card changes its wake's effort, and every roster row and report shows effort and tokens (D19) (covers EFF-13, LEAD-6).
 
 ### M10: Lead tasks and reviews
 
@@ -1489,6 +1498,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 | O4 | No zip in the repository; look in Downloads when stuck | SAFE-4, DOC-1 | M5 walkthrough SAFE-4; M6 live DOC-1 |
 | O5 | The zip is the reference design | §5, ADR-0001 | The §5 parity table |
 | O6 | Mods: spike before choosing the screen | S13 | M0-AC1 |
+| D19 | You choose each model's effort from a suggestion; effort and tokens show for every model | EFF-13, LEAD-6 | M9-AC6 |
 
 ## 21. References
 
@@ -1616,6 +1626,7 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | R9 (low): WS-5 overstated what soldiers see; MCP-3's blob wording clashed with `<rev>:<path>`; M5-AC1's `.env` must be untracked | Reworded |
 | Owner question (2026-10-04): Claude Code mods | F47; CONF-6 and SOLD-2 prove no installed mod loads into the Monarch or a soldier; spike S13 before choosing the screen (O6) |
 | Codex's review of PR #35 (P1): `git add -A` with an exclude naming an ignored folder fails | WS-5 stages an explicit list and never names an ignored path; F48; M5-AC1 |
+| Owner decision (2026-10-05): you choose each model's effort, and tokens show per model | D19; EFF-13; M9-AC6; v1's chat in #54 |
 
 ## Appendix B. Traceability
 
