@@ -111,4 +111,79 @@ describe("parseAgyRun", () => {
       errorMessage: "agy status FAILED",
     });
   });
+
+  describe("error reason", () => {
+    const err = (fields: Record<string, unknown>, stderr?: string) =>
+      parseAgyRun(JSON.stringify({ status: "ERROR", ...fields }), stderr);
+
+    it("uses an `error` string", () => {
+      expect(err({ error: "quota exceeded" })).toMatchObject({
+        isError: true,
+        errorMessage: "agy status ERROR: quota exceeded",
+      });
+    });
+
+    it("uses `error.message` when `error` is an object", () => {
+      expect(err({ error: { code: 429, message: "rate limited" } }).errorMessage).toBe("agy status ERROR: rate limited");
+    });
+
+    it("uses a top-level `message`", () => {
+      expect(err({ message: "model not found" }).errorMessage).toBe("agy status ERROR: model not found");
+    });
+
+    it("uses the `response` text, and keeps it as the parsed text", () => {
+      expect(err({ response: "Could not reach the tool server.\n" })).toMatchObject({
+        text: "Could not reach the tool server.\n",
+        isError: true,
+        errorMessage: "agy status ERROR: Could not reach the tool server.",
+      });
+    });
+
+    it("takes the first present of error, error.message, message, response", () => {
+      const all = { error: "e", message: "m", response: "r" };
+      expect(err(all).errorMessage).toBe("agy status ERROR: e");
+      expect(err({ ...all, error: { message: "em" } }).errorMessage).toBe("agy status ERROR: em");
+      expect(err({ ...all, error: { code: 1 } }).errorMessage).toBe("agy status ERROR: m");
+      expect(err({ error: "  ", message: "m", response: "r" }).errorMessage).toBe("agy status ERROR: m");
+      expect(err({ response: "r" }).errorMessage).toBe("agy status ERROR: r");
+    });
+
+    it("flattens whitespace and clips a long reason with an ellipsis", () => {
+      expect(err({ error: "line one\n\n  line   two\ttabbed" }).errorMessage).toBe(
+        "agy status ERROR: line one line two tabbed",
+      );
+      const clipped = err({ response: `${"x".repeat(299)}y${"z".repeat(100)}` }).errorMessage ?? "";
+      expect(clipped).toBe(`agy status ERROR: ${"x".repeat(299)}…`);
+      const exact = "x".repeat(300);
+      expect(err({ error: exact }).errorMessage).toBe(`agy status ERROR: ${exact}`);
+    });
+
+    it("keeps the full response as text even when the reason is clipped", () => {
+      const long = "a ".repeat(400);
+      expect(err({ response: long }).text).toBe(long);
+    });
+
+    it("falls back to the bare status when the JSON has no reason", () => {
+      expect(err({}).errorMessage).toBe("agy status ERROR");
+      expect(err({ response: "", error: "", message: " " }).errorMessage).toBe("agy status ERROR");
+      expect(err({ error: null, message: 7 }).errorMessage).toBe("agy status ERROR");
+    });
+
+    it("appends the last non-empty stderr line when the JSON has no reason", () => {
+      expect(err({ response: "" }, "warming up\r\nauth token expired\r\n\r\n  \n").errorMessage).toBe(
+        "agy status ERROR: auth token expired",
+      );
+      expect(err({}, "x".repeat(400)).errorMessage).toBe(`agy status ERROR: ${"x".repeat(299)}…`);
+      expect(err({}, " \n\n").errorMessage).toBe("agy status ERROR");
+    });
+
+    it("prefers the JSON reason over stderr", () => {
+      expect(err({ error: "quota exceeded" }, "something else").errorMessage).toBe("agy status ERROR: quota exceeded");
+    });
+
+    it("ignores stderr and reasons on SUCCESS", () => {
+      const ok = parseAgyRun(JSON.stringify({ status: "SUCCESS", response: "pong", message: "m" }), "noise");
+      expect(ok).toMatchObject({ text: "pong", isError: false, errorMessage: undefined });
+    });
+  });
 });
