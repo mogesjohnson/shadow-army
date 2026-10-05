@@ -6,7 +6,7 @@ import { shippedRoster } from "../core/roster.testutil.js";
 import { fakeArmy, monarchScript, planReply, synthesisReply } from "../monarch/fakes.testutil.js";
 import { buildPlanPrompt, HISTORY_TURNS } from "../monarch/prompts.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
-import { ChatSession, EXIT_WINDOW_MS, type ChatDeps } from "./session.js";
+import { ChatSession, EXIT_WINDOW_MS, suggestMonarchEffort, tokenSummary, type ChatDeps } from "./session.js";
 
 vi.setConfig({ testTimeout: 120_000 });
 
@@ -42,7 +42,10 @@ describe("a goal in the chat", () => {
   it("in ask mode, shows the plan, waits for yes, runs, and puts the dashboard and report in the transcript", async () => {
     const { s, repo } = session([oneFile("one.txt")]);
     const done = s.submit("make one file");
-    await vi.waitFor(() => expect(s.getState().confirm).toEqual({ tasks: 1, choice: 0 }), { timeout: 10_000 });
+    await vi.waitFor(
+      () => expect(s.getState().confirm).toMatchObject({ row: 1, tasks: [{ id: "a", suggested: "medium", effort: "medium" }] }),
+      { timeout: 10_000 },
+    );
     expect(s.idle).toBe(false);
     expect(texts(s).at(-1)).toContain("Plan by codex-astra: make one.txt");
     s.decide(true);
@@ -63,9 +66,10 @@ describe("a goal in the chat", () => {
     const { s, repo } = session([oneFile("one.txt")]);
     const done = s.submit("make one file");
     await vi.waitFor(() => expect(s.getState().confirm).toBeDefined(), { timeout: 10_000 });
+    // From Yes, down to No, and Enter.
     s.moveChoice();
-    expect(s.getState().confirm!.choice).toBe(1);
-    s.decide(false);
+    expect(s.getState().confirm!.row).toBe(2);
+    s.choose();
     await done;
     expect(kinds(s)).toEqual(["welcome", "user", "steps", "text", "text"]);
     expect(texts(s).at(-1)).toBe("Not run.");
@@ -140,7 +144,7 @@ describe("a goal in the chat", () => {
     expect(kinds(s)).toEqual(["welcome", "user", "steps", "text", "text"]);
     const [said, note] = s.getState().entries.slice(-2);
     expect(said).toMatchObject({ kind: "text", text: answer, tone: "normal" });
-    expect(note).toMatchObject({ kind: "text", text: "answered by codex-astra; no soldiers were needed", tone: "dim" });
+    expect(note).toMatchObject({ kind: "text", text: "answered by codex-astra at low effort; no soldiers were needed", tone: "dim" });
     expect(texts(s).join("\n")).not.toContain("Nothing to do.");
     expect(texts(s).join("\n")).not.toContain("Plan by");
     const steps = s.getState().entries[2]!;
@@ -163,7 +167,7 @@ describe("a goal in the chat", () => {
     s.cycleMode();
     expect(s.getState().mode).toBe("plan");
     await s.submit("where is the CLI?");
-    expect(texts(s)).toEqual(["It is in src/cli.ts.", "answered by codex-astra; no soldiers were needed"]);
+    expect(texts(s)).toEqual(["It is in src/cli.ts.", "answered by codex-astra at low effort; no soldiers were needed"]);
     await s.submit("make one file");
     expect(texts(s).at(-1)).toContain("Plan by codex-astra: make one.txt");
   });
@@ -338,5 +342,91 @@ describe("the Monarch's view of the session", () => {
     expect(prompt).toContain(`1. GOAL: goal 2`);
     expect(prompt).toContain(`${HISTORY_TURNS}. GOAL: goal ${HISTORY_TURNS + 1}`);
     expect(prompt).not.toContain("x".repeat(1300));
+  });
+});
+
+describe("effort and tokens", () => {
+  /** A session whose Monarch is named, so the effort picker shows. */
+  const named = (plans: string[], usage?: { inputTokens: number; outputTokens: number }) => {
+    const repo = makeRepo({ "README.md": "hello\n" });
+    repos.push(repo);
+    const m = monarchScript({ plans, synthesis: synthesisReply({ summary: "The file is there.", followUps: [], noteDecisions: [] }), usage });
+    const army = fakeArmy(roster);
+    const s = new ChatSession({
+      cwd: repo.dir,
+      roster,
+      monarch: "codex-astra",
+      runCommand: vi.fn(async () => ({ output: "", ok: true })),
+      exit: vi.fn(),
+      clearScreen: vi.fn(),
+      goalOptions: { getAdapter: m.getAdapter, dispatch: army.dispatch, isInstalled: () => true, useVault: false },
+    });
+    return { s, m, army };
+  };
+
+  it("suggests low effort for a short question, and high for anything else", () => {
+    expect(suggestMonarchEffort("what does src/chat do?")).toBe("low");
+    expect(suggestMonarchEffort("Explain the guard")).toBe("low");
+    expect(suggestMonarchEffort("add a /tokens command and test it")).toBe("high");
+    expect(suggestMonarchEffort(`why ${"so ".repeat(100)}?`)).toBe("high");
+  });
+
+  it("asks for the Monarch's effort first, from the suggestion, and plans at the one chosen", async () => {
+    const { s, m } = named([planReply([], "It draws the chat.")]);
+    const done = s.submit("what does src/chat do?");
+    expect(s.getState().pickEffort).toEqual({ soldier: "codex-astra", model: expect.any(String), suggested: "low", choice: "low" });
+    expect(s.idle).toBe(false);
+    expect(m.prompts).toEqual([]);
+    s.moveEffort(1);
+    s.decideEffort(true);
+    await done;
+    expect(m.prompts.map((p) => p.effort)).toEqual(["medium"]);
+    expect(texts(s)).toContain("It draws the chat.");
+    expect(texts(s)).toContain("answered by codex-astra at medium effort; no soldiers were needed");
+  });
+
+  it("cancels the goal from the effort picker, calling no model", async () => {
+    const { s, m } = named([planReply([], "x")]);
+    const done = s.submit("what is this?");
+    s.decideEffort(false);
+    await done;
+    expect(m.prompts).toEqual([]);
+    expect(texts(s).at(-1)).toBe("Cancelled.");
+    expect(s.idle).toBe(true);
+  });
+
+  it("in auto mode uses the suggested effort without asking, and says so", async () => {
+    const { s, m } = named([planReply([], "x")]);
+    s.cycleMode(); // ask -> auto
+    await s.submit("what is this?");
+    expect(s.getState().pickEffort).toBeUndefined();
+    expect(texts(s)).toContain("codex-astra plans at low effort (suggested)");
+    expect(m.prompts.map((p) => p.effort)).toEqual(["low"]);
+  });
+
+  it("lets the owner change a task's effort before running, and the soldier runs at it", async () => {
+    const { s, army } = named([oneFile("one.txt")]);
+    const done = s.submit("make one file");
+    s.decideEffort(true); // high, as suggested
+    await vi.waitFor(() => expect(s.getState().confirm).toBeDefined(), { timeout: 10_000 });
+    s.moveChoice(-1); // from Yes up to the task
+    s.moveEffort(1); // medium -> high
+    s.moveEffort(1); // high -> max
+    s.moveEffort(1); // stays at max
+    expect(s.getState().confirm!.tasks[0]).toMatchObject({ suggested: "medium", effort: "max" });
+    s.choose(); // Enter on a task line runs the plan
+    await done;
+    expect(army.seen.map((x) => x.effort)).toEqual(["max"]);
+  });
+
+  it("adds each run's tokens to the session's totals by soldier", async () => {
+    const { s } = named([planReply([], "x")], { inputTokens: 1200, outputTokens: 300 });
+    s.cycleMode(); // auto: no picker
+    await s.submit("what is this?");
+    await s.submit("what is that?");
+    expect(s.getState().tokens).toEqual({ "codex-astra": { model: expect.any(String), inputTokens: 2400, outputTokens: 600 } });
+    expect(tokenSummary(s.getState().tokens)).toBe("codex-astra 3k");
+    // The answer's turn names what the Monarch used.
+    expect(texts(s).some((t) => /Tokens:\n {2}codex-astra .* effort low\s+1\.2k in · 300 out/.test(t))).toBe(true);
   });
 });

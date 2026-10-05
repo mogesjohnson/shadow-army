@@ -3,6 +3,59 @@ import type { MonarchEvent, PlannedRun, RunResult } from "./monarch.js";
 
 const secs = (ms?: number) => (ms === undefined ? "" : ` in ${(ms / 1000).toFixed(0)}s`);
 
+/** A token count, short: 950, 12.3k, 1.2M. */
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  // Below 10k one decimal is kept; 999,500 and up would round to 1000k, so it is 1M.
+  if (n < 999_500) {
+    const k = n / 1000;
+    return `${k < 9.95 ? k.toFixed(1).replace(/\.0$/, "") : Math.round(k)}k`;
+  }
+  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+}
+
+/** One model's share of a run: who, which model, at what effort, and the tokens it used. */
+export interface ModelUsage {
+  soldier: string;
+  model: string;
+  efforts: string[];
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** Tokens by soldier over a run: the Monarch's calls first, then each soldier's tasks. */
+export function usageByModel(r: RunResult): ModelUsage[] {
+  const rows = new Map<string, ModelUsage>();
+  const add = (soldier: string, model: string, effort: string | undefined, input = 0, output = 0) => {
+    const row = rows.get(soldier) ?? { soldier, model, efforts: [], inputTokens: 0, outputTokens: 0 };
+    if (effort && !row.efforts.includes(effort)) row.efforts.push(effort);
+    row.inputTokens += input;
+    row.outputTokens += output;
+    rows.set(soldier, row);
+  };
+  for (const m of r.monarchUsage ?? []) add(m.soldier, m.model, m.effort, m.inputTokens, m.outputTokens);
+  const effortOf = new Map(r.assignments.map((a) => [a.taskId, a.effort]));
+  for (const o of r.outcomes) {
+    if (!o.report) continue;
+    add(o.soldier, o.report.resolvedModel ?? o.report.model, effortOf.get(o.taskId), o.report.inputTokens, o.report.outputTokens);
+  }
+  return [...rows.values()];
+}
+
+/** The token lines of a run's report, or none when no CLI reported tokens. */
+export function renderUsage(r: RunResult): string[] {
+  const rows = usageByModel(r).filter((u) => u.inputTokens || u.outputTokens);
+  if (!rows.length) return [];
+  const width = Math.max(...rows.map((u) => `${u.soldier} (${u.model})`.length));
+  return [
+    "Tokens:",
+    ...rows.map(
+      (u) =>
+        `  ${`${u.soldier} (${u.model})`.padEnd(width)}  effort ${(u.efforts.join("/") || "?").padEnd(6)}  ${formatTokens(u.inputTokens)} in · ${formatTokens(u.outputTokens)} out`,
+    ),
+  ];
+}
+
 /** The plan inside a run's result, in the shape `renderPlan` takes. */
 export const planOf = (r: RunResult): Pick<PlannedRun, "monarch" | "checked" | "assignments" | "rejected"> => ({
   monarch: r.monarch,
@@ -25,7 +78,7 @@ export function renderPlan(planned: Pick<PlannedRun, "monarch" | "checked" | "as
     const a = planned.assignments.get(id)!;
     const after = t.dependsOn.length ? ` after ${t.dependsOn.join(", ")}` : "";
     const claims = t.claims.length ? ` claims ${t.claims.join(", ")}` : "";
-    lines.push(`  ${id.padEnd(4)} ${t.role.padEnd(8)} ${a.soldier.padEnd(14)} ${t.title}${t.difficulty === "hard" ? " [hard]" : ""}`);
+    lines.push(`  ${id.padEnd(4)} ${t.role.padEnd(8)} ${a.soldier.padEnd(14)} ${a.effort.padEnd(6)} ${t.title}${t.difficulty === "hard" ? " [hard]" : ""}`);
     if (claims || after) lines.push(`       ${[claims.trim(), after.trim()].filter(Boolean).join(";  ")}`);
     if (a.overridden) lines.push(`       (the Monarch wanted ${a.overridden.wanted}: ${a.overridden.because})`);
   }
@@ -88,6 +141,7 @@ export function renderResult(r: RunResult): string {
   if (r.uncommittedIgnored) {
     lines.push("Note: your checkout had uncommitted changes; the run worked from the last commit and did not see them.");
   }
+  lines.push(...renderUsage(r));
   if (r.costUsd) lines.push(`Reported cost: $${r.costUsd.toFixed(4)} (CLIs that report it)`);
   if (r.recordPath) lines.push(`Record: ${r.recordPath}`);
   return lines.join("\n");
