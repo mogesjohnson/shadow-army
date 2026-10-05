@@ -227,10 +227,12 @@ export function ChatApp({
     if (!session.idle) return;
     if (key.tab && key.shift) return session.cycleMode();
 
+    // While browsing earlier inputs, Up and Down stay on them, even when a recalled /command opens the menu.
+    const browsing = recall !== undefined;
     if (menu.length) {
       const pick = menu[Math.min(selected, menu.length - 1)]!;
-      if (key.upArrow) return setSelected((selected - 1 + menu.length) % menu.length);
-      if (key.downArrow) return setSelected((selected + 1) % menu.length);
+      if (key.upArrow && !browsing) return setSelected((selected - 1 + menu.length) % menu.length);
+      if (key.downArrow && !browsing) return setSelected((selected + 1) % menu.length);
       if (key.tab || (key.return && value.slice(1).toLowerCase() !== pick.name)) {
         if (key.return && !pick.args) return submit(`/${pick.name}`);
         return edit(`/${pick.name}${pick.args ? " " : ""}`);
@@ -251,16 +253,23 @@ export function ChatApp({
     if (key.rightArrow) return setCursor(Math.min(value.length, cursor + 1));
     if (key.home || (key.ctrl && input === "a")) return setCursor(0);
     if (key.end || (key.ctrl && input === "e")) return setCursor(value.length);
-    if (key.escape) return edit("");
+    // Editing a recalled input ends browsing, so the arrows go back to the menu or start from the newest input.
+    if (key.escape) {
+      setRecall(undefined);
+      return edit("");
+    }
     if (key.delete) {
+      setRecall(undefined);
       if (cursor < value.length) edit(value.slice(0, cursor) + value.slice(cursor + 1), cursor);
       return;
     }
     if (key.backspace) {
+      setRecall(undefined);
       if (cursor > 0) edit(value.slice(0, cursor - 1) + value.slice(cursor), cursor - 1);
       return;
     }
     if (input && !key.ctrl && !key.meta && !key.tab) {
+      setRecall(undefined);
       const text = input.replace(/\r\n|\r|\n/g, " ");
       edit(value.slice(0, cursor) + text + value.slice(cursor), cursor + text.length);
     }

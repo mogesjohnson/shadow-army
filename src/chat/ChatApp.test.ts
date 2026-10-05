@@ -92,6 +92,30 @@ describe("the chat screen", () => {
     await vi.waitFor(() => expect(deps.runCommand).toHaveBeenCalledTimes(2));
   });
 
+  it("keeps Up and Down on earlier inputs while browsing them, though a recalled command opens the menu", async () => {
+    const { press, sees, deps } = chat();
+    await press("/locks", KEY.enter);
+    await sees("ran sa locks");
+    await press("/army", KEY.enter);
+    await sees("ran sa army");
+    // Up recalls /army, whose menu opens; Up, Down and Up still walk the history (/locks, /army,
+    // /locks) with no need to clear the box, so Enter runs /locks.
+    await press(KEY.up, KEY.up, KEY.down, KEY.up, KEY.enter);
+    await vi.waitFor(() => expect(deps.runCommand).toHaveBeenCalledTimes(3));
+    expect(deps.runCommand).toHaveBeenLastCalledWith(["locks"]);
+  });
+
+  it("gives the arrows back to the menu once a recalled input is edited", async () => {
+    const { press, sees, deps } = chat();
+    await press("/locks", KEY.enter);
+    await sees("ran sa locks");
+    // Recall /locks, erase it back to "/", and pick from the menu with Down: /help, /plan, then /mode.
+    await press(KEY.up, KEY.backspace, KEY.backspace, KEY.backspace, KEY.backspace, KEY.backspace);
+    await press(KEY.down, KEY.down, KEY.tab);
+    await sees("> /mode");
+    expect(deps.runCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the / menu, completes with Tab, and runs a no-argument command straight from Enter", async () => {
     const { press, sees, deps, term } = chat();
     await press("/");
