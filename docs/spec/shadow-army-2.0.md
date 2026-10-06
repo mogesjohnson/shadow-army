@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.13, 2026-10-06 |
+| **Version** | 0.14, 2026-10-06 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
@@ -824,10 +824,15 @@ These are part of the Monarch's static prompt.
     - a symlink: by its target; where git checks links out as plain files (`core.symlinks=false`), by the file's content
     - a gitlink: by the commit your checkout holds, which is the submodule's `HEAD` when it is checked out, and the index entry otherwise. `hash-object` cannot hash a gitlink (GUARD-1).
     - a path the tip adds: it must not exist yet
-  - Changes to symlinks, gitlinks, modes, `.gitmodules` or `.gitattributes` need an apply-review card with typed `yes`. A confirmed gitlink change updates the index entry (`update-index --cacheinfo 160000`), and the card says to run `git submodule update` to check the new commit out. Auto-approve covers mode, `.gitmodules` and `.gitattributes` changes, but never a symlink or gitlink that is added or retargeted (SAFE-3, →M6).
+  - Changes to symlinks, gitlinks, modes, `.gitmodules` or `.gitattributes` need an apply-review card with typed `yes`. A confirmed gitlink change updates the index entry (`update-index --cacheinfo 160000`, or `--force-remove` when the tip deletes the gitlink), and the card says to run `git submodule update` to check the new commit out. Auto-approve covers mode, `.gitmodules` and `.gitattributes` changes, but never a symlink or gitlink that is added or retargeted (SAFE-3, →M6).
   - The patch is written to the runtime directory and re-hashed between `--check` and apply.
-  - **If an apply or an undo fails** after `--check` passed (a file is held open, the disk is full), `git apply` can leave some files changed and others deleted (F46). So before either one writes anything, the harness copies the current bytes of every path the patch touches to `<runtime>/journal/<task>/pre/`, noting the paths that don't exist. On failure, it restores each path from that copy, never from a blob, deletes files the patch created, marks the journal entry failed, and names the files. If that restore fails too, it prints where the copy is. Your edits in other hunks (WS-9) survive either way.
-- **WS-9** **Undo**, extending #32's `sa undo` (§0.3). `/undo <task>` checks every hunk with `git apply -R --check`. If all of them still reverse cleanly, it reverses them and runs `git rm --cached` on the intent-to-add paths it created; otherwise it refuses and shows which hunks changed. Your edits in other hunks survive. This replaces #32's per-file refusal. It runs under the mutex, is journaled, and is announced in the soldier's next brief.
+  - **If an apply or an undo fails** after `--check` passed (a file is held open, the disk is full), `git apply` can leave some files changed and others deleted (F46). So before either one writes anything, the harness copies the current bytes of every path the patch touches to `<runtime>/journal/<task>/pre/`, noting the paths that don't exist, and records every index entry it will write: a gitlink's, or a new file's intent-to-add entry. On failure, it restores each path from that copy, never from a blob, deletes files the patch created, writes those index entries back, marks the journal entry failed, and names the files. If that restore fails too, it prints where the copy is. Your edits in other hunks (WS-9) survive either way.
+- **WS-9** **Undo**, extending #32's `sa undo` (§0.3). `/undo <task>` is all-or-nothing, like the apply:
+  - It checks every hunk with `git apply -R --check`, and every gitlink the apply changed by its index entry, which must still be the one the apply wrote (GUARD-3). Without `--index`, `git apply` ignores a submodule's commits, so the reverse patch alone would leave the tip's commit staged.
+  - If all of them still reverse cleanly, it reverses the hunks, writes back each gitlink's index entry from before the apply (`update-index --cacheinfo 160000`, or `--force-remove` for a gitlink the apply added), and runs `git rm --cached` on the intent-to-add paths it created. No other index entry changes, so the rest of your staging is kept. After undoing a gitlink, it says to run `git submodule update`.
+  - Otherwise it refuses and shows which hunks or gitlinks changed. Your edits in other hunks survive.
+
+  This replaces #32's per-file refusal. It runs under the mutex, is journaled, and is announced in the soldier's next brief.
 - **WS-10** `sa chats prune [--older-than]` removes the workspaces (SAFE-8) and refs of ended chats. Refs of tasks that were never applied are kept unless `--force` is given.
 - **WS-11** Building a base takes at most 1 s for 10,000 files with 100 changed [S11]. **Fallback:** an incremental base.
 - **WS-12** The exit screen also lists every applied-but-uncommitted task with its `/undo` command.
@@ -1016,13 +1021,13 @@ These are part of the Monarch's static prompt.
 
   It never uses `git worktree remove --force` on a populated tree, and never runs `git worktree prune`, which would also drop the records of your other worktrees whose folders are missing. The v1 call sites (`worktree.ts`, `session.ts`, `integration.ts`) are fixed by #36 (draft PR #37, milestone M0a).
 - **SAFE-9** **Link walk before every harness git command** (F37). Before any harness git command in a workspace or snapshot (reset, checkout, add, commit, rm, status, diff, apply):
-  - Every symlink and junction outside the keep folders is unlinked, except base entries of mode 120000 whose target is unchanged.
+  - Every symlink and junction outside the keep folders is unlinked, except a base entry of mode 120000 whose target is unchanged, where the pinned `core.symlinks` (GIT-2) checks links out as links. Once the rest of this walk is done, `diff --name-only <base>` must not list a kept link's path, or that link is unlinked too, since git no longer sees the base's entry there. Git for Windows reads a junction as a folder whatever its target, and would add the files behind it.
   - A link used as a folder on the path to a tracked path fails the wake as `link-escape`, and you are told.
   - Before any harness write, delete or revert by path, each component of the path is checked with `lstat`, keep folders included, and a link component refuses the operation. Node's `fs.rm` follows a link that is a folder on the path, so the check always comes first.
   - Every gitlink folder is emptied link-safely (SAFE-8), keeping the empty folder, so no nested repository a soldier made can run its own filters or hooks. The gitlinks come from the index (`ls-files -s -z`, mode 160000), which also lists any the soldier added with `git add`; the listing only reads the index. Workspaces never check submodules out, and this is never done in your checkout. If the listing or an emptying fails, the wake fails as `guard` and no other harness git runs there.
 - **SAFE-10** Autonomy only chooses each vendor's flags. Shadow Army never removes a vendor safeguard, and may add restrictions.
 - **SAFE-11** **No soldier code runs during harness git.** On Windows, each soldier turn runs in a kill-on-close Job Object; on POSIX, in its own process group. The whole group is killed at the end of the turn, before any harness git touches that workspace. Vendor daemons outside the group (F34) are a stated residual risk [S12]. **Fallback:** SOLD-4's tree walk plus a survivor check that blocks harness git while any survivor is alive.
-- **SAFE-12** **v1's claim audit never writes or deletes through a link** (F42). Before the audit, the write session unlinks the links the soldier left, keeping links the base tracks. If the worktree folder itself was replaced by a link, the session refuses to finish, so no audit, revert or commit runs wherever the link points. `revertPaths` refuses any path that passes through a link, the root included, and the report names the links removed. This is implemented by #36 (draft PR #37).
+- **SAFE-12** **v1's claim audit never writes or deletes through a link** (F42). Before the audit, the write session unlinks the links the soldier left. It keeps a link the base tracks only where git checks links out as links (`core.symlinks`), while its target is unchanged and git still sees the base's entry there. If the worktree folder itself was replaced by a link, the session refuses to finish, so no audit, revert or commit runs wherever the link points. `revertPaths` refuses any path that passes through a link, the root included, and the report names the links removed. This is implemented by #36 (PR #37) and #58 (PR #59).
 - **GIT-1** Every harness git command includes `-c core.hooksPath=<empty runtime dir> -c core.fsmonitor=false -c core.pager=cat -c diff.external= -c format.pretty=medium -c commit.gpgSign=false -c tag.gpgSign=false -c log.showSignature=false --no-optional-locks`, with `GIT_TERMINAL_PROMPT=0`, so no hook, monitor, pager, signing or verification program runs. In a workspace or snapshot it also passes `-c diff.ignoreSubmodules=dirty`, but only as a second layer for `status` and `diff`: a `.gitmodules` entry with `ignore = none` overrides it, and `git add` and plumbing such as `diff-files` never read it. The first layer is SAFE-9, which empties every gitlink folder there before harness git runs, so no nested repository is left to start; a changed gitlink is still reported. In your checkout, `status` does look inside your submodules, so the guard sees edits there, and GIT-3 checks their config. Diffs add `--no-ext-diff --no-textconv`. At chat start, the harness records `<gitdir>` and `<common>` from `git rev-parse --path-format=absolute --git-dir --git-common-dir`; in a linked worktree or a submodule, `<repo>/.git` is a file, not a folder. After that, harness git never discovers its repository. It passes `--git-dir=<gitdir> --work-tree=<repo>` in your checkout, and `--git-dir=<common>/worktrees/<name> --work-tree=<workspace>` in a workspace or snapshot, where `<name>` is recorded when the workspace is created. A rewritten `.git` file therefore cannot redirect it. Each workspace's `gitdir:` line is checked before every command, and a mismatch blocks harness git (GIT-3, →M2). In GIT-3 and GUARD-2 (→M5), `.git/` means `<common>/`.
 - **GIT-2** **Pinned config.** At chat start, the harness reads your effective `core.autocrlf`, `core.eol`, `core.safecrlf`, `core.symlinks`, `core.ignorecase` and `filter.*` settings and passes them explicitly with `-c`.
 - **GIT-3** **Metadata check.** Before every harness git command, the harness compares the config and metadata git will read with a baseline, taken at chat start or when the workspace is created:
@@ -1042,7 +1047,7 @@ These are part of the Monarch's static prompt.
   - `.github/workflows/**`
   - global git config and vendor home configs
   - MEM-2 fallback directories (→M7)
-- **GUARD-3** **The repository mutex** is cross-process. It lives in `<runtime>/repo.lock`, with a fencing token, and is never stolen while its holder is alive (pid plus process start time). It serializes state capture, base builds, applies, undos and ref updates. Applies and undos are journaled with path, post-hash and index entry. The journal extends #32's ledger: it adds each file's post-apply hash, is written before the apply (write-ahead), and moves from `.shadow/applied.jsonl` to the runtime directory. It is subtracted hash-exactly before attribution, in v1's `summon` and `run` as well.
+- **GUARD-3** **The repository mutex** is cross-process. It lives in `<runtime>/repo.lock`, with a fencing token, and is never stolen while its holder is alive (pid plus process start time). It serializes state capture, base builds, applies, undos and ref updates. Applies and undos are journaled with path and post-hash, and with every index entry they write as it was before and after: a gitlink's, or a new file's intent-to-add entry. The journal extends #32's ledger: it adds each file's post-apply hash, is written before the apply (write-ahead), and moves from `.shadow/applied.jsonl` to the runtime directory. It is subtracted hash-exactly before attribution, in v1's `summon` and `run` as well.
 - **GUARD-4** **Attribution card** (D7e). Changes outside the workspaces during a turn appear with:
   - for each path: the change, line counts, a diff on `v`, and the time
   - for each ref: old → new
@@ -1169,7 +1174,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 ### M0a: v1 link-safety fix (#36)
 
-**Goal:** v1 never follows a link when it removes a worktree or reverts out-of-claim edits (O1). This is tracked as issue #36, with draft PR #37.
+**Goal:** v1 never follows a link when it removes a worktree or reverts out-of-claim edits (O1). This is tracked as issue #36 (PR #37) and its follow-up #58 (PR #59).
 
 **Out of scope:** 2.0's link walk before every harness git command (SAFE-9) and the per-turn Job Object (SAFE-11).
 
@@ -1180,7 +1185,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **ACs:**
 - **M0a-AC1** Removing a snapshot or soldier worktree whose tracked folder was replaced by a junction leaves the target intact. It also leaves your other worktrees and their records alone, even one whose folder is missing, or one the soldier's worktree folder was replaced with a link to (covers SAFE-8).
-- **M0a-AC2** The claim audit's revert refuses a path through a link, finishing refuses a worktree whose folder was replaced by a link (your files stay untouched and nothing is committed), and the report names the removed links (covers SAFE-12).
+- **M0a-AC2** The claim audit's revert refuses a path through a link, finishing refuses a worktree whose folder was replaced by a link (your files stay untouched and nothing is committed), and the report names the removed links. A junction or other link that replaced a tracked link is unlinked before the audit, even one to the tracked link's own target, so nothing behind it is deleted or committed (covers SAFE-12).
 
 ### M1a: Monarch runtime, confinement and safe git
 
@@ -1308,7 +1313,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M5-AC6** `sa summon --write` refuses under the chat lock, and a second `sa` in the folder exits naming the open chat (D11) (covers GUARD-5).
 - **M5-AC7** Changing `rules.md` mid-chat pauses wakes and shows the policy-trust card (D9) (covers POL-1, POL-2).
 - **M5-AC8** An apply that fails partway (on Windows, a file held open by another process) leaves your checkout byte-identical to before and names the files. So does an undo that fails partway, keeping your edits in other hunks (covers WS-8, WS-9).
-- **M5-AC9** An apply whose tip moves a gitlink is refused when your submodule no longer holds the base's commit. With the base's commit and a typed `yes`, the index entry moves to the tip's commit (covers WS-8).
+- **M5-AC9** An apply whose tip moves a gitlink is refused when your submodule no longer holds the base's commit. With the base's commit and a typed `yes`, the index entry moves to the tip's commit. `/undo` then moves it back to the base's commit and leaves the rest of your staging as it was, and it refuses, naming the gitlink, if that entry changed since the apply. An apply or undo that fails partway leaves the entry as it was (covers WS-8, WS-9).
 
 ### M6: The whole army
 
@@ -1636,6 +1641,8 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | Codex's review of PR #39 (P2): accepted ADR-0007 hard-coded 100k and an always-digest rollover | ADR-0007 follows SESS-1, CTX-5, SESS-8 and CMP-3 |
 | Codex's review of PR #39 (note): ADR-0001 still rejected the plugin screen that O6 now spikes | ADR-0001 records it as reopened for S13 |
 | Codex's late review of PR #37 (P1): a junction swapped for a tracked link was kept, and the revert deleted through it (reproduced) | v1 fix in #58, PR #59; SAFE-9 already requires a kept link's target to be unchanged |
+| Codex's review of PR #39 (P2): WS-9's reverse patch could not undo WS-8's gitlink update, because `git apply` ignores a submodule's commits without `--index` (reproduced) | WS-9 checks each gitlink by its journaled index entry and writes the old entry back, keeping the rest of your staging; WS-8's failure restore and GUARD-3's journal cover index entries; M5-AC9 |
+| Codex's review of PR #59 (P1): a junction to a tracked link's own target was kept, and git committed the files behind it. Where git checks links out as plain files, any link there is a substitute, and Git for Windows reads a junction as a folder either way (reproduced) | SAFE-9 and SAFE-12 keep a tracked link only where links check out as links, its target is unchanged and git still sees the base's entry; M0a-AC2; v1 fix in PR #59 |
 
 ## Appendix B. Traceability
 
