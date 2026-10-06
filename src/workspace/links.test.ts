@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -192,9 +192,52 @@ describe("the claim audit's revert never writes or deletes through a link", () =
     r.git("commit", "-q", "-m", "tracked link");
     const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: join(r.dir, ".shadow"), soldier: "grok", taskId: "t4" });
 
-    expect(await trackedLinks(wt.path, wt.base)).toEqual(new Set(["src/alias.ts"]));
+    expect(await trackedLinks(wt.path, wt.base)).toEqual(new Map([["src/alias.ts", "a.ts"]]));
     expect(await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base))).toEqual([]);
     expect(existsSync(join(wt.path, "src", "alias.ts"))).toBe(true);
+  });
+
+  it("unlinks a junction that replaced a tracked link, so the revert deletes nothing outside", async () => {
+    const r = repo();
+    const target = outside();
+    // A tracked symlink, made with plumbing so it can be committed where links can't be created.
+    // Where git checks links out as plain files (core.symlinks=false), the worktree gets a file.
+    r.write("link.tmp", "src/a.ts");
+    const oid = r.git("hash-object", "-w", "link.tmp");
+    rmSync(join(r.dir, "link.tmp"));
+    r.git("update-index", "--add", "--cacheinfo", `120000,${oid},alias`);
+    r.git("commit", "-q", "-m", "tracked link");
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["docs/**"] });
+    try {
+      // The soldier swaps the checked-out alias for a junction to a folder outside.
+      rmSync(join(s.cwd, "alias"), { recursive: true, force: true });
+      linkFolder(target, join(s.cwd, "alias"));
+
+      const info = await s.finish("shadow(grok): swap a tracked link");
+
+      expect(info.linksRemoved).toEqual(["alias"]);
+      expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+      // The base's entry is back, as git checks it out here, and nothing else changed.
+      expect(info.outOfScope).toEqual(["alias"]);
+      expect(lstatSync(join(s.cwd, "alias")).isDirectory()).toBe(false);
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
+  it("removes a link standing at a path being reverted, without deleting through it", async () => {
+    const r = repo();
+    const target = outside();
+    const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: join(r.dir, ".shadow"), soldier: "grok", taskId: "t5" });
+    // A tracked file replaced by a junction to a folder outside, left for the revert to meet.
+    rmSync(join(wt.path, "README.md"));
+    linkFolder(target, join(wt.path, "README.md"));
+
+    await revertPaths(wt.path, wt.base, ["README.md"]);
+
+    expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+    expect(readFileSync(join(wt.path, "README.md"), "utf8")).toBe("hello\n");
   });
 });
 
