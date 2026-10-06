@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import { auditWorktree, commitAll, revertPaths } from "./audit.js";
 import { validateClaims } from "./claims.js";
 import { canonicalPath, git, GitError, repoRoot } from "./git.js";
-import { removeWorktreeSafely, trackedLinks, unlinkLinks } from "./links.js";
+import { removeWorktreeSafely, unlinkSoldierLinks } from "./links.js";
 import { DEFAULT_TTL_MS, LockError, Locks } from "./locks.js";
 import { createWorktree } from "./worktree.js";
 
@@ -160,8 +160,9 @@ export async function openWriteSession(opts: {
         throw new GitError(`refusing to finish ${wt.branch}: its worktree folder was replaced by a link`);
       }
       // A link the soldier left could point outside the worktree, and git and the revert below would
-      // follow it, so links go first, unfollowed. Links the base itself tracks stay.
-      const linksRemoved = await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base));
+      // follow it, so links go first, unfollowed. Links the base itself tracks stay while git still
+      // sees them as those links.
+      const linksRemoved = await unlinkSoldierLinks(wt.path, wt.base);
       const audit = await auditWorktree(wt.path, wt.base, claims);
       if (audit.outOfScope.length) await revertPaths(wt.path, wt.base, audit.outOfScope);
       const sha = await commitAll(wt.path, message, wt.base);

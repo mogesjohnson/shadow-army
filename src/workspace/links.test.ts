@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { renderReport } from "../core/summon.js";
 import type { Report } from "../core/types.js";
 import { revertPaths } from "./audit.js";
-import { crossesLink, trackedLinks, unlinkLinks } from "./links.js";
+import { crossesLink, trackedLinks, unlinkSoldierLinks } from "./links.js";
 import { openWriteSession } from "./session.js";
 import { makeRepo } from "./testRepo.testutil.js";
 import { createSnapshot, createWorktree, removeWorktree } from "./worktree.js";
@@ -37,6 +37,19 @@ function repo() {
 function hijackSrc(worktree: string, target: string): void {
   rmSync(join(worktree, "src"), { recursive: true, force: true });
   linkFolder(target, join(worktree, "src"));
+}
+
+/**
+ * Commit `path` as a symbolic link to `target`, made with plumbing so it can be committed where links
+ * can't be created. Where git checks links out as plain files (core.symlinks=false), a worktree gets
+ * a file holding the target.
+ */
+function commitLink(r: ReturnType<typeof repo>, path: string, target: string): void {
+  r.write("link.tmp", target);
+  const oid = r.git("hash-object", "-w", "link.tmp");
+  rmSync(join(r.dir, "link.tmp"));
+  r.git("update-index", "--add", "--cacheinfo", `120000,${oid},${path}`);
+  r.git("commit", "-q", "-m", "tracked link");
 }
 
 describe("removing a worktree never follows a link inside it", () => {
@@ -154,7 +167,7 @@ describe("the claim audit's revert never writes or deletes through a link", () =
     const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: join(r.dir, ".shadow"), soldier: "grok", taskId: "t3" });
     hijackSrc(wt.path, target);
 
-    expect(await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base))).toEqual(["src"]);
+    expect(await unlinkSoldierLinks(wt.path, wt.base)).toEqual(["src"]);
     await revertPaths(wt.path, wt.base, ["src/a.ts"]);
 
     expect(readFileSync(join(wt.path, "src", "a.ts"), "utf8")).toBe("a\n");
@@ -193,20 +206,14 @@ describe("the claim audit's revert never writes or deletes through a link", () =
     const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: join(r.dir, ".shadow"), soldier: "grok", taskId: "t4" });
 
     expect(await trackedLinks(wt.path, wt.base)).toEqual(new Map([["src/alias.ts", "a.ts"]]));
-    expect(await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base))).toEqual([]);
+    expect(await unlinkSoldierLinks(wt.path, wt.base)).toEqual([]);
     expect(existsSync(join(wt.path, "src", "alias.ts"))).toBe(true);
   });
 
   it("unlinks a junction that replaced a tracked link, so the revert deletes nothing outside", async () => {
     const r = repo();
     const target = outside();
-    // A tracked symlink, made with plumbing so it can be committed where links can't be created.
-    // Where git checks links out as plain files (core.symlinks=false), the worktree gets a file.
-    r.write("link.tmp", "src/a.ts");
-    const oid = r.git("hash-object", "-w", "link.tmp");
-    rmSync(join(r.dir, "link.tmp"));
-    r.git("update-index", "--add", "--cacheinfo", `120000,${oid},alias`);
-    r.git("commit", "-q", "-m", "tracked link");
+    commitLink(r, "alias", "src/a.ts");
     const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["docs/**"] });
     try {
       // The soldier swaps the checked-out alias for a junction to a folder outside.
@@ -220,6 +227,56 @@ describe("the claim audit's revert never writes or deletes through a link", () =
       // The base's entry is back, as git checks it out here, and nothing else changed.
       expect(info.outOfScope).toEqual(["alias"]);
       expect(lstatSync(join(s.cwd, "alias")).isDirectory()).toBe(false);
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
+  it("unlinks a claimed link to the tracked link's own target where links check out as plain files", async () => {
+    const r = repo();
+    const target = outside();
+    r.git("config", "core.symlinks", "false");
+    // The base's link names the very folder the soldier links to, and the soldier claims the path.
+    commitLink(r, "alias", target);
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["alias"] });
+    try {
+      rmSync(join(s.cwd, "alias"), { recursive: true, force: true });
+      linkFolder(target, join(s.cwd, "alias"));
+
+      const info = await s.finish("shadow(grok): link a tracked link's own target");
+
+      expect(info.linksRemoved).toEqual(["alias"]);
+      expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+      // Only the link changed: nothing behind it reached the audit or the soldier's commit.
+      expect(info.touched).toEqual(["alias"]);
+      expect(r.git("ls-tree", "-r", "--name-only", info.branch)).not.toContain("precious.txt");
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
+  // Elsewhere a link to the base's own target is just the base's entry, which git never follows.
+  it.runIf(process.platform === "win32")("unlinks a junction git reads as a folder, even where links check out as links", async () => {
+    const r = repo();
+    const target = outside();
+    // Plain files while the worktree is made, which needs no special rights, then links, as with
+    // Developer Mode on.
+    r.git("config", "core.symlinks", "false");
+    commitLink(r, "alias", target);
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["alias"] });
+    try {
+      rmSync(join(s.cwd, "alias"), { recursive: true, force: true });
+      linkFolder(target, join(s.cwd, "alias"));
+      r.git("config", "core.symlinks", "true");
+
+      const info = await s.finish("shadow(grok): swap a tracked link for a junction to its target");
+
+      expect(info.linksRemoved).toEqual(["alias"]);
+      expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+      expect(info.touched).toEqual(["alias"]);
+      expect(r.git("ls-tree", "-r", "--name-only", info.branch)).not.toContain("precious.txt");
     } finally {
       await s.discard();
       await s.release();
