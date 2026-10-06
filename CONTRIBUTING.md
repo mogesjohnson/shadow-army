@@ -6,6 +6,7 @@ Shadow Army is built one feature at a time. Every change has an issue, a branch,
 
 - **One feature, one issue, one PR.** Keep PRs focused. Stacked work names its required base branch.
 - **Soldiers stay isolated.** No adapter may read another soldier's transcript or private Vault directory. Only briefs and reports cross the boundary.
+- **Thin orchestrator.** Shadow Army routes work, tracks who owns what, and records history. Behavior that belongs to a model or a CLI stays there. Before adding orchestration logic, check each CLI for a flag, setting, event or output format that already does it, and pass that through instead of rebuilding it.
 - **Hard rules are code.** Routing rules in `orchestratorDelegate.md` (Grok never reviews, `agy` never writes) must be enforced by the router, not just documented.
 - **Cross-platform.** Windows and POSIX paths and shells both work.
 
