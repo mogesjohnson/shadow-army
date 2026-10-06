@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.13, 2026-10-06 |
+| **Version** | 0.14, 2026-10-06 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
@@ -124,6 +124,7 @@ The design matches Claude Code's harness where that serves the goal (§5), and g
 - **G3** Visibility of every soldier's state, activity, subagents, context and quota.
 - **G4** Quota spent deliberately, with budgets and meters (§13).
 - **G5** v1's safety model kept and hardened (§15).
+- **G6** A thin orchestrator (#56). Shadow Army routes work, tracks who owns what, and records history. What a model or a CLI already does stays there: Shadow Army passes the CLI's flag, or reads its event or output format, instead of rebuilding it. That is why reports use each CLI's structured output (SOLD-9), and why S13 weighs how much of §6 a mod screen would remove.
 
 **Non-goals for 2.0**
 
@@ -178,7 +179,7 @@ The design matches Claude Code's harness where that serves the goal (§5), and g
 | **Digest** | A ≤2 KB summary of a soldier's reports, built by the harness with no model call. |
 | **Summary** | A ≤1,500-character "what I did" text written by the soldier itself. |
 | **Handoff** | A ≤8k-token restart package for the Monarch, built by the harness from `events.jsonl` with no model call: your recent messages and the Monarch's text, open and applied tasks, notices, and the memory index. |
-| **Report** | v1's `shadow-report` block, plus a `verdict` for reviews and tests. |
+| **Report** | v1's `shadow-report` fields, plus a `verdict` for reviews and tests, returned through the CLI's structured output (SOLD-9). |
 | **Army update** | One message to the Monarch carrying reports, direct-chat notes and notices. |
 | **Warm / cold** | Whether the vendor cache still holds the session, judged by a learned TTL. |
 | **Usable window** | Context a soldier can hold before its CLI compacts it. |
@@ -245,6 +246,8 @@ The design matches Claude Code's harness where that serves the goal (§5), and g
 | F46 | `git apply` removes the old copy of every modified file before writing any new one. If a write fails after `--check` passed, later files stay deleted and added files are missing. v1's apply then reports "Your folder is unchanged" (#53). | Round-6 gate E; reproduced with Git 2.52 on Windows | Confirmed |
 | F47 | Claude Code mods (v2.1.287 and later) are plugin code that runs inside Claude Code, also under `claude -p`. Without managed settings or a Team or Enterprise plan, an installed mod can approve a tool call that a deny rule refuses, and can override settings hooks and auto mode's classifier. `--restricted` loads only managed settings and `--settings`. `--safe-mode` and `--bare` stop installed mods but not built-in ones, such as the one that loads `AGENTS.md`. A mod can draw a pane (on the right, or above the prompt), a band above the prompt, and commands. | Mods, permissions and CLI reference docs | Docs; our flags [S3, S5] |
 | F48 | `git add -A` with an exclude pathspec that names an already-ignored folder, such as `:(exclude).shadow`, exits 1 with "paths are ignored", though it stages everything else. A glob exclude that matches an ignored folder does the same. | Codex's review of PR #35; reproduced with Git 2.52 | Confirmed |
+| F49 | Every CLI can hold its final answer to a JSON Schema. claude: `--json-schema` in `-p` validates the answer against draft-07, re-prompts on a mismatch, and returns `structured_output` on the `result`. It ends as `error_max_structured_output_retries` when no valid answer remains, and can end as `success` with none. codex: `exec --output-schema <file>`, also on `exec resume`. agy: `--json-schema`, applied to the final result under `stream-json`. grok: `--json-schema`, which implies `--output-format json`, so its live events stop. | `--help` of claude 2.1.291, codex-cli 0.160.0, grok 1.0.46 and agy 1.2.16 (2026-10-06); structured-outputs docs | Help and docs; behavior [S5] |
+| F50 | A mod's `tool.call` hook can refuse a call, a subagent's too, but a hook that throws or times out is skipped unless it has a `.catch` handler. A mod's `tool.check` hook can approve a call that rules or settings hooks refused. A `PreToolUse` hook from `--settings` runs after every mod. The docs don't say whether `--restricted` loads a `--plugin-dir` mod. `--bare` loads one, but reads no subscription login (F29). | Mods docs (events) and CLI reference, 2026-10-06 | Docs |
 
 ## 5. Reference design: Claude Code parity
 
@@ -658,7 +661,7 @@ At 140 columns or wider:
   --disable-slash-commands --exclude-dynamic-system-prompt-sections --tools <SOLD-8 list>
   ```
 
-  It adds `--session-id` or `--resume`, with env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
+  It adds `--session-id` or `--resume`, and `--json-schema` (SOLD-9), with env `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
   - **Supervised and `auto`** add `--restricted`.
   - **`full`** adds `--setting-sources ""` instead (F19) [S5].
   - **Mods:** neither launch may load an installed plugin or mod, which could approve calls past every deny rule (F47). S5 checks the debug log. **Fallback:** `--settings` with `disableAllHooks` set.
@@ -672,7 +675,7 @@ At 140 columns or wider:
   Partial text is kept. Pidfiles live in the runtime directory, and at startup `sa` kills leftover processes after matching their command lines [S12]. **Fallback:** walk descendants by parent pid, run `taskkill /T /F`, then check for survivors.
 - **SOLD-5** `sa doctor` lists vendor daemons (grok's leader, codex's sandbox service). "Dormant" means no Shadow Army process.
 - **SOLD-6** Unknown events and fields are logged and ignored. Ten unparseable lines in a row fail the turn as `failed (protocol)`.
-- **SOLD-7** codex, grok and agy implement SOLD-1, SOLD-4, SOLD-6 and WAKE-11, with these lean launches [S5]:
+- **SOLD-7** codex, grok and agy implement SOLD-1, SOLD-4, SOLD-6, SOLD-9 and WAKE-11, with these lean launches [S5]:
 
   | CLI | Launch |
   |---|---|
@@ -690,6 +693,8 @@ At 140 columns or wider:
   | research | `Read,Grep,Glob,WebFetch,WebSearch` | `read_file,grep,list_dir,web_search,web_fetch` |
 
   codex and agy use their sandbox and plan modes instead of tool lists.
+- **SOLD-9** **Reports use the CLI's structured output** (G6, F49). The report schema is generated once from the report type, as draft-07, and passed as claude's `--json-schema`, codex's `--output-schema` and agy's `--json-schema`. The brief then asks for no fenced block. A turn that ends without a valid structured output is reported unstructured, from its final text, as v1 does. grok keeps v1's fenced block unless S5 finds a way to keep its live events with `--json-schema` [S5]. **Fallback:** v1's fenced block for any CLI whose flag fails S5.
+- **SOLD-10** **Claim hook** (#57). A claude write wake gets CONF-5's hook script with the wake's claims. `Write`, `Edit` and `NotebookEdit` calls outside the claims are denied before they run, a subagent's too, with a message that names the claims. The hook matches paths with the claim audit's own matcher, loads through `--settings` as CONF-5 does, never as a mod (F47, F50), and exits 2 on any error. It does not judge `Bash` or `PowerShell`, whose writes it cannot know: the claim audit and the checkout guard stay the enforcement, for those and for every other CLI. The CONF-6 suite covers it with a soldier profile. S5 checks that `--settings` loads under both of SOLD-2's launches and measures the cost per call [S5]. **Fallback:** the claim audit alone, as in v1.
 
 ### 7.6 Usage ledger (LEDGER)
 
@@ -1155,9 +1160,9 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 | S3 | The CONF-6 suite with the pinned binary and a fake server; which instruction files load; that no installed mod loads (F47) | All denials hold, the positive control passes, and an installed mod that approves everything never loads | Block M1a | M1a |
 | S9 | `--effort`, `--autocompact` and `/compact <instructions>`, headless | Take effect | A handoff restart | M1a |
 | S12 | Job Object kill-on-close from Node (native helper), the codex sandbox service, and the grok leader | No survivors | The SOLD-4 fallback and a survivor block | M2 |
-| S5 | Each CLI as a soldier: auth under lean launch (claude `full` with `--setting-sources ""`; codex with `windows.sandbox`); tool names per OS; usage semantics; subagent and compaction events; resume; memory switches; windows | A table and fixtures per CLI | The SOLD-2 and SOLD-7 fallbacks | M2 (claude), M6 (others) |
+| S5 | Each CLI as a soldier: auth under lean launch (claude `full` with `--setting-sources ""`; codex with `windows.sandbox`); tool names per OS; usage semantics; subagent and compaction events; resume; memory switches; windows; the report flags (SOLD-9); whether `--settings` loads under both claude launches, and the claim hook's cost per call (SOLD-10) | A table and fixtures per CLI | The SOLD-2, SOLD-7, SOLD-9 and SOLD-10 fallbacks | M2 (claude), M6 (others) |
 | S8 | Windows Terminal: KEY-4, the mouse, Shift+drag, glyphs, render cost | All work | The KEY-4 and UX-5 fallbacks | M3 |
-| S13 | A Claude Code mod as Shadow Army's screen (O6): a roster band above the prompt, a soldier pane with tabs and a direct-chat field, and `/wake` calling the army tools, in Windows Terminal | You see it working and choose between the mod and the Ink shell | The Ink shell, as specified | M3 |
+| S13 | A Claude Code mod as Shadow Army's screen (O6): a roster band above the prompt, a soldier pane with tabs and a direct-chat field, and `/wake` calling the army tools, in Windows Terminal | You see it working, with what it would remove from §6 (G6) and change in the Monarch's confinement (CONF-1 to CONF-5), and choose between the mod and the Ink shell | The Ink shell, as specified | M3 |
 | S11 | Base timing, and CRLF fidelity under GIT-2 | WS-11 met; blobs equal the index blobs | The incremental base | M5 |
 | S4 | Quota signals per vendor | Found, or confirmed absent | Estimates only | M6 |
 | S6 | codex resume with the parent `-s`/`-C` options | A read-only resume cannot write | Two sessions | M6 |
@@ -1227,11 +1232,11 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **Out of scope:** writes, other CLIs, the Ink UI and memory. Read wakes run in snapshots at HEAD.
 
-**Implements:** SOLD-1, SOLD-2, SOLD-4, SOLD-6, SOLD-8, WAKE-1, WAKE-2, WAKE-3, WAKE-4, WAKE-5, WAKE-6, WAKE-7, WAKE-9, WAKE-10, WAKE-11, WAKE-15, UPD-1, UPD-2, UPD-3, UPD-4, MCP-4, MCP-5, CMD-7, LEDGER-4, LEDGER-6, SESS-1, SESS-2, SESS-4, SESS-5, SESS-7, LIM-3, GIT-3, SAFE-9, SAFE-10, SAFE-11, EFF-1, EFF-2
+**Implements:** SOLD-1, SOLD-2, SOLD-4, SOLD-6, SOLD-8, SOLD-9, WAKE-1, WAKE-2, WAKE-3, WAKE-4, WAKE-5, WAKE-6, WAKE-7, WAKE-9, WAKE-10, WAKE-11, WAKE-15, UPD-1, UPD-2, UPD-3, UPD-4, MCP-4, MCP-5, CMD-7, LEDGER-4, LEDGER-6, SESS-1, SESS-2, SESS-4, SESS-5, SESS-7, LIM-3, GIT-3, SAFE-9, SAFE-10, SAFE-11, EFF-1, EFF-2
 
 **Evidence:**
 - **unit:** WAKE-1, WAKE-2, WAKE-3, WAKE-4, WAKE-5, WAKE-6, WAKE-7, WAKE-10, UPD-1, UPD-2, UPD-3, UPD-4, MCP-4, MCP-5, CMD-7, LEDGER-6, SESS-1, SESS-2, SESS-4, SESS-5, SESS-7, LIM-3, SAFE-10, EFF-1, EFF-2
-- **fixture:** SOLD-1, SOLD-6, SOLD-8, WAKE-9, WAKE-11, WAKE-15, LEDGER-4
+- **fixture:** SOLD-1, SOLD-6, SOLD-8, SOLD-9, WAKE-9, WAKE-11, WAKE-15, LEDGER-4
 - **integration:** SOLD-4, GIT-3, SAFE-9, SAFE-11
 - **live:** SOLD-2
 
@@ -1246,6 +1251,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
   - the safety ceiling stops it with status `ceiling`, and nothing is applied
   - a 4th subagent start stops the turn
 - **M2-AC5** At the end of a turn, no soldier process survives. A changed `.git/config` stops harness git, including a planted `gpg.program` with `commit.gpgSign`, which never runs. Neither does the `filter.*.clean` of a nested repository a soldier creates at a gitlink path, or registers with `git add` at a new path, under `add -A`, `status`, `diff` or the audit, with or without a `.gitmodules` `ignore = none`. A rewritten `.git` file does not redirect harness git, also when your checkout is a linked worktree (covers SAFE-11, GIT-1, GIT-3).
+- **M2-AC6** A claude soldier's report comes from `structured_output`, and its brief asks for no fenced block. A turn that ends without one, as `error_max_structured_output_retries` or as `success` with none, is reported unstructured from its final text (covers SOLD-9).
 
 ### M3: Ink shell
 
@@ -1291,11 +1297,11 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **Prerequisite:** PR #35 (#32's snapshot, ledger and undo) merged.
 
-**Implements:** WS-1, WS-2, WS-3, WS-4, WS-5, WS-6, WS-7, WS-8, WS-9, WS-10, WS-11, WS-12, SESS-8, GIT-4, GUARD-1, GUARD-2, GUARD-3, GUARD-4, GUARD-5, GUARD-6, POL-1, POL-2, POL-3, SAFE-1, SAFE-4, WAKE-8
+**Implements:** WS-1, WS-2, WS-3, WS-4, WS-5, WS-6, WS-7, WS-8, WS-9, WS-10, WS-11, WS-12, SESS-8, GIT-4, GUARD-1, GUARD-2, GUARD-3, GUARD-4, GUARD-5, GUARD-6, POL-1, POL-2, POL-3, SAFE-1, SAFE-4, WAKE-8, SOLD-10
 
 **Evidence:**
 - **unit:** WS-4, WS-10, SESS-8, POL-2, POL-3, SAFE-1, WAKE-8
-- **integration:** WS-1, WS-2, WS-3, WS-5, WS-6, WS-7, WS-8, WS-9, WS-12, GIT-4, GUARD-1, GUARD-2, GUARD-3, GUARD-4, GUARD-5, GUARD-6, POL-1
+- **integration:** WS-1, WS-2, WS-3, WS-5, WS-6, WS-7, WS-8, WS-9, WS-12, GIT-4, GUARD-1, GUARD-2, GUARD-3, GUARD-4, GUARD-5, GUARD-6, POL-1, SOLD-10
 - **fixture:** WS-11
 - **walkthrough:** SAFE-4
 
@@ -1309,6 +1315,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M5-AC7** Changing `rules.md` mid-chat pauses wakes and shows the policy-trust card (D9) (covers POL-1, POL-2).
 - **M5-AC8** An apply that fails partway (on Windows, a file held open by another process) leaves your checkout byte-identical to before and names the files. So does an undo that fails partway, keeping your edits in other hunks (covers WS-8, WS-9).
 - **M5-AC9** An apply whose tip moves a gitlink is refused when your submodule no longer holds the base's commit. With the base's commit and a typed `yes`, the index entry moves to the tip's commit (covers WS-8).
+- **M5-AC10** A claude write wake's `Write` outside its claims is refused before it runs, and the refusal names the claims. A `Write` inside them succeeds, and a Bash write outside them is still reverted by the claim audit (covers SOLD-10).
 
 ### M6: The whole army
 
@@ -1504,6 +1511,8 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 | O5 | The zip is the reference design | §5, ADR-0001 | The §5 parity table |
 | O6 | Mods: spike before choosing the screen | S13 | M0-AC1 |
 | D19 | You choose each model's effort from a suggestion; effort and tokens show for every model | EFF-13, LEAD-6 | M9-AC6 |
+| #56 | A thin orchestrator: pass a CLI's own flag, event or output format instead of rebuilding it | G6, SOLD-9 | M2-AC6 |
+| #57 | Mod ideas: reports through each CLI's structured output instead of a report mod; claims checked before a claude write by a `--settings` hook instead of a mod | SOLD-9, SOLD-10 | M2-AC6, M5-AC10 |
 
 ## 21. References
 
@@ -1636,6 +1645,9 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | Codex's review of PR #39 (P2): accepted ADR-0007 hard-coded 100k and an always-digest rollover | ADR-0007 follows SESS-1, CTX-5, SESS-8 and CMP-3 |
 | Codex's review of PR #39 (note): ADR-0001 still rejected the plugin screen that O6 now spikes | ADR-0001 records it as reopened for S13 |
 | Codex's late review of PR #37 (P1): a junction swapped for a tracked link was kept, and the revert deleted through it (reproduced) | v1 fix in #58, PR #59; SAFE-9 already requires a kept link's target to be unchanged |
+| Owner's issue #56: keep the orchestrator thin | G6. `CLAUDE.md` and `CONTRIBUTING.md` say it in PR #60. SOLD-9 applies it to reports, and S13 weighs what a mod screen would remove from §6 |
+| Owner's issue #57 (1): a claim-guard mod | SOLD-10 checks claims before a claude write, through a `--settings` hook as CONF-5 does. A soldier draws nothing, so a mod would add only `tool.check` approvals and a load path the docs don't cover (F50). Bash and git commands are not judged: commands stay the vendor's to govern at the chosen autonomy (`CLAUDE.md`), and `rules.md` asks soldiers to leave git alone |
+| Owner's issue #57 (2): a report-completer mod | SOLD-9: every CLI already holds its final answer to a schema (F49). Secret redaction is left out, because WS-5 already keeps untracked secret files out of every soldier's workspace, and redaction would rewrite tool output rather than deny or observe |
 
 ## Appendix B. Traceability
 
