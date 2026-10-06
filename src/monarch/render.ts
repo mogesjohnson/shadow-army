@@ -23,28 +23,47 @@ export interface ModelUsage {
   outputTokens: number;
 }
 
-/** Tokens by soldier over a run: the Monarch's calls first, then each soldier's tasks. */
-export function usageByModel(r: RunResult): ModelUsage[] {
-  const rows = new Map<string, ModelUsage>();
-  const add = (soldier: string, model: string, effort: string | undefined, input = 0, output = 0) => {
-    const row = rows.get(soldier) ?? { soldier, model, efforts: [], inputTokens: 0, outputTokens: 0 };
+/**
+ * Collects usage by soldier and the model that actually answered: one soldier can resolve to
+ * different models (an alias, a fallback), and each keeps its own totals.
+ */
+export class UsageTally {
+  private readonly rows = new Map<string, ModelUsage>();
+
+  add(soldier: string, model: string, effort: string | undefined, input = 0, output = 0): void {
+    const key = `${soldier}\u0000${model}`;
+    const row = this.rows.get(key) ?? { soldier, model, efforts: [], inputTokens: 0, outputTokens: 0 };
     if (effort && !row.efforts.includes(effort)) row.efforts.push(effort);
     row.inputTokens += input;
     row.outputTokens += output;
-    rows.set(soldier, row);
-  };
-  for (const m of r.monarchUsage ?? []) add(m.soldier, m.model, m.effort, m.inputTokens, m.outputTokens);
+    this.rows.set(key, row);
+  }
+
+  list(): ModelUsage[] {
+    return [...this.rows.values()].map((u) => ({ ...u, efforts: [...u.efforts] }));
+  }
+}
+
+/** Tokens by soldier and model over a run: the Monarch's calls first, then each soldier's tasks. */
+export function usageByModel(r: RunResult): ModelUsage[] {
+  const tally = new UsageTally();
+  for (const m of r.monarchUsage ?? []) tally.add(m.soldier, m.model, m.effort, m.inputTokens, m.outputTokens);
   const effortOf = new Map(r.assignments.map((a) => [a.taskId, a.effort]));
   for (const o of r.outcomes) {
     if (!o.report) continue;
-    add(o.soldier, o.report.resolvedModel ?? o.report.model, effortOf.get(o.taskId), o.report.inputTokens, o.report.outputTokens);
+    tally.add(o.soldier, o.report.resolvedModel ?? o.report.model, effortOf.get(o.taskId), o.report.inputTokens, o.report.outputTokens);
   }
-  return [...rows.values()];
+  return tally.list();
 }
 
 /** The token lines of a run's report, or none when no CLI reported tokens. */
 export function renderUsage(r: RunResult): string[] {
-  const rows = usageByModel(r).filter((u) => u.inputTokens || u.outputTokens);
+  return renderUsageRows(usageByModel(r));
+}
+
+/** Token lines for usage rows: a heading, then one line per soldier and model that used tokens. */
+export function renderUsageRows(all: ModelUsage[]): string[] {
+  const rows = all.filter((u) => u.inputTokens || u.outputTokens);
   if (!rows.length) return [];
   const width = Math.max(...rows.map((u) => `${u.soldier} (${u.model})`.length));
   return [
@@ -89,6 +108,7 @@ export function renderPlan(planned: Pick<PlannedRun, "monarch" | "checked" | "as
 export function renderEvent(e: MonarchEvent): string | undefined {
   switch (e.type) {
     case "branch":
+    case "usage":
       return undefined;
     case "phase":
       return `.. ${e.message}`;
@@ -110,8 +130,9 @@ export function renderEvent(e: MonarchEvent): string | undefined {
 }
 
 export function renderResult(r: RunResult): string {
-  if (r.status === "planned") return "Plan only; nothing was run.";
-  if (r.status === "declined") return "Not run.";
+  // Planning used the Monarch even when nothing ran, so its tokens are reported too.
+  if (r.status === "planned") return ["Plan only; nothing was run.", ...renderUsage(r)].join("\n");
+  if (r.status === "declined") return ["Not run.", ...renderUsage(r)].join("\n");
   const lines: string[] = [];
   if (r.synthesis) {
     lines.push(`Report from ${r.synthesis.fromMonarch ? r.monarch : "the soldiers' reports (the Monarch could not write one)"}:`, "", r.synthesis.summary.trim(), "");

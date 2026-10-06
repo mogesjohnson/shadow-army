@@ -249,15 +249,11 @@ export function ChatApp({
     if (state.notice) session.clearNotice();
 
     if (state.pickEffort) {
-      const digit = Number(input);
       if (key.leftArrow) session.moveEffort(-1);
       else if (key.rightArrow || key.tab) session.moveEffort(1);
-      else if (digit >= 1 && digit <= EFFORTS.length) {
-        // Jump straight to an effort: step from the current one to it.
-        const target = digit - 1;
-        const from = EFFORTS.indexOf(state.pickEffort.choice);
-        for (let i = from; i !== target; i += target > from ? 1 : -1) session.moveEffort(target > from ? 1 : -1);
-      } else if (key.return) session.decideEffort(true);
+      // Exactly one digit, 1 to 4, picks that effort; pasted text such as "1.5" is not a key and is ignored.
+      else if (/^[1-4]$/.test(input)) session.setEffort(EFFORTS[Number(input) - 1]!);
+      else if (key.return) session.decideEffort(true);
       else if (key.escape) session.decideEffort(false);
       return;
     }

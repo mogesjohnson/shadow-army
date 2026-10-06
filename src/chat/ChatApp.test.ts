@@ -58,6 +58,8 @@ function chat(over: Partial<ChatDeps> = {}) {
 function confirmingRun(seen: { ok?: boolean; efforts?: Record<string, string>; monarchEffort?: string }) {
   return async (opts: RunGoalOptions): Promise<RunResult> => {
     seen.monarchEffort = opts.monarchEffort;
+    // The plan call reports its tokens as it returns, as the real runGoal does.
+    opts.onEvent?.({ type: "usage", soldier: "codex-astra", model: "gpt-6-astra", effort: "high", inputTokens: 1500, outputTokens: 500 });
     const planned = samplePlanned();
     const answer = await opts.confirm(planned);
     seen.ok = typeof answer === "boolean" ? answer : answer.run;
@@ -191,6 +193,18 @@ describe("the chat screen", () => {
     await second.sees("Cancelled.");
     expect(cancelled.monarchEffort).toBeUndefined();
     expect(second.session.idle).toBe(true);
+  });
+
+  it("ignores pasted text in the effort picker, such as 1.5, and stays responsive", async () => {
+    const seen: { monarchEffort?: string } = {};
+    const { press, sees } = chat({ monarch: "codex-astra", runGoal: confirmingRun(seen) });
+    await press("what is this?", KEY.enter);
+    await sees("‹low›");
+    await press("1.5", "\x1b[200~1.5\x1b[201~", "3");
+    await sees("‹high›");
+    await press("\x1b"); // Esc still works
+    await sees("Cancelled.");
+    expect(seen.monarchEffort).toBeUndefined();
   });
 
   it("lets each task's effort be changed in the plan box before it runs", async () => {

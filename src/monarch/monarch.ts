@@ -31,8 +31,15 @@ import {
 } from "./prompts.js";
 import { execute, type Dispatch, type RunEvent, type TaskOutcome } from "./schedule.js";
 
-/** Everything a run reports while it works: task events, phase changes, and the branch it works on. */
-export type MonarchEvent = RunEvent | { type: "phase"; message: string } | { type: "branch"; branch: string };
+/**
+ * Everything a run reports while it works: task events, phase changes, the branch it works on, and
+ * what each Monarch call used, sent as soon as the call returns so it counts even if the run fails.
+ */
+export type MonarchEvent =
+  | RunEvent
+  | { type: "phase"; message: string }
+  | { type: "branch"; branch: string }
+  | { type: "usage"; soldier: string; model: string; effort: Effort; inputTokens: number; outputTokens: number };
 
 /** The run cannot go ahead: no Monarch is available, or none produced a valid plan. */
 export class MonarchError extends Error {}
@@ -189,7 +196,8 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
 
   const acceptedNotes = vault ? await vault.acceptedNotes().catch(() => []) : [];
   const monarchEffort = opts.monarchEffort ?? DEFAULT_MONARCH_EFFORT;
-  // Each Monarch soldier's calls and tokens, for the report; a failed call still counts what it used.
+  // Each Monarch soldier's calls and tokens by the model that answered, for the report; a failed call
+  // still counts what it used, and each call is also sent as a usage event.
   const usage = new Map<string, MonarchUsage>();
   const usageNow = () => [...usage.values()].map((u) => ({ ...u }));
   const callMonarch = async (soldierKey: string, prompt: string, cwd: string): Promise<{ text: string; cost: number }> => {
@@ -203,11 +211,16 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
       effort: monarchEffort,
       timeoutMs: opts.monarchTimeoutMs ?? 600_000,
     });
-    const u = usage.get(soldierKey) ?? { soldier: soldierKey, model: r.resolvedModel ?? spec.model, effort: monarchEffort, calls: 0, inputTokens: 0, outputTokens: 0 };
+    const model = r.resolvedModel ?? spec.model;
+    const inputTokens = r.usage?.inputTokens ?? 0;
+    const outputTokens = r.usage?.outputTokens ?? 0;
+    const key = `${soldierKey}\u0000${model}`;
+    const u = usage.get(key) ?? { soldier: soldierKey, model, effort: monarchEffort, calls: 0, inputTokens: 0, outputTokens: 0 };
     u.calls += 1;
-    u.inputTokens += r.usage?.inputTokens ?? 0;
-    u.outputTokens += r.usage?.outputTokens ?? 0;
-    usage.set(soldierKey, u);
+    u.inputTokens += inputTokens;
+    u.outputTokens += outputTokens;
+    usage.set(key, u);
+    opts.onEvent?.({ type: "usage", soldier: soldierKey, model, effort: monarchEffort, inputTokens, outputTokens });
     if (r.isError) throw new MonarchCallFailed(`${soldierKey}: ${r.errorMessage ?? "error"}`);
     return { text: r.text, cost: r.costUsd ?? 0 };
   };

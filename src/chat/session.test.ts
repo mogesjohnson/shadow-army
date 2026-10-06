@@ -424,9 +424,31 @@ describe("effort and tokens", () => {
     s.cycleMode(); // auto: no picker
     await s.submit("what is this?");
     await s.submit("what is that?");
-    expect(s.getState().tokens).toEqual({ "codex-astra": { model: expect.any(String), inputTokens: 2400, outputTokens: 600 } });
+    expect(s.getState().tokens).toEqual([{ soldier: "codex-astra", model: expect.any(String), efforts: [], inputTokens: 2400, outputTokens: 600 }]);
     expect(tokenSummary(s.getState().tokens)).toBe("codex-astra 3k");
     // The answer's turn names what the Monarch used.
     expect(texts(s).some((t) => /Tokens:\n {2}codex-astra .* effort low\s+1\.2k in · 300 out/.test(t))).toBe(true);
+  });
+
+  it("counts and shows the tokens of a turn whose planning failed", async () => {
+    // No valid plan: each Monarch tries twice, then runGoal gives up and throws.
+    const { s } = named(["not a plan"], { inputTokens: 1200, outputTokens: 300 });
+    s.cycleMode(); // auto: no picker
+    await s.submit("make one file");
+    expect(texts(s).some((t) => t.startsWith("error: no valid plan"))).toBe(true);
+    const tokens = s.getState().tokens;
+    expect(tokens[0]).toMatchObject({ soldier: "codex-astra", inputTokens: 2400, outputTokens: 600 });
+    expect(tokens.every((t) => t.inputTokens === 2400 && t.outputTokens === 600)).toBe(true);
+    expect(texts(s).at(-1)).toMatch(/^Tokens:\n {2}codex-astra .* effort high\s+2\.4k in · 600 out/);
+  });
+
+  it("keeps one soldier's different models apart in the status line", () => {
+    expect(
+      tokenSummary([
+        { soldier: "codex-astra", model: "model-A", efforts: [], inputTokens: 100, outputTokens: 10 },
+        { soldier: "codex-astra", model: "model-B", efforts: [], inputTokens: 200, outputTokens: 20 },
+        { soldier: "grok", model: "grok-4.7", efforts: [], inputTokens: 1000, outputTokens: 0 },
+      ]),
+    ).toBe("codex-astra (model-A) 110 · codex-astra (model-B) 220 · grok 1k");
   });
 });

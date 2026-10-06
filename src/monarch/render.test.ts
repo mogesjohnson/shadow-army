@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { samplePlanned } from "../ui/fixtures.testutil.js";
 import type { RunResult } from "./monarch.js";
-import { formatTokens, renderPlan, renderUsage, usageByModel } from "./render.js";
+import { formatTokens, renderPlan, renderResult, renderUsage, usageByModel } from "./render.js";
 
 describe("formatTokens", () => {
   it("writes counts short, without rounding up to the next unit's worth of the smaller one", () => {
@@ -61,5 +61,27 @@ describe("efforts and tokens in the plan and the report", () => {
   it("says nothing about tokens when no CLI reported any", () => {
     const r = { assignments: [], outcomes: [], monarchUsage: [{ soldier: "agy", model: "m", effort: "low", calls: 1, inputTokens: 0, outputTokens: 0 }] } as unknown as RunResult;
     expect(renderUsage(r)).toEqual([]);
+  });
+});
+
+describe("usage by model, and in every result", () => {
+  it("keeps the models one soldier resolved to apart", () => {
+    const r = {
+      assignments: [{ taskId: "a", soldier: "codex-astra", effort: "medium", reason: "" }],
+      monarchUsage: [{ soldier: "codex-astra", model: "model-A", effort: "high", calls: 1, inputTokens: 100, outputTokens: 10 }],
+      outcomes: [{ taskId: "a", soldier: "codex-astra", status: "ok", merged: true, report: { model: "configured", resolvedModel: "model-B", inputTokens: 200, outputTokens: 20 } }],
+    } as unknown as RunResult;
+    expect(usageByModel(r)).toEqual([
+      { soldier: "codex-astra", model: "model-A", efforts: ["high"], inputTokens: 100, outputTokens: 10 },
+      { soldier: "codex-astra", model: "model-B", efforts: ["medium"], inputTokens: 200, outputTokens: 20 },
+    ]);
+  });
+
+  it("lists tokens for a plan-only run and a declined plan too", () => {
+    const base = { assignments: [], outcomes: [], monarchUsage: [{ soldier: "codex-astra", model: "m", effort: "low", calls: 1, inputTokens: 1200, outputTokens: 300 }] };
+    expect(renderResult({ ...base, status: "planned" } as unknown as RunResult)).toBe(
+      "Plan only; nothing was run.\nTokens:\n  codex-astra (m)  effort low     1.2k in · 300 out",
+    );
+    expect(renderResult({ ...base, status: "declined" } as unknown as RunResult)).toMatch(/^Not run\.\nTokens:\n {2}codex-astra \(m\)/);
   });
 });

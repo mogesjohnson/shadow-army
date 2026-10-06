@@ -315,6 +315,17 @@ describe("effort and tokens", () => {
     expect(renderResult(result)).toMatch(/Tokens:\n {2}codex-astra \([^)]+\)\s+effort low\s+2\.4k in · 600 out/);
   });
 
+  it("sends each Monarch call's usage as it returns, even when no valid plan comes", async () => {
+    const r = repo();
+    const m = monarchScript({ plans: ["not a plan"], usage: { inputTokens: 1200, outputTokens: 300 } });
+    const events: { type: string; soldier?: string; inputTokens?: number }[] = [];
+    await expect(runGoal(base(r, { getAdapter: m.getAdapter, onEvent: (e) => events.push(e) }))).rejects.toThrow(/no valid plan/);
+    const usage = events.filter((e) => e.type === "usage");
+    // Every call the Monarchs made, including the failed plans.
+    expect(usage).toHaveLength(m.prompts.length);
+    expect(usage[0]).toMatchObject({ soldier: "codex-astra", inputTokens: 1200 });
+  });
+
   it("plans at high effort when nobody chooses one, as sa run always has", async () => {
     const r = repo();
     const m = monarchScript({ plans: [oneBuild] });

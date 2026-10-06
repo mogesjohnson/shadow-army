@@ -9,7 +9,7 @@ import {
   type RunResult,
 } from "../monarch/monarch.js";
 import type { SessionTurn } from "../monarch/prompts.js";
-import { formatTokens, planOf, renderPlan, renderResult, renderUsage, usageByModel } from "../monarch/render.js";
+import { formatTokens, planOf, renderPlan, renderResult, renderUsage, renderUsageRows, UsageTally, type ModelUsage } from "../monarch/render.js";
 import type { Steps, Working } from "../ui/Dashboard.js";
 import { applyEvent, viewFromPlan, type RunView } from "../ui/runView.js";
 import { cliArgsFor, helpText, parseInput } from "./commands.js";
@@ -69,8 +69,8 @@ export interface ChatState {
   /** A one-line hint under the prompt, such as how to exit. */
   notice?: string;
   sessionCostUsd: number;
-  /** Tokens this session, by soldier, as the CLIs reported them. */
-  tokens: Record<string, { model: string; inputTokens: number; outputTokens: number }>;
+  /** Tokens this session, by soldier and the model that answered, counted as each call reports them. */
+  tokens: ModelUsage[];
 }
 
 /**
@@ -151,7 +151,7 @@ export class ChatSession {
 
   constructor(private readonly deps: ChatDeps) {
     this.clock = deps.clock ?? Date.now;
-    this.state = { entries: [{ id: 0, kind: "welcome" }], epoch: 0, mode: "ask", sessionCostUsd: 0, tokens: {} };
+    this.state = { entries: [{ id: 0, kind: "welcome" }], epoch: 0, mode: "ask", sessionCostUsd: 0, tokens: [] };
   }
 
   getState = (): ChatState => this.state;
@@ -206,6 +206,12 @@ export class ChatSession {
     if (!c || c.row >= c.tasks.length) return;
     const tasks = c.tasks.map((t, i) => (i === c.row ? { ...t, effort: next(t.effort) } : t));
     this.set({ confirm: { ...c, tasks } });
+  }
+
+  /** Set the Monarch's effort in the picker directly, as the 1-4 keys do. */
+  setEffort(effort: Effort) {
+    const p = this.state.pickEffort;
+    if (p && EFFORTS.includes(effort)) this.set({ pickEffort: { ...p, choice: effort } });
   }
 
   /** Enter in a pending plan: No declines; any other line runs it with the efforts shown. */
@@ -346,7 +352,24 @@ export class ChatSession {
       this.add({ kind: "steps", steps: { ...steps, current: { ...steps.current, done: failed ? "error" : "ok" } }, now: this.clock() });
       steps = undefined;
     };
+    // What this turn used, counted as each call reports it, so a failed turn still says it and the
+    // status line moves while the run works.
+    const turn = new UsageTally();
+    const efforts = new Map<string, Effort>();
+    const count = (soldier: string, model: string, effort: string | undefined, input = 0, output = 0) => {
+      if (!input && !output) return;
+      turn.add(soldier, model, effort, input, output);
+      const tally = new UsageTally();
+      for (const u of this.state.tokens) tally.add(u.soldier, u.model, undefined, u.inputTokens, u.outputTokens);
+      tally.add(soldier, model, undefined, input, output);
+      this.set({ tokens: tally.list() });
+    };
     const onEvent = (e: MonarchEvent) => {
+      if (e.type === "usage") return count(e.soldier, e.model, e.effort, e.inputTokens, e.outputTokens);
+      if (e.type === "finish" && e.outcome.report) {
+        const r = e.outcome.report;
+        count(e.outcome.soldier, r.resolvedModel ?? r.model, efforts.get(e.outcome.taskId), r.inputTokens, r.outputTokens);
+      }
       if (view) {
         view = applyEvent(view, e, this.clock());
         this.set({ busy: { kind: "dashboard", view } });
@@ -375,6 +398,8 @@ export class ChatSession {
         });
       }
       if (answer.run) {
+        // The efforts the tasks will run at, for their tokens' lines.
+        for (const id of planned.checked.order) efforts.set(id, answer.efforts?.[id] ?? planned.assignments.get(id)!.effort);
         view = viewFromPlan(planned, goal, this.clock());
         this.set({ busy: { kind: "dashboard", view } });
       }
@@ -397,25 +422,27 @@ export class ChatSession {
       endSteps(false);
       if (view) this.add({ kind: "dashboard", view: { ...view, ended: "done" }, now: this.clock() });
       const answer = answerOf(result);
-      // A finished run's report, which lists tokens itself; a declined plan just says "Not run."
-      const finished = result.status === "completed" && result.outcomes.length > 0;
+      // A finished run's report and a declined plan's "Not run." both list tokens themselves.
+      const reported = (result.status === "completed" && result.outcomes.length > 0) || result.status === "declined";
       if (answer) {
         // No tasks: the Monarch answered the question itself, so its summary is the answer, not a plan.
         this.say(answer);
         this.say(`answered by ${result.monarch} at ${effort} effort; no soldiers were needed`, "dim");
       } else {
         if (!planShown) this.say(renderPlan(planOf(result)));
-        if (finished || result.status === "declined") this.say(renderResult(result));
+        if (reported) this.say(renderResult(result));
       }
-      // Without a finished run's report, say what the Monarch's calls used.
-      if (!finished && renderUsage(result).length) this.say(renderUsage(result).join("\n"), "dim");
+      if (!reported && renderUsage(result).length) this.say(renderUsage(result).join("\n"), "dim");
       this.history.push({ goal, outcome: outcomeOf(result) });
-      this.set({ sessionCostUsd: this.state.sessionCostUsd + result.costUsd, tokens: this.addTokens(result) });
+      this.set({ sessionCostUsd: this.state.sessionCostUsd + result.costUsd });
     } catch (e) {
       endSteps(true);
       if (view) this.add({ kind: "dashboard", view: { ...view, ended: "failed" }, now: this.clock() });
       const message = (e as Error).message;
       this.say(`error: ${message}`, "error");
+      // The calls made before the failure still used tokens.
+      const used = renderUsageRows(turn.list());
+      if (used.length) this.say(used.join("\n"), "dim");
       this.history.push({ goal, outcome: `failed: ${message}` });
     } finally {
       this.answer = undefined;
@@ -423,21 +450,17 @@ export class ChatSession {
     }
   }
 
-  /** The session's tokens by soldier, with a finished run's added. */
-  private addTokens(r: RunResult): ChatState["tokens"] {
-    const tokens = { ...this.state.tokens };
-    for (const u of usageByModel(r)) {
-      const t = tokens[u.soldier] ?? { model: u.model, inputTokens: 0, outputTokens: 0 };
-      tokens[u.soldier] = { model: u.model, inputTokens: t.inputTokens + u.inputTokens, outputTokens: t.outputTokens + u.outputTokens };
-    }
-    return tokens;
-  }
 }
 
-/** The status line's token summary: each soldier's tokens this session, in and out together. */
+/**
+ * The status line's token summary: each soldier's tokens this session, in and out together. A soldier
+ * that answered with more than one model gets one entry per model.
+ */
 export function tokenSummary(tokens: ChatState["tokens"]): string {
-  return Object.entries(tokens)
-    .filter(([, t]) => t.inputTokens + t.outputTokens > 0)
-    .map(([soldier, t]) => `${soldier} ${formatTokens(t.inputTokens + t.outputTokens)}`)
+  const used = tokens.filter((t) => t.inputTokens + t.outputTokens > 0);
+  const models = new Map<string, number>();
+  for (const t of used) models.set(t.soldier, (models.get(t.soldier) ?? 0) + 1);
+  return used
+    .map((t) => `${models.get(t.soldier)! > 1 ? `${t.soldier} (${t.model})` : t.soldier} ${formatTokens(t.inputTokens + t.outputTokens)}`)
     .join(" · ");
 }
