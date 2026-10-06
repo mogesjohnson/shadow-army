@@ -50,6 +50,7 @@ Follow `.github/pull_request_template.md` exactly.
 
 ## Design rules to preserve
 
+- Keep the orchestrator thin. Shadow Army routes work, tracks who owns what, and records history. Behavior that belongs to a model or a CLI stays there: before adding orchestration logic, check whether each CLI already has a flag, setting, event or output format for it, and pass that through instead of rebuilding it.
 - Adapters stay isolated. Only briefs and reports cross between soldiers.
 - Hard rules: Grok never reviews, `agy` never writes. They live in `src/core/assign.ts` and in each adapter's `capabilities`. A delegate file can only restrict an adapter, never grant it more.
 - Routing policy (roles, cost, `forbidden`, `write`) lives in the front-matter of `orchestratorDelegate.md`; runtime settings (`cli`, `model`, `autonomy`) live in `shadow.config.json`. Both files must list the same soldiers.
