@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.12, 2026-10-05 |
+| **Version** | 0.13, 2026-10-06 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
@@ -819,8 +819,12 @@ These are part of the Monarch's static prompt.
 
   Otherwise the work stays on its ref and the Monarch is told. Every step runs only while GIT-3 passes: a GIT-3 finding ends the task with status `guard`, commits and applies nothing, and shows the git-metadata card. The lease heartbeat runs until the apply finishes (F39).
 - **WS-8** **Apply** is all-or-nothing:
-  - Every file in `base..tip` must match its base blob in your checkout (`git hash-object --path`, GIT-2). Otherwise nothing is applied.
-  - Changes to symlinks, gitlinks, modes, `.gitmodules` or `.gitattributes` need an apply-review card with typed `yes`. Auto-approve covers mode, `.gitmodules` and `.gitattributes` changes, but never a symlink or gitlink that is added or retargeted (SAFE-3, →M6).
+  - Every entry in `base..tip` must still match its base entry in your checkout, compared by type. Otherwise nothing is applied.
+    - a regular file: by its blob (`git hash-object --path`, GIT-2)
+    - a symlink: by its target; where git checks links out as plain files (`core.symlinks=false`), by the file's content
+    - a gitlink: by the commit your checkout holds, which is the submodule's `HEAD` when it is checked out, and the index entry otherwise. `hash-object` cannot hash a gitlink (GUARD-1).
+    - a path the tip adds: it must not exist yet
+  - Changes to symlinks, gitlinks, modes, `.gitmodules` or `.gitattributes` need an apply-review card with typed `yes`. A confirmed gitlink change updates the index entry (`update-index --cacheinfo 160000`), and the card says to run `git submodule update` to check the new commit out. Auto-approve covers mode, `.gitmodules` and `.gitattributes` changes, but never a symlink or gitlink that is added or retargeted (SAFE-3, →M6).
   - The patch is written to the runtime directory and re-hashed between `--check` and apply.
   - **If an apply or an undo fails** after `--check` passed (a file is held open, the disk is full), `git apply` can leave some files changed and others deleted (F46). So before either one writes anything, the harness copies the current bytes of every path the patch touches to `<runtime>/journal/<task>/pre/`, noting the paths that don't exist. On failure, it restores each path from that copy, never from a blob, deletes files the patch created, marks the journal entry failed, and names the files. If that restore fails too, it prints where the copy is. Your edits in other hunks (WS-9) survive either way.
 - **WS-9** **Undo**, extending #32's `sa undo` (§0.3). `/undo <task>` checks every hunk with `git apply -R --check`. If all of them still reverse cleanly, it reverses them and runs `git rm --cached` on the intent-to-add paths it created; otherwise it refuses and shows which hunks changed. Your edits in other hunks survive. This replaces #32's per-file refusal. It runs under the mutex, is journaled, and is announced in the soldier's next brief.
@@ -1304,6 +1308,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M5-AC6** `sa summon --write` refuses under the chat lock, and a second `sa` in the folder exits naming the open chat (D11) (covers GUARD-5).
 - **M5-AC7** Changing `rules.md` mid-chat pauses wakes and shows the policy-trust card (D9) (covers POL-1, POL-2).
 - **M5-AC8** An apply that fails partway (on Windows, a file held open by another process) leaves your checkout byte-identical to before and names the files. So does an undo that fails partway, keeping your edits in other hunks (covers WS-8, WS-9).
+- **M5-AC9** An apply whose tip moves a gitlink is refused when your submodule no longer holds the base's commit. With the base's commit and a typed `yes`, the index entry moves to the tip's commit (covers WS-8).
 
 ### M6: The whole army
 
@@ -1627,6 +1632,10 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | Owner question (2026-10-04): Claude Code mods | F47; CONF-6 and SOLD-2 prove no installed mod loads into the Monarch or a soldier; spike S13 before choosing the screen (O6) |
 | Codex's review of PR #35 (P1): `git add -A` with an exclude naming an ignored folder fails | WS-5 stages an explicit list and never names an ignored path; F48; M5-AC1 |
 | Owner decision (2026-10-05): you choose each model's effort, and tokens show per model | D19; EFF-13; M9-AC6; v1's chat in #54 |
+| Codex's review of PR #39 (P2): WS-8 compared every entry to a blob, which a gitlink cannot be (reproduced) | WS-8 compares by type; M5-AC9 |
+| Codex's review of PR #39 (P2): accepted ADR-0007 hard-coded 100k and an always-digest rollover | ADR-0007 follows SESS-1, CTX-5, SESS-8 and CMP-3 |
+| Codex's review of PR #39 (note): ADR-0001 still rejected the plugin screen that O6 now spikes | ADR-0001 records it as reopened for S13 |
+| Codex's late review of PR #37 (P1): a junction swapped for a tracked link was kept, and the revert deleted through it (reproduced) | v1 fix in #58, PR #59; SAFE-9 already requires a kept link's target to be unchanged |
 
 ## Appendix B. Traceability
 
