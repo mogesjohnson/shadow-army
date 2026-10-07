@@ -3,11 +3,11 @@
 | | |
 |---|---|
 | **Status** | Draft for review |
-| **Version** | 0.15, 2026-10-06 |
+| **Version** | 0.16, 2026-10-06 |
 | **Owner** | @mogesjohnson |
 | **Tracking** | Design issue #38 |
 | **Reference design** | Claude Code v2.1.88 source (March 2026, from the owner's collection zip), corrected by the current docs and the installed CLI (2.1.288). See §5. |
-| **Decisions** | Interview decisions Q1–Q26 (§20), and the owner's review decisions D1–D18 of 2026-10-04 (§0.2) |
+| **Decisions** | Interview decisions Q1–Q26 (§20), the owner's review decisions D1–D18 of 2026-10-04, and D19 and D20 since (§0.2) |
 | **Review** | Nine rounds; the ninth found no critical or high problem. Appendix A records every disposition, and Appendix B defines traceability. |
 
 **Conventions.**
@@ -89,6 +89,11 @@ The owner answered every question on 2026-10-04 (`mogesanswers.md`). The tables 
 - **O5:** that zip is the reference for ideas and for how the pieces connect. Shadow Army is the same idea, more ambitious. The other Downloads files are ignored.
 - **O6 (2026-10-04, spike first):** Claude Code mods (F47) could draw Shadow Army's screen inside your normal Claude Code session. Before choosing between that and the Ink shell (§6), M0 runs spike S13, and you decide from the result.
 - **D19 (2026-10-05, you choose):** each job shows its model with a suggested effort, and you pick the effort before it runs. Tokens and effort show for every model. Basic questions shouldn't run at top effort, and hard work shouldn't get too little (EFF-13). v1's chat gets the same in #54.
+- **D20 (2026-10-06, you chose, from the terminal UI design canvas):**
+  - `❄`, `⏸` and `⚠` are written in their text style (U+FE0E), and the tree shows `!` for a soldier waiting on you, as the roster does (ROS-2, TREE-3, TREE-7).
+  - `/mode terminal`, `/mode dark` or `/mode light` picks the colours (UX-7).
+  - In a soldier view, `j` and `l` switch tabs, `i` and `k` scroll, and `Enter` moves into the message field (VIEW-1, VIEW-3, KEY-2).
+  - v1's chat retires the markers it borrowed from Claude Code: `✻`, `⏺`, `❯` and `⏵⏵` (UX-8).
 
 ### 0.3 Work already in flight
 
@@ -293,7 +298,7 @@ At 140 columns or wider:
 │ · Iron     claude-sonnet · sonnet       │
 └─────────────────────────────────────────┘
  ◆ Monarch  Kaisel · claude-opus · opus   waiting on your approval          12.4k   0:42
- └─ ⚑ Beru  grok · grok-4.7               awaiting approval
+ └─ ! Beru  grok · grok-4.7               awaiting approval
  ┌ write · Beru · grok · grok-4.7 · full autonomy ─────────────────────────────────┐
  │ build the settings page                                  task t7 · from Monarch  │
  │ claims src/ui/Settings.tsx src/ui/nav.ts       base b3 = HEAD + your 2 edits     │
@@ -320,8 +325,11 @@ At 140 columns or wider:
   The strip lists the Monarch, then every awake or waiting soldier as `<glyph><Shadow> <model> <%>`, then `+N` for the dormant ones; `/army` lists them all. The minimum height is 24 rows. Below 30 rows, the tree shows at most 3 rows.
 - **UX-5** The mouse is on where the terminal reports it (D6). A click toggles a tree row, selects a roster row, or follows again from the pill, and the wheel scrolls. Shift+drag keeps the terminal's own selection [S8]. **Fallback:** the mouse is off by default. `/mouse off` turns capture off. `/copy [n]` copies a message to the clipboard: `Set-Clipboard` on Windows, `pbcopy` on macOS, `wl-copy` or `xclip` on Linux, otherwise OSC 52.
 - **UX-6** On exit, the normal screen shows the chat id and `sa --resume <id>`.
-- **UX-7** An ASCII profile applies in legacy consoles or with `SA_ASCII=1`. `SA_REDUCED_MOTION=1` freezes animation.
-- **UX-8** All UI text, glyphs and word lists are original. Status words are checked against Claude Code's verb list before release.
+- **UX-7** An ASCII profile applies in legacy consoles or with `SA_ASCII=1`. `SA_REDUCED_MOTION=1` freezes animation. `/mode terminal`, `/mode dark` or `/mode light` picks the colour palette (D20), and `/mode` alone opens a picker:
+  - `terminal`, the default, follows the terminal's background where the terminal reports it (OSC 11), and falls back to dark [S8].
+  - The choice is saved for every chat.
+  - The values avoid `ask`, `auto` and `plan`, which name the write modes on Shift+Tab (KEY-7, →M4).
+- **UX-8** All UI text, glyphs and word lists are original. Status words are checked against Claude Code's verb list before release. v1's chat retires the markers it borrowed from Claude Code: `✻`, `⏺`, `❯` and `⏵⏵` (D20).
 - **UX-9** A soldier always appears with its shadow name and model (Q8): as `<Shadow> · <id> · <model>` in the roster pane, the tree and views, as `<Shadow> <model>` in the strip (UX-4), and as PLAIN-1 writes it in plain mode. The model may be truncated, but never dropped.
 
 ### 6.3 Keys (KEY)
@@ -335,11 +343,12 @@ At 140 columns or wider:
 - **KEY-2** The full Esc ladder acts on the topmost layer:
   1. close typeahead
   2. set aside the focused card
-  3. close a view
-  4. leave the panel
-  5. interrupt the Monarch
-  6. take the last queued message back into the prompt
-  7. a double Esc within 800 ms clears the draft and saves it to history
+  3. leave a view's message field (VIEW-1)
+  4. close a view
+  5. leave the panel
+  6. interrupt the Monarch
+  7. take the last queued message back into the prompt
+  8. a double Esc within 800 ms clears the draft and saves it to history
 
   Esc never stops a soldier.
 - **KEY-3** The ctrl+c ladder:
@@ -419,7 +428,7 @@ At 140 columns or wider:
 
   Within each group, config order.
 - **ROS-2** Each row shows:
-  - a state glyph: `●` awake, `○` dormant with a session, `·` no session, `❄` cold, `⏸` limited, `!` waiting on you
+  - a state glyph: `●` awake, `○` dormant with a session, `·` no session, `❄` cold, `⏸` limited, `!` waiting on you. `❄` and `⏸` are always followed by U+FE0E, the text-presentation selector, so terminals draw their text form rather than a colour emoji (D20).
   - the name, as UX-9
   - a meter (CTX-1)
   - the quota % when known
@@ -435,7 +444,7 @@ At 140 columns or wider:
 - **TREE-1** The tree appears above the prompt while anyone is busy, or a card is waiting.
 - **TREE-2** Its root is the Monarch, then soldiers that are running, queued, waiting, or finished within 30 s, then their subagents.
 - **TREE-3** Each row shows:
-  - a spinner or a status glyph
+  - a spinner or a status glyph; a soldier waiting on you shows `!`, as the roster does (D20)
   - the name, as UX-9 (subagents show their type)
   - activity text from the CLI's own events
   - tokens
@@ -444,14 +453,17 @@ At 140 columns or wider:
 - **TREE-4** Branches are open while any subagent runs, and fold to `▸ +N agents (r running · d done)` when all have finished. A manual toggle persists (Q20, D8).
 - **TREE-5** At most 8 rows (3 below 30 terminal rows), then `+N more`.
 - **TREE-6** Where a CLI doesn't stream subagent detail, the branch shows what is known and fills tokens from the child's transcript.
-- **TREE-7** A soldier over the subagent cap shows `⚠ 4/3`.
+- **TREE-7** A soldier over the subagent cap shows `⚠ 4/3`, with U+FE0E after `⚠` as in ROS-2.
 - **TREE-8** The root glyph is `◆`.
 
 ### 6.8 Soldier view and direct chat (VIEW)
 
-- **VIEW-1** A view opens with `Enter` on a row, `/view <name>`, or a click. `Esc` closes it and never stops work.
+- **VIEW-1** A view opens with `Enter` on a row, `/view <name>`, or a click. It has a tab for the Monarch and one for each soldier you can view, and opens with focus on itself (D20):
+  - `j` and `l` (or `←` and `→`) switch tabs, and `i` and `k` (or `↑` and `↓`) scroll.
+  - `Enter` or `Tab` moves focus into its message field (VIEW-3), where every key types, and `Esc` moves it back.
+  - `Esc` on the view closes it and never stops work.
 - **VIEW-2** A view renders the soldier session's vendor transcript, with tool calls collapsed, followed by that soldier's reports. Subagents get read-only views where the CLI stores them. A view loads on open, is released on close, and its text passes SAFE-7.
-- **VIEW-3** Text typed in a view, or `@name <text>`, is a direct turn (D7a). For a soldier that can write, each direct message opens a write card first, unless `/auto-approve writes` is on (SAFE-3). The claims default to the soldier's last claims, and `e` edits them. A soldier that never writes (agy) gets read-only turns with no card. `@name --write --claim <globs> <task>` pre-fills the claims. An unknown `@name` goes to the Monarch.
+- **VIEW-3** Text typed in a view's message field, or `@name <text>`, is a direct turn (D7a). For a soldier that can write, each direct message opens a write card first, unless `/auto-approve writes` is on (SAFE-3). The claims default to the soldier's last claims, and `e` edits them. A soldier that never writes (agy) gets read-only turns with no card. `@name --write --claim <globs> <task>` pre-fills the claims. An unknown `@name` goes to the Monarch.
 - **VIEW-4** Each direct exchange adds one line of ≤200 characters to the next update, built with no model call (Q21).
 - **VIEW-5** Subagents cannot be messaged; the vendors give no way to address them.
 - **VIEW-6** The views of the Monarch and of Claude soldiers show a `get_context_usage` breakdown. Others show the total and the ceiling.
@@ -469,7 +481,7 @@ At 140 columns or wider:
 | `/undo <task>` · `/cancel <name\|task>` | Undo; stop | no | WS-9, CMD-7 |
 | `/view` · `/army` · `/cards` | Navigation | no | VIEW-1, UX-4, CARD-1 |
 | `/memory …` · `/usage` · `/report <task>` | Memory, ledger, full report | no | MEM-12, LEDGER-6, CMD-6 |
-| `/copy` · `/mouse` · `/notify` | Terminal settings | no | UX-5, ATTN-2 |
+| `/copy` · `/mouse` · `/notify` · `/mode` | Terminal settings | no | UX-5, ATTN-2, UX-7 |
 | `/new` · `/chats` · `/resume <id>` · `/doctor` · `/help` | Chats and help | no | CMD-4, CMD-5, CMD-8 |
 
 - **CMD-1** Local commands never send anything to the Monarch.
@@ -1277,6 +1289,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 - **M3-AC1** Golden frames at 60, 80, 110 and 160 columns show the transcript, prompt and footer at each width, and every soldier mention shows its model (Q8) (covers UX-4, UX-9).
 - **M3-AC2** The NFR-1 p95 and NFR-3 are met (covers NFR-1, NFR-3).
 - **M3-AC3** Esc interrupts the Monarch, a double Esc clears the draft, and the ctrl+c ladder works (covers KEY-3, KEY-6).
+- **M3-AC4** `/mode dark` and `/mode light` switch the palette at once, `/mode terminal` follows the terminal's background, and the choice survives a restart. No frame shows `✻`, `⏺`, `❯` or `⏵⏵` (covers UX-7, UX-8).
 
 ### M4: Cards, attention and roster
 
@@ -1378,7 +1391,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 
 **ACs:**
 - **M8-AC1** Soldiers animate with live tokens, two subagents show as branches that fold when done, and a click or `→`/`←` toggles them (covers TREE-3, TREE-4).
-- **M8-AC2** A view shows the soldier's chat. Typing there sends a direct turn: a write-capable soldier shows a write card first, and with auto-approve on, a direct write to `package.json` applies without one (D14). agy runs read-only. Its VIEW-4 line reaches the Monarch with no model call (covers VIEW-2, VIEW-3, VIEW-4, SAFE-3).
+- **M8-AC2** A view shows the soldier's chat; `j` and `l` switch tabs and `i` and `k` scroll. After `Enter`, typing in its message field sends a direct turn: a write-capable soldier shows a write card first, and with auto-approve on, a direct write to `package.json` applies without one (D14). agy runs read-only. Its VIEW-4 line reaches the Monarch with no model call (covers VIEW-2, VIEW-3, VIEW-4, SAFE-3).
 - **M8-AC3** The full Esc ladder never stops a soldier (covers KEY-2).
 - **M8-AC4** `wake(after)` waits for its predecessor and cancels with it (covers ORCH-7).
 
@@ -1516,6 +1529,7 @@ M0 runs in a scratch repository. Every command is shown before it runs, and it t
 | O5 | The zip is the reference design | §5, ADR-0001 | The §5 parity table |
 | O6 | Mods: spike before choosing the screen | S13 | M0-AC1 |
 | D19 | You choose each model's effort from a suggestion; effort and tokens show for every model | EFF-13, LEAD-6 | M9-AC6 |
+| D20 | Terminal UI: text-style glyphs, `/mode` for colours, view keys `i` `j` `k` `l`, and v1's Claude Code markers retired | ROS-2, TREE-3, TREE-7, UX-7, UX-8, VIEW-1, VIEW-3, KEY-2 | M3-AC4, M8-AC2 |
 | #56 | A thin orchestrator: pass a CLI's own flag, event or output format instead of rebuilding it | G6, SOLD-9 | M2-AC6 |
 | #57 | Mod ideas: reports through each CLI's structured output instead of a report mod; claims checked before a claude write by a `--settings` hook instead of a mod | SOLD-9, SOLD-10 | M2-AC6, M5-AC10 |
 
@@ -1655,6 +1669,7 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | Owner's issue #56: keep the orchestrator thin | G6. `CLAUDE.md` and `CONTRIBUTING.md` say it in PR #60. SOLD-9 applies it to reports, and S13 weighs what a mod screen would remove from §6 |
 | Owner's issue #57 (1): a claim-guard mod | SOLD-10 checks claims before a claude write, through a `--settings` hook as CONF-5 does. A soldier draws nothing, so a mod would add only `tool.check` approvals and a load path the docs don't cover (F50). Bash and git commands are not judged: commands stay the vendor's to govern at the chosen autonomy (`CLAUDE.md`), and `rules.md` asks soldiers to leave git alone |
 | Owner's issue #57 (2): a report-completer mod | SOLD-9: every CLI already holds its final answer to a schema (F49). Secret redaction is left out, because WS-5 already keeps untracked secret files out of every soldier's workspace, and redaction would rewrite tool output rather than deny or observe |
+| Owner decisions (2026-10-06), from the terminal UI design canvas: text-style glyphs, `/mode` for colours, view keys `i` `j` `k` `l`, and v1's Claude Code markers retired | D20. ROS-2, TREE-3 and TREE-7 write `❄`, `⏸` and `⚠` with U+FE0E and show `!` for waiting, also in the 6.1 mock. UX-7 adds `/mode`, avoiding the write-mode names. VIEW-1, VIEW-3 and KEY-2 give the view its own focus, keys and message field. UX-8 retires v1's markers. M3-AC4, M8-AC2 |
 
 ## Appendix B. Traceability
 
