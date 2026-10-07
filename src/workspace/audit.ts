@@ -2,7 +2,7 @@ import { rm } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { git, GitError, gitOk, splitZ } from "./git.js";
 import { matchesClaims } from "./claims.js";
-import { crossesLink } from "./links.js";
+import { crossesLink, removeIfLink } from "./links.js";
 
 export interface AuditResult {
   /** Every file the soldier changed relative to the base commit, from git, not from its own account. */
@@ -56,11 +56,13 @@ export async function revertPaths(worktree: string, base: string, paths: string[
     if (await crossesLink(root, p)) {
       throw new GitError(`refusing to revert ${p}: a folder on its path is a link that could lead outside the worktree`);
     }
+    const abs = resolve(worktree, p);
+    // The path itself being a link: remove the link first, unfollowed, or git would delete through it.
+    if (abs.startsWith(root + sep)) await removeIfLink(abs);
     if (await gitOk(worktree, ["cat-file", "-e", `${base}:${p}`])) {
       await git(worktree, ["checkout", base, "--", p]);
     } else {
       await git(worktree, ["rm", "-f", "-q", "--cached", "--ignore-unmatch", "--", p]);
-      const abs = resolve(worktree, p);
       // paths come from git so are relative and inside the worktree; never delete anything outside it
       if (abs.startsWith(root + sep)) await rm(abs, { force: true });
     }

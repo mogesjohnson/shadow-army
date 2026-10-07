@@ -1,11 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderReport } from "../core/summon.js";
 import type { Report } from "../core/types.js";
 import { revertPaths } from "./audit.js";
-import { crossesLink, trackedLinks, unlinkLinks } from "./links.js";
+import { crossesLink, trackedLinks, unlinkSoldierLinks } from "./links.js";
 import { openWriteSession } from "./session.js";
 import { makeRepo } from "./testRepo.testutil.js";
 import { createSnapshot, createWorktree, removeWorktree } from "./worktree.js";
@@ -37,6 +37,19 @@ function repo() {
 function hijackSrc(worktree: string, target: string): void {
   rmSync(join(worktree, "src"), { recursive: true, force: true });
   linkFolder(target, join(worktree, "src"));
+}
+
+/**
+ * Commit `path` as a symbolic link to `target`, made with plumbing so it can be committed where links
+ * can't be created. Where git checks links out as plain files (core.symlinks=false), a worktree gets
+ * a file holding the target.
+ */
+function commitLink(r: ReturnType<typeof repo>, path: string, target: string): void {
+  r.write("link.tmp", target);
+  const oid = r.git("hash-object", "-w", "link.tmp");
+  rmSync(join(r.dir, "link.tmp"));
+  r.git("update-index", "--add", "--cacheinfo", `120000,${oid},${path}`);
+  r.git("commit", "-q", "-m", "tracked link");
 }
 
 describe("removing a worktree never follows a link inside it", () => {
@@ -154,7 +167,7 @@ describe("the claim audit's revert never writes or deletes through a link", () =
     const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: join(r.dir, ".shadow"), soldier: "grok", taskId: "t3" });
     hijackSrc(wt.path, target);
 
-    expect(await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base))).toEqual(["src"]);
+    expect(await unlinkSoldierLinks(wt.path, wt.base)).toEqual(["src"]);
     await revertPaths(wt.path, wt.base, ["src/a.ts"]);
 
     expect(readFileSync(join(wt.path, "src", "a.ts"), "utf8")).toBe("a\n");
@@ -192,9 +205,123 @@ describe("the claim audit's revert never writes or deletes through a link", () =
     r.git("commit", "-q", "-m", "tracked link");
     const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: join(r.dir, ".shadow"), soldier: "grok", taskId: "t4" });
 
-    expect(await trackedLinks(wt.path, wt.base)).toEqual(new Set(["src/alias.ts"]));
-    expect(await unlinkLinks(wt.path, await trackedLinks(wt.path, wt.base))).toEqual([]);
+    expect(await trackedLinks(wt.path, wt.base)).toEqual(new Map([["src/alias.ts", "a.ts"]]));
+    expect(await unlinkSoldierLinks(wt.path, wt.base)).toEqual([]);
     expect(existsSync(join(wt.path, "src", "alias.ts"))).toBe(true);
+  });
+
+  it("preserves the exact tracked link target including a final newline", async () => {
+    const r = repo();
+    commitLink(r, "alias", "src/name\n");
+
+    expect(await trackedLinks(r.dir, "HEAD")).toEqual(new Map([["alias", "src/name\n"]]));
+  });
+
+  it.skipIf(process.platform === "win32")("keeps an unchanged claimed link whose target ends in a newline", async () => {
+    const r = repo();
+    r.write("src/name\n", "keep me\n");
+    symlinkSync("src/name\n", join(r.dir, "alias"));
+    r.git("add", "src/name\n", "alias");
+    r.git("commit", "-q", "-m", "tracked link with newline target");
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["alias"] });
+    try {
+      const info = await s.finish("shadow(grok): leave tracked link unchanged");
+
+      expect(info.linksRemoved).toEqual([]);
+      expect(info.touched).toEqual([]);
+      expect(info.commit).toBeUndefined();
+      expect(readFileSync(join(s.cwd, "alias"), "utf8")).toBe("keep me\n");
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
+  it("unlinks a junction that replaced a tracked link, so the revert deletes nothing outside", async () => {
+    const r = repo();
+    const target = outside();
+    commitLink(r, "alias", "src/a.ts");
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["docs/**"] });
+    try {
+      // The soldier swaps the checked-out alias for a junction to a folder outside.
+      rmSync(join(s.cwd, "alias"), { recursive: true, force: true });
+      linkFolder(target, join(s.cwd, "alias"));
+
+      const info = await s.finish("shadow(grok): swap a tracked link");
+
+      expect(info.linksRemoved).toEqual(["alias"]);
+      expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+      // The base's entry is back, as git checks it out here, and nothing else changed.
+      expect(info.outOfScope).toEqual(["alias"]);
+      expect(lstatSync(join(s.cwd, "alias")).isDirectory()).toBe(false);
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
+  it("unlinks a claimed link to the tracked link's own target where links check out as plain files", async () => {
+    const r = repo();
+    const target = outside();
+    r.git("config", "core.symlinks", "false");
+    // The base's link names the very folder the soldier links to, and the soldier claims the path.
+    commitLink(r, "alias", target);
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["alias"] });
+    try {
+      rmSync(join(s.cwd, "alias"), { recursive: true, force: true });
+      linkFolder(target, join(s.cwd, "alias"));
+
+      const info = await s.finish("shadow(grok): link a tracked link's own target");
+
+      expect(info.linksRemoved).toEqual(["alias"]);
+      expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+      // Only the link changed: nothing behind it reached the audit or the soldier's commit.
+      expect(info.touched).toEqual(["alias"]);
+      expect(r.git("ls-tree", "-r", "--name-only", info.branch)).not.toContain("precious.txt");
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
+  // Elsewhere a link to the base's own target is just the base's entry, which git never follows.
+  it.runIf(process.platform === "win32")("unlinks a junction git reads as a folder, even where links check out as links", async () => {
+    const r = repo();
+    const target = outside();
+    // Plain files while the worktree is made, which needs no special rights, then links, as with
+    // Developer Mode on.
+    r.git("config", "core.symlinks", "false");
+    commitLink(r, "alias", target);
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["alias"] });
+    try {
+      rmSync(join(s.cwd, "alias"), { recursive: true, force: true });
+      linkFolder(target, join(s.cwd, "alias"));
+      r.git("config", "core.symlinks", "true");
+
+      const info = await s.finish("shadow(grok): swap a tracked link for a junction to its target");
+
+      expect(info.linksRemoved).toEqual(["alias"]);
+      expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+      expect(info.touched).toEqual(["alias"]);
+      expect(r.git("ls-tree", "-r", "--name-only", info.branch)).not.toContain("precious.txt");
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
+  it("removes a link standing at a path being reverted, without deleting through it", async () => {
+    const r = repo();
+    const target = outside();
+    const wt = await createWorktree({ repoRoot: r.dir, shadowRoot: join(r.dir, ".shadow"), soldier: "grok", taskId: "t5" });
+    // A tracked file replaced by a junction to a folder outside, left for the revert to meet.
+    rmSync(join(wt.path, "README.md"));
+    linkFolder(target, join(wt.path, "README.md"));
+
+    await revertPaths(wt.path, wt.base, ["README.md"]);
+
+    expect(readFileSync(join(target, "precious.txt"), "utf8")).toBe("keep me\n");
+    expect(readFileSync(join(wt.path, "README.md"), "utf8")).toBe("hello\n");
   });
 });
 

@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, rm, rmdir, unlink } from "node:fs/promises";
+import { lstat, readdir, readFile, readlink, rm, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { CASE_INSENSITIVE_FS } from "./claims.js";
 import { canonicalPath, git, splitZ } from "./git.js";
@@ -10,11 +10,16 @@ import { canonicalPath, git, splitZ } from "./git.js";
  * worktree itself.
  */
 
-/** Paths, relative to the worktree with forward slashes, that `ref` itself tracks as symbolic links. */
-export async function trackedLinks(worktree: string, ref: string): Promise<Set<string>> {
-  const links = new Set<string>();
+/**
+ * The symbolic links `ref` itself tracks: each path, relative to the worktree with forward slashes,
+ * and the target it records.
+ */
+export async function trackedLinks(worktree: string, ref: string): Promise<Map<string, string>> {
+  const links = new Map<string, string>();
   for (const entry of splitZ(await git(worktree, ["ls-tree", "-r", "-z", "--full-tree", ref]))) {
-    if (entry.startsWith("120000 ")) links.add(entry.slice(entry.indexOf("\t") + 1));
+    if (!entry.startsWith("120000 ")) continue;
+    const oid = entry.split(" ")[2]!.split("\t")[0]!;
+    links.set(entry.slice(entry.indexOf("\t") + 1), await git(worktree, ["cat-file", "blob", oid], { stripFinalNewline: false }));
   }
   return links;
 }
@@ -30,11 +35,27 @@ async function removeLink(path: string): Promise<void> {
   }
 }
 
+/** Remove `path` if it is itself a link, without following it. Says whether it was one. */
+export async function removeIfLink(path: string): Promise<boolean> {
+  const stats = await lstat(path).catch(() => undefined);
+  if (!stats?.isSymbolicLink()) return false;
+  await removeLink(path);
+  return true;
+}
+
+/** Whether the link at `path` still points where its base records, compared with forward slashes. */
+async function pointsAt(path: string, target: string): Promise<boolean> {
+  const actual = await readlink(path).catch(() => undefined);
+  return actual !== undefined && actual.replace(/\\/g, "/") === target.replace(/\\/g, "/");
+}
+
 /**
- * Unlink every symbolic link and junction under `dir`, never following one, except the paths in
- * `keep`. Returns what was removed, relative to `dir` with forward slashes.
+ * Unlink every symbolic link and junction under `dir`, never following one. A link at a path in
+ * `keep` stays only while it points at the target `keep` records for it, since a soldier can swap a
+ * tracked link for a junction that leads outside. Returns what was removed, relative to `dir` with
+ * forward slashes.
  */
-export async function unlinkLinks(dir: string, keep: ReadonlySet<string> = new Set()): Promise<string[]> {
+export async function unlinkLinks(dir: string, keep: ReadonlyMap<string, string> = new Map()): Promise<string[]> {
   const removed: string[] = [];
   const walk = async (abs: string): Promise<void> => {
     for (const entry of await readdir(abs, { withFileTypes: true })) {
@@ -42,7 +63,8 @@ export async function unlinkLinks(dir: string, keep: ReadonlySet<string> = new S
       const stats = await lstat(path);
       if (stats.isSymbolicLink()) {
         const rel = relative(dir, path).split(sep).join("/");
-        if (keep.has(rel)) continue;
+        const target = keep.get(rel);
+        if (target !== undefined && (await pointsAt(path, target))) continue;
         await removeLink(path);
         removed.push(rel);
       } else if (stats.isDirectory()) {
@@ -51,6 +73,28 @@ export async function unlinkLinks(dir: string, keep: ReadonlySet<string> = new S
     }
   };
   await walk(dir);
+  return removed.sort();
+}
+
+/**
+ * Unlink the links a soldier left in its worktree before the claim audit, never following one. A link
+ * at a path `base` tracks as a symbolic link stays only where git checks links out as links
+ * (`core.symlinks`), while it points at the base's target and git still sees the base's entry there.
+ * Anything else there is a substitute. Where links check out as plain files, every link is one. Git
+ * for Windows reads a junction as a folder whatever its target, so it would commit the files behind
+ * it. Returns what was removed, relative to `worktree` with forward slashes.
+ */
+export async function unlinkSoldierLinks(worktree: string, base: string): Promise<string[]> {
+  const checksOutLinks =
+    (await git(worktree, ["config", "--type=bool", "--default=true", "core.symlinks"])).trim() !== "false";
+  const keep = checksOutLinks ? await trackedLinks(worktree, base) : new Map<string, string>();
+  const removed = await unlinkLinks(worktree, keep);
+  if (!keep.size) return removed;
+  // Only links matching the base are left, so git reads through no other link here.
+  const changed = new Set(splitZ(await git(worktree, ["diff", "--name-only", "-z", "--no-renames", base])));
+  for (const rel of keep.keys()) {
+    if (changed.has(rel) && (await removeIfLink(join(worktree, rel)))) removed.push(rel);
+  }
   return removed.sort();
 }
 

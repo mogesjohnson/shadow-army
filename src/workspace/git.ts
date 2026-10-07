@@ -4,11 +4,17 @@ import { execa } from "execa";
 
 export class GitError extends Error {}
 
-/** Run git in `cwd`; returns stdout, throws GitError with git's own message on failure. */
-export async function git(cwd: string, args: string[]): Promise<string> {
+/** Run git in `cwd`; preserve a blob's final newline when requested. Throws GitError on failure. */
+export async function git(cwd: string, args: string[], opts: { stripFinalNewline?: boolean } = {}): Promise<string> {
   let r;
   try {
-    r = await execa("git", args, { cwd, reject: false, stdin: "ignore", windowsHide: true });
+    r = await execa("git", args, {
+      cwd,
+      reject: false,
+      stdin: "ignore",
+      windowsHide: true,
+      stripFinalNewline: opts.stripFinalNewline ?? true,
+    });
   } catch (e) {
     throw new GitError(`could not run git: ${(e as Error).message}`);
   }
