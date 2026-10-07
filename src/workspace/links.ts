@@ -19,7 +19,7 @@ export async function trackedLinks(worktree: string, ref: string): Promise<Map<s
   for (const entry of splitZ(await git(worktree, ["ls-tree", "-r", "-z", "--full-tree", ref]))) {
     if (!entry.startsWith("120000 ")) continue;
     const oid = entry.split(" ")[2]!.split("\t")[0]!;
-    links.set(entry.slice(entry.indexOf("\t") + 1), await git(worktree, ["cat-file", "blob", oid]));
+    links.set(entry.slice(entry.indexOf("\t") + 1), await git(worktree, ["cat-file", "blob", oid], { stripFinalNewline: false }));
   }
   return links;
 }

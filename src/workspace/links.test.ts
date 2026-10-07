@@ -210,6 +210,33 @@ describe("the claim audit's revert never writes or deletes through a link", () =
     expect(existsSync(join(wt.path, "src", "alias.ts"))).toBe(true);
   });
 
+  it("preserves the exact tracked link target including a final newline", async () => {
+    const r = repo();
+    commitLink(r, "alias", "src/name\n");
+
+    expect(await trackedLinks(r.dir, "HEAD")).toEqual(new Map([["alias", "src/name\n"]]));
+  });
+
+  it.skipIf(process.platform === "win32")("keeps an unchanged claimed link whose target ends in a newline", async () => {
+    const r = repo();
+    r.write("src/name\n", "keep me\n");
+    symlinkSync("src/name\n", join(r.dir, "alias"));
+    r.git("add", "src/name\n", "alias");
+    r.git("commit", "-q", "-m", "tracked link with newline target");
+    const s = await openWriteSession({ cwd: r.dir, soldier: "grok", claims: ["alias"] });
+    try {
+      const info = await s.finish("shadow(grok): leave tracked link unchanged");
+
+      expect(info.linksRemoved).toEqual([]);
+      expect(info.touched).toEqual([]);
+      expect(info.commit).toBeUndefined();
+      expect(readFileSync(join(s.cwd, "alias"), "utf8")).toBe("keep me\n");
+    } finally {
+      await s.discard();
+      await s.release();
+    }
+  });
+
   it("unlinks a junction that replaced a tracked link, so the revert deletes nothing outside", async () => {
     const r = repo();
     const target = outside();
