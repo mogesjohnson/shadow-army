@@ -2,8 +2,8 @@
 import { readFileSync } from "node:fs";
 import { Command, Option } from "commander";
 import React from "react";
-import { render } from "ink";
-import { Banner } from "./ui/Banner.js";
+import { openChat } from "./chat/open.js";
+import { closestName } from "./core/closest.js";
 import { WorkingLine, type Working } from "./ui/Dashboard.js";
 import { liveScreensFor, startLive } from "./ui/live.js";
 import { plainBanner } from "./ui/art.js";
@@ -50,29 +50,6 @@ interface SummonCliOptions {
   json?: boolean;
 }
 
-/** The known command within edit distance 2 of `typed`, if there is one. */
-function closestCommand(typed: string, names: string[]): string | undefined {
-  const distance = (a: string, b: string): number => {
-    const row = Array.from({ length: b.length + 1 }, (_, j) => j);
-    for (let i = 1; i <= a.length; i++) {
-      let prev = row[0]!;
-      row[0] = i;
-      for (let j = 1; j <= b.length; j++) {
-        const cur = row[j]!;
-        row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
-        prev = cur;
-      }
-    }
-    return row[b.length]!;
-  };
-  let best: { name: string; d: number } | undefined;
-  for (const name of names) {
-    const d = distance(typed, name);
-    if (d <= 2 && (!best || d < best.d)) best = { name, d };
-  }
-  return best?.name;
-}
-
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ) as { version: string };
@@ -88,17 +65,19 @@ program
   // The banner is the root command's action, so commander would report a mistyped command as
   // "too many arguments". Accept the extra word here and report it as the unknown command it is.
   .allowExcessArguments(true)
-  .action((opts: { plain?: boolean }, cmd: Command) => {
+  .action(async (opts: { plain?: boolean }, cmd: Command) => {
     if (cmd.args.length) {
-      const hint = closestCommand(cmd.args[0]!, cmd.commands.map((c) => c.name()));
+      const hint = closestName(cmd.args[0]!, cmd.commands.map((c) => c.name()));
       cmd.error(`error: unknown command '${cmd.args[0]}'${hint ? ` (Did you mean ${hint}?)` : ""}\nRun "sa --help" to see the commands.`);
     }
-    if (opts.plain || !process.stdout.isTTY) {
+    // The chat needs a terminal both ways: one to draw on and one to read keys from.
+    if (opts.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
       console.log(plainBanner(pkg.version));
       return;
     }
-    const app = render(React.createElement(Banner, { version: pkg.version }));
-    app.unmount();
+    const roster = rosterOrExit();
+    if (!roster) return;
+    await openChat({ version: pkg.version, roster, cwd: process.cwd() });
   });
 
 program

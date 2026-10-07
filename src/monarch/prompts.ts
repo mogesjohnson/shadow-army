@@ -24,6 +24,16 @@ export function describeRoster(roster: Roster, isInstalled: (cli: string) => boo
   return lines;
 }
 
+/** An earlier goal in the same chat session and how it ended. Only this crosses between goals. */
+export interface SessionTurn {
+  goal: string;
+  outcome: string;
+}
+
+/** How many earlier turns, and how much of each outcome, the Monarch is shown. */
+export const HISTORY_TURNS = 6;
+const HISTORY_OUTCOME_CHARS = 1200;
+
 export function buildPlanPrompt(opts: {
   goal: string;
   roster: Roster;
@@ -31,6 +41,7 @@ export function buildPlanPrompt(opts: {
   maxTasks: number;
   vaultNotes?: string[];
   previousErrors?: string[];
+  history?: SessionTurn[];
 }): string {
   const lines = [
     "You are the Monarch of Shadow Army. You plan; soldiers do the work.",
@@ -39,9 +50,19 @@ export function buildPlanPrompt(opts: {
     "GOAL:",
     opts.goal.trim(),
     "",
+  ];
+  const history = opts.history?.slice(-HISTORY_TURNS) ?? [];
+  if (history.length) {
+    lines.push(
+      "EARLIER IN THIS SESSION (the owner's previous goals, oldest first, and how each ended; the goal above may build on them):",
+      ...history.flatMap((h, i) => [`${i + 1}. GOAL: ${clip(h.goal, 400)}`, `   OUTCOME: ${clip(h.outcome, HISTORY_OUTCOME_CHARS)}`]),
+      "",
+    );
+  }
+  lines.push(
     "YOUR SOLDIERS (code enforces who may do what; anything else is overridden):",
     ...describeRoster(opts.roster, opts.isInstalled),
-  ];
+  );
   if (opts.roster.guide) lines.push("", "DELEGATION GUIDE:", opts.roster.guide.trim());
   if (opts.roster.rules.all.trim()) {
     lines.push(
@@ -62,6 +83,7 @@ export function buildPlanPrompt(opts: {
     '- dependsOn: ids of the tasks that must succeed first. The task then starts from their merged work and sees their reports. A review task should depend on the build tasks it reviews.',
     '- difficulty: "hard" only for genuinely hard or risky changes.',
     '- soldier: optional; your preferred soldier for the task.',
+    '- If the goal is only a question that you can answer by reading the repository yourself, plan no tasks: use an empty "tasks" list and put the complete answer in "summary" as plain text. Do not plan a research task for it. Plan tasks only when something must be changed, run or checked by a soldier.',
   );
   if (opts.previousErrors?.length) {
     lines.push("", "YOUR PREVIOUS PLAN WAS REJECTED. Fix every one of these and return a corrected plan:", ...opts.previousErrors.map((e) => `- ${e}`));
@@ -70,7 +92,7 @@ export function buildPlanPrompt(opts: {
     "",
     "Reply with a short explanation of your plan, then end with exactly one fenced block in this form:",
     "```" + PLAN_FENCE,
-    '{"summary": "the plan in one or two sentences", "tasks": [{"id": "t1", "title": "short title", "role": "build", "difficulty": "routine", "soldier": "grok", "claims": ["src/example.ts"], "dependsOn": [], "brief": "complete instructions for the soldier"}]}',
+    '{"summary": "the plan in one or two sentences, or, when you plan no tasks because you are answering a question, the whole answer (a JSON string: write line breaks as \\n)", "tasks": [{"id": "t1", "title": "short title", "role": "build", "difficulty": "routine", "soldier": "grok", "claims": ["src/example.ts"], "dependsOn": [], "brief": "complete instructions for the soldier"}]}',
     "```",
   );
   return lines.join("\n");

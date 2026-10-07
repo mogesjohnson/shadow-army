@@ -3,6 +3,14 @@ import type { MonarchEvent, PlannedRun, RunResult } from "./monarch.js";
 
 const secs = (ms?: number) => (ms === undefined ? "" : ` in ${(ms / 1000).toFixed(0)}s`);
 
+/** The plan inside a run's result, in the shape `renderPlan` takes. */
+export const planOf = (r: RunResult): Pick<PlannedRun, "monarch" | "checked" | "assignments" | "rejected"> => ({
+  monarch: r.monarch,
+  checked: { plan: r.plan, order: r.order },
+  assignments: new Map(r.assignments.map((a) => [a.taskId, a])),
+  rejected: r.rejected,
+});
+
 export function renderPlan(planned: Pick<PlannedRun, "monarch" | "checked" | "assignments" | "rejected">): string {
   const { plan, order } = planned.checked;
   const byId = new Map(plan.tasks.map((t) => [t.id, t]));
