@@ -20,9 +20,11 @@
 
 A personal CLI that commands other AI coding CLIs as a disciplined army.
 
-`status: pre-alpha — README first, code feature by feature`
+`status: v1 legacy, Claude-first design next`
 
 </div>
+
+> **v1 is legacy.** This README describes v1, the `sa` CLI that starts a new process for every message. Shadow Army is moving to a Claude-first design: your Claude Code session is the Monarch, and every soldier is a live session of its own CLI. See [docs/claude-first.md](docs/claude-first.md) and #63. v1 is frozen at the `v1.0.0` tag.
 
 ---
 
