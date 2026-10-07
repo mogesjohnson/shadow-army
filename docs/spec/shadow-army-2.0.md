@@ -91,7 +91,7 @@ The owner answered every question on 2026-10-04 (`mogesanswers.md`). The tables 
 - **D19 (2026-10-05, you choose):** each job shows its model with a suggested effort, and you pick the effort before it runs. Tokens and effort show for every model. Basic questions shouldn't run at top effort, and hard work shouldn't get too little (EFF-13). v1's chat gets the same in #54.
 - **D20 (2026-10-06, you chose, from the terminal UI design canvas):**
   - `❄`, `⏸` and `⚠` are written in their text style (U+FE0E), and the tree shows `!` for a soldier waiting on you, as the roster does (ROS-2, TREE-3, TREE-7).
-  - `/mode terminal`, `/mode dark` or `/mode light` picks the colours (UX-7).
+  - `/mode terminal`, `/mode dark` or `/mode light` picks the colours, next to v1's `/mode ask|auto|plan` for the write mode (UX-7, KEY-7).
   - In a soldier view, `j` and `l` switch tabs, `i` and `k` scroll, and `Enter` moves into the message field (VIEW-1, VIEW-3, KEY-2).
   - v1's chat retires the markers it borrowed from Claude Code: `✻`, `⏺`, `❯` and `⏵⏵` (UX-8).
 
@@ -325,10 +325,10 @@ At 140 columns or wider:
   The strip lists the Monarch, then every awake or waiting soldier as `<glyph><Shadow> <model> <%>`, then `+N` for the dormant ones; `/army` lists them all. The minimum height is 24 rows. Below 30 rows, the tree shows at most 3 rows.
 - **UX-5** The mouse is on where the terminal reports it (D6). A click toggles a tree row, selects a roster row, or follows again from the pill, and the wheel scrolls. Shift+drag keeps the terminal's own selection [S8]. **Fallback:** the mouse is off by default. `/mouse off` turns capture off. `/copy [n]` copies a message to the clipboard: `Set-Clipboard` on Windows, `pbcopy` on macOS, `wl-copy` or `xclip` on Linux, otherwise OSC 52.
 - **UX-6** On exit, the normal screen shows the chat id and `sa --resume <id>`.
-- **UX-7** An ASCII profile applies in legacy consoles or with `SA_ASCII=1`. `SA_REDUCED_MOTION=1` freezes animation. `/mode terminal`, `/mode dark` or `/mode light` picks the colour palette (D20), and `/mode` alone opens a picker:
+- **UX-7** An ASCII profile applies in legacy consoles or with `SA_ASCII=1`. `SA_REDUCED_MOTION=1` freezes animation. `/mode terminal`, `/mode dark` or `/mode light` picks the colour palette (D20):
   - `terminal`, the default, follows the terminal's background where the terminal reports it (OSC 11), and falls back to dark [S8].
   - The choice is saved for every chat.
-  - The values avoid `ask`, `auto` and `plan`, which name the write modes on Shift+Tab (KEY-7, →M4).
+  - `/mode` also sets the write mode, as #30's chat does (KEY-7, →M4). The colour values avoid `ask`, `auto` and `plan`, so the two never clash, and `/mode` alone opens one picker for both.
 - **UX-8** All UI text, glyphs and word lists are original. Status words are checked against Claude Code's verb list before release. v1's chat retires the markers it borrowed from Claude Code: `✻`, `⏺`, `❯` and `⏵⏵` (D20).
 - **UX-9** A soldier always appears with its shadow name and model (Q8): as `<Shadow> · <id> · <model>` in the roster pane, the tree and views, as `<Shadow> <model>` in the strip (UX-4), and as PLAIN-1 writes it in plain mode. The model may be truncated, but never dropped.
 
@@ -365,7 +365,7 @@ At 140 columns or wider:
   - **auto**: the same as `/auto-approve writes on` (SAFE-3, →M6). Entering it posts a notice that writes now apply without cards.
   - **plan**: the Monarch plans and reads, and write wakes and lead tasks are refused.
 
-  The footer shows the mode, and it persists across `--resume` (D14).
+  The footer shows the mode, and it persists across `--resume` (D14). `/mode ask`, `/mode auto` or `/mode plan` sets it directly, as #30's chat does, and `/mode` alone opens the picker it shares with the colours (UX-7).
 
 ### 6.4 Prompt (PROMPT)
 
@@ -481,7 +481,8 @@ At 140 columns or wider:
 | `/undo <task>` · `/cancel <name\|task>` | Undo; stop | no | WS-9, CMD-7 |
 | `/view` · `/army` · `/cards` | Navigation | no | VIEW-1, UX-4, CARD-1 |
 | `/memory …` · `/usage` · `/report <task>` | Memory, ledger, full report | no | MEM-12, LEDGER-6, CMD-6 |
-| `/copy` · `/mouse` · `/notify` · `/mode` | Terminal settings | no | UX-5, ATTN-2, UX-7 |
+| `/copy` · `/mouse` · `/notify` | Terminal settings | no | UX-5, ATTN-2 |
+| `/mode [ask\|auto\|plan\|terminal\|dark\|light]` | Write mode or colours; alone, one picker for both | no | KEY-7, UX-7 |
 | `/new` · `/chats` · `/resume <id>` · `/doctor` · `/help` | Chats and help | no | CMD-4, CMD-5, CMD-8 |
 
 - **CMD-1** Local commands never send anything to the Monarch.
@@ -1669,7 +1670,7 @@ Critic findings are labelled `R<round>·<critic><n>` to avoid clashing with owne
 | Owner's issue #56: keep the orchestrator thin | G6. `CLAUDE.md` and `CONTRIBUTING.md` say it in PR #60. SOLD-9 applies it to reports, and S13 weighs what a mod screen would remove from §6 |
 | Owner's issue #57 (1): a claim-guard mod | SOLD-10 checks claims before a claude write, through a `--settings` hook as CONF-5 does. A soldier draws nothing, so a mod would add only `tool.check` approvals and a load path the docs don't cover (F50). Bash and git commands are not judged: commands stay the vendor's to govern at the chosen autonomy (`CLAUDE.md`), and `rules.md` asks soldiers to leave git alone |
 | Owner's issue #57 (2): a report-completer mod | SOLD-9: every CLI already holds its final answer to a schema (F49). Secret redaction is left out, because WS-5 already keeps untracked secret files out of every soldier's workspace, and redaction would rewrite tool output rather than deny or observe |
-| Owner decisions (2026-10-06), from the terminal UI design canvas: text-style glyphs, `/mode` for colours, view keys `i` `j` `k` `l`, and v1's Claude Code markers retired | D20. ROS-2, TREE-3 and TREE-7 write `❄`, `⏸` and `⚠` with U+FE0E and show `!` for waiting, also in the 6.1 mock. UX-7 adds `/mode`, avoiding the write-mode names. VIEW-1, VIEW-3 and KEY-2 give the view its own focus, keys and message field. UX-8 retires v1's markers. M3-AC4, M8-AC2 |
+| Owner decisions (2026-10-06), from the terminal UI design canvas: text-style glyphs, `/mode` for colours, view keys `i` `j` `k` `l`, and v1's Claude Code markers retired | D20. ROS-2, TREE-3 and TREE-7 write `❄`, `⏸` and `⚠` with U+FE0E and show `!` for waiting, also in the 6.1 mock. UX-7 adds colour values to `/mode`, which already sets the write mode in v1's chat, and KEY-7 records that. VIEW-1, VIEW-3 and KEY-2 give the view its own focus, keys and message field. UX-8 retires v1's markers. M3-AC4, M8-AC2 |
 
 ## Appendix B. Traceability
 
