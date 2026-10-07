@@ -297,3 +297,61 @@ describe("a whole run", () => {
     expect(r.git("branch", "--list", "shadow/*")).toBe("");
   });
 });
+
+describe("effort and tokens", () => {
+  const oneBuild = planReply([{ id: "a", title: "one", role: "build", soldier: "grok", claims: ["one.txt"], brief: "write one.txt=1" }]);
+  const made = synthesisReply({ summary: "made it", followUps: [], noteDecisions: [] });
+
+  it("plans and reports at the Monarch effort it is given, and counts the Monarch's tokens", async () => {
+    const r = repo();
+    const m = monarchScript({ plans: [oneBuild], synthesis: made, usage: { inputTokens: 1200, outputTokens: 300 } });
+    const army = fakeArmy(roster);
+    const result = await runGoal(base(r, { monarchEffort: "low", getAdapter: m.getAdapter, dispatch: army.dispatch, useVault: false }));
+    // The plan and the final report.
+    expect(m.prompts.map((p) => p.effort)).toEqual(["low", "low"]);
+    expect(result.monarchUsage).toEqual([
+      { soldier: "codex-astra", model: expect.any(String), effort: "low", calls: 2, inputTokens: 2400, outputTokens: 600 },
+    ]);
+    expect(renderResult(result)).toMatch(/Tokens:\n {2}codex-astra \([^)]+\)\s+effort low\s+2\.4k in · 600 out/);
+  });
+
+  it("sends each Monarch call's usage as it returns, even when no valid plan comes", async () => {
+    const r = repo();
+    const m = monarchScript({ plans: ["not a plan"], usage: { inputTokens: 1200, outputTokens: 300 } });
+    const events: { type: string; soldier?: string; inputTokens?: number }[] = [];
+    await expect(runGoal(base(r, { getAdapter: m.getAdapter, onEvent: (e) => events.push(e) }))).rejects.toThrow(/no valid plan/);
+    const usage = events.filter((e) => e.type === "usage");
+    // Every call the Monarchs made, including the failed plans.
+    expect(usage).toHaveLength(m.prompts.length);
+    expect(usage[0]).toMatchObject({ soldier: "codex-astra", inputTokens: 1200 });
+  });
+
+  it("plans at high effort when nobody chooses one, as sa run always has", async () => {
+    const r = repo();
+    const m = monarchScript({ plans: [oneBuild] });
+    await runGoal(base(r, { planOnly: true, getAdapter: m.getAdapter }));
+    expect(m.prompts.map((p) => p.effort)).toEqual(["high"]);
+  });
+
+  it("runs each task at the effort the owner chose when approving the plan", async () => {
+    const r = repo();
+    const m = monarchScript({ plans: [oneBuild], synthesis: made });
+    const army = fakeArmy(roster);
+    const result = await runGoal(
+      base(r, { confirm: async () => ({ run: true, efforts: { a: "max" } }), getAdapter: m.getAdapter, dispatch: army.dispatch, useVault: false }),
+    );
+    expect(army.seen.map((s) => s.effort)).toEqual(["max"]);
+    expect(result.assignments[0]!.effort).toBe("max");
+  });
+
+  it("runs nothing when the owner's answer is no, whatever efforts it carries", async () => {
+    const r = repo();
+    const m = monarchScript({ plans: [oneBuild] });
+    const army = fakeArmy(roster);
+    const result = await runGoal(
+      base(r, { confirm: async () => ({ run: false, efforts: { a: "max" } }), getAdapter: m.getAdapter, dispatch: army.dispatch }),
+    );
+    expect(result.status).toBe("declined");
+    expect(army.seen).toEqual([]);
+  });
+});

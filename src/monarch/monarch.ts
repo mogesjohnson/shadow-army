@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Adapter } from "../adapters/Adapter.js";
+import type { Adapter, Effort } from "../adapters/Adapter.js";
 import { getAdapter as defaultGetAdapter } from "../adapters/registry.js";
 import { route } from "../core/router.js";
 import type { Roster } from "../core/roster.js";
@@ -31,11 +31,37 @@ import {
 } from "./prompts.js";
 import { execute, type Dispatch, type RunEvent, type TaskOutcome } from "./schedule.js";
 
-/** Everything a run reports while it works: task events, phase changes, and the branch it works on. */
-export type MonarchEvent = RunEvent | { type: "phase"; message: string } | { type: "branch"; branch: string };
+/**
+ * Everything a run reports while it works: task events, phase changes, the branch it works on, and
+ * what each Monarch call used, sent as soon as the call returns so it counts even if the run fails.
+ */
+export type MonarchEvent =
+  | RunEvent
+  | { type: "phase"; message: string }
+  | { type: "branch"; branch: string }
+  | { type: "usage"; soldier: string; model: string; effort: Effort; inputTokens: number; outputTokens: number };
 
 /** The run cannot go ahead: no Monarch is available, or none produced a valid plan. */
 export class MonarchError extends Error {}
+
+/** The owner's answer to a plan: whether to run it, and any task efforts they changed, by task id. */
+export interface ConfirmAnswer {
+  run: boolean;
+  efforts?: Record<string, Effort>;
+}
+
+/** What one Monarch soldier used in a run, over its plan and report calls. */
+export interface MonarchUsage {
+  soldier: string;
+  model: string;
+  effort: Effort;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** The Monarch's effort when nobody chooses one: what `sa run` has always used. */
+export const DEFAULT_MONARCH_EFFORT: Effort = "high";
 
 export interface PlannedRun {
   runId: string;
@@ -61,6 +87,8 @@ export interface RunResult {
   /** Notes the Monarch decided on, and whether its decision was applied (`--accept-notes`). */
   notes: { id: string; text: string; decision: "accept" | "reject"; reason: string; applied: boolean }[];
   costUsd: number;
+  /** The Monarch's calls: its effort and tokens. Soldiers' tokens are in their reports. */
+  monarchUsage: MonarchUsage[];
   /** The checkout had uncommitted changes, which the run (working from the last commit) did not see. */
   uncommittedIgnored: boolean;
   /** Whether the branch's changes were put into the checkout as uncommitted edits; absent when not tried. */
@@ -82,8 +110,10 @@ export interface RunGoalOptions {
   waitMs?: number;
   /** Show the plan and stop. */
   planOnly?: boolean;
-  /** Asked once, with the plan, before anything runs. */
-  confirm: (planned: PlannedRun) => Promise<boolean>;
+  /** Asked once, with the plan, before anything runs. An answer can also change tasks' efforts. */
+  confirm: (planned: PlannedRun) => Promise<boolean | ConfirmAnswer>;
+  /** The Monarch's effort for its plan and its final report. Default high. */
+  monarchEffort?: Effort;
   /** Apply the Monarch's accept/reject decisions to this run's proposed vault notes. */
   acceptNotes?: boolean;
   keepWorktrees?: boolean;
@@ -165,6 +195,11 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   const runId = newRunId();
 
   const acceptedNotes = vault ? await vault.acceptedNotes().catch(() => []) : [];
+  const monarchEffort = opts.monarchEffort ?? DEFAULT_MONARCH_EFFORT;
+  // Each Monarch soldier's calls and tokens by the model that answered, for the report; a failed call
+  // still counts what it used, and each call is also sent as a usage event.
+  const usage = new Map<string, MonarchUsage>();
+  const usageNow = () => [...usage.values()].map((u) => ({ ...u }));
   const callMonarch = async (soldierKey: string, prompt: string, cwd: string): Promise<{ text: string; cost: number }> => {
     const spec = opts.roster.soldiers.get(soldierKey)!;
     const adapter = getAdapter(spec.cli)!;
@@ -173,9 +208,19 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
       model: spec.model,
       cwd,
       write: false,
-      effort: "high",
+      effort: monarchEffort,
       timeoutMs: opts.monarchTimeoutMs ?? 600_000,
     });
+    const model = r.resolvedModel ?? spec.model;
+    const inputTokens = r.usage?.inputTokens ?? 0;
+    const outputTokens = r.usage?.outputTokens ?? 0;
+    const key = `${soldierKey}\u0000${model}`;
+    const u = usage.get(key) ?? { soldier: soldierKey, model, effort: monarchEffort, calls: 0, inputTokens: 0, outputTokens: 0 };
+    u.calls += 1;
+    u.inputTokens += inputTokens;
+    u.outputTokens += outputTokens;
+    usage.set(key, u);
+    opts.onEvent?.({ type: "usage", soldier: soldierKey, model, effort: monarchEffort, inputTokens, outputTokens });
     if (r.isError) throw new MonarchCallFailed(`${soldierKey}: ${r.errorMessage ?? "error"}`);
     return { text: r.text, cost: r.costUsd ?? 0 };
   };
@@ -241,11 +286,20 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
     outcomes: [],
     notes: [],
     costUsd,
+    monarchUsage: usageNow(),
     uncommittedIgnored,
   };
   if (opts.planOnly) return base;
   if (planned.checked.plan.tasks.length === 0) return { ...base, status: "completed" };
-  if (!(await opts.confirm(planned))) return { ...base, status: "declined" };
+  const answer = await opts.confirm(planned);
+  if (!(typeof answer === "boolean" ? answer : answer.run)) return { ...base, status: "declined" };
+  // The owner's efforts replace the suggested ones, for the tasks they name.
+  if (typeof answer !== "boolean") {
+    for (const [id, effort] of Object.entries(answer.efforts ?? {})) {
+      const a = planned.assignments.get(id);
+      if (a) a.effort = effort;
+    }
+  }
 
   // Execute on a fresh integration branch. The user's checkout is not changed until the very end, when
   // the result is applied to it as uncommitted edits.
@@ -253,7 +307,7 @@ export async function runGoal(opts: RunGoalOptions): Promise<RunResult> {
   phase(`working on ${integration.branch}`);
   opts.onEvent?.({ type: "branch", branch: integration.branch });
   try {
-    return await executeAndReport(opts, planned, base, integration, root, shadowRoot, vault, callMonarch);
+    return await executeAndReport(opts, planned, base, integration, root, shadowRoot, vault, callMonarch, usageNow);
   } catch (e) {
     // Unexpected failure: keep whatever work the branch holds, but do not leave the worktree behind.
     if (!opts.keepWorktrees) await closeIntegration(root, integration, false).catch(() => undefined);
@@ -270,6 +324,7 @@ async function executeAndReport(
   shadowRoot: string,
   vault: Vault | undefined,
   callMonarch: (soldierKey: string, prompt: string, cwd: string) => Promise<{ text: string; cost: number }>,
+  monarchUsage: () => MonarchUsage[],
 ): Promise<RunResult> {
   const phase = (message: string) => opts.onEvent?.({ type: "phase", message });
   let costUsd = base.costUsd;
@@ -389,6 +444,7 @@ async function executeAndReport(
     synthesis,
     notes,
     costUsd,
+    monarchUsage: monarchUsage(),
     applied,
   };
 

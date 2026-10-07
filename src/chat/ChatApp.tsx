@@ -3,7 +3,7 @@ import { Box, Static, Text, useInput } from "ink";
 import { Banner } from "../ui/Banner.js";
 import { RunDashboard, StepsView, WorkingLine } from "../ui/Dashboard.js";
 import { menuFor, type SlashCommand } from "./commands.js";
-import { MODE_LABEL, type ChatSession, type ChatState, type Entry } from "./session.js";
+import { EFFORTS, MODE_LABEL, tokenSummary, type ChatSession, type ChatState, type Entry } from "./session.js";
 
 export interface WelcomeInfo {
   version: string;
@@ -120,29 +120,59 @@ function SlashMenu({ items, selected }: { items: SlashCommand[]; selected: numbe
   );
 }
 
+/** The efforts in a row, the chosen one marked, the suggested one labelled. */
+function EffortRow({ choice, suggested, active }: { choice: string; suggested: string; active: boolean }) {
+  return (
+    <Text>
+      {EFFORTS.map((e) => (
+        <Text key={e} color={e === choice && active ? ACCENT : undefined} bold={e === choice} dimColor={e !== choice}>
+          {e === choice ? `‹${e}›` : ` ${e} `}{" "}
+        </Text>
+      ))}
+      {choice === suggested ? <Text dimColor>(suggested)</Text> : <Text dimColor>(suggested: {suggested})</Text>}
+    </Text>
+  );
+}
+
+function EffortPicker({ pick }: { pick: NonNullable<ChatState["pickEffort"]> }) {
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="#8650f0" paddingX={1}>
+      <Text bold>
+        {pick.soldier} <Text dimColor>({pick.model})</Text> will plan this. Effort?
+      </Text>
+      <EffortRow choice={pick.choice} suggested={pick.suggested} active />
+      <Text dimColor>←/→ or 1-4 to change · Enter to start · Esc to cancel</Text>
+    </Box>
+  );
+}
+
 function ConfirmBox({ confirm }: { confirm: NonNullable<ChatState["confirm"]> }) {
-  const option = (i: 0 | 1, label: string) => (
-    <Text color={confirm.choice === i ? ACCENT : undefined}>
-      {confirm.choice === i ? "❯" : " "} {i + 1}. {label}
+  const n = confirm.tasks.length;
+  const width = Math.max(...confirm.tasks.map((t) => `${t.soldier} (${t.model})`.length));
+  const option = (row: number, label: string) => (
+    <Text color={confirm.row === row ? ACCENT : undefined}>
+      {confirm.row === row ? "❯" : " "} {label}
     </Text>
   );
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="#8650f0" paddingX={1}>
-      <Text bold>
-        Run {confirm.tasks === 1 ? "this task" : `these ${confirm.tasks} tasks`}?
-      </Text>
-      {option(0, "Yes, run it")}
-      {option(1, "No")}
+      <Text bold>Run {n === 1 ? "this task" : `these ${n} tasks`}? Set each one's effort first if you like.</Text>
+      {confirm.tasks.map((t, i) => (
+        <Text key={t.id}>
+          <Text color={confirm.row === i ? ACCENT : undefined}>{confirm.row === i ? "❯" : " "} </Text>
+          <Text>{t.id.padEnd(4)} {`${t.soldier} (${t.model})`.padEnd(width)}  </Text>
+          <EffortRow choice={t.effort} suggested={t.suggested} active={confirm.row === i} />
+        </Text>
+      ))}
+      {option(n, "Yes, run it")}
+      {option(n + 1, "No")}
+      <Text dimColor>↑/↓ to move · ←/→ to change a task's effort · Enter or y to run · n or Esc for no</Text>
     </Box>
   );
 }
 
 function StatusLine({ state, status }: { state: ChatState; status: StatusInfo }) {
-  const right = [
-    status.branch,
-    status.ready ? `${status.ready.found}/${status.ready.total} soldiers ready` : undefined,
-    state.sessionCostUsd ? `$${state.sessionCostUsd.toFixed(4)}` : undefined,
-  ].filter(Boolean);
+  const right = [status.branch, status.ready ? `${status.ready.found}/${status.ready.total} soldiers ready` : undefined, tokenSummary(state.tokens) || undefined].filter(Boolean);
   return (
     <Box justifyContent="space-between" paddingX={2}>
       {state.notice ? (
@@ -211,17 +241,30 @@ export function ChatApp({
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
+      if (state.pickEffort) return session.decideEffort(false);
       if (state.confirm) return session.decide(false);
       if (session.idle && value) return edit("");
       return session.interrupt();
     }
     if (state.notice) session.clearNotice();
 
+    if (state.pickEffort) {
+      if (key.leftArrow) session.moveEffort(-1);
+      else if (key.rightArrow || key.tab) session.moveEffort(1);
+      // Exactly one digit, 1 to 4, picks that effort; pasted text such as "1.5" is not a key and is ignored.
+      else if (/^[1-4]$/.test(input)) session.setEffort(EFFORTS[Number(input) - 1]!);
+      else if (key.return) session.decideEffort(true);
+      else if (key.escape) session.decideEffort(false);
+      return;
+    }
     if (state.confirm) {
-      if (key.upArrow || key.downArrow || key.tab) session.moveChoice();
-      else if (key.return) session.decide(state.confirm.choice === 0);
-      else if (input === "y" || input === "1") session.decide(true);
-      else if (input === "n" || input === "2" || key.escape) session.decide(false);
+      if (key.upArrow) session.moveChoice(-1);
+      else if (key.downArrow || key.tab) session.moveChoice(1);
+      else if (key.leftArrow) session.moveEffort(-1);
+      else if (key.rightArrow) session.moveEffort(1);
+      else if (key.return) session.choose();
+      else if (input === "y") session.decide(true);
+      else if (input === "n" || key.escape) session.decide(false);
       return;
     }
     if (!session.idle) return;
@@ -286,6 +329,7 @@ export function ChatApp({
         {state.busy?.kind === "steps" ? <StepsView steps={state.busy.steps} now={now} tick={tick} /> : null}
         {state.busy?.kind === "dashboard" ? <RunDashboard view={state.busy.view} now={now} tick={tick} /> : null}
         {state.busy?.kind === "command" ? <WorkingLine work={state.busy.work} now={now} tick={tick} /> : null}
+        {state.pickEffort ? <EffortPicker pick={state.pickEffort} /> : null}
         {state.confirm ? <ConfirmBox confirm={state.confirm} /> : null}
         {session.idle ? <InputBox value={value} cursor={cursor} /> : null}
         {menu.length ? <SlashMenu items={menu} selected={Math.min(selected, menu.length - 1)} /> : null}

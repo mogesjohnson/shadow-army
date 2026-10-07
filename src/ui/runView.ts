@@ -93,6 +93,9 @@ export function applyEvent(view: RunView, e: MonarchEvent, now: number): RunView
     view.tasks.map((t) => (t.id === id ? { ...t, ...change } : t));
 
   switch (e.type) {
+    case "usage":
+      // Tokens are totalled in the report and the status line, not on the dashboard.
+      return view;
     case "branch":
       return { ...view, branch: e.branch, activity };
     case "phase":

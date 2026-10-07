@@ -1,7 +1,15 @@
+import type { Effort } from "../adapters/Adapter.js";
 import type { Roster } from "../core/roster.js";
-import { runGoal as realRunGoal, type MonarchEvent, type PlannedRun, type RunGoalOptions, type RunResult } from "../monarch/monarch.js";
+import {
+  runGoal as realRunGoal,
+  type ConfirmAnswer,
+  type MonarchEvent,
+  type PlannedRun,
+  type RunGoalOptions,
+  type RunResult,
+} from "../monarch/monarch.js";
 import type { SessionTurn } from "../monarch/prompts.js";
-import { planOf, renderPlan, renderResult } from "../monarch/render.js";
+import { formatTokens, planOf, renderPlan, renderResult, renderUsage, renderUsageRows, UsageTally, type ModelUsage } from "../monarch/render.js";
 import type { Steps, Working } from "../ui/Dashboard.js";
 import { applyEvent, viewFromPlan, type RunView } from "../ui/runView.js";
 import { cliArgsFor, helpText, parseInput } from "./commands.js";
@@ -31,17 +39,48 @@ export type Busy =
   | { kind: "dashboard"; view: RunView }
   | { kind: "command"; work: Working };
 
+/** The efforts the owner can pick, lowest first. */
+export const EFFORTS: Effort[] = ["low", "medium", "high", "max"];
+
+/** One task of a plan waiting for approval, with the effort it will run at. */
+export interface ConfirmTask {
+  id: string;
+  title: string;
+  soldier: string;
+  model: string;
+  /** What Shadow Army suggests, from the task's role and difficulty. */
+  suggested: Effort;
+  effort: Effort;
+}
+
 export interface ChatState {
   entries: Entry[];
   /** Changes when the transcript is cleared, so the screen starts printing it afresh. */
   epoch: number;
   mode: Mode;
   busy?: Busy;
-  /** A plan waiting for the owner's yes or no; choice 0 is yes. */
-  confirm?: { tasks: number; choice: 0 | 1 };
+  /** The Monarch's effort, being picked before it plans a goal. */
+  pickEffort?: { soldier: string; model: string; suggested: Effort; choice: Effort };
+  /**
+   * A plan waiting for the owner. `row` is the highlighted line: a task (its effort can be changed),
+   * then Yes at `tasks.length`, then No.
+   */
+  confirm?: { tasks: ConfirmTask[]; row: number };
   /** A one-line hint under the prompt, such as how to exit. */
   notice?: string;
   sessionCostUsd: number;
+  /** Tokens this session, by soldier and the model that answered, counted as each call reports them. */
+  tokens: ModelUsage[];
+}
+
+/**
+ * The Monarch's suggested effort for a goal: low for a short question, high for anything else. Only a
+ * suggestion: the owner picks the effort before the Monarch is called.
+ */
+export function suggestMonarchEffort(goal: string): Effort {
+  const g = goal.trim().toLowerCase();
+  const asks = g.endsWith("?") || /^(what|why|how|where|when|which|who|is|are|does|do|can|could|should|explain|describe|list|show|tell)\b/.test(g);
+  return asks && g.length <= 200 ? "low" : "high";
 }
 
 export interface ChatDeps {
@@ -55,6 +94,8 @@ export interface ChatDeps {
   runGoal?: (opts: RunGoalOptions) => Promise<RunResult>;
   /** Extra options for every run (tests pass fake soldiers here). */
   goalOptions?: Partial<RunGoalOptions>;
+  /** The soldier expected to be Monarch, named in the effort picker. Without one, the suggestion is used. */
+  monarch?: string;
 }
 
 /** How long a first Ctrl+C waits for the second. */
@@ -103,13 +144,14 @@ export class ChatSession {
   private readonly listeners = new Set<() => void>();
   private readonly history: SessionTurn[] = [];
   private nextId = 1;
-  private answer?: (ok: boolean) => void;
+  private answer?: (a: ConfirmAnswer) => void;
+  private pickAnswer?: (effort: Effort | undefined) => void;
   private exitArmedAt?: number;
   private readonly clock: () => number;
 
   constructor(private readonly deps: ChatDeps) {
     this.clock = deps.clock ?? Date.now;
-    this.state = { entries: [{ id: 0, kind: "welcome" }], epoch: 0, mode: "ask", sessionCostUsd: 0 };
+    this.state = { entries: [{ id: 0, kind: "welcome" }], epoch: 0, mode: "ask", sessionCostUsd: 0, tokens: [] };
   }
 
   getState = (): ChatState => this.state;
@@ -137,9 +179,9 @@ export class ChatSession {
     this.add({ kind: "text", text, tone });
   }
 
-  /** Whether the prompt takes input now: not while something runs or a plan waits for an answer. */
+  /** Whether the prompt takes input now: not while something runs, or an effort or a plan waits for an answer. */
   get idle(): boolean {
-    return !this.state.busy && !this.state.confirm;
+    return !this.state.busy && !this.state.confirm && !this.state.pickEffort;
   }
 
   cycleMode() {
@@ -147,17 +189,55 @@ export class ChatSession {
     this.set({ mode, notice: undefined });
   }
 
-  moveChoice() {
-    if (this.state.confirm) this.set({ confirm: { ...this.state.confirm, choice: this.state.confirm.choice === 0 ? 1 : 0 } });
+  /** Move the highlight in the pending plan: through its tasks, then Yes and No, wrapping around. */
+  moveChoice(step: 1 | -1 = 1) {
+    const c = this.state.confirm;
+    if (!c) return;
+    const lines = c.tasks.length + 2;
+    this.set({ confirm: { ...c, row: (c.row + step + lines) % lines } });
   }
 
-  /** Answer the pending plan: run it or not. */
+  /** Change an effort: the Monarch's while it is being picked, or the highlighted task's in a pending plan. */
+  moveEffort(step: 1 | -1) {
+    const next = (e: Effort) => EFFORTS[Math.min(EFFORTS.length - 1, Math.max(0, EFFORTS.indexOf(e) + step))]!;
+    const p = this.state.pickEffort;
+    if (p) return this.set({ pickEffort: { ...p, choice: next(p.choice) } });
+    const c = this.state.confirm;
+    if (!c || c.row >= c.tasks.length) return;
+    const tasks = c.tasks.map((t, i) => (i === c.row ? { ...t, effort: next(t.effort) } : t));
+    this.set({ confirm: { ...c, tasks } });
+  }
+
+  /** Set the Monarch's effort in the picker directly, as the 1-4 keys do. */
+  setEffort(effort: Effort) {
+    const p = this.state.pickEffort;
+    if (p && EFFORTS.includes(effort)) this.set({ pickEffort: { ...p, choice: effort } });
+  }
+
+  /** Enter in a pending plan: No declines; any other line runs it with the efforts shown. */
+  choose() {
+    const c = this.state.confirm;
+    if (c) this.decide(c.row !== c.tasks.length + 1);
+  }
+
+  /** Answer the pending plan: run it or not, with the efforts shown. */
   decide(ok: boolean) {
     const answer = this.answer;
-    if (!answer) return;
+    const c = this.state.confirm;
+    if (!answer || !c) return;
     this.answer = undefined;
     this.set({ confirm: undefined });
-    answer(ok);
+    answer({ run: ok, efforts: Object.fromEntries(c.tasks.map((t) => [t.id, t.effort])) });
+  }
+
+  /** Answer the Monarch's effort picker: start with the highlighted effort, or cancel the goal. */
+  decideEffort(ok: boolean) {
+    const answer = this.pickAnswer;
+    const p = this.state.pickEffort;
+    if (!answer || !p) return;
+    this.pickAnswer = undefined;
+    this.set({ pickEffort: undefined });
+    answer(ok ? p.choice : undefined);
   }
 
   /** Ctrl+C on an empty prompt: the first press warns, a second within the window exits. */
@@ -191,7 +271,7 @@ export class ChatSession {
       case "error":
         return this.say(input.message, "error");
       case "goal":
-        return this.runTurn(input.goal, this.state.mode);
+        return this.startGoal(input.goal, this.state.mode);
       case "unknown":
         return this.say(`Unknown command /${input.typed}.${input.suggestion ? ` Did you mean /${input.suggestion}?` : ""} Type /help for the list.`, "error");
       case "command":
@@ -218,7 +298,7 @@ export class ChatSession {
         return this.say(`Mode: ${MODE_LABEL[mode]}.`, "dim");
       }
       case "plan":
-        return rest ? this.runTurn(rest, "plan") : this.say("Usage: /plan <goal>", "error");
+        return rest ? this.startGoal(rest, "plan") : this.say("Usage: /plan <goal>", "error");
       case "diff":
         // Free: git runs here, with no `sa` child and no Monarch or soldier.
         return this.working(name, "/diff", async () => ({ output: await folderChanges(this.deps.cwd), ok: true }));
@@ -242,8 +322,28 @@ export class ChatSession {
     }
   }
 
+  /**
+   * Pick the Monarch's effort, then run the goal. In ask and plan mode the owner picks it, starting
+   * from the suggestion; in auto mode the suggestion is used and said.
+   */
+  private async startGoal(goal: string, mode: Mode) {
+    const suggested = suggestMonarchEffort(goal);
+    const soldier = this.deps.monarch;
+    if (mode === "auto" || !soldier) {
+      if (soldier) this.say(`${soldier} plans at ${suggested} effort (suggested)`, "dim");
+      return this.runTurn(goal, mode, suggested);
+    }
+    const model = this.deps.roster.soldiers.get(soldier)?.model ?? "?";
+    const effort = await new Promise<Effort | undefined>((resolve) => {
+      this.pickAnswer = resolve;
+      this.set({ pickEffort: { soldier, model, suggested, choice: suggested } });
+    });
+    if (!effort) return this.say("Cancelled.", "dim");
+    return this.runTurn(goal, mode, effort);
+  }
+
   /** One goal: plan, maybe ask, run with the live dashboard, then the report into the transcript. */
-  private async runTurn(goal: string, mode: Mode) {
+  private async runTurn(goal: string, mode: Mode, effort: Effort) {
     let steps: Steps | undefined;
     let view: RunView | undefined;
     let planShown = false;
@@ -252,7 +352,24 @@ export class ChatSession {
       this.add({ kind: "steps", steps: { ...steps, current: { ...steps.current, done: failed ? "error" : "ok" } }, now: this.clock() });
       steps = undefined;
     };
+    // What this turn used, counted as each call reports it, so a failed turn still says it and the
+    // status line moves while the run works.
+    const turn = new UsageTally();
+    const efforts = new Map<string, Effort>();
+    const count = (soldier: string, model: string, effort: string | undefined, input = 0, output = 0) => {
+      if (!input && !output) return;
+      turn.add(soldier, model, effort, input, output);
+      const tally = new UsageTally();
+      for (const u of this.state.tokens) tally.add(u.soldier, u.model, undefined, u.inputTokens, u.outputTokens);
+      tally.add(soldier, model, undefined, input, output);
+      this.set({ tokens: tally.list() });
+    };
     const onEvent = (e: MonarchEvent) => {
+      if (e.type === "usage") return count(e.soldier, e.model, e.effort, e.inputTokens, e.outputTokens);
+      if (e.type === "finish" && e.outcome.report) {
+        const r = e.outcome.report;
+        count(e.outcome.soldier, r.resolvedModel ?? r.model, efforts.get(e.outcome.taskId), r.inputTokens, r.outputTokens);
+      }
       if (view) {
         view = applyEvent(view, e, this.clock());
         this.set({ busy: { kind: "dashboard", view } });
@@ -262,23 +379,31 @@ export class ChatSession {
         this.set({ busy: { kind: "steps", steps } });
       }
     };
-    const confirm = async (planned: PlannedRun): Promise<boolean> => {
+    const confirm = async (planned: PlannedRun): Promise<ConfirmAnswer> => {
       endSteps(false);
       this.say(renderPlan(planned));
       planShown = true;
-      let ok = true;
+      let answer: ConfirmAnswer = { run: true };
       if (mode === "ask") {
         this.set({ busy: undefined });
-        ok = await new Promise<boolean>((resolve) => {
+        const tasks: ConfirmTask[] = planned.checked.order.map((id) => {
+          const task = planned.checked.plan.tasks.find((t) => t.id === id)!;
+          const a = planned.assignments.get(id)!;
+          const model = this.deps.roster.soldiers.get(a.soldier)?.model ?? "?";
+          return { id, title: task.title, soldier: a.soldier, model, suggested: a.effort, effort: a.effort };
+        });
+        answer = await new Promise<ConfirmAnswer>((resolve) => {
           this.answer = resolve;
-          this.set({ confirm: { tasks: planned.checked.order.length, choice: 0 } });
+          this.set({ confirm: { tasks, row: tasks.length } });
         });
       }
-      if (ok) {
+      if (answer.run) {
+        // The efforts the tasks will run at, for their tokens' lines.
+        for (const id of planned.checked.order) efforts.set(id, answer.efforts?.[id] ?? planned.assignments.get(id)!.effort);
         view = viewFromPlan(planned, goal, this.clock());
         this.set({ busy: { kind: "dashboard", view } });
       }
-      return ok;
+      return answer;
     };
 
     this.set({ busy: { kind: "steps", steps: { past: [], current: { label: "starting", startedAt: this.clock() } } } });
@@ -289,6 +414,7 @@ export class ChatSession {
         roster: this.deps.roster,
         planOnly: mode === "plan",
         history: this.turns(),
+        monarchEffort: effort,
         onEvent,
         confirm,
         ...this.deps.goalOptions,
@@ -296,14 +422,17 @@ export class ChatSession {
       endSteps(false);
       if (view) this.add({ kind: "dashboard", view: { ...view, ended: "done" }, now: this.clock() });
       const answer = answerOf(result);
+      // A finished run's report and a declined plan's "Not run." both list tokens themselves.
+      const reported = (result.status === "completed" && result.outcomes.length > 0) || result.status === "declined";
       if (answer) {
         // No tasks: the Monarch answered the question itself, so its summary is the answer, not a plan.
         this.say(answer);
-        this.say(`answered by ${result.monarch}; no soldiers were needed`, "dim");
+        this.say(`answered by ${result.monarch} at ${effort} effort; no soldiers were needed`, "dim");
       } else {
         if (!planShown) this.say(renderPlan(planOf(result)));
-        if (result.status !== "planned" && (result.status !== "completed" || result.outcomes.length)) this.say(renderResult(result));
+        if (reported) this.say(renderResult(result));
       }
+      if (!reported && renderUsage(result).length) this.say(renderUsage(result).join("\n"), "dim");
       this.history.push({ goal, outcome: outcomeOf(result) });
       this.set({ sessionCostUsd: this.state.sessionCostUsd + result.costUsd });
     } catch (e) {
@@ -311,10 +440,27 @@ export class ChatSession {
       if (view) this.add({ kind: "dashboard", view: { ...view, ended: "failed" }, now: this.clock() });
       const message = (e as Error).message;
       this.say(`error: ${message}`, "error");
+      // The calls made before the failure still used tokens.
+      const used = renderUsageRows(turn.list());
+      if (used.length) this.say(used.join("\n"), "dim");
       this.history.push({ goal, outcome: `failed: ${message}` });
     } finally {
       this.answer = undefined;
       this.set({ busy: undefined, confirm: undefined });
     }
   }
+
+}
+
+/**
+ * The status line's token summary: each soldier's tokens this session, in and out together. A soldier
+ * that answered with more than one model gets one entry per model.
+ */
+export function tokenSummary(tokens: ChatState["tokens"]): string {
+  const used = tokens.filter((t) => t.inputTokens + t.outputTokens > 0);
+  const models = new Map<string, number>();
+  for (const t of used) models.set(t.soldier, (models.get(t.soldier) ?? 0) + 1);
+  return used
+    .map((t) => `${models.get(t.soldier)! > 1 ? `${t.soldier} (${t.model})` : t.soldier} ${formatTokens(t.inputTokens + t.outputTokens)}`)
+    .join(" · ");
 }

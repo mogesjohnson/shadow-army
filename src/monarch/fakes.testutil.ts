@@ -12,10 +12,11 @@ export const synthesisReply = (obj: unknown) => "Done.\n```shadow-synthesis\n" +
 
 /**
  * Fake CLIs with the real adapters' capabilities (so the hard rules are the real ones). Monarch calls
- * are answered from a script; a CLI listed in `failing` returns an error instead.
+ * are answered from a script; a CLI listed in `failing` returns an error instead. Each call records the
+ * effort it was asked for, and reports `usage` when the script gives one.
  */
-export function monarchScript(script: { plans: string[]; synthesis?: string; failing?: string[] }) {
-  const prompts: { cli: string; prompt: string; cwd: string }[] = [];
+export function monarchScript(script: { plans: string[]; synthesis?: string; failing?: string[]; usage?: RunResult["usage"] }) {
+  const prompts: { cli: string; prompt: string; cwd: string; effort?: string }[] = [];
   let planIndex = 0;
   const getAdapter = (cli: string): Adapter | undefined => {
     const real = realAdapter(cli);
@@ -24,10 +25,10 @@ export function monarchScript(script: { plans: string[]; synthesis?: string; fai
       ...real,
       detect: async () => ({ found: true }),
       async run(req: RunRequest): Promise<RunResult> {
-        prompts.push({ cli, prompt: req.prompt, cwd: req.cwd });
+        prompts.push({ cli, prompt: req.prompt, cwd: req.cwd, effort: req.effort });
         if (script.failing?.includes(cli)) return { text: "", isError: true, errorMessage: `${cli} is down` };
-        if (req.prompt.includes("Your soldiers have finished")) return { text: script.synthesis ?? "no block", isError: false };
-        return { text: script.plans[Math.min(planIndex++, script.plans.length - 1)]!, isError: false };
+        if (req.prompt.includes("Your soldiers have finished")) return { text: script.synthesis ?? "no block", isError: false, usage: script.usage };
+        return { text: script.plans[Math.min(planIndex++, script.plans.length - 1)]!, isError: false, usage: script.usage };
       },
     };
   };
@@ -42,7 +43,7 @@ export function monarchScript(script: { plans: string[]; synthesis?: string; fai
 export function fakeArmy(roster: Roster, vault?: Vault, guardRoot?: string) {
   let active = 0;
   let maxActive = 0;
-  const seen: { brief: string; cwd: string; context: string }[] = [];
+  const seen: { brief: string; cwd: string; context: string; effort?: string }[] = [];
   const adapter: Adapter = {
     id: "fake",
     label: "Fake",
@@ -56,7 +57,7 @@ export function fakeArmy(roster: Roster, vault?: Vault, guardRoot?: string) {
       try {
         const task = /TASK:\n([\s\S]*?)\n\n/.exec(req.prompt + "\n\n")?.[1] ?? "";
         const context = /REPORTED[^\n]*\n([\s\S]*?)(\n\n|$)/.exec(req.prompt)?.[1] ?? "";
-        seen.push({ brief: task, cwd: req.cwd, context });
+        seen.push({ brief: task, cwd: req.cwd, context, effort: req.effort });
         if (task.includes("slow")) await new Promise((r) => setTimeout(r, 400));
         if (task.includes("fail")) return { text: "", isError: true, errorMessage: "it broke" };
         for (const m of task.matchAll(/write ([^=\s]+)=([^;\n]*)/g)) {
@@ -88,6 +89,7 @@ export function fakeArmy(roster: Roster, vault?: Vault, guardRoot?: string) {
       baseRef: ctx.baseRef,
       context: ctx.context,
       isolated: task.role !== "build",
+      effort: a.effort,
       guardRoot,
       adapter,
       vault,

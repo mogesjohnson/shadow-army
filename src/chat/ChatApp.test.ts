@@ -55,14 +55,20 @@ function chat(over: Partial<ChatDeps> = {}) {
 }
 
 /** A runGoal stand-in that asks to confirm the sample plan and reports what it was told. */
-function confirmingRun(seen: { ok?: boolean }) {
+function confirmingRun(seen: { ok?: boolean; efforts?: Record<string, string>; monarchEffort?: string }) {
   return async (opts: RunGoalOptions): Promise<RunResult> => {
+    seen.monarchEffort = opts.monarchEffort;
+    // The plan call reports its tokens as it returns, as the real runGoal does.
+    opts.onEvent?.({ type: "usage", soldier: "codex-astra", model: "gpt-6-astra", effort: "high", inputTokens: 1500, outputTokens: 500 });
     const planned = samplePlanned();
-    seen.ok = await opts.confirm(planned);
+    const answer = await opts.confirm(planned);
+    seen.ok = typeof answer === "boolean" ? answer : answer.run;
+    if (typeof answer !== "boolean") seen.efforts = answer.efforts;
     return {
       runId: planned.runId, goal: opts.goal, status: seen.ok ? "completed" : "declined", monarch: planned.monarch,
       plan: planned.checked.plan, order: planned.checked.order, assignments: [...planned.assignments.values()],
       rejected: [], outcomes: [], notes: [], costUsd: 0.5, uncommittedIgnored: false,
+      monarchUsage: [{ soldier: "codex-astra", model: "gpt-6-astra", effort: "high", calls: 1, inputTokens: 1500, outputTokens: 500 }],
     };
   };
 }
@@ -149,10 +155,11 @@ describe("the chat screen", () => {
     const { press, sees } = chat({ runGoal: confirmingRun(seen) });
     await press("make two files", KEY.enter);
     await sees("Run these 3 tasks?");
-    await sees("❯ 1. Yes, run it");
+    await sees("❯ Yes, run it");
     await press("y");
     await vi.waitFor(() => expect(seen.ok).toBe(true));
-    await sees("$0.5000");
+    // The status line shows tokens by soldier, not a dollar figure.
+    await sees("codex-astra 2k");
 
     const no: { ok?: boolean } = {};
     const second = chat({ runGoal: confirmingRun(no) });
@@ -161,6 +168,56 @@ describe("the chat screen", () => {
     await second.press(KEY.down, KEY.enter);
     await vi.waitFor(() => expect(no.ok).toBe(false));
     await second.sees("Not run.");
+  });
+
+  it("asks for the Monarch's effort before it plans: arrows change it, Enter starts, Esc cancels", async () => {
+    const seen: { monarchEffort?: string } = {};
+    const { press, sees } = chat({ monarch: "codex-astra", runGoal: confirmingRun(seen) });
+    await press("make two files", KEY.enter);
+    await sees("will plan this. Effort?");
+    await sees("‹high›");
+    await press("\x1b[D"); // left: high -> medium
+    await sees("(suggested: high)");
+    await press(KEY.enter);
+    await vi.waitFor(() => expect(seen.monarchEffort).toBe("medium"));
+    await sees("Run these 3 tasks?");
+    await press("n");
+
+    const cancelled: { monarchEffort?: string } = {};
+    const second = chat({ monarch: "codex-astra", runGoal: confirmingRun(cancelled) });
+    await second.press("what is this?", KEY.enter);
+    await second.sees("‹low›");
+    await second.press("4"); // straight to max
+    await second.sees("‹max›");
+    await second.press("\x1b"); // Esc
+    await second.sees("Cancelled.");
+    expect(cancelled.monarchEffort).toBeUndefined();
+    expect(second.session.idle).toBe(true);
+  });
+
+  it("ignores pasted text in the effort picker, such as 1.5, and stays responsive", async () => {
+    const seen: { monarchEffort?: string } = {};
+    const { press, sees } = chat({ monarch: "codex-astra", runGoal: confirmingRun(seen) });
+    await press("what is this?", KEY.enter);
+    await sees("‹low›");
+    await press("1.5", "\x1b[200~1.5\x1b[201~", "3");
+    await sees("‹high›");
+    await press("\x1b"); // Esc still works
+    await sees("Cancelled.");
+    expect(seen.monarchEffort).toBeUndefined();
+  });
+
+  it("lets each task's effort be changed in the plan box before it runs", async () => {
+    const seen: { ok?: boolean; efforts?: Record<string, string> } = {};
+    const { press, sees } = chat({ runGoal: confirmingRun(seen) });
+    await press("make two files", KEY.enter);
+    await sees("Run these 3 tasks?");
+    // Up from Yes to the last task (r), raise its effort twice, then Enter runs the plan.
+    await press(KEY.up, "\x1b[C", "\x1b[C");
+    await sees("‹max›");
+    await press(KEY.enter);
+    await vi.waitFor(() => expect(seen.ok).toBe(true));
+    expect(seen.efforts).toEqual({ a: "medium", b: "medium", r: "max" });
   });
 
   it("clears the input on Ctrl+C, and exits on two presses at an empty prompt", async () => {

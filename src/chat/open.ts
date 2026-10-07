@@ -43,9 +43,12 @@ export async function openChat(opts: { version: string; roster: Roster; cwd: str
   const stdout = process.stdout;
   stdout.write(CLEAR_ALL);
   let app: Instance | undefined;
+  // The soldier first in line to be Monarch; the effort picker names it. runGoal still falls back if it fails.
+  const monarch = route(opts.roster, getAdapter, { role: "orchestrate" }).candidates[0]?.soldier;
   const session = new ChatSession({
     cwd: opts.cwd,
     roster: opts.roster,
+    monarch,
     runCommand: runSaCommand(opts.cwd),
     exit: () => app?.unmount(),
     clearScreen: () => {
@@ -53,7 +56,6 @@ export async function openChat(opts: { version: string; roster: Roster; cwd: str
       stdout.write(CLEAR_ALL);
     },
   });
-  const monarch = route(opts.roster, getAdapter, { role: "orchestrate" }).candidates[0]?.soldier;
   app = render(
     React.createElement(ChatApp, {
       session,
