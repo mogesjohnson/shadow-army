@@ -84,6 +84,11 @@ export function parseGrokRun(stdout: string): RunResult {
     return failure(`unreadable grok output: ${(e as Error).message}`);
   }
   const u = (o.usage ?? {}) as Obj;
+  // Grok's input_tokens is the uncached input only; the cache fields hold the rest.
+  const input =
+    (num(u.input_tokens) ?? 0) +
+    (num(u.cache_read_input_tokens) ?? 0) +
+    (num(u.cache_creation_input_tokens) ?? 0);
   const text = str(o.text) ?? "";
   const stop = str(o.stopReason);
   const isError = !text && stop !== undefined && stop !== "end_turn";
@@ -91,7 +96,7 @@ export function parseGrokRun(stdout: string): RunResult {
     text,
     isError,
     errorMessage: isError ? `grok stopped: ${stop}` : undefined,
-    usage: { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens) },
+    usage: { inputTokens: input || undefined, outputTokens: num(u.output_tokens) },
     costUsd: num(o.total_cost_usd),
     sessionId: str(o.sessionId),
     resolvedModel: firstKey(o.modelUsage),
@@ -132,6 +137,8 @@ export function parseAgyRun(stdout: string, stderr = ""): RunResult {
     return failure(`unreadable agy output: ${(e as Error).message}`);
   }
   const u = (o.usage ?? {}) as Obj;
+  // agy's input_tokens leaves out the cached input, which it reports as cache_read_tokens.
+  const input = (num(u.input_tokens) ?? 0) + (num(u.cache_read_tokens) ?? 0);
   const status = str(o.status);
   const isError = status !== undefined && status !== "SUCCESS";
   const stderrTail = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-1)[0];
@@ -140,7 +147,7 @@ export function parseAgyRun(stdout: string, stderr = ""): RunResult {
     text: str(o.response) ?? "",
     isError,
     errorMessage: isError ? `agy status ${status}${reason ? `: ${reason}` : ""}` : undefined,
-    usage: { inputTokens: num(u.input_tokens), outputTokens: num(u.output_tokens) },
+    usage: { inputTokens: input || undefined, outputTokens: num(u.output_tokens) },
     sessionId: str(o.conversation_id),
   };
 }

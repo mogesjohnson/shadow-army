@@ -84,6 +84,16 @@ describe("parseGrokRun", () => {
     });
   });
 
+  it("counts cached input, which grok leaves out of input_tokens", () => {
+    // Usage as grok -p reported it on 2026-10-07.
+    const cached = JSON.stringify({
+      text: "Lantern is a tiny command-line tool.",
+      stopReason: "end_turn",
+      usage: { input_tokens: 22063, cache_read_input_tokens: 23936, cache_creation_input_tokens: 0, output_tokens: 333 },
+    });
+    expect(parseGrokRun(cached).usage).toEqual({ inputTokens: 45999, outputTokens: 333 });
+  });
+
   it("flags an empty answer with a non-end_turn stop reason", () => {
     expect(parseGrokRun(JSON.stringify({ text: "", stopReason: "max_tokens" }))).toMatchObject({ isError: true });
   });
@@ -103,6 +113,17 @@ describe("parseAgyRun", () => {
       usage: { inputTokens: 13278, outputTokens: 540 },
       sessionId: "a1",
     });
+  });
+
+  it("counts cached input, which agy leaves out of input_tokens", () => {
+    // Usage as agy -p reported it on 2026-10-07.
+    const out = JSON.stringify({
+      conversation_id: "a2",
+      status: "SUCCESS",
+      response: "Lantern is a small command-line tool.",
+      usage: { input_tokens: 15177, output_tokens: 1250, thinking_tokens: 922, cache_read_tokens: 12141, total_tokens: 16427 },
+    });
+    expect(parseAgyRun(out).usage).toEqual({ inputTokens: 27318, outputTokens: 1250 });
   });
 
   it("flags any status other than SUCCESS", () => {
