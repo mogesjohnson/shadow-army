@@ -17,4 +17,4 @@ An open session re-sends its whole history with every message. While the provide
 ## Consequences
 
 - Cost stays visible, and the owner decides when to reset.
-- Each CLI needs two pieces of data from its own events: the context size, and its cache lifetime (spike S3).
+- Each CLI needs two pieces of data: the context size, from its own events, and a cache lifetime for each soldier, from the owner, the CLI's usage or the provider's documentation. Cold is therefore an estimate; an observed cache miss never sets a lifetime (SES-6).
