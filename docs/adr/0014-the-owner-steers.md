@@ -28,5 +28,6 @@ The review also found state that read two ways: a message to a disconnected sold
 
 - Each channel needs an interrupt. Spike S6 checks each CLI, and agy in particular. A CLI without one, or one whose turn does not end after the stop, is stopped by ending its process tree and resuming its session.
 - A turn ended that way has no end event, so the post office finishes it: the checkout guard and the claim audit run once, before the session resumes or another message goes in (PO-8).
+- A turn is over only when its work has stopped. Background work a CLI keeps running after its end event, such as claude's background commands, belongs to that turn, and s stops it (PO-8).
 - The post office has to record each turn's tool calls and the branch's state, so that the card's facts do not depend on what a model says.
 - The mod gains `/stop`, `/queue`, `/decisions`, `/diff` and `/apply`, and the pane gains the keys s, q, g, d, x and c.
