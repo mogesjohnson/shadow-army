@@ -16,6 +16,8 @@ The review also found state that read two ways: a message to a disconnected sold
 ## Decision
 
 - **Stop a turn.** s in the pane, or `/stop`, stops a running turn through the CLI's own interrupt. The session and the work so far stay. Afterwards the soldier's queue is held until the owner sends it (MSG-9, CH-10).
+  - A stop also cancels any approval request the turn has open. Stopping is the owner's answer, and it approves nothing (CH-6).
+  - The next message goes in only once the stopped turn has ended (CH-10).
 - **The queue is visible.** The owner can see, cancel or change any queued message before it is delivered (MSG-10).
 - **One meaning for each message state.** A queued message waits, and goes by itself once it can, including after a reconnect. A message ends as interrupted (delivered; the turn may have changed files), not delivered (nothing was sent), or cancelled. "Failed" is no longer a state (MSG-3, MSG-4).
 - **Facts on the card.** Beside "answered", the summary card states the changes on the branch, whether tests ran and passed, and whether the work is applied. These come from git and the tool-call record, never from the summary's text (MSG-11, WSP-9).
@@ -24,6 +26,7 @@ The review also found state that read two ways: a message to a disconnected sold
 
 ## Consequences
 
-- Each channel needs an interrupt. Spike S6 checks each CLI, and agy in particular. A CLI without one is stopped by ending its process and resuming its session.
+- Each channel needs an interrupt. Spike S6 checks each CLI, and agy in particular. A CLI without one, or one whose turn does not end after the stop, is stopped by ending its process tree and resuming its session.
+- A turn ended that way has no end event, so the post office finishes it: the checkout guard and the claim audit run once, before the session resumes or another message goes in (PO-8).
 - The post office has to record each turn's tool calls and the branch's state, so that the card's facts do not depend on what a model says.
 - The mod gains `/stop`, `/queue`, `/decisions`, `/diff` and `/apply`, and the pane gains the keys s, q, g, d, x and c.

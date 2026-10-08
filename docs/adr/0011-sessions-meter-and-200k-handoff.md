@@ -11,10 +11,14 @@ An open session re-sends its whole history with every message. While the provide
 - **The meter.** Each soldier shows its context size, taken from its CLI's own numbers, as a bar up to a handoff line of 200,000 tokens. The line is set per soldier and stays below any window the CLI reports.
 - **Near handoff.** At 90% of the line, the soldier shows "near handoff".
 - **The handoff.** At the line, the soldier writes a handoff summary: working on, done, decided, files, open. The owner chooses: accept (a fresh session starts with the summary), edit, or keep going.
-- **The cold warning.** Before a message goes to a cold session, the owner sees how many tokens it will re-send.
+- **The cold warning.** Before a message goes to a cold session, the owner sees how many tokens it is likely to re-send.
 - **Starting fresh.** The owner can start any soldier fresh at any time.
 
 ## Consequences
 
 - Cost stays visible, and the owner decides when to reset.
-- Each CLI needs two pieces of data: the context size, from its own events, and a cache lifetime for each soldier, from the owner, the CLI's usage or the provider's documentation. Cold is therefore an estimate; an observed cache miss never sets a lifetime (SES-6).
+- Each CLI needs three pieces of data:
+  - the context size, from its own events;
+  - a cache lifetime for each soldier, from the owner, the CLI's usage or the provider's documentation;
+  - which changes to a soldier's model, effort or tools keep its cache and which reset it, from the CLI's documentation.
+- Cold is therefore an estimate. An observed cache miss never sets a lifetime, and a change the documentation does not cover leaves the estimate unknown rather than cold (SES-6).
