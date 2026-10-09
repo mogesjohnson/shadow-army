@@ -1,0 +1,31 @@
+{
+  "name": "shadow-army-typescript7",
+  "version": "0.1.0",
+  "description": "Native TypeScript 7 code intelligence using the current worktree's compiler",
+  "author": { "name": "Shadow Army contributors" },
+  "repository": "https://github.com/mogesjohnson/shadow-army",
+  "license": "MIT",
+  "lspServers": {
+    "typescript7": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/start-server.mjs"],
+      "transport": "stdio",
+      "workspaceFolder": "${CLAUDE_PROJECT_DIR}",
+      "extensionToLanguage": {
+        ".ts": "typescript",
+        ".tsx": "typescriptreact",
+        ".mts": "typescript",
+        ".cts": "typescript",
+        ".js": "javascript",
+        ".jsx": "javascriptreact",
+        ".mjs": "javascript",
+        ".cjs": "javascript"
+      },
+      "initializationOptions": { "disablePushDiagnostics": false },
+      "diagnostics": true,
+      "startupTimeout": 20000,
+      "shutdownTimeout": 5000,
+      "restartOnCrash": false
+    }
+  }
+}
