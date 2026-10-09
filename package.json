@@ -12,12 +12,17 @@
     "shadow.config.json",
     "orchestratorDelegate.md",
     "rules.md",
-    "agent.md"
+    "agent.md",
+    "plugins/typescript7-lsp/.claude-plugin/plugin.json",
+    "plugins/typescript7-lsp/scripts/start-server.mjs",
+    "plugins/typescript7-lsp/scripts/diagnostics-bridge.mjs",
+    "plugins/typescript7-lsp/README.md"
   ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
+    "test:lsp": "node scripts/check-typescript7-lsp.mjs",
     "prepare": "node scripts/setup-hooks.mjs"
   },
   "license": "MIT",
