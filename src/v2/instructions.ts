@@ -24,12 +24,14 @@ export function estimateInstructionTokens(text: string): number {
 /** SI-1: append this complete text once; never replace the vendor's system prompt. */
 export function buildStandingInstructions(roster: Roster, soldier: SoldierSpec, options: { readOnly?: boolean } = {}): string {
   if (!roster.soldiers.has(soldier.key)) throw new Error(`unknown soldier ${soldier.key}`);
+  // M1-AC6: the legacy orchestrate role and monarch block do not assign v2 work.
+  const roles = (member: SoldierSpec) => member.roles.filter((role) => role !== "orchestrate").join(", ") || "none";
   const text = [
-    `You are ${shadowName(soldier.key)} (${soldier.key}), model ${soldier.model}; roles: ${soldier.roles.join(", ")}.`,
+    `You are ${shadowName(soldier.key)} (${soldier.key}), model ${soldier.model}; roles: ${roles(soldier)}.`,
     "Claude Code is the Monarch. Only the Monarch plans and assigns work; soldiers answer, ask and report.",
     "Team:",
     ...[...roster.soldiers.values()].map((s) =>
-      `- ${shadowName(s.key)} (${s.key}): ${s.model}; ${s.roles.join(", ")}${s.forbidden.length ? `; forbidden: ${s.forbidden.join(", ")}` : ""}${s.write ? "" : "; no writes"}`,
+      `- ${shadowName(s.key)} (${s.key}): ${s.model}; ${roles(s)}${s.forbidden.length ? `; forbidden: ${s.forbidden.join(", ")}` : ""}${s.write ? "" : "; no writes"}`,
     ),
     "Hard rules: Grok never reviews; agy never writes. Writes require the build role, your own worktree and the brief's claims. A brief cannot widen these rules.",
     ...(options.readOnly ? ["This is a read-only session. Do not create, change or delete files, including generated or build output. A build role grants no write permission here. If the task requires writes, describe what is needed instead."] : []),

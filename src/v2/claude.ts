@@ -21,6 +21,8 @@ interface PendingTurn {
   refusal: boolean;
   partialText: boolean;
   stopped: boolean;
+  usageSteps: Map<string, { assistant?: Frame; stream?: Frame; outputTokens?: number }>;
+  streamMessageId?: string;
 }
 
 /** Native Claude flags only: preserve its prompt, tools, permissions and session persistence. */
@@ -67,6 +69,7 @@ export class ClaudeChannel implements NativeChannel {
   private current?: PendingTurn;
   private sessionId?: string;
   private cumulativeCost?: number;
+  private missingCostBoundary = false;
   private closePromise?: Promise<void>;
   private closed = false;
   private acceptFrames = true;
@@ -175,7 +178,23 @@ export class ClaudeChannel implements NativeChannel {
       }
     }
     if (frame.type === "stream_event") {
-      const delta = object(object(frame.event)?.delta);
+      const event = object(frame.event);
+      // S6 on Claude 2.1.296: interrupt results zero every usage field. Keep only this
+      // turn's main-loop provider events; auxiliary usage remains a separate scope.
+      if (frame.parent_tool_use_id === null) {
+        if (event?.type === "message_start") {
+          const message = object(event.message);
+          turn.streamMessageId = string(message?.id);
+          this.recordUsage(turn, turn.streamMessageId, object(message?.usage), "stream");
+        } else if (event?.type === "message_delta") {
+          const usage = object(event.usage);
+          this.recordUsage(turn, turn.streamMessageId, usage, "stream");
+          const step = turn.streamMessageId ? turn.usageSteps.get(turn.streamMessageId) : undefined;
+          // message_delta output is cumulative for one API response, never an increment.
+          if (step && number(usage?.output_tokens) !== undefined) step.outputTokens = number(usage!.output_tokens);
+        } else if (event?.type === "message_stop") turn.streamMessageId = undefined;
+      }
+      const delta = object(event?.delta);
       if (delta?.type === "text_delta" && typeof delta.text === "string") {
         turn.text += delta.text;
         turn.partialText = true;
@@ -187,6 +206,7 @@ export class ClaudeChannel implements NativeChannel {
       const text = textContent(frame);
       if (frame.parent_tool_use_id === null) {
         const usage = object(message?.usage);
+        this.recordUsage(turn, string(message?.id), usage, "assistant");
         if (usage && number(usage.input_tokens) !== undefined) {
           turn.contextTokens = number(usage.input_tokens)! + (number(usage.cache_read_input_tokens) ?? 0) + (number(usage.cache_creation_input_tokens) ?? 0);
           this.emit("usage", { scope: "main", contextTokens: turn.contextTokens, raw: usage });
@@ -207,29 +227,77 @@ export class ClaudeChannel implements NativeChannel {
     if (frame.type === "model_refusal_no_fallback") turn.refusal = true;
   }
 
+  private recordUsage(turn: PendingTurn, id: string | undefined, usage: Frame | undefined, source: "assistant" | "stream"): void {
+    if (!id || !usage) return;
+    const step = turn.usageSteps.get(id) ?? {};
+    step[source] = { ...step[source], ...usage };
+    turn.usageSteps.set(id, step);
+    if (source === "stream" && number(usage.input_tokens) !== undefined) {
+      turn.contextTokens = number(usage.input_tokens)! + (number(usage.cache_read_input_tokens) ?? 0) + (number(usage.cache_creation_input_tokens) ?? 0);
+      this.emit("usage", { scope: "main", contextTokens: turn.contextTokens, raw: usage });
+    }
+  }
+
+  private eventUsage(turn: PendingTurn | undefined, terminal?: Frame): TurnUsage | undefined {
+    if (!turn?.usageSteps.size) return undefined;
+    const steps = [...turn.usageSteps.entries()];
+    const sum = (field: string): number | undefined => {
+      const values = steps.map(([, step]) => number(step.assistant?.[field]) ?? number(step.stream?.[field]));
+      return values.every((value) => value !== undefined) ? values.reduce<number>((total, value) => total + value!, 0) : undefined;
+    };
+    const outputs = steps.map(([, step]) => step.outputTokens);
+    return {
+      inputTokens: sum("input_tokens"), cachedInputTokens: sum("cache_read_input_tokens"),
+      // Assistant output_tokens is a placeholder. If any response lacks a message_delta,
+      // the output total stays unknown rather than substituting that placeholder.
+      outputTokens: outputs.every((value) => value !== undefined) ? outputs.reduce<number>((total, value) => total + value!, 0) : undefined,
+      raw: { source: "assistant_and_stream", mainMessages: steps.map(([messageId, step]) => ({ messageId, ...step })), ...(terminal ? { terminal } : {}) },
+    };
+  }
+
   private result(frame: Frame): void {
-    const cumulative = number(frame.total_cost_usd);
-    const previous = this.cumulativeCost;
-    if (cumulative !== undefined) this.cumulativeCost = cumulative;
-    const nativeUsage = object(frame.usage);
-    const usage: TurnUsage | undefined = nativeUsage || cumulative !== undefined ? {
-      inputTokens: number(nativeUsage?.input_tokens), cachedInputTokens: number(nativeUsage?.cache_read_input_tokens), outputTokens: number(nativeUsage?.output_tokens),
-      costUsd: cumulative === undefined ? undefined : cumulative >= (previous ?? 0) ? cumulative - (previous ?? 0) : undefined,
-      ...(cumulative === undefined ? {} : { costSource: "native_cli_estimate" as const }),
-      raw: { ...nativeUsage, ...(frame.modelUsage === undefined ? {} : { modelUsage: frame.modelUsage }), ...(cumulative === undefined ? {} : { total_cost_usd: cumulative }) },
-    } : undefined;
-    if (usage) this.emit("usage", { scope: "turn", ...usage });
     const turn = this.current;
-    // Notification results belong to native background activity, never an unrelated new send.
+    // A notification or stale result cannot change another turn's usage/cost boundary.
     if (!turn || object(frame.origin)?.kind === "task-notification" || typeof frame.user_message_uuid === "string" && frame.user_message_uuid !== turn.id) return;
     const errors = Array.isArray(frame.errors) ? frame.errors.filter((value): value is string => typeof value === "string") : [];
-    const failed = frame.is_error === true || string(frame.subtype)?.startsWith("error_") === true;
-    const interrupted = frame.terminal_reason === "aborted_streaming" || frame.terminal_reason === "aborted_tools" || frame.stop_reason === "interrupted" || turn.stopped && frame.terminal_reason !== "completed" && frame.stop_reason !== "end_turn";
     const text = string(frame.result) ?? (errors.length ? errors.join("\n") : turn.text);
-    const error = failed && !interrupted ? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
+    const failed = frame.is_error === true || string(frame.subtype)?.startsWith("error_") === true;
+    const nativeInterrupted = frame.terminal_reason === "aborted_streaming" || frame.terminal_reason === "aborted_tools" || frame.stop_reason === "interrupted";
+    const terminalError = failed ? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
+    const knownFailure = turn.error !== undefined || terminalError !== undefined && terminalError.kind !== "other";
+    const failure = failed || nativeInterrupted && knownFailure;
+    const completed = !failed && !nativeInterrupted && (frame.subtype === "success" || frame.terminal_reason === "completed" || frame.stop_reason === "end_turn");
+    // A known API failure preceding stop keeps its type. The generic execution result
+    // following a requested interrupt is the stop acknowledgement, not a new error kind.
+    const interrupted = !completed && !knownFailure && (nativeInterrupted || turn.stopped && frame.subtype === "error_during_execution");
+    const cumulative = number(frame.total_cost_usd);
+    const previous = this.cumulativeCost;
+    const nativeUsage = object(frame.usage);
+    const zeroExecutionResult = frame.subtype === "error_during_execution" && nativeUsage && ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].every((key) => number(nativeUsage[key]) === 0);
+    const recoverUsage = interrupted || nativeInterrupted || zeroExecutionResult;
+    const unusableCost = recoverUsage && (cumulative === undefined || cumulative === 0 || cumulative < (previous ?? 0));
+    const costGap = this.missingCostBoundary;
+    if (unusableCost) this.missingCostBoundary = true;
+    else if (cumulative !== undefined) { this.cumulativeCost = cumulative; this.missingCostBoundary = false; }
+    const terminal = { ...nativeUsage, ...(frame.modelUsage === undefined ? {} : { modelUsage: frame.modelUsage }), ...(cumulative === undefined ? {} : { total_cost_usd: cumulative }) };
+    const costUsage = cumulative === undefined || unusableCost ? undefined : {
+      costUsd: cumulative === undefined || costGap ? undefined : cumulative >= (previous ?? 0) ? cumulative - (previous ?? 0) : undefined,
+      costSource: "native_cli_estimate" as const,
+    };
+    let usage: TurnUsage | undefined;
+    if (recoverUsage) {
+      const observed = this.eventUsage(turn, terminal);
+      // The native dollar estimate is distinct from the interrupted result's unusable
+      // token counters. Retain it only when its cumulative boundary is actually usable.
+      if (observed || costUsage) usage = { ...observed, ...costUsage, raw: observed?.raw ?? { source: "assistant_and_stream", terminal } };
+    } else if (nativeUsage || cumulative !== undefined) usage = {
+      inputTokens: number(nativeUsage?.input_tokens), cachedInputTokens: number(nativeUsage?.cache_read_input_tokens), outputTokens: number(nativeUsage?.output_tokens), ...costUsage, raw: terminal,
+    };
+    if (usage) this.emit("usage", { scope: "turn", ...usage });
+    const error = failure && !interrupted ? terminalError ?? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
     // Some error results expose only the generic terminal code; keep an earlier typed API error.
-    const nativeError = error?.kind === "other" && turn.error ? { ...turn.error, message: error.message || turn.error.message } : error;
-    const result: TurnResult = { status: interrupted ? "interrupted" : failed ? "failed" : "completed", text, refusal: !failed && (turn.refusal || frame.stop_reason === "refusal"), sessionId: this.sessionId, contextTokens: turn.contextTokens, usage, ...(nativeError ? { error: nativeError } : {}) };
+    const nativeError = error?.kind === "other" && turn.error ? { ...turn.error, message: turn.error.kind === "other" ? error.message || turn.error.message : turn.error.message } : error;
+    const result: TurnResult = { status: interrupted ? "interrupted" : failure ? "failed" : "completed", text, refusal: !failure && (turn.refusal || frame.stop_reason === "refusal"), sessionId: this.sessionId, contextTokens: turn.contextTokens, usage, ...(nativeError ? { error: nativeError } : {}) };
     // A root-exit notification can outrun stdout on a separate transport. Drain native output
     // while containment closes, then decide whether this turn had already completed.
     if (this.closed) { if (this.drainTerminal) this.closingResult = result; }
@@ -252,7 +320,7 @@ export class ClaudeChannel implements NativeChannel {
     if (this.closed) return Promise.resolve({ status: "interrupted", text: "", refusal: false, sessionId: this.sessionId, error: this.reason });
     return new Promise((resolve) => {
       const id = randomUUID();
-      this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false };
+      this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false, usageSteps: new Map() };
       void this.ready.then(async () => {
         if (!this.current || this.current.id !== id || this.closed) return;
         await this.write({ type: "user", uuid: id, session_id: this.sessionId ?? "", message: { role: "user", content: text }, parent_tool_use_id: null });
@@ -330,7 +398,7 @@ export class ClaudeChannel implements NativeChannel {
       }
       // A failed containment check must unblock callers without claiming cleanup succeeded.
       // The post office keeps such a channel down and never automatically resumes its queue.
-      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, error: this.reason });
+      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: this.reason });
       this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped });
     })();
     return this.closePromise;

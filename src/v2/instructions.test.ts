@@ -8,13 +8,13 @@ describe("standing instructions", () => {
     for (const soldier of roster.soldiers.values()) {
       const text = buildStandingInstructions(roster, soldier);
       expect(text).toContain(`${shadowName(soldier.key)} (${soldier.key}), model ${soldier.model}`);
-      expect(text).toContain(`roles: ${soldier.roles.join(", ")}`);
+      expect(text).toContain(`roles: ${soldier.roles.filter((role) => role !== "orchestrate").join(", ")}`);
       expect(text).toContain("Claude Code is the Monarch");
       expect(text).toContain("Grok never reviews; agy never writes");
       expect(text).toContain(roster.rules.all);
       expect(text).toContain(roster.rules.perSoldier.get(soldier.key) ?? "(none)");
       for (const member of roster.soldiers.values()) {
-        expect(text).toContain(`${shadowName(member.key)} (${member.key}): ${member.model}; ${member.roles.join(", ")}`);
+        expect(text).toContain(`${shadowName(member.key)} (${member.key}): ${member.model}; ${member.roles.filter((role) => role !== "orchestrate").join(", ")}`);
       }
       expect(text).not.toContain("Tank (");
       expect(text).toContain("at most five lines");
@@ -22,6 +22,15 @@ describe("standing instructions", () => {
       expect(text).toContain("working on, done, decided, files, open");
       expect(estimateInstructionTokens(text)).toBeLessThan(MAX_INSTRUCTION_TOKENS);
     }
+  });
+
+  it("keeps Claude as v2 Monarch regardless of legacy routing authority", () => {
+    const roster = makeRoster({ legacy: { cli: "claude", model: "opus", roles: ["orchestrate", "review"] } });
+    roster.monarch.default = "legacy";
+    const text = buildStandingInstructions(roster, roster.soldiers.get("legacy")!);
+    expect(text).toContain("roles: review.");
+    expect(text).toContain("Claude Code is the Monarch. Only the Monarch plans and assigns work");
+    expect(text).not.toContain("orchestrate");
   });
 
   it("does not copy another soldier's private instructions", () => {
