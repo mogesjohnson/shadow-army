@@ -1,6 +1,6 @@
 # 0014: The owner steers: stop a turn, control the queue, facts on the card, one list of decisions
 
-- **Status:** accepted on 2026-10-08 with spec v0.3 (#68), and amended by spec v0.4 (#69). It was proposed the same day, from Codex's review of the design canvas.
+- **Status:** accepted on 2026-10-08 with spec v0.3 (#68), and amended by spec v0.4 (#69). It was proposed the same day, from Codex's review of the design canvas. ADR-0015 puts its one list of decisions at the head of the army, in the pane's first tab.
 
 ## Context
 
