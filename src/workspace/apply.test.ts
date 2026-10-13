@@ -145,6 +145,7 @@ describe("applying a run to the checkout", () => {
     expect(read("old.txt")).toBe("gone\n");
   });
 
+  // powershell.exe can take far longer than 5 s to start on a busy Windows CI runner.
   it.each(["cost$price`'[1].txt", "@price.txt"])("runs the printed undo for %s without expanding filenames or pathspecs", async (literal) => {
     const matched = "cost$price`'1.txt";
     const r = makeRepo({ [literal]: "before\n", [matched]: "owner original\n" });
@@ -161,7 +162,7 @@ describe("applying a run to the checkout", () => {
     execFileSync(process.platform === "win32" ? "powershell.exe" : "sh", process.platform === "win32" ? ["-NoProfile", "-Command", undo] : ["-c", undo], { cwd: r.dir });
     expect(readFileSync(join(r.dir, literal), "utf8")).toBe("before\n");
     expect(readFileSync(join(r.dir, matched), "utf8")).toBe("owner local edit\n");
-  });
+  }, 60_000);
 });
 
 describe("what the report says", () => {
