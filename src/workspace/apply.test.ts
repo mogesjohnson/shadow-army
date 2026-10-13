@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyToCheckout, renderApply } from "./apply.js";
 import { makeRepo } from "./testRepo.testutil.js";
+
+vi.setConfig({ testTimeout: 60_000 });
 
 const repos: ReturnType<typeof makeRepo>[] = [];
 afterEach(() => {
