@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
+import { canonicalPath } from "../workspace/git.js";
 import { OfficeClient } from "./client.js";
 import type { OfficeEvent } from "./postOffice.js";
 import type { TurnResult } from "./channel.js";
@@ -46,7 +47,7 @@ describe("M1 caller subprocess contract", () => {
     const repo = makeRepo(); repos.push(repo);
     const client = new OfficeClient({ cwd: relative(process.cwd(), repo.dir), command: { file: process.execPath, args: runtimeArgs } }); clients.push(client);
     const opened = await client.request<{ cwd: string }>({ action: "open", soldier: "scout" });
-    expect(relative(repo.dir, opened.cwd)).toMatch(/^\.shadow[\\/]v2[\\/]worktrees[\\/]session-/);
+    expect(relative(canonicalPath(repo.dir), canonicalPath(opened.cwd))).toMatch(/^\.shadow[\\/]v2[\\/]worktrees[\\/]session-/);
     expect((await client.request<TurnResult>({ action: "send", soldier: "scout", text: "inspect" })).status).toBe("completed");
   }, 30_000);
   it("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children while retaining partial work", async () => {
