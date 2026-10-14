@@ -10,6 +10,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-2 | The lease timing: do the owner's 10 s / 30 s hold up against Codex's 5 s / 20 s? | technical unless the timing changes (then big) | prototype and both drafts done; judge next (option reviews dropped) | — |
 | D-4 | A threat model (R-F-5) | big | card to batch | — |
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
+| D-6 | How G7's "traced in CI" is met (R-F-36) | technical | to decide in the fix pass | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | option A drafted and the Linux prototype done; options B and C to redraft (cut off); then a judge and the card | — |
 
 ---
@@ -91,3 +92,10 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** nothing bounds a soldier's queue, its send rate, a message's or a report's size, or the logs. A runaway soldier's sends become paid turns (G5); logs can fill the disk.
 - **Options** (from verifier F-V1): A, caps now on queue depth, send rate, message and report size (refused with a reason), plus log size and rotation (H62 pulled in); B, the queue, send and size caps now, with logs left to H62 after v2.0 and the disk risk stated; C, no limits in v2.0, stated as a non-goal with the risk.
 - **Next:** a card to the owner, batched. Leaning B.
+
+## D-6 How G7's "traced in CI" is met (from R-F-36)
+
+- **Kind:** technical (how things are tested; the document's structure). Verifier F-V3 judged it so.
+- **Question:** G7 promises verification traced in CI, but VER-7 checks only the spec's own cross-references, and the AC-to-test link lives on each PR (VER-3, §6).
+- **Options:** (a) tests name the requirement or AC IDs they verify, and VER-7 fails a requirement with U, C, I, X, F or S evidence that no test names; R and L stay on the PR (VER-8, §6); (b) reword G7: "Every requirement is verified: CI checks the trace (VER-7), and each PR maps its ACs to evidence (section 6)."
+- **Next:** decide directly or by a small bake-off in the fix pass; it changes nothing the owner sees.
