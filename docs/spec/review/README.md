@@ -1,6 +1,6 @@
 # The spec 2.0 review
 
-The record of the review that turns `docs/spec/v2.md` into the Shadow Army 2.0 specification (issue #63). Everything here is committed on the PR "#63 Ultimate Spec Review", at the owner's request.
+The record of the review that turns `docs/spec/v2.md` into the Shadow Army 2.0 specification (issue #63). Everything here is committed on PR #77, "#63 Ultimate Spec Review", at the owner's request.
 
 Start with [`STATE.md`](STATE.md). The rules are in [`spec2.0_review_flow.md`](spec2.0_review_flow.md), and the full protocol is in [`PLAYBOOK.md`](PLAYBOOK.md). Section 8 of the flow says what each file and folder holds.
 

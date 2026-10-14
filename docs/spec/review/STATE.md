@@ -6,7 +6,7 @@ Last updated: 2026-10-14, session 7ac7daad. All agents stopped at the owner's re
 
 ## Where things are
 
-- **Branch** `claude/63-ultimate-spec-review`, PR "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`). The spec text is unchanged so far: `tools/trace-v2.mjs docs/spec/v2.md` gives 0 problems (97 requirements, 53 ACs).
+- **Branch** `claude/63-ultimate-spec-review`, PR #77, "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`). The spec text is unchanged so far: `tools/trace-v2.mjs docs/spec/v2.md` gives 0 problems (97 requirements, 53 ACs).
 - **`main`** is spec v0.5 (`ab04992`). #76 (v0.6: Appendix C and M1's decisions) is a draft, with CI green at `be9deb0` and no Codex review yet.
 - **M1 (#75)** is Codex's draft, paused at `04ab953` until the spec's M1 text converges. Read it for reality checks only: `git worktree add ../shadow-army-m1 origin/codex/63-m1-post-office`.
 

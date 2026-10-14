@@ -106,7 +106,7 @@ For you: <what changes for the owner>. Can be undone: <yes, or how hard>
 
 ## 8. Records, commits and the PR
 
-- **Everything that ties to the review is committed** (the owner, 2026-10-14), in `docs/spec/review/` on the PR **"#63 Ultimate Spec Review"**, branch `claude/63-ultimate-spec-review`, stacked on #76 (`claude/63-spec-ideas`).
+- **Everything that ties to the review is committed** (the owner, 2026-10-14), in `docs/spec/review/` on PR #77, **"#63 Ultimate Spec Review"**, branch `claude/63-ultimate-spec-review`, stacked on #76 (`claude/63-spec-ideas`).
 - **Commit and push every time an agent's result changes a doc**: a raw report saved, the ledger, a decision, a probe, a fix to the spec. **After every pass** (a round, a bake-off, a unit's sign-off), update the ledger's summary and [`STATE.md`](STATE.md), and post a short comment on the PR: what ran, what was found and fixed, what is next. The work must survive if the credits run out.
 - Commit subjects: `#63 <action>`, for example `#63 Review M1, round 1: verify 45 findings`. End each with the attribution trailer the session gives. Stage files by path; never `git add -A`. Never force-push.
 - Spec fixes from the review go on this same branch.

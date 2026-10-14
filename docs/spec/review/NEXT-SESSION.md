@@ -17,7 +17,7 @@ Read, in this order: CLAUDE.md, CONTRIBUTING.md, docs/spec/review/STATE.md, docs
 Rules that matter most:
 - At most two agents at a time. Start the next when one returns.
 - You are the only editor. Agents are read-only and return text; save each report word for word under docs/spec/review/raw/.
-- Commit and push after every agent result that changes a doc (raw report, ledger, decisions, probes, spec fix), and after every pass update STATE.md and the ledger summary and comment on the PR "#63 Ultimate Spec Review". Subjects: "#63 <action>". Stage by path; never git add -A; never force-push.
+- Commit and push after every agent result that changes a doc (raw report, ledger, decisions, probes, spec fix), and after every pass update STATE.md and the ledger summary and comment on PR #77, "#63 Ultimate Spec Review". Subjects: "#63 <action>". Stage by path; never git add -A; never force-push.
 - The owner answers only big questions, as short decision cards with a tested recommendation; the agents decide technical ones by bake-off and record them in decisions.md.
 - Never put leaked Claude Code source, or code from the owner's the-future/order files, into anything. Vendor files (Claude Code's mod typings) stay out of the repository.
 - Live probes and CLI runs need the owner's go.
