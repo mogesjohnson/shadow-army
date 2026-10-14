@@ -1,0 +1,36 @@
+# F round 1, verifier F-V5 (evidence levels and the canvas): R-F-25, 44, 43, 45. Snapshot be9deb0.
+
+- id: R-F-25
+  verdict: CONFIRMED
+  severity: P2
+  evidence: Snapshot :457-463 (the C list has only "an error"). CH-1 :216 claims C evidence, and :219 lists the kinds. The only claude recording, M1-AC3 :548, has no error. The kinds are tested only against fakes: M1-AC4 :552 and M2-AC10 :597-598. Codex's M1 draft shows the gap in practice. AIConnections-m1/test/fakes/claude.mjs:2 says "hand-written fake, not a recorded/live Claude session", and at :83-87 the fake makes up `terminal_reason` values and never emits a `rate_limit_event`. Its adapter, src/v2/claude.ts, reads an undocumented `reset_at` at :53 and the documented event at :172-176. The official docs at https://code.claude.com/docs/en/agent-sdk/typescript give claude's rate-limit reset time on a separate `SDKRateLimitEvent` (`rate_limit_info.resetsAt`). `SDKAssistantMessage.error` has `rate_limit`, `authentication_failed` and `invalid_request`, but no context-overflow value. So the reviewer's NEEDS-PROBE about the shape is partly settled by the docs: the shape spans several events, which is exactly what a recording would check. This touches H6 (:783). It is not R-M1-17 (which fields to name) or R-F-44 (other recordings), though it fixes the same list as R-F-44.
+  reason: CH-1 claims contract evidence, but each CLI's one recorded error has no named kind, so the classification of the other kinds is checked only against hand-written fakes.
+  fix: as proposed. In §5.1 C, replace "an error;" with "one session for each error kind of CH-1 that the CLI can be made to produce, such as a login needed and a context overflow. A kind that can't be produced on purpose, such as a rate limit, is built from the vendor's documented shape and marked synthetic in its fixture;"
+
+- id: R-F-44
+  verdict: CONFIRMED
+  severity: P2
+  evidence: Snapshot :457-463. M2-AC6 :574 asks for "a recorded session … stopped mid-turn", and CH-10 :261 is (C, L). CH-9 :260 is (M4; C), so C is its only evidence, and no listed recording resumes a session. PO-4 :176 is (C, I, X), and :181 says the tool goes in through each CLI's MCP configuration. M1-AC3 :548 needs a subagent's message, which is R-M1-46's point. On the trigger: :463 says "recorded again when a CLI updates (CH-8)". CH-8 :256-258 lets a newer CLI connect with a warning, and VER-4 :505 names no trigger. settled.md:26 sets a trigger only for M1-AC3 (when the flags differ). claude went from 2.1.292 on 2026-10-07 (m0-report.md:4) to 2.1.299 by 2026-10-14 (evidence/README.md:14). S6's live logs are in a private scratchpad (s6-results.md:5), not fixtures.
+  reason: Requirements that claim C evidence (CH-9 has nothing else), and M2-AC6, need recordings the list doesn't have. "When a CLI updates" has no event or owner, while claude ships several versions a week.
+  fix: In §5.1 C: "For each CLI, the owner records: the two-prompt task, for claude with a subagent's message (M1-AC3); an approval request, or for agy a tool it soft-denies (CH-6); one session per error kind it can be made to produce (CH-1); a turn stopped through its own interrupt, then the next message (CH-10); a session resumed by id (CH-9); a `send` call through the added MCP server, except for agy (PO-4); a session that goes cold." Then: "A fixture carries the CLI version it was recorded with (CH-8), and is recorded again when its adapter is changed for a newer version of its CLI. Until then, a newer CLI connects with CH-8's warning."
+
+- id: R-F-43
+  verdict: CONFIRMED
+  severity: P2
+  evidence: These make the canvas binding: header :11, VIS-1 :424, VIS-2 :426, HOST-9 :133, §5.1 S :492 and M5-AC1 :667. Nothing in §0 (:14-33) or anywhere else in the spec says which wins. The artifact is private: STATE.md:47 says "Codex can't open the private artifact". Its source is in `.shadow/`, which is never committed (spec :1060; CLAUDE.md). PLAYBOOK §10.9 asks for normative and informative parts to be marked. Part of the claim is wrong: the glyphs do exist on the Foundations page (V2-Foundations.dc.html:281-285, 296-385), so VIS-2 points to them rather than leaving them out. The S1 example is also out of date: V2-Host.dc.html:26 and :41 now say docked from 110. But the two disagree today:
+    - the canvas gives messages a seventh state, "⏸ held" (V2-Foundations.dc.html:328; V2-Messaging.dc.html:354), which is not among MSG-4's six states (:294-299) or ADR-0014's (settled.md:13);
+    - the canvas disagrees with itself on "down": ◌ "disconnected" in its state table (V2-Foundations.dc.html:284) but ✗ in its glyph table (:377), while HOST-6 :126 uses the word "down". This overlaps R-F-17.
+  reason: VIS-2, HOST-9 and M5-AC1 tie the build to a private artifact whose source is never committed. The spec names no winner, and the canvas already disagrees with MSG-4 and with itself.
+  fix: VIS-1 adds: "The canvas illustrates this spec. Where the two disagree, this spec wins, and the canvas is redrawn." VIS-2 lists each soldier, connection and message state with its glyph, ASCII fallback and word, taken from the Foundations page (version 21), with one glyph for "down" and "held" as a state of the queue. HOST-9 gives each command's argument hint and description in its own text. With the normative parts in the spec, the canvas doesn't need to be exported.
+
+- id: R-F-45
+  verdict: CONFIRMED
+  severity: P2
+  evidence: Spec lines: §5.1 S :492, VIS-3 :427, M5-AC1 :667, M5-AC6 :672, M5-AC7 :673, HOST-3 :96-98. The mod API documentation:
+    - evidence/mod-api-2.1.294/reference.md:113: "A `Pane` or `AbovePrompt` hook sizes its tree to `e.props.bodyColumns` instead … narrower than the viewport while a pane is docked".
+    - claude-code.d.ts:10212-10216: the band's width is "its column's width less the engine's five", and "The column is the terminal, or the transcript's beside a docked `Pane`".
+    - claude-code.d.ts:7392-7397: `columns` is the docked body width the pane asks for, and a dragged width wins.
+    - claude-code.d.ts:7383-7388: inline, the pane's rows default to a third of the terminal.
+  The scenario's claim that 44 and 60 are "never covered" is wrong: M5-AC6 and M5-AC7 require those snapshots themselves. A worse case is real, and the proposed fix misses it. With the pane docked at 110 (56 body columns plus its frame), the strip gets under 50 columns. No width in the spec or in M5-AC7 (60) covers that. The canvas draws the strip 144 wide under the dock (V2-Host.dc.html:262) and draws strips at 144, 110, 80 and 60 (:318).
+  reason: The S level and M5-AC1 name widths without saying they are the terminal's, while Claude Code hands each tree a narrower body width. So the snapshots can test widths that never occur and miss the strip beside a docked pane.
+  fix: In §5.1 S: "The widths 144, 110 and 80, and the 24 rows, are the terminal's. Each surface's tree is rendered at the size Claude Code gives it there (`bodyColumns`): the pane docked at 56, inline at up to 72, and at 44 (VIS-3); the strip at the terminal's width less the band's five-column mark, and beside the docked pane (under 50 at 110)." VIS-3 and M5-AC1 say "terminal columns". M5-AC7 adds the strip beside the pane docked at 110.
