@@ -1,0 +1,150 @@
+# Spec 2.0 review ledger
+
+Every finding, its verdict and its resolution. Raw reviewer and verifier outputs are in `raw/`, one file per agent run. Snapshots of the spec each round reviewed are in `snapshots/` (line numbers in findings refer to the round's snapshot).
+
+## Summary
+
+| Unit | Status | Rounds | Open P0–P2 | Fixed | Refuted | Decisions pending | Sign-offs |
+|---|---|---|---|---|---|---|---|
+| F | round 1: 51 findings (16 P1, 31 P2, 4 P3); 7 duplicates; 5 parked (R-F-14 for M6; R-F-15, R-F-31 for M3; R-F-26, R-F-27 for M4); 39 to verify: 32 in F-V1 to F-V5, 7 in M1-V1 to M1-V4. Its 6 verifiers were cut off by the usage limit: rerun them | 1 | — | 0 | 0 | D-1 | — |
+| M1 | round 1: 56 findings (16 P1, 36 P2, 4 P3); 16 duplicates; 40 to verify, in M1-V1 to M1-V6 (with 7 of F's); packets ready, not run | 1 | — | 0 | 0 | D-2, D-3 | — |
+| C (M1 rows) | not started | 0 | — | 0 | 0 | — | — |
+| M2a | not started | 0 | — | 0 | 0 | — | — |
+| M2b | not started | 0 | — | 0 | 0 | — | — |
+| M3 | not started | 0 | — | 0 | 0 | — | — |
+| M4 | not started | 0 | — | 0 | 0 | — | — |
+| M5 | not started | 0 | — | 0 | 0 | — | — |
+| M6 | not started | 0 | — | 0 | 0 | — | — |
+| C (rest) | not started | 0 | — | 0 | 0 | — | — |
+| X1–X5 | not started | 0 | — | 0 | 0 | — | — |
+
+Clean-round streaks: F 0, M1 0.
+
+## Unit F
+
+Contents (snapshot `v2@be9deb0.md`): header 1–12, §0 14–33, §1 35–53, §2 55–72, §3 74–87, §5.1 450–498, §7 698–709, §8 711–720, Appendix A 722–741, Appendix B 743–751.
+
+### Round 1 (snapshot `be9deb0`; lenses: implementer, red team, chaos)
+
+Round 1 ran on 2026-10-14 (session 7ac7daad). Raw reports: `raw/F-r1-redteam.md`, `raw/F-r1-chaos.md`, `raw/F-r1-implementer.md`. Verification batches (`batches/`): F-V1 security (R-F-1, 3, 4, 5, 7, 8, 28), F-V2 terms and states (R-F-12, 17, 40, 41, 46, 47, 49, 9), F-V3 verification rules (R-F-32, 33, 22, 36, 37, 48, 50, 51), F-V4 failure and timing (R-F-18, 19, 20, 21, 24), F-V5 evidence levels and canvas (R-F-25, 44, 43, 45), F-V6 second verifier for the P1s (R-F-1, 3, 28, 12, 32, 33). Verified with M1 because they overlap it: R-F-10, 11, 13, 16, 29, 30, 38.
+
+| ID | Lens | Sev | Type | Location | Claim | Verdict | Resolution |
+|---|---|---|---|---|---|---|---|
+| R-F-1 | red team | P1 | defect | App A 729, G6 44, WSP-4 (H48) | 2.0 GIT-1..GIT-4 (hooks, fsmonitor, pager, signing off on harness git) were not carried over, so harness git, the guard's git status included, runs a hostile repo's configured commands | pending | |
+| R-F-2 | red team | P1 | defect | PO-3 172, SEC-2, SEC-3 (B2) | the Monarch's secret is readable from process memory | DUPLICATE of R-M1-1 | |
+| R-F-3 | red team | P1 | gap | §2, ARM-6, G6 | autonomy (supervised, auto, full) is never defined, and the settled rule that an auto/full read-only task runs in a throwaway snapshot with the guard is missing | pending | |
+| R-F-4 | red team | P2 | gap | §5.1 X 471-475 | the X level lists four tests and omits SEC-5, ARM-6 and the secret in memory | pending | |
+| R-F-5 | red team | P2 | readiness | §1-§3 | no threat model: assets, actors, trust boundaries, and each boundary's control and test | pending | |
+| R-F-6 | red team | P2 | gap | App A, VIS-2 (H25) | 2.0 SAFE-7 (strip control and escape sequences) was dropped | DUPLICATE of R-M1-6 | |
+| R-F-7 | red team | P2 | gap | §1, §5.1, PO-5, MSG-3 | no limits on queues, logs, disk, soldiers or message sizes, and no backpressure | pending | |
+| R-F-8 | red team | P2 | ambiguity | §3 85, MSG-1 | "messages carry words, never file contents" reads as an enforced invariant; it is a transport rule and an instruction | pending | |
+| R-F-9 | red team | P3 | editorial | §2 | the glossary omits owner, worktree, snapshot, checkout guard, claim and claim audit, attribution card | pending | |
+| R-F-10 | chaos | P1 | gap | §3 82-87, HOST-2, PO-1, M3-AC12, §5.1 | the post office dying is undefined: who notices or restarts it, what becomes of the CLIs, open turns and guards, queued and delivered messages, the lock, and what the owner sees (overlaps R-M1-9, R-M1-10) | pending | |
+| R-F-11 | chaos | P1 | contradiction | PO-7, HOST-14, ARM-6, CH-6, SEC-3 | the session's end (or a lapsed lease) has no order or time limit, and loses every open decision: approval requests, attribution and handoff cards; their messages never end (overlaps R-M1-8) | pending | |
+| R-F-12 | chaos | P1 | ambiguity | §2 61, PO-8 193-211, M2-AC9 | "turn" means both the CLI's turn and a message's span; when the CLI takes a turn by itself after background work, nothing says when the message's work is over (overlaps R-M1-16) | pending | |
+| R-F-13 | chaos | P1 | untestable | §5.1 490, PO-5, PO-6, MSG-4 303 | a failed or partial write has no outcome, and MSG-4's "delivered before the write" rests on a record whose durability is undefined (overlaps R-M1-11) | pending | |
+| R-F-14 | chaos | P1 | gap | WSP-5, M6-AC5 | an apply or undo killed mid-way (process death) has no journal on disk and no rollback at the next start | parked for M6 | |
+| R-F-15 | chaos | P1 | gap | §3 84, HOST-10, PO-4 | a send retried after a partial success (lost reply, Esc) sends the brief twice; no request id (2.0 MCP-4 had one) | parked for M3 | |
+| R-F-16 | chaos | P2 | gap | HOST-2, PO-1 164, App A | a second process that wants the folder (another Claude session, a quick restart, v1 sa writes): 2.0 GUARD-5 not carried; "folder" undefined (overlaps R-M1-3) | pending | |
+| R-F-17 | chaos | P2 | gap | §2, HOST-6, HOST-14, MSG-3, PO-1, M3-AC11, VIS-2 | soldier states are not defined: "error" has no card or way out, "disconnected" vs "down", "log in" doesn't queue | pending | |
+| R-F-18 | chaos | P2 | gap | §3 82-87 | the mod to post office link has no rule for a slow reader (Windows pipes are synchronous), a lost or malformed event, sequence or snapshot, or a mod restart | pending | |
+| R-F-19 | chaos | P2 | ambiguity | §5.1 489, SES-6, HOST-15, CH-10 | no timer names its clock; a laptop sleep or a clock jump breaks the cold estimate and the away digest | pending | |
+| R-F-20 | chaos | P2 | gap | §1 53, §5.1 L 497, U, F | no level tests simulation 7; claude's cost is its own estimate, not a report; the $2 budget can't bound CLIs that report no cost (overlaps R-M1-12) | pending | |
+| R-F-21 | chaos | P2 | gap | CH-1, MSG-3, §5.1 478, 488 | nothing says what a soldier and its queue do after each error kind: a login needed burns through the queue (decide with H6) | pending | |
+| R-F-22 | chaos | P2 | defect | App B, CH-9, PO-1, M2-AC6, M3-AC9 | the trace rules miss an AC that needs a later milestone's requirement (CH-9 is M4; M1 restarts; M2/M3 ACs need resume) (overlaps R-M1-13) | pending | |
+| R-F-23 | chaos | P2 | untestable | §5.1 487, PO-1 | a slow or silent CLI has no defined outcome | DUPLICATE of R-M1-19 | |
+| R-F-24 | chaos | P2 | ambiguity | §3 82, MSG-10, HOST-5, PO-1 | no single authority orders actions: cancel vs delivery, r during an automatic restart, r pressed twice | pending | |
+| R-F-25 | chaos | P2 | untestable | §5.1 C 457-463, CH-1 | contract fixtures record only "an error", so the error kinds are checked only against fakes (overlaps R-M1-17) | pending | |
+| R-F-26 | chaos | P2 | ambiguity | SES-6, SI-4, SET-1, CH-9, HOST-9 | how a soldier's model, effort, autonomy or tools change mid-session, and /mode, are undefined | parked for M4 | |
+| R-F-27 | chaos | P2 | ambiguity | §2 68, SI-4, SES-4 | whether the handoff summary goes into the standing instructions or arrives as a quoted message (simulation 6) | parked for M4 | |
+| R-F-28 | implementer | P1 | gap | §2 72, §3 82, HOST-1, G2 | nothing keeps the mod out of claude soldiers: mods run in claude -p too, so an installed mod gives each claude soldier the Monarch's send, and other installed mods' tool.check can approve a soldier's tool calls | pending | |
+| R-F-29 | implementer | P1 | decision-needed | §3 83-84, PO-3, PO-4, SEC-5 | same-user soldiers can read credentials: a claude soldier's credential sits in --mcp-config on its command line (ps), so another soldier can send as it; the Monarch's secret in memory (with R-M1-1) | pending | |
+| R-F-30 | implementer | P1 | gap | §3 82-83, HOST-2, PO-1, PO-7 | the secret and event pipe live only in the mod instance that started the post office: a mod reload (--plugin-dir saves, /reload-plugins), a second session or a quick restart meets a lock it can't command (with R-M1-10, R-M1-3) | pending | |
+| R-F-31 | implementer | P1 | decision-needed | §3 84, §2 65, MSG-5, G5 | a soldier's send has no defined return path: replies as new turns can ping-pong without limit; a blocking send can deadlock | parked for M3 | |
+| R-F-32 | implementer | P1 | contradiction | §0 31 | "the archived 2.0 text is the reference for their detail" imports 2.0 sentences that contradict v2 and settled rules (SAFE-11 kills the group at turn end, SAFE-10 "may add restrictions", SAFE-6 prunes logs) | pending | |
+| R-F-33 | implementer | P1 | untestable | §5.1 L 493-497, VER-9, M1-AC8, M2-AC4 | the parity check is undefined: the two prompts, which tokens, 5% in which direction, the headless baseline; the 2026-10-07 data fails some readings | pending | |
+| R-F-34 | implementer | P1 | gap | §5.1 487, 490 | a slow first token and a failed log write have no defined outcome | DUPLICATE of R-M1-11, R-M1-19 | |
+| R-F-35 | implementer | P2 | defect | App B 748 | rule 4 lets an AC rely on a later milestone (M3-AC9, M3-AC10, M3-AC5, M3-AC4 need M5) | DUPLICATE of R-F-22 | |
+| R-F-36 | implementer | P2 | decision-needed | G7 45, App B, §5.1 R | G7 promises verification traced in CI, but nothing links an AC to a test, so CI passes with no tests | pending | |
+| R-F-37 | implementer | P2 | defect | VIS-3 427, App A, App B rule 6 | VIS-3 cites "v1 UX-9" (2.0's UX-9, which shows the model in the strip), is missing from Appendix A, and the check misses it | pending | |
+| R-F-38 | implementer | P2 | ambiguity | §2, HOST-2, SES-1, WSP-1 | "the Claude session" is undefined: /clear, /resume, /branch and logout end one; the Desktop app has no $.process (with R-M1-20) | pending | |
+| R-F-39 | implementer | P2 | ambiguity | §2, HOST-2, PO-1 | "folder" and "checkout" are undefined | DUPLICATE of R-F-16 | |
+| R-F-40 | implementer | P2 | ambiguity | §2 69, CH-2 226 | "cached ones included" doesn't say whether cache writes count | pending | |
+| R-F-41 | implementer | P2 | gap | §2 65, MSG-5 306 | "at most five lines" sets no line length | pending | |
+| R-F-42 | implementer | P2 | ambiguity | §2 61, PO-8 | "turn" is undefined | DUPLICATE of R-F-12 | |
+| R-F-43 | implementer | P2 | gap | header 11, VIS-1, VIS-2, HOST-9 | the canvas is normative but outside the repository; which wins when they disagree is unsaid; the spec gives no state glyphs | pending | |
+| R-F-44 | implementer | P2 | gap | §5.1 C 457-463 | the recordings list misses what C requirements need (a stop, a resume, a send, a subagent), and "recorded again when a CLI updates" has no trigger (with R-F-25) | pending | |
+| R-F-45 | implementer | P2 | ambiguity | §5.1 S 492, M5-AC6, M5-AC7, VIS-3 | "144, 110 and 80 columns" doesn't say terminal or surface width; ACs need 44 and 60 | pending | |
+| R-F-46 | implementer | P2 | gap | §5.1 U 454, HOST-7 | "state precedence" is tested but never defined; "most urgent fact first" has no order | pending | |
+| R-F-47 | implementer | P2 | ambiguity | §2 64, HOST-9 135 | a brief names no sender, so the owner's /send --kind has no defined sender, reply path or wake | pending | |
+| R-F-48 | implementer | P2 | gap | §0 17, App B | "marked withdrawn" has no format or exemption from rules 2-4; nothing checks rule 5 | pending | |
+| R-F-49 | implementer | P3 | editorial | §3 78, 84 | the diagram says channels are one per CLI (one per soldier) and send goes to each soldier (none for agy) | pending | |
+| R-F-50 | implementer | P3 | editorial | §8 Q2, Q6 | S2 answered Q2; Q6's live checks belong to no requirement | pending | |
+| R-F-51 | implementer | P3 | editorial | VER-2 503, M1-AC7 | "every test level except L" includes R, which CI can't run | pending | |
+
+## Unit M1
+
+Contents (snapshot `v2@be9deb0.md`): HOST-2 94; PO-1 163–168, PO-2 169, PO-3 170–175, PO-5 183, PO-7 185–186; CH-1 216–220, CH-2 221–226, CH-7 253–255; SI-1 to SI-3 270–277; ARM-1 376–378, ARM-3 381; WSP-8 409; SEC-1 416, SEC-2 417, SEC-4 419; VER-1 to VER-3, VER-5 to VER-7, VER-9 502–514; M1 and its ACs 534–557.
+
+### Round 1 (snapshot `be9deb0`; lenses: implementer, red team, chaos)
+
+Raw reports: `raw/M1-r1-redteam.md`, `raw/M1-r1-chaos.md`, `raw/M1-r1-implementer.md`. Verification packets (`batches/`, not yet run): M1-V1 security (R-M1-1, R-F-29, R-M1-2, R-M1-39, R-M1-24, R-M1-56, R-M1-53, R-M1-31); M1-V2 lifecycle (R-M1-3, R-F-16, R-M1-8, R-F-11, R-M1-10, R-F-30, R-M1-20, R-F-38); M1-V3 death and containment (R-M1-9, R-F-10, R-M1-5, R-M1-14, R-M1-15, R-M1-19, R-M1-27, R-M1-51); M1-V4 records and logs (R-M1-11, R-F-13, R-M1-7, R-M1-21, R-M1-52, R-M1-6, R-M1-54); M1-V5 the claude channel (R-M1-12, R-M1-16, R-M1-17, R-M1-18, R-M1-4, R-M1-42, R-M1-43, R-M1-22); M1-V6 where soldiers run, instructions, roster, CI (R-M1-23, R-M1-13, R-M1-46, R-M1-47, R-M1-48, R-M1-49, R-M1-50, R-M1-55); M1-V7 and M1-V8: the second verifier of each P1.
+
+| ID | Lens | Sev | Type | Location | Claim | Verdict | Resolution |
+|---|---|---|---|---|---|---|---|
+| R-M1-1 | red team | P1 | decision-needed | PO-3 170-175, SEC-2, M1-AC2 (B2) | a same-user soldier can read the Monarch's secret from the post office's or the mod's memory (Windows; Linux with ptrace unrestricted); SEC-2 tests only files, command lines and environment. F's red team found it too (R-F-2) | pending | |
+| R-M1-2 | red team | P1 | gap | ARM-1, ARM-3, HOST-2, VER-5 | a repo-supplied shadow.config.json chooses each soldier's cli and autonomy; no allowlist or binary-resolution rule, so a malicious repo runs its own command when the army starts | pending | |
+| R-M1-3 | red team, chaos | P1 | gap | PO-1 164, HOST-2, M1-AC1 | no action when a lock already exists (stale, live, empty, forged); "folder" and the start time's source undefined | pending | |
+| R-M1-4 | red team, chaos | P2 | gap | CH-2 223, CH-6, M1-AC4, M1-AC8 | M1 routes claude's permission requests to the host, but nothing answers or stops one before M2: the turn hangs | pending | |
+| R-M1-5 | red team | P2 | defect | PO-1 168, M1-AC4, §5.1 479 | "nothing the CLI started keeps running" is overstated (setsid daemons, OS schedulers); 2.0 SAFE-11 stated the residual; no test of an escaping child (D-3) | pending | |
+| R-M1-6 | red team | P2 | decision-needed | WSP-8, SEC-4, App A (H25) | 2.0 SAFE-7 (strip control and escape sequences) was not carried over. F's red team found it too (R-F-6) | pending | |
+| R-M1-7 | red team | P2 | untestable | SEC-4, WSP-8 | "logs hold no secret" is absolute, and redact()'s match set is undefined | pending | |
+| R-M1-8 | chaos | P1 | gap | PO-7 185-186, HOST-2, M1-AC1 | shutdown "through the CLI's own exit" has no time limit, no rule for a turn or background work in progress, and none for a restart during shutdown | pending | |
+| R-M1-9 | chaos | P1 | gap | PO-1 168, PO-7, M1-AC4 | nothing requires a soldier's tree to end when the post office itself dies, and no test kills the post office | pending | |
+| R-M1-10 | chaos | P1 | gap | HOST-2, PO-7, PO-3 | when the post office ends while the mod lives (lease lapse, crash), or the mod reloads, no restart rule and nothing shown to the owner | pending | |
+| R-M1-11 | chaos | P1 | untestable | PO-5 183, §5.1 490 | a failed log write has a fault test but no defined outcome | pending | |
+| R-M1-12 | chaos | P1 | vendor-fact | CH-2 226, M1-AC3, VER-9 | "turn totals come from result" is wrong in streaming input: cost and modelUsage are running totals, usage leaves out subagents, a crash or stop result reports zeros | pending | |
+| R-M1-13 | chaos | P2 | readiness | PO-1 165-167, M1 | M1's crash path rests on PO-8 (M2), MSG-4 (M3) and CH-9/SI-4 (M4); decision 7's snapshot is not in the text | pending | |
+| R-M1-14 | chaos | P2 | gap | PO-1 165 | "restarted at most three times" has no window, delay or reset, and no rule for a start that fails at once | pending | |
+| R-M1-15 | chaos | P2 | ambiguity | PO-1 166, CH-1, §5.1 488 | a login error followed by an exit: a crash (restarts, then down) or "log in" | pending | |
+| R-M1-16 | chaos | P2 | gap | CH-2 225, PO-8 | a result from a turn no message started (a background task's follow-up) can end the next message's turn | pending | |
+| R-M1-17 | chaos | P2 | vendor-fact | CH-1, CH-2, M1-AC4 | claude's fields for each error kind are not named; api_retry events; the refusal field; the reply from result.result | pending | |
+| R-M1-18 | chaos | P2 | ambiguity | PO-1 166, CH-1, §5.1 486 | a malformed line: a lost connection (crash) or an error the session survives (H2) | pending | |
+| R-M1-19 | chaos | P2 | gap | PO-1, §5.1 487 | a living but silent CLI has no limit or state; a slow first start versus a watchdog | pending | |
+| R-M1-20 | chaos | P2 | ambiguity | HOST-2, PO-7, SES-1 | whether /clear or /resume ends the session, and the army | pending | |
+| R-M1-21 | chaos | P2 | ambiguity | PO-5, WSP-8, SEC-4 | redaction per write misses a secret split across streamed fragments | pending | |
+| R-M1-22 | chaos | P3 | editorial | M1-AC4 552 | "three different kinds" counts a refusal as an error kind | pending | |
+| R-M1-23 | implementer | P1 | contradiction | M1 Implements 536-544, CH-1 217 | M1 never says where a soldier runs or that a guard watches it: decision 7's throwaway snapshot and the auto/full guard rule are missing (overlaps R-M1-13, R-F-3) | pending | |
+| R-M1-24 | implementer | P1 | gap | CH-7 255, CH-2 221-224 | no table of the permission mode each autonomy level passes; with no flag, claude -p starts in default, in auto (telemetry off, 2.1.285+), or in a committed .claude/settings.json defaultMode | pending | |
+| R-M1-25 | implementer | P1 | gap | PO-7, PO-1 | closing "through the CLI's own exit" has no mechanism or limit | DUPLICATE of R-M1-8 | |
+| R-M1-26 | implementer | P1 | gap | PO-1 164, HOST-2 | what a start does when a lock exists | DUPLICATE of R-M1-3 | |
+| R-M1-27 | implementer | P1 | untestable | HOST-2 94, M1-AC1 | "the first time the army is used" has no trigger in M1 (no command before M5, no tool before M3); no M1 way to open, stop or reconnect a soldier | pending | |
+| R-M1-28 | implementer | P1 | untestable | WSP-8, SEC-4, VER-6 | nothing defines what redact() removes | DUPLICATE of R-M1-7 (severity to settle: P1 or P2) | |
+| R-M1-29 | implementer | P1 | gap | PO-5, §5.1 490 | a failed log write has no outcome | DUPLICATE of R-M1-11 | |
+| R-M1-30 | implementer | P1 | vendor-fact | CH-2 226, M1-AC3 | turn totals from result are wrong under either reading | DUPLICATE of R-M1-12 | |
+| R-M1-31 | implementer | P2 | contradiction | M1-AC2 547, PO-3 173 | M1-AC2 says the credential "travels only on standard input", while every command presents it over the loopback port | pending | |
+| R-M1-32 | implementer | P2 | untestable | PO-3 172, SEC-2 | "anywhere a soldier can read" can't hold against memory reads | DUPLICATE of R-M1-1 | |
+| R-M1-33 | implementer | P2 | ambiguity | HOST-2, PO-7 | whether /clear and /resume end the session | DUPLICATE of R-M1-20 | |
+| R-M1-34 | implementer | P2 | gap | PO-1 165-167 | restarts: no span, delay, or fresh-versus-resumed rule | DUPLICATE of R-M1-14 | |
+| R-M1-35 | implementer | P2 | ambiguity | PO-1 168 (D-3) | "whole process tree" undefined for processes that leave it; containment when the post office dies | DUPLICATE of R-M1-5, R-M1-9 | |
+| R-M1-36 | implementer | P2 | gap | PO-1 164 | the process start time has no source, format or precision | DUPLICATE of R-M1-3 | |
+| R-M1-37 | implementer | P2 | gap | CH-2 223, CH-6 | a permission request in M1 waits forever, unseen | DUPLICATE of R-M1-4 | |
+| R-M1-38 | implementer | P2 | vendor-fact | CH-2 222, HOST-1 | Shadow Army's own mod would load in every claude soldier once installed | DUPLICATE of R-F-28 | |
+| R-M1-39 | implementer | P2 | ambiguity | VER-5 506 | "chosen through configuration" doesn't say which; one reading puts an executable path in a repository file (with R-M1-2) | pending | |
+| R-M1-40 | implementer | P2 | contradiction | PO-1 166, §5.1 486 | an unparseable line in M1 | DUPLICATE of R-M1-18 | |
+| R-M1-41 | implementer | P2 | vendor-fact | CH-1 219, M1-AC4 | nothing maps claude's error values to CH-1's kinds | DUPLICATE of R-M1-17 | |
+| R-M1-42 | implementer | P2 | vendor-fact | CH-2 223 | --permission-prompts needs claude 2.1.259 or later; no minimum version or outcome for an older CLI | pending | |
+| R-M1-43 | implementer | P2 | vendor-fact | CH-2 224, SI-2 | --append-system-prompt can't carry multi-line instructions through an npm claude.cmd on Windows; --append-system-prompt-file exists | pending | |
+| R-M1-44 | implementer | P2 | ambiguity | §2 69, CH-2 226 | whether cache writes count in the context size | DUPLICATE of R-F-40 | |
+| R-M1-45 | implementer | P2 | untestable | VER-9, §5.1 L, M1-AC8 | "within 5%" is undefined | DUPLICATE of R-F-33 | |
+| R-M1-46 | implementer | P2 | untestable | M1-AC3, §5.1 C | M1-AC3 needs a real recording with a subagent message, which no listed recording produces | pending | |
+| R-M1-47 | implementer | P2 | gap | SI-3, M1-AC5 | no offline way to count tokens, and no outcome when rules.md pushes the instructions past 1,500 | pending | |
+| R-M1-48 | implementer | P2 | ambiguity | ARM-1 376-378, M1-AC6 | whether codex-astra keeps orchestrate (v1's Monarch), and which file's order "listed after" means | pending | |
+| R-M1-49 | implementer | P2 | gap | ARM-3 381 | "they can be configured" names no setting and no uniqueness rule for names | pending | |
+| R-M1-50 | implementer | P2 | untestable | VER-6 507-511 | coverage can't measure code in another language or run in a child process; string literals count as covered | pending | |
+| R-M1-51 | implementer | P2 | untestable | HOST-2 | HOST-2's lifecycle is never checked against the real Claude Code host; needs L | pending | |
+| R-M1-52 | implementer | P2 | gap | PO-5, WSP-8 | logs have no format, names, size limit or retention; whether 2.0 SAFE-6's 30-day pruning applies | pending | |
+| R-M1-53 | implementer | P2 | gap | PO-3 173 | "the refusal is reported" has no rate limit, so bad requests flood the log | pending | |
+| R-M1-54 | implementer | P3 | gap | PO-2, M1-AC1 | no setting chooses the address; accepted strings unlisted | pending | |
+| R-M1-55 | implementer | P3 | ambiguity | SI-1 275 | "the handoff instruction" has two readings | pending | |
+| R-M1-56 | implementer | P3 | editorial | CH-7, M1-AC5 | CH-7 forbids a flag that disables a safeguard, but full autonomy maps to bypassPermissions | pending | |
