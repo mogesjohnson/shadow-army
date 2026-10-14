@@ -11,7 +11,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-4 | A threat model (R-F-5) | big | card to batch | — |
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
 | D-6 | How G7's "traced in CI" is met (R-F-36) | technical | to decide in the fix pass | — |
-| D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | option A drafted and the Linux prototype done; options B and C to redraft (cut off); then a judge and the card | — |
+| D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A and B drafted, the Linux prototype done; option C resuming; then a judge and the card | — |
 
 ---
 
@@ -50,7 +50,12 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Bake-off:** drafters for A, B and C; option reviewers (red team, enterprise operator, implementer, chaos); evidence from vendor and OS documentation and Codex's draft (read-only); an offline prototype where a fact can be measured locally (WSL Ubuntu is installed but stopped); a judge. Then a card to the owner.
 - **Record:**
   - **Option A drafted** (`raw/D-3-option-A.md`): the helper compiled at first use, as NEW-1 to NEW-9 with ACs M1-AC9 to M1-AC14. It lists exactly which macOS interfaces are unpublished (`libproc.h` calls, `proc_info_private.h` flavours, `__proc_info_extended_id`, a hand-built audit token, launchd coalitions), a self-test before the first soldier, "no containment, no soldier" with no override, a SHA-256-checked source, and a cache that only the user can write.
-  - **Options B and C:** their drafters were cut off by the usage limit. Their partial work is only in session 7ac7daad's agent transcripts, so redraft them.
+  - **Option B drafted** (`raw/D-3-option-B.md`, resumed after the limit): the helper prebuilt per system and processor (static Linux x64 and arm64, one universal macOS binary; Windows keeps a Job Object), no install script and no download, its SHA-256 built into the post office and checked before each use, a containment check at every start with no override, reproducible builds compared across two runners, attestations, and CI on old and new Ubuntu, Alpine, macOS on Apple silicon and Intel, and Windows x64 and arm64 (NEW-1 to NEW-10, M1-AC9 to M1-AC15). Facts that bear on the owner's card:
+    - notarizing the macOS helper needs an Apple Developer Program membership (99 USD a year) and a Developer ID;
+    - GitHub artifact attestations and npm provenance need a public repository (or GitHub Enterprise Cloud); environment secrets in a private repository need a paid GitHub plan; publishing to npm needs `"private": true` removed from package.json;
+    - **a Windows finding for any option:** M1's draft creates its Job Object through PowerShell's `Add-Type`, which compiles C# at run time. Under AppLocker or App Control, PowerShell runs in ConstrainedLanguage mode, where `Add-Type` can't load arbitrary C# or Win32 APIs (https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_language_modes?view=powershell-5.1). In a locked-down enterprise, Windows containment would fail. The spec says what the Job Object must do, not how it is created;
+    - Linux binaries built statically, because a dynamic build on Ubuntu 24.04 needs glibc 2.34 (the prototype).
+  - **Option C:** its drafter was cut off by the usage limit; resuming it last.
   - **Prototype, Linux** (`prototypes/D-3/`; results `prototypes/D-3/results/summary-main2-20261014-063708.txt`; WSL Ubuntu 24.04, kernel 6.6, systemd 255, cgroup v2; 20 runs per mechanism; a fake CLI starts (a) a child, (b) a nohup child, (c) a setsid double-fork daemon, (d) a daemon every 5 ms):
 
     | Mechanism | (a) | (b) | (c) daemon | (d) daemon storm |
