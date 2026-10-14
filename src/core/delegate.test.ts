@@ -24,7 +24,7 @@ describe("the shipped orchestratorDelegate.md", () => {
   });
 
   it("names the monarch order and returns the prose guide", () => {
-    expect(d.policy.monarch).toEqual({ default: "codex-astra", fallback: "claude-opus" });
+    expect(d.policy.monarch).toEqual({ default: "claude-opus" });
     expect(d.guide).toContain("# Orchestrator Delegation Guide");
     expect(d.guide).not.toContain("monarch:"); // front-matter is not part of the guide
   });

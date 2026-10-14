@@ -47,16 +47,16 @@ describe("a goal in the chat", () => {
       { timeout: 10_000 },
     );
     expect(s.idle).toBe(false);
-    expect(texts(s).at(-1)).toContain("Plan by codex-astra: make one.txt");
+    expect(texts(s).at(-1)).toContain("Plan by claude-opus: make one.txt");
     s.decide(true);
     await done;
 
     expect(kinds(s)).toEqual(["welcome", "user", "steps", "text", "dashboard", "text"]);
     const steps = s.getState().entries[2]!;
-    expect(steps.kind === "steps" && steps.steps.current).toMatchObject({ label: "codex-astra is planning", done: "ok" });
+    expect(steps.kind === "steps" && steps.steps.current).toMatchObject({ label: "claude-opus is planning", done: "ok" });
     const dash = s.getState().entries[4]!;
     expect(dash.kind === "dashboard" && dash.view).toMatchObject({ ended: "done", tasks: [{ id: "a", status: "ok" }] });
-    expect(texts(s).at(-1)).toContain("Report from codex-astra:");
+    expect(texts(s).at(-1)).toContain("Report from claude-opus:");
     expect(s.getState()).toMatchObject({ busy: undefined, confirm: undefined });
     expect(repo.git("branch", "--list", "shadow/run/*")).not.toBe("");
     expect(s.turns()).toEqual([{ goal: "make one file", outcome: expect.stringContaining("The file is there. (tasks: 1 ok).") }]);
@@ -93,7 +93,7 @@ describe("a goal in the chat", () => {
     expect(plan.s.getState().mode).toBe("ask");
     await plan.s.submit("/plan make two");
     expect(kinds(plan.s)).not.toContain("dashboard");
-    expect(texts(plan.s).filter((t) => t.startsWith("Plan by codex-astra"))).toHaveLength(2);
+    expect(texts(plan.s).filter((t) => t.startsWith("Plan by claude-opus"))).toHaveLength(2);
     expect(plan.repo.git("branch", "--list", "shadow/*")).toBe("");
     expect(plan.s.turns().map((t) => t.outcome)).toEqual(["planned only, not run. Plan: make one.txt", "planned only, not run. Plan: make two.txt"]);
   });
@@ -144,7 +144,7 @@ describe("a goal in the chat", () => {
     expect(kinds(s)).toEqual(["welcome", "user", "steps", "text", "text"]);
     const [said, note] = s.getState().entries.slice(-2);
     expect(said).toMatchObject({ kind: "text", text: answer, tone: "normal" });
-    expect(note).toMatchObject({ kind: "text", text: "answered by codex-astra at low effort; no soldiers were needed", tone: "dim" });
+    expect(note).toMatchObject({ kind: "text", text: "answered by claude-opus at low effort; no soldiers were needed", tone: "dim" });
     expect(texts(s).join("\n")).not.toContain("Nothing to do.");
     expect(texts(s).join("\n")).not.toContain("Plan by");
     const steps = s.getState().entries[2]!;
@@ -167,9 +167,9 @@ describe("a goal in the chat", () => {
     s.cycleMode();
     expect(s.getState().mode).toBe("plan");
     await s.submit("where is the CLI?");
-    expect(texts(s)).toEqual(["It is in src/cli.ts.", "answered by codex-astra at low effort; no soldiers were needed"]);
+    expect(texts(s)).toEqual(["It is in src/cli.ts.", "answered by claude-opus at low effort; no soldiers were needed"]);
     await s.submit("make one file");
-    expect(texts(s).at(-1)).toContain("Plan by codex-astra: make one.txt");
+    expect(texts(s).at(-1)).toContain("Plan by claude-opus: make one.txt");
   });
 
   it("keeps the session going when the Monarch fails, and says why", async () => {
@@ -355,7 +355,7 @@ describe("effort and tokens", () => {
     const s = new ChatSession({
       cwd: repo.dir,
       roster,
-      monarch: "codex-astra",
+      monarch: "claude-opus",
       runCommand: vi.fn(async () => ({ output: "", ok: true })),
       exit: vi.fn(),
       clearScreen: vi.fn(),
@@ -374,7 +374,7 @@ describe("effort and tokens", () => {
   it("asks for the Monarch's effort first, from the suggestion, and plans at the one chosen", async () => {
     const { s, m } = named([planReply([], "It draws the chat.")]);
     const done = s.submit("what does src/chat do?");
-    expect(s.getState().pickEffort).toEqual({ soldier: "codex-astra", model: expect.any(String), suggested: "low", choice: "low" });
+    expect(s.getState().pickEffort).toEqual({ soldier: "claude-opus", model: expect.any(String), suggested: "low", choice: "low" });
     expect(s.idle).toBe(false);
     expect(m.prompts).toEqual([]);
     s.moveEffort(1);
@@ -382,7 +382,7 @@ describe("effort and tokens", () => {
     await done;
     expect(m.prompts.map((p) => p.effort)).toEqual(["medium"]);
     expect(texts(s)).toContain("It draws the chat.");
-    expect(texts(s)).toContain("answered by codex-astra at medium effort; no soldiers were needed");
+    expect(texts(s)).toContain("answered by claude-opus at medium effort; no soldiers were needed");
   });
 
   it("cancels the goal from the effort picker, calling no model", async () => {
@@ -400,7 +400,7 @@ describe("effort and tokens", () => {
     s.cycleMode(); // ask -> auto
     await s.submit("what is this?");
     expect(s.getState().pickEffort).toBeUndefined();
-    expect(texts(s)).toContain("codex-astra plans at low effort (suggested)");
+    expect(texts(s)).toContain("claude-opus plans at low effort (suggested)");
     expect(m.prompts.map((p) => p.effort)).toEqual(["low"]);
   });
 
@@ -424,10 +424,10 @@ describe("effort and tokens", () => {
     s.cycleMode(); // auto: no picker
     await s.submit("what is this?");
     await s.submit("what is that?");
-    expect(s.getState().tokens).toEqual([{ soldier: "codex-astra", model: expect.any(String), efforts: [], inputTokens: 2400, outputTokens: 600 }]);
-    expect(tokenSummary(s.getState().tokens)).toBe("codex-astra 3k");
+    expect(s.getState().tokens).toEqual([{ soldier: "claude-opus", model: expect.any(String), efforts: [], inputTokens: 2400, outputTokens: 600 }]);
+    expect(tokenSummary(s.getState().tokens)).toBe("claude-opus 3k");
     // The answer's turn names what the Monarch used.
-    expect(texts(s).some((t) => /Tokens:\n {2}codex-astra .* effort low\s+1\.2k in · 300 out/.test(t))).toBe(true);
+    expect(texts(s).some((t) => /Tokens:\n {2}claude-opus .* effort low\s+1\.2k in · 300 out/.test(t))).toBe(true);
   });
 
   it("counts and shows the tokens of a turn whose planning failed", async () => {
@@ -437,9 +437,9 @@ describe("effort and tokens", () => {
     await s.submit("make one file");
     expect(texts(s).some((t) => t.startsWith("error: no valid plan"))).toBe(true);
     const tokens = s.getState().tokens;
-    expect(tokens[0]).toMatchObject({ soldier: "codex-astra", inputTokens: 2400, outputTokens: 600 });
+    expect(tokens[0]).toMatchObject({ soldier: "claude-opus", inputTokens: 2400, outputTokens: 600 });
     expect(tokens.every((t) => t.inputTokens === 2400 && t.outputTokens === 600)).toBe(true);
-    expect(texts(s).at(-1)).toMatch(/^Tokens:\n {2}codex-astra .* effort high\s+2\.4k in · 600 out/);
+    expect(texts(s).at(-1)).toMatch(/^Tokens:\n {2}claude-opus .* effort high\s+2\.4k in · 600 out/);
   });
 
   it("keeps one soldier's different models apart in the status line", () => {

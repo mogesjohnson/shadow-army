@@ -178,9 +178,9 @@ describe("a whole run on the dashboard", () => {
 
     expect(result.outcomes.map((o) => [o.taskId, o.status])).toEqual([["a", "ok"], ["b", "error"], ["r", "skipped"]]);
     const out = term.text();
-    expect(out.indexOf("✓ codex-astra is planning")).toBeLessThan(out.indexOf("Plan by codex-astra"));
+    expect(out.indexOf("✓ claude-opus is planning")).toBeLessThan(out.indexOf("Plan by claude-opus"));
     const frame = out.slice(out.indexOf("SHADOW ARMY"));
-    expect(frame).toContain(`run ${result.runId}  Monarch codex-astra`);
+    expect(frame).toContain(`run ${result.runId}  Monarch claude-opus`);
     expect(frame).toContain(`Branch: ${result.integration!.branch}`);
     expect(frame).toMatch(/Finished\s+3\/3 done/);
     expect(frame).toMatch(/a\s+grok\s+build\s+done\s+\d+:\d\d\s+merged, 1 file/);

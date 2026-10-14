@@ -24,9 +24,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: node scripts/check-spec-trace.mjs
       - run: npx tsc --noEmit
       - run: npm run build
-      - run: npm test
+      - run: npm run test:coverage
       # The commit-msg hook is a POSIX sh script; check it under a real sh, not only Git for Windows'.
       - name: commit-msg hook under sh
         if: runner.os != 'Windows'
