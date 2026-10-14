@@ -11,6 +11,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-4 | A threat model (R-F-5) | big | card to batch | — |
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
 | D-6 | How G7's "traced in CI" is met (R-F-36) | technical | to decide in the fix pass | — |
+| D-7 | How the settled read-only rule reaches every soldier (R-F-3) | technical if A or C, big if B or D | bake-off in the fix pass | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A, B and C drafted, the Linux prototype done; next a judge, then the card | — |
 
 ---
@@ -110,3 +111,14 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** G7 promises verification traced in CI, but VER-7 checks only the spec's own cross-references, and the AC-to-test link lives on each PR (VER-3, §6).
 - **Options:** (a) tests name the requirement or AC IDs they verify, and VER-7 fails a requirement with U, C, I, X, F or S evidence that no test names; R and L stay on the PR (VER-8, §6); (b) reword G7: "Every requirement is verified: CI checks the trace (VER-7), and each PR maps its ACs to evidence (section 6)."
 - **Next:** decide directly or by a small bake-off in the fix pass; it changes nothing the owner sees.
+
+## D-7 How the settled read-only rule reaches every soldier (from R-F-3)
+
+- **Kind:** technical if A or C wins; big if B or D (B changes SES-1 and what the meter shows; D amends an owner rule).
+- **Question:** the settled rule says that with auto or full autonomy a read-only task runs in a throwaway snapshot. v2 carries it only for agy (ARM-6). Verifier F-V6 found that a snapshot per read-only task conflicts with one long-lived session per soldier (G2, SES-1) for soldiers that take both builds and reviews (Kaisel, Bellion).
+- **Options** (from F-V6):
+  - A: under auto or full, a soldier without the build role runs its whole session in a snapshot, as agy does; a builder's non-build turn is audited with no claims, so any write is reverted and reported as a read-violation; the guard covers every turn;
+  - B: a builder's non-build brief goes to a second, snapshot session of that soldier;
+  - C: each turn switches to the vendor's own read-only mode where the CLI has one, else A (rests on vendor modes, which agy ignores);
+  - D: the owner amends the rule for v2, so that worktree isolation, the guard and the claim audit replace the snapshot.
+- **Next:** a bake-off in the fix pass (drafts for A and C first, since either keeps the decision technical).
