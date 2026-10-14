@@ -8,6 +8,8 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 |---|---|---|---|---|
 | D-1 | The spec's name and revision scheme | big | card sent to the owner 2026-10-14 | — |
 | D-2 | The lease timing: do the owner's 10 s / 30 s hold up against Codex's 5 s / 20 s? | technical unless the timing changes (then big) | prototype and both drafts done; judge next (option reviews dropped) | — |
+| D-4 | A threat model (R-F-5) | big | card to batch | — |
+| D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | option A drafted and the Linux prototype done; options B and C to redraft (cut off); then a judge and the card | — |
 
 ---
@@ -75,3 +77,17 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 **D-3 judge** (`spec-verifier`), after B and C: the judge template in PLAYBOOK section 12, with the three drafts (`raw/D-3-option-*.md`), the prototype results and this record. It must also say whether any option needs the owner to accept a residual risk (big).
 
 **D-2 judge** (`spec-verifier`): "Decision D-2: PO-7's lease. Options: A, the owner's 10 s / 30 s (`docs/spec/review/raw/D-2-option-A.md`); B, Codex's 5 s / 20 s (`raw/D-2-option-B.md`). Evidence: the prototype (`raw/D-2-prototype.md`, `prototypes/D-2/results.txt`) and the record above. Score each option from 1 to 5 on, in order: safety and security; the owner's goals and settled decisions (`docs/spec/review/settled.md`); failure outcomes (the seven simulations); enterprise readiness (PLAYBOOK section 10); cost to the owner; effort to build; how easily it is undone. A lower criterion breaks ties only. Return the scores as a table, your recommendation and its two strongest reasons, which parts of the other draft the winner should take, and whether the decision is big or technical by PLAYBOOK section 14 (changing the owner's 10 s / 30 s is big)."
+
+## D-4 A threat model (from R-F-5)
+
+- **Kind:** big (PLAYBOOK §10: a new area goes to the owner first; trust levels and accepting residual risk are security posture).
+- **Question:** the spec has no threat model: no assets, actors, trust boundaries, or what is prevented versus only detected. The 2.0 draft had one (legacy lines 147-170).
+- **Options** (from verifier F-V1): A, an informative appendix in the 2.0 draft's form, drafted in pass X1: assets, actors and their trust, each boundary with its control and X test, prevented versus detected, and the residual risks for the owner to accept; B, the same as a normative §1 subsection, with a boundary-to-control-to-test table that Appendix B's script checks; C, none, stated as a non-goal (fails PLAYBOOK §10.1).
+- **Next:** a card to the owner, batched with the other big ones. Leaning A.
+
+## D-5 Limits: queues, sends, sizes and logs (from R-F-7)
+
+- **Kind:** big (pulls H62, an after-v2.0 item, into 2.0, or accepts a residual risk). The values are technical once the option is chosen.
+- **Question:** nothing bounds a soldier's queue, its send rate, a message's or a report's size, or the logs. A runaway soldier's sends become paid turns (G5); logs can fill the disk.
+- **Options** (from verifier F-V1): A, caps now on queue depth, send rate, message and report size (refused with a reason), plus log size and rotation (H62 pulled in); B, the queue, send and size caps now, with logs left to H62 after v2.0 and the disk risk stated; C, no limits in v2.0, stated as a non-goal with the risk.
+- **Next:** a card to the owner, batched. Leaning B.
