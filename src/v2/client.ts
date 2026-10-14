@@ -5,12 +5,16 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { redact } from "./logs.js";
 import type { OfficeEvent } from "./postOffice.js";
+import type { LeaseOptions } from "./lease.js";
 
 export interface ClientOptions {
   cwd: string;
   onEvent?: (event: OfficeEvent) => void;
   /** Dependency injection for a configured runtime entry, including subprocess contract tests. */
   command?: { file: string; args: string[] };
+  /** The native mod passes its ephemeral credential on relay stdin, never argv/env/disk. */
+  credential?: string;
+  lease?: LeaseOptions;
 }
 
 /** One caller owns the process and the secret, retained only in memory and its stdin pipe. */
@@ -23,11 +27,15 @@ export class OfficeClient {
   private ended = false;
 
   constructor(options: ClientOptions) {
+    if (options.credential !== undefined) {
+      if (!/^[a-f0-9]{64}$/i.test(options.credential)) throw new Error("caller credential must contain 32 random bytes");
+      this.#credential = options.credential;
+    }
     const command = options.command ?? { file: process.execPath, args: [fileURLToPath(new URL("./main.js", import.meta.url))] };
     const cwd = resolve(options.cwd);
     // Windows' default child job dies with its launcher before guard finalization can run.
     // Keep the helper alive briefly to observe caller loss and close its contained sessions.
-    this.child = spawn(command.file, [...command.args, "--cwd", cwd], { cwd, detached: process.platform === "win32", windowsHide: true, stdio: "pipe" });
+    this.child = spawn(command.file, [...command.args, "--cwd", cwd], { cwd, detached: !!options.lease || process.platform === "win32", windowsHide: true, stdio: "pipe" });
     let ready!: (url: string) => void;
     let failed!: (error: Error) => void;
     this.ready = new Promise<string>((resolve, reject) => { ready = resolve; failed = reject; });
@@ -57,8 +65,11 @@ export class OfficeClient {
       this.child.once("error", (error) => { this.ended = true; clearTimeout(timer); failed(error); resolve(); });
       this.child.once("close", () => { this.ended = true; clearTimeout(timer); failed(new Error(`post office ended${diagnostic ? `: ${diagnostic}` : ""}`)); resolve(); });
     });
-    this.child.stdin.end(`${JSON.stringify({ credential: this.#credential })}\n`);
+    this.child.stdin.end(`${JSON.stringify({ credential: this.#credential, ...(options.lease ? { lease: options.lease } : {}) })}\n`);
   }
+
+  /** The relay exposes only this loopback endpoint; its credential stays in memory. */
+  endpoint(): Promise<string> { return this.ready; }
 
   async request<T = unknown>(command: Record<string, unknown>): Promise<T> {
     const url = await this.ready;

@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startOfficeServer, type OfficeServer, type ServerOptions } from "./server.js";
 import { redact } from "./logs.js";
+import type { LeaseOptions } from "./lease.js";
 
 /** Bootstrap is written once then closed, as the mod contract specifies. Shutdown is authenticated. */
 export async function runPostOffice(settings: Partial<Omit<ServerOptions, "credential">> = {}): Promise<void> {
@@ -50,8 +51,9 @@ export async function runPostOffice(settings: Partial<Omit<ServerOptions, "crede
     });
     const parsed: unknown = JSON.parse(bootstrap);
     credential = parsed && typeof parsed === "object" && "credential" in parsed && typeof parsed.credential === "string" ? parsed.credential : "";
+    const lease = parsed && typeof parsed === "object" && "lease" in parsed ? parsed.lease as LeaseOptions : undefined;
     const cwdIndex = process.argv.indexOf("--cwd");
-    office = await startOfficeServer({ ...settings, cwd: settings.cwd ?? (cwdIndex >= 0 ? process.argv[cwdIndex + 1] ?? "" : process.cwd()), credential,
+    office = await startOfficeServer({ ...settings, lease: settings.lease ?? lease, cwd: settings.cwd ?? (cwdIndex >= 0 ? process.argv[cwdIndex + 1] ?? "" : process.cwd()), credential,
       onEvent: (event) => { if (!outputLost) process.stdout.write(`${JSON.stringify(event)}\n`); },
       onShutdown: () => { void stop(); },
     });

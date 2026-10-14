@@ -4,9 +4,10 @@ import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { PostOffice, type OfficeOptions } from "./postOffice.js";
 import { redact } from "./logs.js";
+import { SessionLease, type LeaseOptions } from "./lease.js";
 
 export interface OfficeServer { url: string; office: PostOffice; close(): Promise<void>; }
-export interface ServerOptions extends OfficeOptions { host?: string; port?: number; onShutdown?: () => void; }
+export interface ServerOptions extends OfficeOptions { host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; }
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
   let size = 0;
@@ -41,6 +42,13 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
   const office = await PostOffice.create(options);
   let unlock: (() => Promise<void>) | undefined;
   let server: Server | undefined;
+  let lease: SessionLease | undefined;
+  let api: OfficeServer | undefined;
+  const requestShutdown = () => {
+    lease?.dispose();
+    if (options.onShutdown) options.onShutdown();
+    else void api?.close().catch(() => {});
+  };
   try {
     unlock = await folderLock(office.root);
     const credential = Buffer.from(options.credential, "hex");
@@ -62,9 +70,18 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
         }
         try {
           const command = await body(request);
+          lease?.assertActive();
           const key = typeof command.soldier === "string" ? command.soldier : "";
           let value: unknown;
           switch (command.action) {
+            case "renew":
+              if (!lease) throw new Error("post office has no mod session lease");
+              value = lease.renew(command.session); break;
+            case "release":
+              if (!lease) throw new Error("post office has no mod session lease");
+              lease.release(command.session);
+              office.leaseEnded(lease.session, "released");
+              value = { ok: true }; break;
             case "army": value = office.army(); break;
             case "open": value = await office.open(key); break;
             case "send":
@@ -79,7 +96,7 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
             default: throw new Error("unknown post office command");
           }
           response.end(JSON.stringify(redact({ result: value }, [options.credential])));
-          if (command.action === "shutdown") options.onShutdown?.();
+          if (command.action === "shutdown" || command.action === "release") requestShutdown();
         } catch (error) {
           response.writeHead(400); response.end(JSON.stringify(redact({ error: error instanceof Error ? error.message : String(error) }, [options.credential])));
         }
@@ -93,19 +110,29 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
     if (!address || typeof address === "string") throw new Error("post office did not bind a TCP port");
     let closing: Promise<void> | undefined;
     const bound = server;
-    return { office, url: `http://${host === "::1" ? "[::1]" : host}:${address.port}`, close() {
+    api = { office, url: `http://${host === "::1" ? "[::1]" : host}:${address.port}`, close() {
       return closing ??= (async () => {
+        lease?.dispose();
         const stopped = new Promise<void>((resolve, reject) => bound.close((error) => error ? reject(error) : resolve()));
         try {
           await office.close();
         } finally {
           // A caller holding an incomplete/rejected request cannot pin shutdown or the folder lock.
           bound.closeAllConnections();
-          try { await stopped; } finally { await unlock!(); }
+          // An uncertain containment close must retain the folder marker. A fresh caller
+          // cannot launch another writer until the owner has checked the previous session.
+          await stopped;
         }
+        await unlock!();
       })();
     } };
+    if (options.lease) lease = new SessionLease(options.lease, () => {
+      office.leaseEnded(lease!.session, "expired");
+      requestShutdown();
+    });
+    return api;
   } catch (error) {
+    lease?.dispose();
     server?.close();
     await office.close();
     await unlock?.();

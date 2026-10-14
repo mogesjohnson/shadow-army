@@ -1,10 +1,12 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
-import type { Readable, Writable } from "node:stream";
+import { PassThrough, Writable, type Readable } from "node:stream";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 export interface ProcessExit { code: number | null; signal: NodeJS.Signals | null }
 export interface ManagedProcess {
@@ -25,16 +27,30 @@ export interface ManagedProcessOptions {
 }
 
 const notFound = (error: unknown) => (error as NodeJS.ErrnoException).code === "ESRCH";
+const execute = promisify(execFile);
+let nativeBridge: Promise<string> | undefined;
+async function processSupervisor(): Promise<string> {
+  return nativeBridge ??= (async () => {
+    const script = fileURLToPath(new URL("../../scripts/build-process-supervisor.mjs", import.meta.url));
+    const { stdout } = await execute(process.execPath, [script], { timeout: 35_000, maxBuffer: 65536 });
+    const built = JSON.parse(stdout) as { path?: string };
+    if (!built.path || !isAbsolute(built.path)) throw new Error("Native session containment returned no executable.");
+    return built.path;
+  })();
+}
 
-/** Each session owns a process group on POSIX and a kill-on-close Job Object on Windows. */
+/** Kernel ownership: Linux subreaper, macOS job coalition, Windows kill-on-close Job Object. */
 export async function spawnManagedProcess(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  return process.platform === "win32" ? spawnWindows(options) : spawnPosix(options);
+  return process.platform === "win32" ? spawnWindows(options) : process.platform === "darwin" ? spawnDarwin(options) : spawnPosix(options);
 }
 
 async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProcess> {
+  if (process.platform !== "linux") throw new Error("Session process containment currently supports Windows, Linux, and macOS.");
+  const supervisor = await processSupervisor();
   // The guardian owns this group for its entire life. It survives native root exit, and IPC EOF
   // lets it tear down the group even when the post office is killed without running finally.
-  const guardian = spawn(process.execPath, ["-e", POSIX_GUARDIAN], {
+  // prctl is set before exec, so the Node guardian inherits the kernel's subreaper identity.
+  const guardian = spawn(supervisor, ["launch", process.execPath, "-e", POSIX_GUARDIAN], {
     cwd: options.cwd, env: options.env, detached: true, stdio: ["pipe", "pipe", "pipe", "ipc"],
   }) as ChildProcessWithoutNullStreams;
   const group = guardian.pid;
@@ -50,12 +66,15 @@ async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProces
   let failed!: (error: Error) => void;
   const ready = new Promise<void>((done, fail) => { started = done; failed = fail; });
   let pid: number | undefined;
+  let contained = false, containmentError: Error | undefined;
   guardian.on("message", (message: unknown) => {
     if (!message || typeof message !== "object") return;
     const event = message as { kind?: string; pid?: number; code?: number | null; signal?: NodeJS.Signals | null; message?: string };
     if (event.kind === "started" && typeof event.pid === "number") { pid = event.pid; started(); }
     else if (event.kind === "exited") settleExit({ code: event.code ?? null, signal: event.signal ?? null });
     else if (event.kind === "error") failed(new Error(event.message ?? "POSIX process guardian failed"));
+    else if (event.kind === "closed") contained = true;
+    else if (event.kind === "containment_error") containmentError = new Error(event.message ?? "Linux session descendants did not end.");
   });
   guardian.stdin.on("error", () => {});
   guardian.once("error", (error) => { settleExit({ code: null, signal: null }); failed(error); });
@@ -73,11 +92,14 @@ async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProces
     pid: pid!, stdin: guardian.stdin, stdout: guardian.stdout, stderr: guardian.stderr, exited,
     close() {
       return closing ??= (async () => {
-        const fallback = setTimeout(killGroup, 4_000);
+        const fallback = setTimeout(killGroup, 15_000);
         guardian.stdin.end();
         if (guardian.connected) guardian.send({ kind: "close" }, () => {});
         else killGroup();
-        try { await guardianClosed; } finally { clearTimeout(fallback); }
+        try {
+          await guardianClosed;
+          if (!contained) throw containmentError ?? new Error("Linux session guardian ended without verifying that every descendant stopped.");
+        } finally { clearTimeout(fallback); }
       })();
     },
   };
@@ -87,14 +109,44 @@ async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProces
 // the remaining bytes stream to native stdin with backpressure and without text decoding.
 const POSIX_GUARDIAN = String.raw`
 const { spawn } = require('node:child_process');
+const { readFileSync } = require('node:fs');
 let native, header = Buffer.alloc(0), stopping = false, closing = false, nativeExited = false, grace, forced;
 function stop() {
   if (stopping) return;
   stopping = true;
   clearTimeout(grace); clearTimeout(forced);
-  // Include the guardian itself: its death is the teardown acknowledgment, and its live PID
-  // prevents accidental reuse of the owned group while a native descendant remains running.
-  try { process.kill(-process.pid, 'SIGKILL'); } catch { process.exit(1); }
+  // The kernel reparents orphaned descendants to this subreaper even after setsid, double-fork,
+  // or env clearing. Kill direct children first; their remaining children are then adopted here.
+  // Reading and signaling run in one JS callback, before libuv can reap/reuse these child PIDs.
+  const began = Date.now();
+  function drain() {
+    let children;
+    try { children = readFileSync('/proc/self/task/'+process.pid+'/children','utf8').trim().split(/\s+/).filter(Boolean).map(Number); }
+    catch (error) { fail(error.message); return; }
+    // Adopted children unknown to libuv can remain zombies until this guardian exits.
+    // They have already exited and cannot fork or write; only live children need signals.
+    children = children.filter(pid => {
+      try {
+        const stat = readFileSync('/proc/'+pid+'/stat','utf8');
+        return stat.slice(stat.lastIndexOf(')')+2).split(' ')[0] !== 'Z';
+      } catch (error) { if(error.code==='ENOENT') return false; throw error; }
+    });
+    if (!children.length) {
+      if (process.connected) process.send({kind:'closed'},()=>process.exit(0));
+      else process.exit(0);
+      return;
+    }
+    for (const pid of children) {
+      try { process.kill(pid,'SIGKILL'); } catch (error) { if(error.code!=='ESRCH') { fail(error.message); return; } }
+    }
+    if (Date.now()-began>=10000) { fail('Linux session descendants did not empty within 10 seconds'); return; }
+    setTimeout(drain,10); // Let libuv reap killed children before testing the next adopted generation.
+  }
+  function fail(message) {
+    if(process.connected) process.send({kind:'containment_error',message},()=>process.exit(1));
+    else process.exit(1);
+  }
+  drain();
 }
 function notify(event, then) {
   if (!process.connected) { stop(); return; }
@@ -148,6 +200,185 @@ process.stdin.on('data', (bytes) => {
   } catch (error) { notify({ kind: 'error', message: error.message }, stop); }
 });
 if (!process.connected) stop();
+`;
+
+interface DarwinIdentity { pid: number; unique: string; version: number; coalition: string; status: number }
+async function darwinNative<T>(bridge: string, args: string[]): Promise<T> {
+  const { stdout } = await execute(bridge, args, { timeout: 12_000, maxBuffer: 4 * 1024 * 1024 });
+  return JSON.parse(stdout) as T;
+}
+
+async function spawnDarwin(options: ManagedProcessOptions): Promise<ManagedProcess> {
+  const bridge = await processSupervisor();
+  const own = await darwinNative<DarwinIdentity>(bridge, ["query", String(process.pid)]);
+  const label = `com.shadow-army.session.${randomUUID()}`;
+  const nonce = randomBytes(32).toString("hex");
+  const temporary = await mkdtemp(join(tmpdir(), "shadow-darwin-session-"));
+  const bootstrap = join(temporary, "bootstrap.json");
+  const stdout = new PassThrough(), stderr = new PassThrough();
+  const server = createServer();
+  let socket: Socket | undefined, coalition: string | undefined, rootPid: number | undefined;
+  let exitSettled = false, readySettled = false, closing: Promise<void> | undefined;
+  let settleExit!: (exit: ProcessExit) => void, start!: () => void, fail!: (error: Error) => void;
+  const exited = new Promise<ProcessExit>((done) => { settleExit = (value) => { if (!exitSettled) { exitSettled = true; done(value); } }; });
+  const ready = new Promise<void>((done, reject) => { start = () => { readySettled = true; done(); }; fail = (error) => { if (!readySettled) reject(error); }; });
+  let containReady!: () => void;
+  const readyToContain = new Promise<void>((done) => { containReady = done; });
+  const closedSocket = new Promise<void>((done) => server.once("close", () => done()));
+  const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+  async function removeJob() {
+    try { await execute("/bin/launchctl", ["remove", label], { timeout: 5_000, maxBuffer: 65536 }); }
+    catch (error) { if ((error as { code?: number }).code !== 3) throw error; }
+  }
+  async function contain() {
+    // Stop demand/restarts before scanning. The kernel coalition identity remains valid after
+    // its leader is gone, and IDs are never reused. Only this nonce job is removed.
+    let removalError: unknown;
+    try { await removeJob(); } catch (error) { removalError = error; }
+    if (coalition) await darwinNative(bridge, ["close", coalition]);
+    else if (removalError) throw removalError;
+    if (removalError) throw removalError;
+  }
+  server.on("connection", (candidate) => {
+    if (socket) { candidate.destroy(); return; }
+    let pending = "", authenticated = false;
+    const authenticationTimer = setTimeout(() => candidate.destroy(), 10_000);
+    candidate.setEncoding("utf8");
+    candidate.on("error", () => {});
+    candidate.on("close", () => {
+      clearTimeout(authenticationTimer);
+      if (socket === candidate) {
+        containReady(); settleExit({ code: null, signal: null });
+        fail(new Error("macOS session bridge closed before native launch."));
+      }
+    });
+    candidate.on("data", (bytes: string) => {
+      pending += bytes;
+      if (pending.length > 2 * 1024 * 1024) { candidate.destroy(); return; }
+      let newline: number;
+      while ((newline = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, newline); pending = pending.slice(newline + 1);
+        let event: { kind?: string; nonce?: string; pid?: number; code?: number | null; signal?: NodeJS.Signals | null; stream?: string; data?: string; message?: string };
+        try { event = JSON.parse(line); } catch { candidate.destroy(); return; }
+        if (!authenticated) {
+          if (event.kind !== "hello" || event.nonce !== nonce || !Number.isSafeInteger(event.pid) || !event.pid || event.pid <= 1) { candidate.destroy(); return; }
+          authenticated = true; socket = candidate; clearTimeout(authenticationTimer);
+          void (async () => {
+            const { stdout: registration } = await execute("/bin/launchctl", ["list", label], { timeout: 5_000, maxBuffer: 65536 });
+            const jobPid = /"PID"\s*=\s*([1-9]\d*)/.exec(registration)?.[1];
+            if (!jobPid || Number(jobPid) !== event.pid) throw new Error("Session bridge did not come from its registered launchd job.");
+            const identity = await darwinNative<DarwinIdentity>(bridge, ["query", String(event.pid)]);
+            const candidateCoalition = identity.coalition;
+            if (candidateCoalition === own.coalition || candidateCoalition === "1") throw new Error("launchd did not create an isolated session coalition.");
+            const members = await darwinNative<DarwinIdentity[]>(bridge, ["members", candidateCoalition]);
+            if (members.length !== 1 || members[0]?.unique !== identity.unique) throw new Error("Session coalition contained another process before native launch.");
+            coalition = candidateCoalition;
+            candidate.write(`${JSON.stringify({ kind: "launch", config: { file: options.file, args: options.args ?? [], cwd: options.cwd, env: options.env ?? process.env, bridge, coalition, label } })}\n`);
+          })().catch((error: Error) => { fail(error); candidate.destroy(); });
+          continue;
+        }
+        if (event.kind === "started" && typeof event.pid === "number") { rootPid = event.pid; start(); }
+        else if (event.kind === "exited") settleExit({ code: event.code ?? null, signal: event.signal ?? null });
+        else if (event.kind === "contain_ready") containReady();
+        else if (event.kind === "error") { fail(new Error(event.message ?? "macOS session guardian failed")); containReady(); }
+        else if (event.kind === "data" && typeof event.data === "string") {
+          const stream = event.stream === "stderr" ? stderr : stdout;
+          if (!stream.write(Buffer.from(event.data, "base64"))) {
+            candidate.pause(); stream.once("drain", () => candidate.resume());
+          }
+        }
+      }
+    });
+  });
+  await new Promise<void>((done, reject) => {
+    server.once("error", reject); server.listen(0, "127.0.0.1", done);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("macOS session bridge has no loopback port.");
+  await writeFile(bootstrap, JSON.stringify({ port: address.port, nonce }), { mode: 0o600 });
+  let launchTimer: NodeJS.Timeout | undefined;
+  try {
+    await execute("/bin/launchctl", ["submit", "-l", label, "--", process.execPath, "-e", DARWIN_GUARDIAN, bootstrap], { timeout: 10_000, maxBuffer: 65536 });
+    launchTimer = setTimeout(() => fail(new Error("macOS session guardian did not launch within 15 seconds.")), 15_000);
+    await ready;
+  } catch (error) {
+    try { await contain(); } finally { socket?.destroy(); server.close(); stdout.end(); stderr.end(); await rm(temporary, { recursive: true, force: true }); }
+    throw error;
+  } finally { if (launchTimer) clearTimeout(launchTimer); }
+  const stdin = new Writable({
+    write(chunk, _encoding, done) {
+      if (!socket || socket.destroyed) { done(new Error("macOS native session is closed.")); return; }
+      socket.write(`${JSON.stringify({ kind: "stdin", data: Buffer.from(chunk).toString("base64") })}\n`, done);
+    },
+    final(done) { if (socket && !socket.destroyed) socket.write('{"kind":"stdin_end"}\n', done); else done(); },
+  });
+  stdin.on("error", () => {});
+  return {
+    pid: rootPid!, stdin, stdout, stderr, exited,
+    close() {
+      return closing ??= (async () => {
+        stdin.end();
+        if (socket && !socket.destroyed) socket.write('{"kind":"close"}\n');
+        await Promise.race([readyToContain, pause(3_000)]);
+        try { await contain(); }
+        finally {
+          socket?.destroy(); server.close(); await closedSocket;
+          stdout.end(); stderr.end(); settleExit({ code: null, signal: null });
+          await rm(temporary, { recursive: true, force: true });
+        }
+      })();
+    },
+  };
+}
+
+// The private bootstrap contains a session-only bridge nonce. The post office's credential
+// never enters this file, the launchd job arguments, this connection, or the native environment.
+const DARWIN_GUARDIAN = String.raw`
+const {readFileSync,unlinkSync}=require('node:fs');
+const {createConnection}=require('node:net');
+const {spawn}=require('node:child_process');
+const bootstrap=process.argv[1], setup=JSON.parse(readFileSync(bootstrap,'utf8'));
+unlinkSync(bootstrap);
+let native,config,closed=false,nativeExited=false,nativeClosed=false,closing=false,grace,forced,pending='';
+const socket=createConnection({host:'127.0.0.1',port:setup.port});
+function emit(event,then){if(socket.destroyed)return;socket.write(JSON.stringify(event)+'\n',then);}
+function readyToContain(){clearTimeout(grace);clearTimeout(forced);emit({kind:'contain_ready'});}
+function orphanCleanup(){
+ if(closed)return;closed=true;clearTimeout(grace);clearTimeout(forced);
+ if(!config){process.exit(1);return;}
+ const helper=spawn(config.bridge,['close-own',config.coalition,config.label],{stdio:'ignore'});
+ helper.once('error',()=>process.exit(1));helper.unref();
+ // Stay alive until the helper has stopped/reaped every other coalition member, including us.
+ setInterval(()=>{},1000);
+}
+function close(){
+ if(closing)return;closing=true;
+ if(!native||nativeClosed){readyToContain();return;}
+ native.stdin.end();
+ grace=setTimeout(()=>{try{native.kill('SIGTERM');}catch{}forced=setTimeout(readyToContain,500);},2000);
+}
+socket.on('connect',()=>emit({kind:'hello',nonce:setup.nonce,pid:process.pid}));
+socket.setEncoding('utf8');socket.on('error',()=>{});socket.on('close',orphanCleanup);
+socket.on('data',bytes=>{
+ pending+=bytes;if(pending.length>2097152){socket.destroy();return;}
+ let newline;while((newline=pending.indexOf('\n'))>=0){
+  const line=pending.slice(0,newline);pending=pending.slice(newline+1);
+  let event;try{event=JSON.parse(line);}catch{socket.destroy();return;}
+  if(event.kind==='launch'&&!native){
+   config=event.config;
+   native=spawn(config.file,config.args,{cwd:config.cwd,env:config.env,stdio:['pipe','pipe','pipe']});
+   native.stdin.on('error',()=>{});
+   native.once('spawn',()=>emit({kind:'started',pid:native.pid}));
+   native.once('error',error=>emit({kind:'error',message:error.message}));
+   for(const [name,stream] of [['stdout',native.stdout],['stderr',native.stderr]]){
+    stream.on('data',bytes=>{if(!socket.write(JSON.stringify({kind:'data',stream:name,data:bytes.toString('base64')})+'\n')){stream.pause();socket.once('drain',()=>stream.resume());}});
+   }
+   native.once('exit',(code,signal)=>{nativeExited=true;emit({kind:'exited',code,signal});});
+   native.once('close',()=>{nativeClosed=true;if(closing)readyToContain();});
+  }else if(event.kind==='stdin'&&native&&!closing){if(!native.stdin.write(Buffer.from(event.data,'base64'))){socket.pause();native.stdin.once('drain',()=>socket.resume());}}
+  else if(event.kind==='stdin_end'||event.kind==='close')close();
+ }
+});
 `;
 
 async function resolveWindowsCommand(file: string, cwd: string, env: NodeJS.ProcessEnv): Promise<string> {

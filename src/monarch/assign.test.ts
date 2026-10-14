@@ -38,11 +38,11 @@ describe("assignTasks", () => {
   });
 
   it("never lets a soldier review work it built, at any depth", () => {
-    // claude-opus is the only reviewer and builds hard tasks; if it built anything upstream, nobody may review.
+    // Both eligible reviewers built upstream changes, one at an indirect dependency.
     const r = assignTasks(
       checked([
         build("a", { difficulty: "hard", soldier: "claude-opus" }),
-        build("b", { dependsOn: ["a"] }),
+        build("b", { difficulty: "hard", soldier: "codex-astra", dependsOn: ["a"] }),
         { id: "r", title: "review", role: "review", dependsOn: ["b"], brief: "b" },
       ]),
       roster,
@@ -50,7 +50,10 @@ describe("assignTasks", () => {
       all,
     );
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.errors.join()).toMatch(/nobody may take review task "r".*claude-opus: wrote the change/);
+    if (!r.ok) {
+      expect(r.errors.join()).toMatch(/nobody may take review task "r".*claude-opus: wrote the change/);
+      expect(r.errors.join()).toMatch(/codex-astra: wrote the change/);
+    }
   });
 
   it("leaves out soldiers whose CLI is not installed", () => {

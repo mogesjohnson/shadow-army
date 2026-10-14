@@ -88,6 +88,17 @@ describe.skipIf(process.platform === "win32")("POSIX guardian owner death", () =
 });
 
 describe("session process containment", () => {
+  it.skipIf(process.platform === "win32")("stops an orphaned detached writer with an empty environment", async () => {
+    const cwd = await directory(); const marker = join(cwd, "detached-writes");
+    const writer = "const fs=require('node:fs');setInterval(()=>fs.appendFileSync(process.argv[1],'x'),20);";
+    const native = "const c=require('node:child_process').spawn(process.execPath,['-e',process.argv[1],process.argv[2]],{detached:true,env:{},stdio:'ignore'});c.unref();c.once('spawn',()=>process.exit(42));";
+    const session = await launch(process.execPath, ["-e", native, writer, marker], cwd);
+    expect((await session.exited).code).toBe(42);
+    await waitForFile(marker);
+    await session.close();
+    const stopped = await readFile(marker, "utf8"); await pause(250);
+    expect(await readFile(marker, "utf8")).toBe(stopped);
+  }, 30_000);
   it("allows asynchronous native EOF cleanup before stopping retained descendants", async () => {
     const cwd = await directory(); const marker = join(cwd, "cleanup-writes"); const cleanup = join(cwd, "native-cleanup");
     const writer = "const fs=require('node:fs');setInterval(()=>fs.appendFileSync(process.argv[1],'x'),20);";

@@ -259,6 +259,10 @@ export class PostOffice {
 
   refused(): void { this.record({ type: "command_refused", data: { reason: "wrong or missing Monarch credential" } }); }
 
+  leaseEnded(session: string, reason: "expired" | "released"): void {
+    this.record({ type: "lease_ended", data: { session, reason } });
+  }
+
   close(): Promise<void> {
     return this.closePromise ??= (async () => {
       this.closed = true;

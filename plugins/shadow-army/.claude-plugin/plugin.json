@@ -1,0 +1,6 @@
+{
+  "name": "shadow-army",
+  "version": "0.1.0",
+  "description": "Shadow Army M1 post-office lifecycle and Claude session controls.",
+  "author": { "name": "Shadow Army" }
+}

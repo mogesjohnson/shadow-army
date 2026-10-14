@@ -10,10 +10,10 @@ import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 const servers: OfficeServer[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 const sockets: Socket[] = [];
-async function setup() {
+async function setup(lease?: { session: string; ttlMs: number }) {
   const repo = makeRepo(); repos.push(repo);
   const events: OfficeEvent[] = [];
-  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, onEvent: (event) => events.push(event) }); servers.push(server);
+  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, onEvent: (event) => events.push(event) }); servers.push(server);
   return { repo, server, events };
 }
 const command = (server: OfficeServer, value: Record<string, unknown>) => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify(value) });
@@ -23,6 +23,25 @@ afterEach(async () => {
   repos.splice(0).forEach((repo) => repo.cleanup());
 });
 describe("M1 authenticated loopback command server", () => {
+  it("a released mod session cannot renew or keep its folder alive", async () => {
+    const { repo, server, events } = await setup({ session: "current", ttlMs: 2000 });
+    expect((await command(server, { action: "renew", session: "old" })).status).toBe(400);
+    expect((await command(server, { action: "renew", session: "current" })).status).toBe(200);
+    expect((await command(server, { action: "release", session: "current" })).status).toBe(200);
+    await server.close();
+    expect(events.filter((event) => event.type === "lease_ended")).toEqual([
+      { type: "lease_ended", data: { session: "current", reason: "released" } },
+    ]);
+    await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
+  }, 20_000);
+
+  it("missed heartbeats close the office while the owning test process stays alive", async () => {
+    const { repo, server, events } = await setup({ session: "expired", ttlMs: 100 });
+    await until(() => events.some((event) => event.type === "lease_ended"));
+    await server.close();
+    expect(events.find((event) => event.type === "lease_ended")?.data).toEqual({ session: "expired", reason: "expired" });
+    await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
+  }, 20_000);
   it("only binds loopback, authenticates every request and has no HTTP event stream", async () => {
     const { repo, server } = await setup();
     await expect(startOfficeServer({ cwd: repo.dir, credential, host: "0.0.0.0" })).rejects.toThrow("non-loopback");

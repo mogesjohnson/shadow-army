@@ -45,7 +45,7 @@ describe("planning", () => {
     const m = monarchScript({ plans: [planReply(twoBuildsAndReview)] });
     const result = await runGoal(base(r, { planOnly: true, getAdapter: m.getAdapter }));
     expect(result.status).toBe("planned");
-    expect(result.monarch).toBe("codex-astra");
+    expect(result.monarch).toBe("claude-opus");
     expect(result.order).toEqual(["a", "b", "r"]);
     // Grok never reviews: the router overrides the Monarch's pick.
     expect(result.assignments.find((a) => a.taskId === "r")).toMatchObject({ soldier: "claude-opus", overridden: { wanted: "grok" } });
@@ -76,8 +76,12 @@ describe("planning", () => {
 
   it("falls back to the second Monarch when the first is unavailable", async () => {
     const r = repo();
+    // An explicit custom policy keeps fallback coverage while the shipped roster has one Monarch.
+    const fallbackRoster = shippedRoster();
+    fallbackRoster.soldiers.get("codex-astra")!.roles.push("orchestrate");
+    fallbackRoster.monarch = { default: "codex-astra", fallback: "claude-opus" };
     const m = monarchScript({ plans: [planReply(twoBuildsAndReview)], failing: ["codex"] });
-    const result = await runGoal(base(r, { planOnly: true, getAdapter: m.getAdapter }));
+    const result = await runGoal(base(r, { roster: fallbackRoster, planOnly: true, getAdapter: m.getAdapter }));
     expect(result.monarch).toBe("claude-opus");
     expect(m.prompts.map((p) => p.cli)).toEqual(["codex", "claude"]);
   });
@@ -85,7 +89,7 @@ describe("planning", () => {
   it("gives up with a clear error when no Monarch can plan", async () => {
     const r = repo();
     const bad = monarchScript({ plans: ["no plan here"] });
-    await expect(runGoal(base(r, { planOnly: true, getAdapter: bad.getAdapter }))).rejects.toThrow(/no valid plan: codex-astra returned an invalid plan twice; claude-opus returned an invalid plan twice/);
+    await expect(runGoal(base(r, { planOnly: true, getAdapter: bad.getAdapter }))).rejects.toThrow(/no valid plan: claude-opus returned an invalid plan twice/);
 
     const none = monarchScript({ plans: [] });
     await expect(
@@ -310,9 +314,9 @@ describe("effort and tokens", () => {
     // The plan and the final report.
     expect(m.prompts.map((p) => p.effort)).toEqual(["low", "low"]);
     expect(result.monarchUsage).toEqual([
-      { soldier: "codex-astra", model: expect.any(String), effort: "low", calls: 2, inputTokens: 2400, outputTokens: 600 },
+      { soldier: "claude-opus", model: expect.any(String), effort: "low", calls: 2, inputTokens: 2400, outputTokens: 600 },
     ]);
-    expect(renderResult(result)).toMatch(/Tokens:\n {2}codex-astra \([^)]+\)\s+effort low\s+2\.4k in · 600 out/);
+    expect(renderResult(result)).toMatch(/Tokens:\n {2}claude-opus \([^)]+\)\s+effort low\s+2\.4k in · 600 out/);
   });
 
   it("sends each Monarch call's usage as it returns, even when no valid plan comes", async () => {
@@ -323,7 +327,7 @@ describe("effort and tokens", () => {
     const usage = events.filter((e) => e.type === "usage");
     // Every call the Monarchs made, including the failed plans.
     expect(usage).toHaveLength(m.prompts.length);
-    expect(usage[0]).toMatchObject({ soldier: "codex-astra", inputTokens: 1200 });
+    expect(usage[0]).toMatchObject({ soldier: "claude-opus", inputTokens: 1200 });
   });
 
   it("plans at high effort when nobody chooses one, as sa run always has", async () => {
