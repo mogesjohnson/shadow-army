@@ -2,7 +2,7 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-Last updated: 2026-10-14, session 7ac7daad. The owner had the stopped agents resumed one or two at a time, and then nothing new started. Unit F's round-1 verification is done; M1's has not run; no fix is applied yet.
+Last updated: 2026-10-14, end of session 7ac7daad. Unit F's round-1 verification is done; M1's has not run; no fix is applied. All agents are finished; the D-3 prototype's agent was left unresumed, because its results are already recorded. The next session starts from `NEXT-SESSION.md`.
 
 ## Where things are
 
@@ -29,23 +29,20 @@ Last updated: 2026-10-14, session 7ac7daad. The owner had the stopped agents res
 
 ## Next, in order
 
-Two agents at a time; commit and push after each result that changes a doc.
+Credit is short (the owner had about 7% of the weekly limit left on 2026-10-14). Ask the owner before starting any agent; run at most two at a time; commit and push after every result that changes a doc. `NEXT-SESSION.md` has the setup, the prompts and the detail.
 
-1. **Set up** the machine, as `NEXT-SESSION.md` says.
-2. **Verify M1:** `batches/M1-V1.md` to `M1-V6.md`, with the verifier prompt in `NEXT-SESSION.md`. Record each verdict in the ledger.
-   - Then a second verifier for each P1 that the first one CONFIRMED or called a DECISION (flow, section 4). Build that packet from the confirmed P1s; `M1-V7.md` and `M1-V8.md` hold every P1, so trim them.
-3. **F is verified.** Its fixes are listed, one per finding, in the ledger's Resolution column ("fix pending: …").
-4. **Fix** every CONFIRMED finding in `docs/spec/v2.md`. A fix checker checks each P0 and P1 fix. Run the trace, commit, push, and comment on the PR.
-5. **D-2:** the judge, over `raw/D-2-option-A.md`, `raw/D-2-option-B.md`, `raw/D-2-prototype.md` and `decisions.md`. Apply the winner. If it is A, no owner question is needed; tell Codex to match `lease.ts`.
-6. **D-3:** redraft options B and C (prompts in `decisions.md`), a judge, then the card to the owner.
-7. **DECISION verdicts:** a bake-off for each technical one, and a card for each big one. Likely big:
-   - B2: how far PO-3 goes, and accepting what can't be fixed;
+1. **Set up** the machine (`NEXT-SESSION.md`, section 3).
+2. **Apply unit F's 24 confirmed fixes** to `docs/spec/v2.md`. This needs no agent. Each fix is in the ledger's Resolution column ("fix pending: …"), with detail in `raw/F-r1-verify-V1.md` to `V6.md`. Run the trace (0 problems), set the version to 0.7, and commit one group at a time.
+3. **Verify M1** (agents): `batches/M1-V1.md` to `M1-V6.md`. Then a second verifier for each P1 the first one confirmed; `M1-V7.md` and `M1-V8.md` hold every P1, so trim them first. Record the verdicts with `tools/set-verdicts.mjs`.
+4. **Fix M1's confirmed findings**, and run a fix check for every P1 fix, F's included.
+5. **Judges:** D-2 (apply the winner; tell Codex to match `lease.ts`), then D-3, then its card.
+6. **D-6 and D-7** in the fix pass. Then **the cards** D-3, D-4 and D-5, and any big decision from M1's verification. Likely big:
+   - B2: how far PO-3 goes;
    - whether `/clear` and `/resume` end the army (with H38);
-   - how far a repository's own config is trusted;
-   - how soldiers start without the owner's mods.
-8. **Round 2** for F and M1, with two reviewers each (flow, section 4): a test author and a consistency auditor; M1 also needs vendor facts.
-9. **C's rows that M1 touches.** `tools/check-appendix-c.mjs` and the idea files need the owner's `the-future` folder, which exists only on the owner's machine. On another machine, review those rows against the appendix's own text, and leave the checker for the owner's machine.
-10. **The first batch to Codex**, through the owner. Merge with its approval.
+   - how far a repository's own config is trusted.
+7. **Round 2** for F and M1, with two reviewers each.
+8. **C's rows that M1 touches.** These need the owner's `the-future` folder.
+9. **The first batch to Codex**, through the owner.
 
 ## Waiting on the owner
 
