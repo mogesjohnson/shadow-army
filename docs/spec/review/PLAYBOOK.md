@@ -47,7 +47,7 @@ The session that runs this is the **orchestrator**. It plans the rounds, spawns 
 
 Both agent types are defined in `.claude/agents/` in the main checkout (excluded from git through `.git/info/exclude`). Their committed copies are in `docs/spec/review/agents/`; on a new machine, copy them into `.claude/agents/` before starting. Their tools are Read, Grep, Glob, WebSearch and WebFetch only, so they cannot change a file. If the types are missing, use `general-purpose` agents with `model: "opus"`, put the agent's rules (the text of the definition files) at the top of each prompt, and run `git status` after every round to be sure nothing changed.
 
-Spawn agents in parallel where they are independent: the reviewers of one round, and the verifiers of one batch. Agents run in the background, and the orchestrator is told when each finishes.
+Run at most two agents at a time (the owner, 2026-10-14). Start the next when one returns, even when more are independent, such as the reviewers of one round or the verifiers of one batch. Agents run in the background, and the orchestrator is told when each finishes.
 
 ## 4. Units
 
@@ -353,7 +353,7 @@ When in doubt, it is big.
 **The bake-off**
 1. **Frame.** Write the question, two or three options (including "leave it as is" when that is a real option), and what would settle it.
 2. **Draft.** A drafter writes each option as spec text, ready to drop in.
-3. **Test.** Run these for each option in parallel, each reviewer seeing one option only:
+3. **Test.** Run these for each option, two agents at a time, each reviewer seeing one option only:
    - the lenses that fit: red team, chaos (the seven simulations), implementer, enterprise operator, and the owner's advocate;
    - the evidence: vendor docs, Codex's M1 draft (read-only), and the spike reports;
    - a prototype, when a question of fact would settle it and no live model is needed;

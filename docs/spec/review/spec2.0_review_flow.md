@@ -35,6 +35,7 @@ The two definitions are in [`agents/`](agents/). On a new machine, copy them int
 - **At most two agents run at once** (the owner, 2026-10-14). Start the next one when one comes back. Order the queue so that verification and fixes of the unit nearest done come first: M1 unblocks Codex.
 - The lineup stays the one round 1 used: three reviewers for each unit in round 1, verifiers for every finding, drafters, prototypes and a judge for each decision. Only the pace changes.
 - **Why:** on 2026-10-14, thirteen agents at once used up a five-hour usage window in about ten minutes, three times. Every agent cut off mid-run had to be resumed later, which re-reads its whole transcript (100k–300k tokens) at full price.
+- **The rate, measured:** one verifier (F-V1) alone used about 243k tokens, 68 tool calls and 16 minutes.
 - **When a usage or rate limit cuts agents off:**
   - in the same session, send each one a message (SendMessage) once the limit resets; it continues from its transcript;
   - in a new session, or on another machine, they can't be resumed. Rerun them from their packets or prompts.
