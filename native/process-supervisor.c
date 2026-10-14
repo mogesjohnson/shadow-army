@@ -1,5 +1,9 @@
 /* Shadow Army's small OS bridge. No model, prompt, credential, or tool policy lives here. */
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE 1
+#else
 #define _POSIX_C_SOURCE 200809L
+#endif
 #include <errno.h>
 #include <inttypes.h>
 #include <signal.h>
