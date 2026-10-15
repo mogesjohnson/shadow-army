@@ -18,6 +18,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-10 | How far the folder's own config and policy files are trusted (R-M1-2) | big (a trust boundary; A adds a card the owner answers) | first verifier M1-V1 done; second verifier, then a card | — |
 | D-11 | What `/clear`, `/resume` and `/branch` do to the army (R-M1-20, R-F-38; with H38) | big (what the owner keeps, loses and pays) | first verifier M1-V2 done; a card to batch | — |
 | D-12 | A mod reload or a lost hooks worker leaves a post office the new mod instance can't command (R-F-30) | technical if (a); (b) and (c) are big | (a) chosen by the orchestrator, 2026-10-15; second verifier due | — |
+| D-13 | What starts the army in M1, which has no command or tool (R-M1-27) | technical | A chosen by the orchestrator, 2026-10-15 | — |
 
 ---
 
@@ -201,6 +202,14 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Choice** (2026-10-15, the orchestrator): **(a)**, the only option that keeps every settled decision; the owner may overrule. A probe of whether a spawned child outlives a hot reload doesn't block it, since the lease ends a survivor anyway.
 - **Next:** the second verifier (R-F-30 is P1), then apply in M1's fix pass.
 
+## D-13 What starts the army in M1 (from R-M1-27)
+
+- **Kind:** technical: milestone order and test entry points, within settled decision 3 (verifier M1-V3). Option B would turn big if its subcommands shipped in 2.0.
+- **Question:** M1 implements neither HOST-9 (commands, M5) nor HOST-10 (the `send` tool, M3), so "the first time the army is used" means nothing in M1, and Codex's draft invented `/army open|inspect|stop`, which HOST-9 doesn't have.
+- **Options:** A, HOST-9's `/army` comes forward to M1, list form only, as the first use, and `sa live` is named as M1's dev tool to open, message, stop and reconnect a claude soldier; B, the draft's dev-only `/army open|inspect|stop <soldier>`, replaced by HOST-9's commands in M5; C, no M1 trigger: M1-AC1 uses a fake `$`, and everything live in M1 goes through `sa live`.
+- **Choice** (2026-10-15, the orchestrator): **A**, the verifier's recommendation: it adds nothing HOST-9 lacks, and it gives M1's live checks (M1-AC8, R-M1-51) a real trigger. The owner may overrule.
+- **Next:** apply in M1's fix pass.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
@@ -212,4 +221,5 @@ Limits and defaults that a confirmed fix left open. The orchestrator set each fr
 | The parity check's runs (R-F-33) | §5.1 L | one each way; two more each way when a run fails on tokens alone, judged by the medians | One run keeps the owner's cost low; the repeats absorb a model's run-to-run spread (codex's normal follow-up re-ran a command on 2026-10-07) without letting one bad run decide. |
 | A background task's follow-up wait (R-F-12) | PO-8 | 30 seconds after the task ended, on the monotonic clock | claude starts its follow-up turn on its own once a task ends (spike S6); a task stopped by s starts none. Waiting the same 30 s as CH-10's stop leaves room for a slow first event, and a later turn still gets its own guard and audit. A probe of claude's follow-up latency could shorten it. |
 | The parity check's read rule (R-F-63) | §5.1 L | no tool call in the live follow-up opens either file, a shell command included; after a failure either way, at most one of the three live follow-ups may read | The same spread the token repeats absorb shows up as a model choosing to re-check (codex ran a command in its 2026-10-07 headless follow-up); two clean follow-ups out of three still show the session kept the context. |
+| A crashed channel's restarts (R-M1-14) | PO-1, M1-AC4 | after 1 s, then 5 s, then 30 s; a fourth crash within 10 minutes of the first leaves it down; a reconnect, or 10 minutes without a crash, resets the count | The reviewer's proposal, which the verifier took as proposed: a start that fails at once no longer uses up all three restarts in under a second, and crashes days apart no longer add up to "down". |
 | The pass rule (R-F-33) | §5.1 L, VER-9 | live total at most 1.05 times headless, over both prompts | One-sided, because a cheaper live session is the goal; over both prompts, because the follow-up is what a live session saves. On the 2026-10-07 data all four CLIs pass (claude -3.8%, codex -14.8%, grok +2.1%, agy +3.6%). |
