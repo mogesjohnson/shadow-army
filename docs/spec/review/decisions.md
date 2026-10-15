@@ -10,7 +10,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-2 | The lease timing: do the owner's 10 s / 30 s hold up against Codex's 5 s / 20 s? | technical unless the timing changes (then big) | prototype and both drafts done; judge next (option reviews dropped) | — |
 | D-4 | A threat model (R-F-5) | big | card to batch | — |
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
-| D-6 | How G7's "traced in CI" is met (R-F-36) | technical | decided 2026-10-15 by the orchestrator: option (a); to apply once fix check F-FC1 is back | — |
+| D-6 | How G7's "traced in CI" is met (R-F-36) | technical | decided 2026-10-15 by the orchestrator: option (a) | v0.7: VER-7, Appendix B rule 9, M1-AC7 |
 | D-7 | How the settled read-only rule reaches every soldier (R-F-3) | technical if A or C, big if B or D | bake-off in the fix pass | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A, B and C drafted, the Linux prototype done; next a judge, then the card | — |
 | D-8 | The live checks' $2 budget per release: how a CLI that reports no cost counts, and what happens when it runs out (R-F-33, R-F-20) | big (money) | card to batch | — |
@@ -148,6 +148,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   - C: each turn switches to the vendor's own read-only mode where the CLI has one, else A (rests on vendor modes, which agy ignores);
   - D: the owner amends the rule for v2, so that worktree isolation, the guard and the claim audit replace the snapshot.
 - **Next:** a bake-off in the fix pass (drafts for A and C first, since either keeps the decision technical).
+- **When it lands:** the glossary's Autonomy entry names the read-only rule too (fix check F-FC1's finding 6, R-F-58): "Among the CLI's flags it chooses only documented ones (CH-7); with `auto` or `full`, a read-only task also runs in a throwaway snapshot (<D-7's requirement>)."
 
 ## D-8 The live checks' $2 budget (from R-F-33 and R-F-20)
 
@@ -192,4 +193,5 @@ Limits and defaults that a confirmed fix left open. The orchestrator set each fr
 | The parity task's two files (R-F-33) | §5.1 L | `README.md` and `package.json` | The 2026-10-07 runs read "two files" that no record names; these two exist at every commit, and both kinds of run read the same ones, so the comparison stays fair as they change. |
 | The parity check's runs (R-F-33) | §5.1 L | one each way; two more each way when a run fails on tokens alone, judged by the medians | One run keeps the owner's cost low; the repeats absorb a model's run-to-run spread (codex's normal follow-up re-ran a command on 2026-10-07) without letting one bad run decide. |
 | A background task's follow-up wait (R-F-12) | PO-8 | 30 seconds after the task ended, on the monotonic clock | claude starts its follow-up turn on its own once a task ends (spike S6); a task stopped by s starts none. Waiting the same 30 s as CH-10's stop leaves room for a slow first event, and a later turn still gets its own guard and audit. A probe of claude's follow-up latency could shorten it. |
+| The parity check's read rule (R-F-63) | §5.1 L | no tool call in the live follow-up opens either file, a shell command included; after a failure either way, at most one of the three live follow-ups may read | The same spread the token repeats absorb shows up as a model choosing to re-check (codex ran a command in its 2026-10-07 headless follow-up); two clean follow-ups out of three still show the session kept the context. |
 | The pass rule (R-F-33) | §5.1 L, VER-9 | live total at most 1.05 times headless, over both prompts | One-sided, because a cheaper live session is the goal; over both prompts, because the follow-up is what a live session saves. On the 2026-10-07 data all four CLIs pass (claude -3.8%, codex -14.8%, grok +2.1%, agy +3.6%). |
