@@ -10,7 +10,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-2 | The lease timing: do the owner's 10 s / 30 s hold up against Codex's 5 s / 20 s? | technical unless the timing changes (then big) | prototype and both drafts done; judge next (option reviews dropped) | — |
 | D-4 | A threat model (R-F-5) | big | card to batch | — |
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
-| D-6 | How G7's "traced in CI" is met (R-F-36) | technical | to decide in the fix pass | — |
+| D-6 | How G7's "traced in CI" is met (R-F-36) | technical | decided 2026-10-15 by the orchestrator: option (a); to apply once fix check F-FC1 is back | — |
 | D-7 | How the settled read-only rule reaches every soldier (R-F-3) | technical if A or C, big if B or D | bake-off in the fix pass | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A, B and C drafted, the Linux prototype done; next a judge, then the card | — |
 | D-8 | The live checks' $2 budget per release: how a CLI that reports no cost counts, and what happens when it runs out (R-F-33, R-F-20) | big (money) | card to batch | — |
@@ -130,6 +130,11 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** G7 promises verification traced in CI, but VER-7 checks only the spec's own cross-references, and the AC-to-test link lives on each PR (VER-3, §6).
 - **Options:** (a) tests name the requirement or AC IDs they verify, and VER-7 fails a requirement with U, C, I, X, F or S evidence that no test names; R and L stay on the PR (VER-8, §6); (b) reword G7: "Every requirement is verified: CI checks the trace (VER-7), and each PR maps its ACs to evidence (section 6)."
 - **Next:** decide directly or by a small bake-off in the fix pass; it changes nothing the owner sees.
+- **Choice** (2026-10-15, the orchestrator, no bake-off): **(a)**. Option (b) rewrites G7, one of the owner's goals, to fit what CI does today, which would make it a big decision; (a) makes CI do what G7 says, and only adds work for the builder. An enterprise reviewer asks which test proves each control, and today a test for SEC-2's property can be missing while coverage and VER-7 both pass (F-V3).
+- **To apply:**
+  - VER-7: each test names the requirement or AC IDs it verifies, in its title or a comment beside it; the script fails when a requirement of the current milestone or an earlier one, with U, C, I, X, F or S evidence, is named by no test, or when a test names an ID the spec doesn't have; R and L evidence stays on the PR (VER-8, section 6). CI names the current milestone.
+  - Appendix B: a new rule 9 with the same test, which rule 7's script checks in CI only, since it needs the code.
+  - M1-AC7: the trace script also passes this check for M1's requirements.
 
 ## D-7 How the settled read-only rule reaches every soldier (from R-F-3)
 
