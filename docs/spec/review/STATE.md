@@ -2,15 +2,14 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-Last updated: 2026-10-15, session 2. Unit F's 25 confirmed round-1 fixes are applied (spec v0.7, commits `b92637f` to `3ec5f7d`), with no agent run. M1's verification has not run. The next session starts from `NEXT-SESSION.md`, whose section 4 step 1 is now done.
+Last updated: 2026-10-15, session 2. Unit F's round 1 is closed: its 25 confirmed fixes are in v0.7, and two fix checks passed (F-FC1, F-FC2). M1's verification is half done (M1-V1 to M1-V3 recorded). The next session starts from `NEXT-SESSION.md`.
 
 ## Where things are
 
 - **Branch** `claude/63-ultimate-spec-review`, PR #77, "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`). The spec is v0.7. `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <v2@be9deb0.md>` gives 0 problems (99 requirements, 59 ACs); it now checks Appendix B's rules 1 to 6 and the new rule 8 (forward citations marked →Mx), and with a previous version, that no ID is gone. `tools/check-appendix-c.mjs` gives 0 problems.
-- **Agents running** (2026-10-15): F-FC2 (the second fix check) and M1-V4 (records and logs). Their reports go to `raw/F-r1-fixcheck-FC2.md` and `raw/M1-r1-verify-V4.md`; if either is missing in a later session, rerun that agent from its packet. Done: M1-V2 (new D-11, big; D-12, technical, (a) chosen) and M1-V3 (new D-13, technical, A chosen), both cut off by the usage limit and resumed; verdicts in the ledger.
-- **P1s confirmed or called a decision so far, for the second verifiers (M1-V7, M1-V8):** R-M1-1, R-F-29, R-M1-2 (decisions); R-M1-24; R-M1-3, R-M1-8, R-F-11, R-M1-10; R-F-30 (decision); R-M1-9, R-F-10. Trim the packets to these once M1-V4 to M1-V6 are in.
-- **Done this session:** M1-V1 (`raw/M1-r1-verify-V1.md`; verdicts in the ledger; new big decisions D-9 and D-10). Fix check F-FC1 (`raw/F-r1-fixcheck-FC1.md`): all five P1 fixes FIXED, and 12 findings on what they broke or left open, now R-F-53 to R-F-64. Ten are repaired in `7ba5f75`; R-F-58 waits for D-7, and R-F-59 for M1-V2's R-F-38 and R-M1-20. D-6 is applied.
-- **Next agents:** F-FC2, a second fix check of the WSP-10 rework (R-F-53, R-F-54, both P1) and the other repairs, then M1-V4 to M1-V6.
+- **Agents running** (2026-10-15): M1-V4 (records and logs) and M1-V7 (the second, independent verification of eight P1s). Their reports go to `raw/M1-r1-verify-V4.md` and `raw/M1-r1-verify-V7.md`; if either is missing in a later session, rerun that agent from its packet.
+- **Done this session:** unit F's fixes; fix checks F-FC1 (the five P1 fixes FIXED; 12 follow-up findings, R-F-53 to R-F-64) and F-FC2 (all eleven repairs and D-6 FIXED; two P3 notes, R-F-65 and R-F-66, closed). M1-V1, M1-V2 and M1-V3, the last two cut off by the usage limit and resumed. New decisions: D-8 to D-11 (big), D-12 and D-13 (technical, chosen); D-6 decided and applied.
+- **Next agents, two at a time:** M1-V5 and M1-V6, then M1-V8 (trim it to R-F-30, R-M1-9 and R-F-10, plus any P1 that M1-V4 to M1-V6 confirm or call a decision; R-M1-27 is out, now P2). Then M1's fix pass, its fix checks, the D-2 and D-3 judges, and round 2 for F.
 - **Saving a report:** this session's background transcripts are in `~/.claude/projects/C--Users-johns-projects-AIConnections/<session>/subagents/agent-<id>.jsonl` (the tasks folder's `.output` files are empty). Copy one to `<scratch>/tasks/<id>.output`, then run `tools/extract.mjs` with `TASKS_DIR=<scratch>/tasks`.
 - **M1's verifiers** still verify against the `be9deb0` snapshot. v0.7 already changed M1 text, so M1's fix pass merges with it: HOST-2 (the mod only in the owner's session), PO-1 (a restart opens a fresh session in M1), PO-7 (the event stream), CH-2 (context size fields), SI-1, ARM-1, ARM-3, the new WSP-10 (harness git), M1-AC1, M1-AC7, and the new M1-AC9 and M1-AC10.
 - **`main`** is spec v0.5 (`ab04992`). #76 (v0.6: Appendix C and M1's decisions) is a draft, with CI green at `be9deb0` and no Codex review yet.
@@ -18,8 +17,8 @@ Last updated: 2026-10-15, session 2. Unit F's 25 confirmed round-1 fixes are app
 
 | Unit | State |
 |---|---|
-| F | Round 1 reviewed (51 findings) and 32 verified (F-V1 to F-V6): 25 confirmed (5 P1, 14 P2, 6 P3; session 1 counted 13 P2), 4 decisions, 2 refuted, 2 duplicates. R-F-52 found and parked for M3. **All 25 fixed in v0.7.** The 5 P1 fixes (R-F-1, R-F-3's glossary half, R-F-12, R-F-28, R-F-33) need a fix check (agents). The 7 findings that overlap M1 (R-F-10, 11, 13, 16, 29, 30, 38) are verified with M1's packets. |
-| M1 | Round 1 reviewed: 56 findings, 40 to verify. Packets `batches/M1-V1.md` to `M1-V6.md` are ready. |
+| F | Round 1 closed. 51 findings; 32 verified: 25 confirmed (5 P1, 14 P2, 6 P3), 4 decisions, 2 refuted, 2 duplicates; R-F-52 parked for M3. All 25 fixed in v0.7. Fix check F-FC1 passed the five P1 fixes and found 12 follow-ups (R-F-53 to R-F-64); F-FC2 passed their repairs and found two P3 notes (R-F-65, R-F-66), closed. R-F-58 waits for D-7. Round 1 was not clean, so F needs round 2 (two reviewers) and then a second clean round. |
+| M1 | Round 1 reviewed: 56 findings, 40 to verify. M1-V1 to M1-V3 recorded (24 findings: 15 confirmed, 5 decisions, 4 duplicates; one half refuted); M1-V4 and M1-V7 running; M1-V5, M1-V6 and M1-V8 to go. No M1 fix applied yet. |
 | C (M1's rows) | Not started. |
 | M2–M6, C, X1–X5 | Not started. |
 
