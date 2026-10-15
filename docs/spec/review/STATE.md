@@ -32,7 +32,7 @@ Last updated: 2026-10-15, session 2. Unit F's 25 confirmed round-1 fixes are app
 
 ## Next, in order
 
-Credit is short (the owner had about 7% of the weekly limit left on 2026-10-14). Ask the owner before starting any agent; run at most two at a time; commit and push after every result that changes a doc. `NEXT-SESSION.md` has the setup, the prompts and the detail.
+Credit: the owner had over 90% of the weekly limit left on 2026-10-15 (7% on 2026-10-14). Still ask the owner before starting agents in a new session; run at most two at a time; commit and push after every result that changes a doc. `NEXT-SESSION.md` has the setup, the prompts and the detail.
 
 1. **Set up** the machine (`NEXT-SESSION.md`, section 3).
 2. ~~Apply unit F's confirmed fixes.~~ Done 2026-10-15 (v0.7).
