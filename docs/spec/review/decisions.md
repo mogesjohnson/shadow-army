@@ -98,6 +98,15 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** the spec has no threat model: no assets, actors, trust boundaries, or what is prevented versus only detected. The 2.0 draft had one (legacy lines 147-170).
 - **Options** (from verifier F-V1): A, an informative appendix in the 2.0 draft's form, drafted in pass X1: assets, actors and their trust, each boundary with its control and X test, prevented versus detected, and the residual risks for the owner to accept; B, the same as a normative §1 subsection, with a boundary-to-control-to-test table that Appendix B's script checks; C, none, stated as a non-goal (fails PLAYBOOK §10.1).
 - **Next:** a card to the owner, batched with the other big ones. Leaning A.
+- **Card** (drafted 2026-10-15, to send with D-3's):
+
+  ```
+  D-4 Should the 2.0 spec have a threat model?
+  Options: A an informative appendix: assets, actors and how far each is trusted, each trust boundary with its control and security test, what is prevented and what is only detected, and the risks you accept; B the same as a normative section 1 part, checked by the trace script; C none, stated as a non-goal.
+  Tested: verifier F-V1 found none outside Appendix C; the archived 2.0 draft had one (lines 147-170); the review's enterprise checklist (PLAYBOOK 10.1) asks for one.
+  Recommended: A, because an enterprise reviewer gets the boundaries and the residual risks in one place, and it adds no requirement until pass X1 drafts it.
+  For you: you accept, in writing, the residual risks it lists (such as a same-user soldier reading the post office's memory, B2). Can be undone: yes, it is informative.
+  ```
 
 ## D-5 Limits: queues, sends, sizes and logs (from R-F-7)
 
@@ -105,6 +114,15 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** nothing bounds a soldier's queue, its send rate, a message's or a report's size, or the logs. A runaway soldier's sends become paid turns (G5); logs can fill the disk.
 - **Options** (from verifier F-V1): A, caps now on queue depth, send rate, message and report size (refused with a reason), plus log size and rotation (H62 pulled in); B, the queue, send and size caps now, with logs left to H62 after v2.0 and the disk risk stated; C, no limits in v2.0, stated as a non-goal with the risk.
 - **Next:** a card to the owner, batched. Leaning B.
+- **Card** (drafted 2026-10-15, to send with D-3's):
+
+  ```
+  D-5 Should v2.0 limit queues, sends, message and report sizes, and logs?
+  Options: A caps on all of them now, log size and rotation included (pulls H62 into 2.0); B caps on queue depth, send rate and sizes now, logs after 2.0 with the disk risk stated; C no limits in 2.0, with the risk stated.
+  Tested: verifier F-V1: nothing bounds a queue, a message, a report or a log; a runaway soldier's sends each become a paid turn (G5); MSG-3's "nothing is dropped silently" allows a refusal with its reason.
+  Recommended: B, because it bounds what costs you money now, and it leaves log rotation, a new feature, after 2.0 as you planned it (H62).
+  For you: a flood of sends is refused with a reason, and the agents set the cap values. Can be undone: yes.
+  ```
 
 ## D-6 How G7's "traced in CI" is met (from R-F-36)
 
@@ -130,6 +148,15 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** §5.1 L says "The budget is at most $2 of reported cost per release". codex and agy report tokens but no cost, and claude's cost is its own estimate, so the budget can't bound every check, and nothing says what happens when it runs out. R-F-33's verifiers left the clause to R-F-20, and R-F-20's to R-F-33, so it had no owner until this record.
 - **Options:** A, keep $2 of reported cost, and count a CLI that reports none at its vendor's published prices (an estimate, against the non-goal "Cost figures beyond what each CLI reports"); B, $2 of reported cost plus a token cap for the CLIs that report no cost, and a check that would go past either one waits for the owner's go; C, no budget: each check's reported cost and tokens go on the PR (VER-8), and the owner stops when they choose.
 - **Next:** a card to the owner, batched with D-4 and D-5. Leaning B: it keeps the non-goal and bounds every CLI.
+- **Card** (drafted 2026-10-15, to send with D-3's):
+
+  ```
+  D-8 How should the live checks' $2 budget per release work?
+  Options: A count a CLI that reports no cost at its vendor's list prices (an estimate, against the non-goal); B $2 of reported cost plus a token cap for the CLIs that report none, and a check that would go past either one waits for your go; C no budget: each check's cost and tokens go on the PR.
+  Tested: codex and agy report tokens but no cost (CH-3, CH-5), and claude's cost is its own estimate (R-M1-12); on 2026-10-07 both runs of the parity task used about 90k to 200k tokens per CLI.
+  Recommended: B, because it keeps the rule that Shadow Army never estimates cost, and it still bounds every CLI.
+  For you: you accept the token cap the agents propose, and approve any check past a limit. Can be undone: yes.
+  ```
 
 ## Values set in the fix pass
 

@@ -6,7 +6,7 @@ Every finding, its verdict and its resolution. Raw reviewer and verifier outputs
 
 | Unit | Status | Rounds | Open P0–P2 | Fixed | Refuted | Decisions pending | Sign-offs |
 |---|---|---|---|---|---|---|---|
-| F | round 1 reviewed: 51 findings (16 P1, 31 P2, 4 P3); 7 duplicates; 5 parked. Verified the 32 in F-V1 to F-V5, with F-V6 as the second verifier of the P1s: 24 confirmed (5 P1, 13 P2, 6 P3), 4 decisions (D-4, D-5 big; D-6, D-7 technical or big by option), 2 refuted, 2 duplicates; R-F-52 found and parked for M3. Still to verify with M1: R-F-10, 11, 13, 16, 29, 30, 38. No fix applied yet | 1 | 18 confirmed P1-P2 open | 0 | 2 | D-1, D-4, D-5, D-6, D-7 | — |
+| F | round 1 reviewed: 51 findings (16 P1, 31 P2, 4 P3); 7 duplicates; 5 parked. Verified the 32 in F-V1 to F-V5, with F-V6 as the second verifier of the P1s: 25 confirmed (5 P1, 14 P2, 6 P3; session 1 counted 13 P2), 4 decisions (D-4, D-5 big; D-6, D-7 technical or big by option), 2 refuted, 2 duplicates; R-F-52 found and parked for M3. All 25 fixed in v0.7 on 2026-10-15 (`b92637f` to `3ec5f7d`); R-F-3's mechanism is D-7 and R-F-33's budget clause D-8. The P1 fixes (R-F-1, R-F-3's glossary half, R-F-12, R-F-28, R-F-33) wait for a fix check. Still to verify with M1: R-F-10, 11, 13, 16, 29, 30, 38 | 1 | 0 (5 P1 fixes unchecked) | 25 | 2 | D-1, D-4, D-5, D-6, D-7, D-8 | — |
 | M1 | round 1: 56 findings (16 P1, 36 P2, 4 P3); 16 duplicates; 40 to verify, in M1-V1 to M1-V6 (with 7 of F's); packets ready, not run | 1 | — | 0 | 0 | D-2, D-3 | — |
 | C (M1 rows) | not started | 0 | — | 0 | 0 | — | — |
 | M2a | not started | 0 | — | 0 | 0 | — | — |
