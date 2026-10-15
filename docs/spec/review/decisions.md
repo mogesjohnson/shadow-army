@@ -122,3 +122,11 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   - C: each turn switches to the vendor's own read-only mode where the CLI has one, else A (rests on vendor modes, which agy ignores);
   - D: the owner amends the rule for v2, so that worktree isolation, the guard and the claim audit replace the snapshot.
 - **Next:** a bake-off in the fix pass (drafts for A and C first, since either keeps the decision technical).
+
+## Values set in the fix pass
+
+Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
+
+| Value | Where | Set to | Why |
+|---|---|---|---|
+| A summary line's length (R-F-41) | §2, MSG-5, SI-1 | 120 characters | Five lines of 120 are 600 characters, the summary cap the archived 2.0 draft set (UPD-2); a line of 120 wraps to two rows at 80 columns. |
