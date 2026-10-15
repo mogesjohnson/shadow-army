@@ -16,6 +16,8 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-8 | The live checks' $2 budget per release: how a CLI that reports no cost counts, and what happens when it runs out (R-F-33, R-F-20) | big (money) | card to batch | — |
 | D-9 | B2: how far PO-3 goes, and what each credential defends against (R-M1-1, R-F-29) | big (security posture; a residual to accept) | first verifier M1-V1 done; second verifier, then a card with D-4 | — |
 | D-10 | How far the folder's own config and policy files are trusted (R-M1-2) | big (a trust boundary; A adds a card the owner answers) | first verifier M1-V1 done; second verifier, then a card | — |
+| D-11 | What `/clear`, `/resume` and `/branch` do to the army (R-M1-20, R-F-38; with H38) | big (what the owner keeps, loses and pays) | first verifier M1-V2 done; a card to batch | — |
+| D-12 | A mod reload or a lost hooks worker leaves a post office the new mod instance can't command (R-F-30) | technical if (a); (b) and (c) are big | (a) chosen by the orchestrator, 2026-10-15; second verifier due | — |
 
 ---
 
@@ -182,6 +184,22 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** v1 and Codex's draft read the folder's `shadow.config.json` first, so a cloned repository sets every soldier's autonomy, up to claude's `bypassPermissions`, which Claude Code itself refuses from a project's settings. The archived 2.0 draft had a trust card for this (D9, POL-1, POL-2) that v2 didn't carry over.
 - **Options** (verifier M1-V1): A, carry over 2.0's POL-1 and POL-2: the folder's `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md` are hashed, and a new or changed one shows a trust card before any soldier starts, the only way the folder raises autonomy above supervised; B, `cli`, `model` and `autonomy` come only from the owner's own config outside the folder, and the folder's files may only restrict; C, trust the folder, and say so in D-4's threat model.
 - **Next:** the second verifier, then a card.
+
+## D-11 What `/clear`, `/resume` and `/branch` do to the army (from R-M1-20 and R-F-38)
+
+- **Kind:** big: it decides what the owner keeps, loses and pays, and touches H38.
+- **Question:** HOST-2, PO-7, SES-1 and WSP-1 depend on "the session", which the spec never defines. Claude Code's mod reference says `session.end` fires when the session ends or `/clear`, `/resume` or `/branch` runs, and no `session.start` fires after them; the process goes on under a new session id. Both D-2 drafts already end the army when the session id changes, so closing D-2 would decide this silently.
+- **Options** (verifier M1-V2): A, the army lives as long as the Claude Code process and its mod, and `/clear`, `/resume` and `/branch` keep the soldiers and their sessions, with a summary card for an earlier brief arriving in the new conversation, marked as from the earlier one; B, each Claude session has its own army: any `session.end` ends it as PO-7 says, and the next use starts a new one; C, `/clear` keeps the army, and `/resume` and `/branch` end it, because another conversation takes over (what a resumed conversation gets stays with H38).
+- **Applied meanwhile:** D-2's shutdown text goes in without its session-id clause until this is decided.
+- **Next:** a card, batched with the other big ones.
+
+## D-12 A mod reload leaves a post office the new instance can't command (from R-F-30)
+
+- **Kind:** technical if (a), which changes no settled decision or ADR; (b) changes ADR-0012 and (c) reverses settled decision 2, so either would be big.
+- **Question:** a save under `--plugin-dir`, `/reload-plugins` or a lost hooks worker reloads the mod inside a live session. The new instance has no secret and can't hear the event stream, which lives only on the old child's standard output (PO-3, ADR-0012).
+- **Options** (verifier M1-V2): (a) a mod instance owns only the post office it started: at a reload that post office ends, with the module or by its lease within 30 s, its turns are cut short (PO-8), and the new instance starts its own at the next use once the old lock is stale (R-M1-3), with one transcript line; (b) a reload-safe handover, the secret kept in `$.state` and the event stream moved off standard output (changes ADR-0012); (c) one post office per Claude session (reverses settled decision 2).
+- **Choice** (2026-10-15, the orchestrator): **(a)**, the only option that keeps every settled decision; the owner may overrule. A probe of whether a spawned child outlives a hot reload doesn't block it, since the lease ends a survivor anyway.
+- **Next:** the second verifier (R-F-30 is P1), then apply in M1's fix pass.
 
 ## Values set in the fix pass
 
