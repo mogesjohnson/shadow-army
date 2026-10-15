@@ -18,7 +18,7 @@ Last updated: 2026-10-15, session 2. Unit F's round 1 is closed: its 25 confirme
 | Unit | State |
 |---|---|
 | F | Round 1 closed. 51 findings; 32 verified: 25 confirmed (5 P1, 14 P2, 6 P3), 4 decisions, 2 refuted, 2 duplicates; R-F-52 parked for M3. All 25 fixed in v0.7. Fix check F-FC1 passed the five P1 fixes and found 12 follow-ups (R-F-53 to R-F-64); F-FC2 passed their repairs and found two P3 notes (R-F-65, R-F-66), closed. R-F-58 waits for D-7. Round 1 was not clean, so F needs round 2 (two reviewers) and then a second clean round. |
-| M1 | Round 1 reviewed: 56 findings, 40 to verify. M1-V1 to M1-V3 recorded (24 findings: 15 confirmed, 5 decisions, 4 duplicates; one half refuted); M1-V4 and M1-V7 running; M1-V5, M1-V6 and M1-V8 to go. No M1 fix applied yet. |
+| M1 | Round 1 reviewed: 56 findings, 40 to verify. M1-V1 to M1-V3 recorded (24 findings: 16 confirmed, R-F-10 in part; 6 decisions; 2 duplicates; R-M1-19 half refuted); M1-V4 and M1-V7 running; M1-V5, M1-V6 and M1-V8 to go. No M1 fix applied yet. |
 | C (M1's rows) | Not started. |
 | M2–M6, C, X1–X5 | Not started. |
 
