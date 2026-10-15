@@ -13,6 +13,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-6 | How G7's "traced in CI" is met (R-F-36) | technical | to decide in the fix pass | — |
 | D-7 | How the settled read-only rule reaches every soldier (R-F-3) | technical if A or C, big if B or D | bake-off in the fix pass | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A, B and C drafted, the Linux prototype done; next a judge, then the card | — |
+| D-8 | The live checks' $2 budget per release: how a CLI that reports no cost counts, and what happens when it runs out (R-F-33, R-F-20) | big (money) | card to batch | — |
 
 ---
 
@@ -123,6 +124,13 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   - D: the owner amends the rule for v2, so that worktree isolation, the guard and the claim audit replace the snapshot.
 - **Next:** a bake-off in the fix pass (drafts for A and C first, since either keeps the decision technical).
 
+## D-8 The live checks' $2 budget (from R-F-33 and R-F-20)
+
+- **Kind:** big (money).
+- **Question:** §5.1 L says "The budget is at most $2 of reported cost per release". codex and agy report tokens but no cost, and claude's cost is its own estimate, so the budget can't bound every check, and nothing says what happens when it runs out. R-F-33's verifiers left the clause to R-F-20, and R-F-20's to R-F-33, so it had no owner until this record.
+- **Options:** A, keep $2 of reported cost, and count a CLI that reports none at its vendor's published prices (an estimate, against the non-goal "Cost figures beyond what each CLI reports"); B, $2 of reported cost plus a token cap for the CLIs that report no cost, and a check that would go past either one waits for the owner's go; C, no budget: each check's reported cost and tokens go on the PR (VER-8), and the owner stops when they choose.
+- **Next:** a card to the owner, batched with D-4 and D-5. Leaning B: it keeps the non-goal and bounds every CLI.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
@@ -130,3 +138,6 @@ Limits and defaults that a confirmed fix left open. The orchestrator set each fr
 | Value | Where | Set to | Why |
 |---|---|---|---|
 | A summary line's length (R-F-41) | §2, MSG-5, SI-1 | 120 characters | Five lines of 120 are 600 characters, the summary cap the archived 2.0 draft set (UPD-2); a line of 120 wraps to two rows at 80 columns. |
+| The parity task's two files (R-F-33) | §5.1 L | `README.md` and `package.json` | The 2026-10-07 runs read "two files" that no record names; these two exist at every commit, and both kinds of run read the same ones, so the comparison stays fair as they change. |
+| The parity check's runs (R-F-33) | §5.1 L | one each way; two more each way when a run fails on tokens alone, judged by the medians | One run keeps the owner's cost low; the repeats absorb a model's run-to-run spread (codex's normal follow-up re-ran a command on 2026-10-07) without letting one bad run decide. |
+| The pass rule (R-F-33) | §5.1 L, VER-9 | live total at most 1.05 times headless, over both prompts | One-sided, because a cheaper live session is the goal; over both prompts, because the follow-up is what a live session saves. On the 2026-10-07 data all four CLIs pass (claude -3.8%, codex -14.8%, grok +2.1%, agy +3.6%). |
