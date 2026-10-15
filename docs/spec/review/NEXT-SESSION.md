@@ -1,6 +1,6 @@
 # Handoff to the next session
 
-Written 2026-10-14 at the end of session 7ac7daad. Paste the prompt in section 1. Sections 2 to 6 give the detail the prompt points to.
+Written 2026-10-14 at the end of session 7ac7daad; updated 2026-10-15 in session 2, after unit F's fixes (spec v0.7). Paste the prompt in section 1. Sections 2 to 6 give the detail the prompt points to. `STATE.md` is newer than this file wherever they differ.
 
 ## 1. The prompt
 
@@ -11,20 +11,20 @@ Continue the Shadow Army spec 2.0 review (issue #63). The review lives on PR #77
 
 Read, in this order: CLAUDE.md, CONTRIBUTING.md, docs/spec/review/NEXT-SESSION.md (all of it), docs/spec/review/STATE.md, docs/spec/review/spec2.0_review_flow.md (the rules; it wins over PLAYBOOK.md), then the ledger and decisions.md as you need them.
 
-Credit is short. Before starting any agent, ask me how much is left, and run at most two agents at a time. Work that needs no agent comes first: applying unit F's 24 confirmed fixes to docs/spec/v2.md, from the ledger's "fix pending" lines and the verifiers' reports in docs/spec/review/raw/. Commit and push after every result that changes a doc, and after every pass update STATE.md and comment on PR #77.
+Before starting any agent, ask me how much credit is left, and run at most two agents at a time. Unit F's 25 fixes are applied (spec v0.7). First check that every agent STATE.md lists as running has its report saved in docs/spec/review/raw/; rerun any that is missing from its packet. Then continue STATE.md's queue: M1's verification (batches/M1-V2.md to M1-V6.md), apply D-6, and the fixes. Commit and push after every result that changes a doc, and after every pass update STATE.md and comment on PR #77.
 
 Answer me straight to the point. I answer only big questions, as short decision cards with a tested recommendation.
 ```
 
 ## 2. Where things stand
 
-- **PR #77** (draft) is stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`). Its head when this was written was `5ae5ac5`, plus this handoff commit. The spec text is still v0.6: no fix has been applied.
+- **PR #77** (draft) is stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`). The spec on #77 is v0.7: unit F's 25 confirmed fixes, commits `b92637f` to `3ec5f7d` (PR comment 6195977725). M1's verifiers still cite the `be9deb0` snapshot.
 - **`main`** is spec v0.5 (`ab04992`). #76 has no Codex review yet.
 - **M1 (#75)** is Codex's draft, paused at `04ab953` until the spec's M1 text converges. Read it, never write to it. On the owner's machine it is in `../AIConnections-m1`.
 
 | Unit | State |
 |---|---|
-| F | Round 1 reviewed (51 findings) and 32 of them verified: 24 confirmed (5 P1, 13 P2, 6 P3), 4 decisions, 2 refuted, 2 duplicates. 7 findings that overlap M1 wait for M1's packets. R-F-52 is parked for M3. **No fix applied.** |
+| F | Round 1 reviewed (51 findings) and 32 of them verified: 25 confirmed (5 P1, 14 P2, 6 P3), 4 decisions, 2 refuted, 2 duplicates. 7 findings that overlap M1 wait for M1's packets. R-F-52 is parked for M3. **All 25 fixed in v0.7**; the five P1 fixes go to fix check F-FC1 (`batches/F-FC1.md`). |
 | M1 | Round 1 reviewed (56 findings, 40 to verify). **Not verified.** Packets `batches/M1-V1.md` to `M1-V6.md` are ready. `M1-V7.md` and `M1-V8.md` hold every P1 for a second verifier; trim them to the P1s the first verifiers confirm. |
 | The rest | Not started. |
 
@@ -61,7 +61,7 @@ The cloud machine has no `the-future` idea files, no `.shadow/`, no WSL and none
 ## 4. What to do first
 
 **Without agents (cheap; do this first while credit is short):**
-1. **Apply unit F's 24 confirmed fixes** to `docs/spec/v2.md`. Each fix is in the ledger's Resolution column, with detail in the verifier reports `raw/F-r1-verify-V1.md` to `V6.md`.
+1. ~~Apply unit F's confirmed fixes~~ (done 2026-10-15, v0.7; the notes below are kept for reference). Edit the spec with a checked exact-replace script once any script has written it: the Edit tool refuses a file changed on disk until it is read again. Each fix is in the ledger's Resolution column, with detail in the verifier reports `raw/F-r1-verify-V1.md` to `V6.md`.
    - Group them: the glossary (R-F-9, R-F-40, R-F-41, the autonomy entry from R-F-3); §0 and Appendices A and B (R-F-32, R-F-37, R-F-48, R-F-22 with rule 8 and moving CH-9 to M2); §3 (R-F-8, R-F-49, R-F-24, R-F-18 with D-2 option A's event-stream bullet, R-F-28's "the mod acts only in the owner's session"); §5.1 (R-F-25, R-F-44, R-F-45, R-F-33's parity definition, R-F-19's clocks); the rest (R-F-1's new WSP-10, R-F-12, R-F-17, R-F-43, R-F-47, R-F-50, R-F-51).
    - New requirements need an ID, a milestone, evidence codes, an Implements entry and an AC.
    - Then run `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md`, which must give 0 problems.
