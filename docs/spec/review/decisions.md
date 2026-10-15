@@ -14,6 +14,8 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-7 | How the settled read-only rule reaches every soldier (R-F-3) | technical if A or C, big if B or D | bake-off in the fix pass | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A, B and C drafted, the Linux prototype done; next a judge, then the card | — |
 | D-8 | The live checks' $2 budget per release: how a CLI that reports no cost counts, and what happens when it runs out (R-F-33, R-F-20) | big (money) | card to batch | — |
+| D-9 | B2: how far PO-3 goes, and what each credential defends against (R-M1-1, R-F-29) | big (security posture; a residual to accept) | first verifier M1-V1 done; second verifier, then a card with D-4 | — |
+| D-10 | How far the folder's own config and policy files are trusted (R-M1-2) | big (a trust boundary; A adds a card the owner answers) | first verifier M1-V1 done; second verifier, then a card | — |
 
 ---
 
@@ -162,6 +164,23 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   Recommended: B, because it keeps the rule that Shadow Army never estimates cost, and it still bounds every CLI.
   For you: you accept the token cap the agents propose, and approve any check past a limit. Can be undone: yes.
   ```
+
+## D-9 B2: how far PO-3 goes, and what each credential defends against (from R-M1-1 and R-F-29)
+
+- **Kind:** big: a residual on Windows that can't be fixed, and a trust boundary (PLAYBOOK section 14). Decide it with D-4's threat model.
+- **Question:** a soldier that can run code reads the Monarch's secret from the mod's or the post office's memory on Windows always, and on Linux at `ptrace_scope` 0 (Yama scope 1 already shields both, since soldiers are their descendants). A claude soldier's own credential sits on its command line (S4's `--mcp-config` JSON string), where any same-user process, and on Linux any local user, reads it. SEC-2 and SEC-5 test files, command lines and the environment only, so they pass while the gap is open.
+- **Options** (verifier M1-V1):
+  - A: harden where the system allows and state the rest. PO-3's MUST NOT names disk, command lines, environment variables, output and logs; the post office checks and logs the protection it relies on (Linux `ptrace_scope` 1 or more; a Windows process security descriptor where one can be set), with an X test; each soldier credential stays off command lines and disk where the CLI allows (codex and grok over stdio; claude over its stream-json input if a probe confirms it, else an owner-only file removed once the session is up); SEC-5 and ADR-0012's consequences narrowed; the residual in D-4;
+  - B: soldiers run as another OS user or in a sandbox, so PO-3 and SEC-5 hold as written (a new capability and a setup change);
+  - C: as A, and on Linux at scope 0 soldiers start only if the owner allows it.
+- **Next:** the second verifier (M1-V7/V8), then a card with D-4. Under A, the hardening mechanism is technical and goes to a bake-off.
+
+## D-10 How far the folder's own config is trusted (from R-M1-2)
+
+- **Kind:** big: a trust boundary, and what a repository may change without the owner. The program-resolution rule inside it is technical and is fixed in M1's fix pass whatever wins.
+- **Question:** v1 and Codex's draft read the folder's `shadow.config.json` first, so a cloned repository sets every soldier's autonomy, up to claude's `bypassPermissions`, which Claude Code itself refuses from a project's settings. The archived 2.0 draft had a trust card for this (D9, POL-1, POL-2) that v2 didn't carry over.
+- **Options** (verifier M1-V1): A, carry over 2.0's POL-1 and POL-2: the folder's `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md` are hashed, and a new or changed one shows a trust card before any soldier starts, the only way the folder raises autonomy above supervised; B, `cli`, `model` and `autonomy` come only from the owner's own config outside the folder, and the folder's files may only restrict; C, trust the folder, and say so in D-4's threat model.
+- **Next:** the second verifier, then a card.
 
 ## Values set in the fix pass
 
