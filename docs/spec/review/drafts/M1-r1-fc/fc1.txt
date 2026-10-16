@@ -1,0 +1,141 @@
+Repairs for fix check M1-FC1's findings (raw/M1-r1-fixcheck-FC1.md), against v0.8. Not applied yet.
+Apply: node tools/pairs.mjs drafts/M1-r1-fc/fc1.txt <scratch>/fc1.json, then node tools/rep.mjs ../v2.md <scratch>/fc1.json.
+
+R-M1-67, its technical part: outside a git working tree the army doesn't start (PO-1).
+<<< OLD
+The folder is the top level of the git working tree the owner's Claude Code session runs in. A lock there holds
+=== NEW
+The folder is the top level of the git working tree the owner's Claude Code session runs in. Outside a git working tree the army doesn't start, and the mod says why, as in `the army runs only inside a git working tree`. A lock there holds
+>>> END
+
+R-M1-67, the glossary's Folder entry that R-M1-3's row names.
+<<< OLD
+- **Post office:** the local helper process that holds the soldiers' sessions and carries messages between them.
+=== NEW
+- **Post office:** the local helper process that holds the soldiers' sessions and carries messages between them.
+- **Folder:** the top level of the git working tree the owner's Claude Code session runs in. One post office serves a folder (PO-1).
+>>> END
+
+R-M1-69 (1): only the mod whose own post office is closing knows it is still closing.
+<<< OLD
+or `the army is still closing` while that post office shuts down (PO-7). The next use of the army tries again.
+=== NEW
+or, when the mod's own last post office is still shutting down, `the army is still closing` (PO-7). The next use of the army tries again.
+>>> END
+
+R-M1-60: more work that escapes every containment option.
+<<< OLD
+a scheduled task, a process started through WMI, or a vendor's own background service,
+=== NEW
+a scheduled task, a process started through WMI, a container engine, a tmux or screen server already running, a session that `ssh localhost` opens, or a vendor's own background service,
+>>> END
+
+R-M1-62, R-M1-63, R-M1-65 and R-M1-66 (D-18, option b): what the next post office finishes, and from what.
+<<< OLD
+  - **After a post office that didn't close its channels.** Before it opens any channel, a post office finishes what the last one's records left open (PO-6, →M3). Each turn still open is finished (PO-8, →M2): its guard is closed against the baseline kept on disk for it, any change goes on that turn's attribution card (ARM-6, →M2), or before M2 into one line in Claude's transcript, and its message ends as interrupted. Each queued message ends as not delivered. Both carry the reason `the post office stopped unexpectedly`, and nothing is sent again by itself (MSG-4, →M3).
+=== NEW
+  - **After a post office that didn't close its channels.** Before it opens any channel, a post office finishes what the last one left open, as the last one's logs (PO-5) and, from M3, its records (PO-6, →M3) show:
+    - Each turn still open is finished (PO-8, →M2). Its guard is closed against the baseline kept on disk for it (WSP-11), and any change goes on that turn's attribution card (ARM-6, →M2), or before M2 into one line in Claude's transcript. That check can't tell the turn's changes from later ones, so the card or the line says that it compares the checkout now with the turn's start, gives the time the last post office's log ends, and says that changes made since then, the owner's own included, show on it too. A turn whose guard had already closed is not checked again (PO-8, →M2).
+    - Each message still recorded as delivered ends as interrupted, and each queued message ends as not delivered. Both carry the reason `the post office stopped unexpectedly`, and nothing is sent again by itself (MSG-4, →M3).
+    - Each attribution or handoff card left open is kept in the records as unanswered, with its paths and hashes from the log, as PO-7 says (ARM-6, →M2; SES-4, →M4; PO-6, →M3).
+    - In each snapshot the last one left (WSP-11; ARM-6, →M2), every file written is reported as a read-violation, in the log and in one line in Claude's transcript. Then the snapshot is removed, and so is any instructions file the last one left (CH-2).
+>>> END
+
+D-18 (b): turns are logged, so the next post office finds one left open (PO-5).
+<<< OLD
+  - Each decision (HOST-14, →M5) is logged when it opens and when it closes, so a post office ended outright loses none.
+=== NEW
+  - Each decision (HOST-14, →M5) is logged when it opens and when it closes, so a post office ended outright loses none. So is each turn, when its message goes in and when it is over, with where its guard's baseline is kept (WSP-11), so the next post office finds a turn left open (PO-1).
+>>> END
+
+D-18 (b): from M1, a turn's guard baseline is on disk before its message goes in (WSP-11).
+<<< OLD
+  - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended.
+=== NEW
+  - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended. Its baseline is on disk before the message goes in, so a post office that dies mid-turn leaves it for the next one (PO-1).
+>>> END
+
+R-M1-69 (3): a reloaded mod's old post office ends with the module or through its lease's shutdown.
+<<< OLD
+that post office ends, with the module or by its lease within 30 seconds (PO-7), and its turns are cut short (PO-8, →M2). The new instance takes over no post office, since it has no secret: it starts its own at the next use, once the old lock is stale (PO-1), and Claude's transcript gets one line saying so.
+=== NEW
+that post office ends, with the module or through the shutdown its lease starts within 30 seconds (PO-7), and its turns are cut short (PO-8, →M2). The new instance takes over no post office, since it has no secret: it starts its own at the next use, once the old one has exited (PO-1), and Claude's transcript gets one line saying so.
+>>> END
+
+R-M1-64: the decisions list after the post office stops (HOST-14).
+<<< OLD
+  - A row leaves the list once its decision is made, wherever it was made. An approval request also leaves when a stop cancels it (CH-6).
+=== NEW
+  - A row leaves the list once its decision is made, wherever it was made. An approval request also leaves when a stop cancels it (CH-6). When the post office stops, however it stops, every row it raised leaves the list: a request as closed (CH-6), a card as left unanswered (PO-7). An answer given after that is dropped.
+>>> END
+
+R-M1-64: "not started" becomes "not running", which covers an army that has stopped (HOST-14's groups).
+<<< OLD
+then starting, reconnecting and not started.
+=== NEW
+then starting, reconnecting and not running.
+>>> END
+
+R-M1-64: VIS-2's state table.
+<<< OLD
+| not started | · | `.` | | configured, but not started in this Claude session |
+=== NEW
+| not running | · | `.` | | configured, but not running: not started in this Claude session, or the army has stopped (PO-7) and not been used since |
+>>> END
+
+R-M1-69 (2): a post office that stopped unexpectedly never releases its lock.
+<<< OLD
+    - The next use of the army starts a new post office (HOST-2) once the old one has exited and released its lock.
+=== NEW
+    - The next use of the army starts a new post office (HOST-2) once the old one has exited, its lock released or left stale (PO-1).
+>>> END
+
+R-M1-67, technical part: M1-AC1's lock cases.
+<<< OLD
+Two starts racing on one stale lock end with one post office;
+=== NEW
+Two starts racing on one stale lock end with one post office. Outside a git working tree the first use starts nothing, and the mod says why;
+>>> END
+
+R-M1-62, R-M1-65 and R-M1-66 (D-18): M1-AC1's kill case.
+<<< OLD
+  - the post office is killed, and in a second case ended by its lease, while the fake mod lives. Each time the fake and its child are gone within 10 seconds, Claude's transcript gets one line with the reason, and the next use starts a new post office with a new secret;
+=== NEW
+  - the post office is killed, and in a second case ended by its lease, while the fake mod lives. Each time the fake and its child are gone within 10 seconds, Claude's transcript gets one line with the reason, and the next use starts a new post office with a new secret. In the kill case the fake, mid-turn at auto, has changed a checkout file and written a file in its snapshot. Before it opens any channel, the next post office reports the checkout change in one transcript line, which gives the time the last log ends and says that later changes show too; it reports the snapshot's file as a read-violation and removes the old snapshot (PO-1, PO-5, WSP-11);
+>>> END
+
+R-M1-69: M1-AC1's reload case, to match HOST-2.
+<<< OLD
+  - a reloaded fake mod starts its own post office at the next use once the old lock is stale, and Claude's transcript gets one line.
+=== NEW
+  - a reloaded fake mod starts its own post office at the next use once the old one has exited, and Claude's transcript gets one line.
+>>> END
+
+R-M1-68: M2 has no records, so M2-AC8 checks the log.
+<<< OLD
+  - the lease ends while an attribution card is open: the card is recorded as unanswered, with its paths and hashes, and its message ends as interrupted (PO-7).
+=== NEW
+  - the lease ends while an attribution card is open: the card is logged as unanswered, with its paths and hashes (PO-5), and its message ends as interrupted (PO-7).
+>>> END
+
+R-M1-68: M3-AC11 checks the card kept in the records.
+<<< OLD
+each with the shutdown as its reason. Nothing more is sent, and the briefs' rows show both endings (MSG-3, MSG-4, PO-7).
+=== NEW
+each with the shutdown as its reason. An attribution card left open is kept in the records as unanswered, with its paths and hashes. Nothing more is sent, and the briefs' rows show both endings (MSG-3, MSG-4, PO-6, PO-7).
+>>> END
+
+R-M1-63: M3-AC12 adds a card left open when the post office is killed.
+<<< OLD
+  - a post office killed with a turn open and a message queued: before opening any channel, the next one ends the turn's message as interrupted and the queued one as not delivered, both with `the post office stopped unexpectedly` (PO-1);
+=== NEW
+  - a post office killed with a turn open and a message queued: before opening any channel, the next one ends the turn's message as interrupted and the queued one as not delivered, both with `the post office stopped unexpectedly` (PO-1);
+  - a post office killed while an attribution card is open: the next one ends the card's message as interrupted, keeps the card in the records as unanswered, with its paths and hashes from the log, and does not run that turn's guard again (PO-1, PO-5, PO-6);
+>>> END
+
+R-M1-64: M5-AC5 adds the post office stopping.
+<<< OLD
+With one decision open, a second gets one toast that gives the count, and a third gets none (HOST-14, HOST-8).
+=== NEW
+With one decision open, a second gets one toast that gives the count, and a third gets none. When the post office is killed with a request and a card open, both rows leave the list, an answer given after that is dropped, and each soldier shows not running until the next use (HOST-14, HOST-8, VIS-2, PO-7).
+>>> END
