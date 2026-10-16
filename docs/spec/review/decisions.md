@@ -19,6 +19,8 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-11 | What `/clear`, `/resume` and `/branch` do to the army (R-M1-20, R-F-38; with H38) | big (what the owner keeps, loses and pays) | first verifier M1-V2 done; a card to batch | — |
 | D-12 | A mod reload or a lost hooks worker leaves a post office the new mod instance can't command (R-F-30) | technical if (a); (b) and (c) are big | (a) chosen by the orchestrator, 2026-10-15; second verifier due | — |
 | D-13 | What starts the army in M1, which has no command or tool (R-M1-27) | technical | A chosen by the orchestrator, 2026-10-15 | — |
+| D-14 | A line a CLI writes that can't be parsed (R-M1-18; H2) | technical | (c) chosen by the orchestrator, 2026-10-15 | — |
+| D-15 | What M1 does with a claude permission request before the relay (R-M1-4) | technical | (a) chosen by the orchestrator, 2026-10-15 | — |
 
 ---
 
@@ -209,6 +211,20 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Options:** A, HOST-9's `/army` comes forward to M1, list form only, as the first use, and `sa live` is named as M1's dev tool to open, message, stop and reconnect a claude soldier; B, the draft's dev-only `/army open|inspect|stop <soldier>`, replaced by HOST-9's commands in M5; C, no M1 trigger: M1-AC1 uses a fake `$`, and everything live in M1 goes through `sa live`.
 - **Choice** (2026-10-15, the orchestrator): **A**, the verifier's recommendation: it adds nothing HOST-9 lacks, and it gives M1's live checks (M1-AC8, R-M1-51) a real trigger. The owner may overrule.
 - **Next:** apply in M1's fix pass.
+
+## D-14 A line a CLI writes that can't be parsed (from R-M1-18; Appendix C's H2)
+
+- **Kind:** technical: PLAYBOOK section 14 lists H2 as technical; it fixes v2.0's failure handling and changes nothing the owner approves (verifier M1-V5).
+- **Question:** PO-1 says only a process ending or a lost connection is a crash, CH-8 (M2) calls an unparseable line an error, and Codex's draft treats one as a lost connection. The outcome is undefined for all four channels.
+- **Options:** (a) a lost connection: end the tree, finish the turn as cut short, and restart; (b) record the line word for word (redacted), show it as an error of the kind "another error", and carry on; (c) as (b), but ten unparseable lines in a row count as a lost connection (from 2.0 SOLD-6). In every option a line split across reads is joined first, and only one still incomplete when the stream ends is malformed.
+- **Choice** (2026-10-15, the orchestrator, as M1-V5 recommends): **(c)**: one stray line costs no restart, and a stream that has turned to garbage still ends rather than hanging a turn M1 can't stop. H2 becomes Same. The owner may overrule.
+
+## D-15 What M1 does with a claude permission request (from R-M1-4)
+
+- **Kind:** technical: milestone order, as with D-13; v2.0's final behavior and approvals don't change (verifier M1-V5).
+- **Question:** CH-2 runs claude with `--permission-prompts host --permission-prompt-tool stdio`, so every permission request goes to the host, but nothing answers or cancels one before CH-6 arrives in M2, and the turn waits until the channel closes.
+- **Options:** (a) until CH-6 lands, CH-2 runs without `--permission-prompt-tool stdio`, so claude denies by itself whatever would prompt (spike S5); not `--permission-prompts none`, which also removes AskUserQuestion, against CH-7 and ADR-0010; (b) CH-6's claude half moves into M1, through D-13's `sa live`; (c) M1 states the hang and keeps its live check free of requests.
+- **Choice** (2026-10-15, the orchestrator, as M1-V5 recommends): **(a)**, the smallest change: nothing hangs, M1's soldiers already run in a throwaway snapshot, and M2 restores the relay flags with CH-6. The owner may overrule.
 
 ## Values set in the fix pass
 
