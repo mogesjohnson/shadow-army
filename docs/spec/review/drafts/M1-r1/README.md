@@ -14,4 +14,4 @@ node docs/spec/review/tools/blocks.mjs docs/spec/v2.md g134.json CH-1=<dir>/m1-g
 node docs/spec/review/tools/rep.mjs docs/spec/v2.md g134.json
 ```
 
-A dry run against v0.7 at `0f8e822` gave 0 problems from `trace-v2.mjs` (101 requirements, 61 ACs) and from `check-appendix-c.mjs`. Still to add before applying: M1-V8's and M1-V9's verdicts (R-F-30, R-M1-9, R-F-10, R-M1-11, R-M1-7, R-M1-12, R-M1-23; R-M1-57, R-M1-58, R-F-67), and Appendix C's H25 and H2 becoming Same.
+A dry run against v0.7 at `0f8e822` gave 0 problems from `trace-v2.mjs` (101 requirements, 61 ACs) and from `check-appendix-c.mjs`. Then `node docs/spec/review/tools/rep.mjs docs/spec/v2.md <dir>/m1-appc.json` makes Appendix C's H25 and H2 Same (a dry run gives 0 problems). Still to add before applying: M1-V8's and M1-V9's verdicts (R-F-30, R-M1-9, R-F-10, R-M1-11, R-M1-7, R-M1-12, R-M1-23; R-M1-57, R-M1-58, R-F-67).
