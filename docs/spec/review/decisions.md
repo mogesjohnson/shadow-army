@@ -22,6 +22,8 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-14 | A line a CLI writes that can't be parsed (R-M1-18; H2) | technical | (c) chosen by the orchestrator, 2026-10-15 | v0.8: CH-1, PO-1, §5.1 F; H2 Same |
 | D-15 | What M1 does with a claude permission request before the relay (R-M1-4) | technical | (a) chosen by the orchestrator, 2026-10-15 | v0.8: CH-2 |
 | D-16 | What a supervised claude soldier may run without the owner (R-M1-57) | big (what runs without the owner) | card drafted, to batch | — |
+| D-17 | One army per repository, or one per working tree (R-M1-67) | big (A changes what the owner can run; B changes what the guard trusts) | card drafted 2026-10-16, to send | — |
+| D-18 | How a turn cut short by the post office's end is checked before M3 (R-M1-66) | technical | (b) chosen by the orchestrator, 2026-10-16 | with M1-FC1's repairs |
 
 ---
 
@@ -306,6 +308,30 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   Recommended: B, because supervised then means what v1 says it means, with auto left as the level that trusts the classifier, and it uses only a documented vendor flag.
   For you: more approval requests from supervised soldiers, from M2. Can be undone: yes, one mapping.
   ```
+
+## D-17 One army per repository, or one per working tree (from R-M1-67)
+
+- **Kind:** big. Option A changes what the owner can run; option B changes what the guard trusts (fix check M1-FC1).
+- **Question:** PO-1 makes the folder the top level of the git working tree. A Claude Code session in a linked worktree of the same repository, such as one `claude --worktree` makes under `.claude/worktrees/<name>/`, then gets its own lock and post office on the same `.git`. Each army's snapshots and worktrees change the worktree metadata that the other's git checks (WSP-10) and guard (ARM-6, WSP-11) compare, so the two armies fail each other's turns. Separately, a session outside any git working tree has no folder at all.
+- **Options** (M1-FC1): A, one army per repository: the folder is the main working tree (the parent of `git rev-parse --git-common-dir`), so a session in a linked worktree meets that lock and is refused with PO-1's message; B, one per working tree: each army leaves the other's Shadow Army snapshots and worktrees out of WSP-10's comparison and its guard, and their branch names are kept apart (WSP-1, →M6).
+- **Technical whatever wins:** outside a git working tree the army doesn't start, and the mod says why. §2 gets the Folder entry that R-M1-3's row names.
+- **Card** (drafted 2026-10-16):
+
+  ```
+  D-17 Should each working tree of a repository get its own army, or one army per repository?
+  Options: A one per repository: a session in a linked worktree of the same repository (as claude --worktree makes) finds that repository's army already running and is refused, with the reason; B one per working tree: each army leaves the other's snapshots and worktrees out of its git checks and guard, and their branch names are kept apart.
+  Tested: fix check M1-FC1, from Claude Code's docs: a claude --worktree session's git commands write to the main repository's .git, so as v0.8 stands two armies on one repository trip each other's git checks and guard and fail each other's turns.
+  Recommended: B, because you already run sessions side by side in worktrees of one repository, and the settled guard rule already exempts Shadow Army's own branches and worktrees, which B applies to both armies.
+  For you: an army in each working tree you open; A would refuse the second one. Can be undone: yes.
+  ```
+
+## D-18 How a turn cut short by the post office's end is checked before M3 (from R-M1-66)
+
+- **Kind:** technical (fix check M1-FC1: "technical, choose one").
+- **Question:** PO-1's cleanup after a post office that didn't close its channels works from PO-6's records (→M3) and PO-8's on-disk baseline (→M2). So in M1 and M2 a turn cut short by the post office's end is never checked, against the settled guard rule (settled.md 41).
+- **Options:** (a) drop the clause and state the gap: before M3 such a turn is not checked, and each milestone's PR says so; (b) from M1 a turn's guard baseline is on disk before its message goes in (WSP-11), and the next post office finds a turn left open in the last one's log (PO-5) and reports any change in one line in Claude's transcript; M1-AC1's kill case adds a fake that changes a checkout file before the kill.
+- **Choice** (2026-10-16, the orchestrator): **(b)**, the only option that keeps the settled guard rule from M1. It costs M1 one file written per turn and one read of the last log at start. The owner may overrule.
+- **Applied:** with M1-FC1's repairs.
 
 ## Values set in the fix pass
 

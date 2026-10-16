@@ -7,7 +7,8 @@ Last updated: 2026-10-16, session 3. Unit F's round 1 is closed: its 25 confirme
 ## Where things are
 
 - **Branch** `claude/63-ultimate-spec-review`, PR #77, "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`). The spec is v0.7. `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <v2@be9deb0.md>` gives 0 problems (99 requirements, 59 ACs); it now checks Appendix B's rules 1 to 6 and the new rule 8 (forward citations marked →Mx), and with a previous version, that no ID is gone. `tools/check-appendix-c.mjs` gives 0 problems.
-- **Agents running** (2026-10-16, session 3): fix checks M1-FC1 (the post office's life: R-M1-3, R-M1-8, R-F-11, R-M1-10, R-F-30, R-M1-9, R-F-10) and M1-FC2 (the claude channel, logs and where soldiers run: R-M1-24, R-M1-11, R-M1-7, R-M1-12, R-M1-23). M1-FC1 and the D-3 judge are reruns: session 2's runs were cut off by the usage limit at 02:43 and 02:46 with no report, and a new session can't resume them. The judge's rerun reported: B, big (`raw/D-3-judge.md`). Reports go to `raw/M1-r1-fixcheck-FC1.md` and `raw/M1-r1-fixcheck-FC2.md`. Next: D-7's two drafters (options A and C), then round 2 for F and M1 once the fix checks' repairs are in. If a report is missing in a later session, rerun that agent from its packet or prompt.
+- **Agents running** (2026-10-16, session 3): fix check M1-FC2 (the claude channel, logs and where soldiers run: R-M1-24, R-M1-11, R-M1-7, R-M1-12, R-M1-23), report to `raw/M1-r1-fixcheck-FC2.md`; and D-7's drafter for option A, on the frozen v0.8 snapshot `.shadow/v2-tools/review/snapshots/v2@1580e87.md`, report to `raw/D-7-option-A.md`. Next: D-7's drafter for option C; M1-FC1's and M1-FC2's repairs, applied together once FC2 reports (drafted meanwhile, so no agent reads a spec that moves); then round 2 for F and M1. If a report is missing in a later session, rerun that agent from its packet or prompt.
+- **Done in session 3:** session 2's cut-off M1-FC1 and D-3 judge rerun (a new session can't resume them). The D-3 judge recommends B, big (`raw/D-3-judge.md`; its findings R-M1-59 to R-M1-61, probes P-5 to P-10). M1-FC1: all seven P1 fixes FIXED, with follow-ups R-M1-62 to R-M1-69 and R-M1-70, outside its scope (`raw/M1-r1-fixcheck-FC1.md`); new decisions D-17 (big) and D-18 (technical, (b)). Cards D-1, D-3, D-4, D-5, D-8, D-9, D-10, D-11 and D-16 sent to the owner on 2026-10-16.
 - **The spec is v0.8** (`1580e87`): M1's round-1 fixes are applied, with D-2 and D-12 to D-15; both checkers give 0 problems (101 requirements, 61 ACs). The drafts it came from are in `drafts/M1-r1/`.
 - **Done this session:** unit F's fixes; fix checks F-FC1 (the five P1 fixes FIXED; 12 follow-up findings, R-F-53 to R-F-64) and F-FC2 (all eleven repairs and D-6 FIXED; two P3 notes, R-F-65 and R-F-66, closed). M1-V1, M1-V2 and M1-V3, the last two cut off by the usage limit and resumed. New decisions: D-8 to D-11 (big), D-12 and D-13 (technical, chosen); D-6 decided and applied.
 - **Next:** the fix checks' findings, if any, repaired and checked again; the D-3 card; then the cards for the owner (D-1, D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16); then round 2 for F and M1, two reviewers each, on a snapshot of v0.8.
@@ -19,7 +20,7 @@ Last updated: 2026-10-16, session 3. Unit F's round 1 is closed: its 25 confirme
 | Unit | State |
 |---|---|
 | F | Round 1 closed. 51 findings; 32 verified: 25 confirmed (5 P1, 14 P2, 6 P3), 4 decisions, 2 refuted, 2 duplicates; R-F-52 parked for M3. All 25 fixed in v0.7. Fix check F-FC1 passed the five P1 fixes and found 12 follow-ups (R-F-53 to R-F-64); F-FC2 passed their repairs and found two P3 notes (R-F-65, R-F-66), closed. R-F-58 waits for D-7. Round 1 was not clean, so F needs round 2 (two reviewers) and then a second clean round. |
-| M1 | Round 1: 56 findings, 40 verified, every P1 twice, and 3 more that verifiers raised. All confirmed findings are fixed in v0.8; the twelve P1 fixes are in fix checks M1-FC1 and M1-FC2. Big decisions waiting: D-9 (B2 and the credentials), D-10 (the folder's config), D-11 (/clear, /resume, /branch), D-16 (what supervised allows). |
+| M1 | Round 1: 56 findings, 40 verified, every P1 twice, and 3 more that verifiers raised. All confirmed findings are fixed in v0.8. Fix check M1-FC1 passed its seven P1 fixes and found R-M1-62 to R-M1-70 (repairs drafted, to apply with M1-FC2's); M1-FC2 checks the other five. Big decisions waiting: D-3 (Q8), D-9 (B2 and the credentials), D-10 (the folder's config), D-11 (/clear, /resume, /branch), D-16 (what supervised allows), D-17 (one army per repository or per working tree). |
 | C (M1's rows) | Not started. |
 | M2–M6, C, X1–X5 | Not started. |
 
@@ -57,6 +58,7 @@ Credit: the owner had over 90% of the weekly limit left on 2026-10-15 (7% on 202
 
 ## Waiting on the owner
 
+- The cards sent on 2026-10-16: D-1 (the name, re-sent), D-3, D-4, D-5, D-8, D-9, D-10, D-11 and D-16. D-17 goes with the next message.
 - Card D-1 (the name).
 - Probes P-1 (grok's pending permission at a stop) and P-2 (agy's interrupt), which finish spike S6 (`probes.md`).
 - Later: cards D-3 (Q8), D-4 (a threat model), D-5 (limits) and D-8 (the live checks' budget), and any big one from M1's verification.
