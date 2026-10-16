@@ -21,6 +21,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-13 | What starts the army in M1, which has no command or tool (R-M1-27) | technical | A chosen by the orchestrator, 2026-10-15 | — |
 | D-14 | A line a CLI writes that can't be parsed (R-M1-18; H2) | technical | (c) chosen by the orchestrator, 2026-10-15 | — |
 | D-15 | What M1 does with a claude permission request before the relay (R-M1-4) | technical | (a) chosen by the orchestrator, 2026-10-15 | — |
+| D-16 | What a supervised claude soldier may run without the owner (R-M1-57) | big (what runs without the owner) | card drafted, to batch | — |
 
 ---
 
@@ -231,6 +232,21 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** CH-2 runs claude with `--permission-prompts host --permission-prompt-tool stdio`, so every permission request goes to the host, but nothing answers or cancels one before CH-6 arrives in M2, and the turn waits until the channel closes.
 - **Options:** (a) until CH-6 lands, CH-2 runs without `--permission-prompt-tool stdio`, so claude denies by itself whatever would prompt (spike S5); not `--permission-prompts none`, which also removes AskUserQuestion, against CH-7 and ADR-0010; (b) CH-6's claude half moves into M1, through D-13's `sa live`; (c) M1 states the hang and keeps its live check free of requests.
 - **Choice** (2026-10-15, the orchestrator, as M1-V5 recommends): **(a)**, the smallest change: nothing hangs, M1's soldiers already run in a throwaway snapshot, and M2 restores the relay flags with CH-6. The owner may overrule.
+
+## D-16 What a supervised claude soldier may run without the owner (from R-M1-57)
+
+- **Kind:** big: it decides what runs without the owner (PLAYBOOK section 14), and option B changes what the owner approves (verifier M1-V9).
+- **Question:** v1 maps supervised to claude's `plan` mode for a task that doesn't write (`src/adapters/claude.ts`), and R-M1-24's fix makes that explicit. Since claude 2.1.285, plan mode lets claude's classifier approve shell commands outside the read-only set wherever auto mode is available, which it is for the roster's Opus and Sonnet models; `useAutoModeDuringPlan` is on by default, and a repository can't turn it off. So a supervised soldier's read-only turn runs commands the owner never sees, while v1's own comments give the classifier to `auto` and say supervised refuses commands that need approval.
+- **Options:** A, keep `plan`, and say what supervised then allows (the owner's own `useAutoModeDuringPlan: false` makes each such command ask, through the relay from M2); B, a supervised read-only turn passes `--permission-mode default`, so each such command comes to the owner from M2, and is denied in M1 (D-15); C, keep `plan`, and the adapter turns `useAutoModeDuringPlan` off (a probe first; it changes a vendor default, which the settled rules forbid).
+- **Card** (drafted 2026-10-16):
+
+  ```
+  D-16 May a "supervised" claude soldier let claude's own classifier approve its shell commands?
+  Options: A keep v1's plan mode, where claude's classifier approves commands outside the read-only set (your own useAutoModeDuringPlan: false would make each ask you); B use claude's default mode for a supervised soldier's read-only turns, so each such command asks you from M2 (and is refused in M1); C keep plan mode and have Shadow Army turn the classifier off (changes a vendor default, which your rules forbid).
+  Tested: verifier M1-V9 checked claude's docs: plan mode's classifier is on by default for Opus and Sonnet and a repository can't turn it off; v1's comments say supervised refuses commands that need approval, but its code passes plan.
+  Recommended: B, because supervised then means what v1 says it means, with auto left as the level that trusts the classifier, and it uses only a documented vendor flag.
+  For you: more approval requests from supervised soldiers, from M2. Can be undone: yes, one mapping.
+  ```
 
 ## Values set in the fix pass
 

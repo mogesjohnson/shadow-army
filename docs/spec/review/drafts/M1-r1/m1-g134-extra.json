@@ -13,7 +13,7 @@
  ],
  [
   "a running total is turned into each turn's share by taking off the total before it.",
-  "a running total is turned into each turn's share by taking off the total before it. For claude, each turn's figures are taken as CH-2 defines them, and the headless follow-up's tokens are its resumed total less the first run's."
+  "a running total is turned into each turn's share by taking off the total before it. For claude, whose per-message output count is a placeholder, each turn's own figures are taken as CH-2 defines them instead, and the headless follow-up's tokens are its resumed total less the first run's."
  ],
  [
   "| CH-7 | 2.0 SAFE-10 |",
@@ -106,5 +106,9 @@
  [
   "Decide before v2.0.0.\n",
   "Decide before v2.0.0.\n- **Q9** How does a claude soldier take its `send` credential with nothing on its command line or on disk: `setMcpServers` over its stream-json input, or a `headersHelper`? A probe settles it before M3 (PO-4).\n"
+ ],
+ [
+  "  - a header with name · id · model (never dropped),",
+  "  - a header with name · id · the model in use (CH-2), never dropped,"
  ]
 ]

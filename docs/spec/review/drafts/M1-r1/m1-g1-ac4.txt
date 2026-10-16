@@ -4,6 +4,7 @@
   - a crash in the middle of a tool call does not send the message again, and its zeroed `result` reads "not reported" and changes no other turn's figures;
   - a rate limit and a context overflow arrive as two different error kinds and a refusal as a refusal, and none of them restarts the channel; an `api_retry` before a turn that answers shows as a retry, not as an error;
   - a login needed never restarts the channel, whether the fake keeps running or exits after it, and the soldier shows "log in" until it is reconnected;
+  - a turn whose later assistant messages report another model: the change is logged, and the turn's usage names that model;
   - a background task's follow-up `result` that arrives before the next message's own ends only its own message;
   - a fake that answers `initialize` 5 s inside its startup bound, and one silent for 10 minutes mid-turn, both run on; one that never answers is restarted as after a crash;
   - one unparseable line shows as an error and the session carries on; ten in a row count as a lost connection;
