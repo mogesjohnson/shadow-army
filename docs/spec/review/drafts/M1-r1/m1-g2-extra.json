@@ -1,0 +1,74 @@
+[
+ [
+  "  - No adapter answers a request by itself. An unanswered request stays pending (spike S5) until the owner answers it or stops its turn.",
+  "  - No adapter answers a request by itself. An unanswered request stays pending (spike S5) until the owner answers it or stops its turn, or the post office shuts down (PO-7), which closes it as a stop does."
+ ],
+ [
+  "the CLI reported the turn as failed (PO-8), or the owner answered n to the guard's attribution card (ARM-6).",
+  "the CLI reported the turn as failed (PO-8), the post office shut down or stopped unexpectedly (PO-7, PO-1), or the owner answered n to the guard's attribution card (ARM-6)."
+ ],
+ [
+  "No code path answers a vendor's approval request without the owner (CH-6, HOST-12, →M5). A stop's cancellation is the owner's answer, and it approves nothing (CH-6).",
+  "No code path answers a vendor's approval request without the owner (CH-6, HOST-12, →M5), except the cancellation that closes it when the post office shuts down (PO-7). A stop's cancellation is the owner's answer. Neither approves anything (CH-6)."
+ ],
+ [
+  "the soldier is mid-turn (background work included, PO-8), starting, reconnecting or disconnected.",
+  "the soldier is mid-turn (background work included, PO-8), starting, reconnecting, disconnected, or needs a login."
+ ],
+ [
+  "  - a CLI that leaves a child process running;\n",
+  "  - a CLI that leaves a child process running, and one whose child starts a new session and forks twice;\n"
+ ],
+ [
+  "  - a CLI whose turn does not end after a stop;\n",
+  "  - a CLI whose turn does not end after a stop;\n  - the mod's renewals stopping; a sleep, a suspended or stalled post office, a stopped mod and a wall-clock change, on a fake clock (PO-7);\n  - the lease lapsing, and the session ending, while an approval request, an attribution card and a queued message are open;\n  - the post office killed mid-turn, with a message queued, an approval request open and a child running;\n"
+ ],
+ [
+  "  - a malformed or split JSON line;\n",
+  "  - a malformed or split JSON line: a split line is joined, a malformed one is shown and the session carries on, and ten in a row count as a lost connection;\n"
+ ],
+ [
+  "  - a slow first token;\n",
+  "  - a slow first token: a CLI that answers 5 s inside its startup bound, and one silent for 10 minutes mid-turn, run on; one that never answers is restarted as after a crash;\n"
+ ],
+ [
+  "  - an expired login;\n",
+  "  - an expired login: the channel is never restarted, whether the CLI keeps running or exits, and the soldier shows \"log in\" until r;\n"
+ ],
+ [
+  "  - a failed log write;\n",
+  "  - a failed log write: the turn goes on, the failure is reported once, and the log resumes with the count of lost lines;\n  - a record that can't be written as its message is about to go, and a record line cut off by a crash;\n"
+ ],
+ [
+  "(CH-6, CH-10, SEC-3):\n",
+  "(CH-6, CH-10, SEC-3, PO-7):\n"
+ ],
+ [
+  "  - a fake whose turn has not ended 30 seconds after the stop is ended, and its turn is finished as PO-8 says;\n",
+  "  - a fake whose turn has not ended 30 seconds after the stop is ended, and its turn is finished as PO-8 says;\n  - when the lease ends while a request is open, the request is closed the same way and nothing is approved. The turn is finished as PO-8 says, and the session is closed, not resumed (PO-7);\n"
+ ],
+ [
+  "  - a `result` read after the turn has ended is recorded, and the guard does not run again.\n",
+  "  - a `result` read after the turn has ended is recorded, and the guard does not run again;\n  - the lease ends while an attribution card is open: the card is recorded as unanswered, with its paths and hashes, and its message ends as interrupted (PO-7).\n"
+ ],
+ [
+  "A message the post office can no longer deliver ends as not delivered, with its reason (MSG-3, MSG-4).",
+  "A message the post office can no longer deliver ends as not delivered, with its reason. When the lease ends (PO-7), each queued message ends as not delivered, and the message whose turn was running ends as interrupted, each with the shutdown as its reason. Nothing more is sent, and the briefs' rows show both endings (MSG-3, MSG-4, PO-7)."
+ ],
+ [
+  "  - a new message that repeats an interrupted one's text gets its own id, and its row names the message it repeats.\n",
+  "  - a new message that repeats an interrupted one's text gets its own id, and its row names the message it repeats;\n  - a post office killed with a turn open and a message queued: before opening any channel, the next one ends the turn's message as interrupted and the queued one as not delivered, both with `the post office stopped unexpectedly` (PO-1);\n  - a record that can't be written leaves its message queued, with the reason in its row, and a record line cut off by a crash is skipped when the records are read (MSG-4, PO-6).\n"
+ ],
+ [
+  "The next turn's guard starts from the checkout as it is when that turn's message goes in.",
+  "The next turn's guard starts from the checkout as it is when that turn's message goes in. That baseline is on disk before the message goes in, so a post office that dies mid-turn leaves it for the next one (PO-1)."
+ ],
+ [
+  "- **M1-AC8** Live: the owner's claude parity check passes (VER-9).",
+  "- **M1-AC8** Live, on Windows and on one POSIX system: the owner's claude parity check passes (VER-9). Through `/army` and `sa live`, the owner also runs the army's life on the real host: first use, reuse, `/clear`, a mod reload, a normal exit, and Claude Code killed from outside. Each time the post office, its soldiers and the lock end as HOST-2 and PO-7 say, and the run is written up on the PR (HOST-2, PO-7)."
+ ],
+ [
+  "| VIS-3 | 2.0 UX-9 |\n",
+  "| VIS-3 | 2.0 UX-9 |\n\n2.0 GUARD-5 (one chat per folder) is not carried: PO-1's lock replaces its chat lock, and v1's write commands don't check it.\n"
+ ]
+]

@@ -1,0 +1,110 @@
+[
+ [
+  "- **M1-AC3** A contract test replays a recorded claude session. It shows two turns in one process, the instructions appended, and turn end, context size and turn usage parsed. A subagent's message leaves the context size unchanged (CH-1, CH-2, SI-2).",
+  "- **M1-AC3** A contract test replays a recorded claude session. It shows three turns in one process, the instructions appended, the permission mode its `system/init` reports, and turn end, context size and each turn's own figures parsed; the three turns' figures add up to the last result's `modelUsage` and `total_cost_usd`. A subagent's message leaves the context size unchanged (CH-1, CH-2, SI-2)."
+ ],
+ [
+  "- **M1-AC5** The standing instructions contain every SI-1 part and stay under 1,500 tokens. No adapter replaces a system prompt or removes a tool (SI-1, SI-3, CH-7).",
+  "- **M1-AC5** The standing instructions contain every SI-1 part and stay under 1,500 tokens, counted as SI-3 says, and a `rules.md` that brings the count to 1,500 keeps the soldier from opening, with SI-3's message. No adapter replaces a system prompt or removes a tool, and each autonomy level's arguments carry exactly its permission mode (SI-1, SI-3, CH-7, CH-2)."
+ ],
+ [
+  "  - the two-prompt task (L, below); for claude, with a subagent's message in it (M1-AC3);",
+  "  - the two-prompt task (L, below); for claude, followed in the same session by \"Use a subagent to count the lines in package.json.\", so that the recording has three turns and a subagent's messages (M1-AC3);"
+ ],
+ [
+  "a running total is turned into each turn's share by taking off the total before it.",
+  "a running total is turned into each turn's share by taking off the total before it. For claude, each turn's figures are taken as CH-2 defines them, and the headless follow-up's tokens are its resumed total less the first run's."
+ ],
+ [
+  "| CH-7 | 2.0 SAFE-10 |",
+  "| CH-1 | 2.0 SOLD-6 |\n| CH-7 | 2.0 SAFE-10 |"
+ ],
+ [
+  "| MSG-1 | v1's isolation rule |",
+  "| MSG-1 | v1's isolation rule |\n| SEC-6 | 2.0 SAFE-7 |"
+ ],
+ [
+  "| WSP-10 | 2.0 GIT-1 to GIT-4, GUARD-2 |\n",
+  "| WSP-10 | 2.0 GIT-1 to GIT-4, GUARD-2 |\n| WSP-11 | v1 (CLAUDE.md design rules; `src/core/summon.ts`) |\n"
+ ],
+ [
+  "| ARM-3 | 2.0 CFG-4 |",
+  "| ARM-3 | 2.0 CFG-3, CFG-4 |"
+ ],
+ [
+  "or send under another soldier's name (PO-4).\n",
+  "or send under another soldier's name, and that no soldier credential appears on the command line of any process the post office starts (PO-4).\n- **SEC-6** (M1; U, X) **Text the mod shows** (from 2.0 SAFE-7). In text from a soldier, a CLI or a config file, each character of Unicode's control (Cc) and format (Cf) categories, except newline and tab, shows as a visible placeholder such as `\\u{1b}` or `\\u{202e}` wherever the mod draws it, and reaches Claude escaped the same way. That covers ESC, and so every escape sequence, as well as the bidirectional controls and the zero-width characters. Every other character is kept, so an approval request is still shown word for word (CH-6, →M2). A test draws a line holding each kind and finds only placeholders.\n"
+ ],
+ [
+  "  - That credential works only on the soldiers' MCP endpoint, which serves exactly one tool, `send(to, text)`, over local HTTP.\n",
+  "  - That credential works only on the soldiers' MCP endpoint, which serves exactly one tool, `send(to, text)`, over local HTTP.\n  - A soldier credential never appears on any process's command line. codex and grok take theirs over stdio, in `thread/start` and `session/new`; how claude takes its own, with nothing on its command line or on disk, is open question Q9.\n"
+ ],
+ [
+  "    - The post office records a message as delivered before it writes it to the CLI. A crash between the two can then only lose a send, which shows as interrupted, and never repeat one.",
+  "    - The post office records a message as delivered, and flushes the record to disk, before it writes the message to the CLI. A crash between the two, the machine's included, can then only lose a send, which shows as interrupted, and never repeat one. If the record can't be written, the message isn't sent: it stays queued, and its row says why, as in `waits · records can't be written · disk full`. A record line cut off by a crash is skipped when the records are read; because of the flush, its message never reached the CLI."
+ ],
+ [
+  "  - a summary card of at most five lines, plus the report's path;",
+  "  - a summary card of at most five lines, plus the report's path, or `report not saved · <reason>` when the report can't be written;"
+ ],
+ [
+  "- **PO-6** (M3; U) **Records.**",
+  "- **PO-6** (M3; U, F) **Records.**"
+ ],
+ [
+  "- **M1-AC2** A missing or wrong Monarch credential is refused and reported. The credential travels only on the post office's standard input, and appears in no file, command line, environment variable, output or log (PO-3, SEC-2, SEC-4, PO-5, WSP-8).",
+  "- **M1-AC2** A missing or wrong Monarch credential is refused and reported, and 1,000 refused requests give one full report, then one a minute with the count. The credential is handed over only on the post office's standard input; after that, each command presents it over the loopback connection. It appears in no file, command line, environment variable, output or log. Each kind `redact()` matches, written to a log and a record, appears in neither, and a key that a fake claude streams across three fragments appears in no log (PO-3, SEC-2, SEC-4, PO-5, WSP-8)."
+ ],
+ [
+  "never as instructions (MSG-1, OBS-2).",
+  "never as instructions, with any control or format character in them escaped (MSG-1, OBS-2, SEC-6)."
+ ],
+ [
+  "and the keys row wraps without dropping a key (VIS-3, HOST-4).",
+  "and the keys row wraps without dropping a key. An approval request that holds a bidirectional control shows it as a placeholder (VIS-3, HOST-4, SEC-6)."
+ ],
+ [
+  "- SEC-1, SEC-2, SEC-4;",
+  "- SEC-1, SEC-2, SEC-4, SEC-6;"
+ ],
+ [
+  "- WSP-8, WSP-10;",
+  "- WSP-8, WSP-10, WSP-11;"
+ ],
+ [
+  "  - `git push -u` run between turns, which writes `branch.*`, holds nothing.\n",
+  "  - `git push -u` run between turns, which writes `branch.*`, holds nothing;\n  - a `claude.cmd`, `claude.exe`, `claude` and `git.exe` committed at the repository's root, and in a soldier's snapshot, never run: the CLI and git come from `PATH` (CH-1, WSP-10).\n- **M1-AC11** A fake claude soldier at `auto` (WSP-11, PO-1):\n  - its session opens in a snapshot of HEAD under `.shadow/v2/`, never in the folder;\n  - a file it writes there is gone before its next turn, and its log reports a read-violation;\n  - a tracked checkout file changed during a turn fails that turn, and so does an ignored `.claude/settings.local.json`; the log names the path;\n  - an edit made between turns raises nothing;\n  - a restart opens a new snapshot, and closing the session removes it;\n  - a snapshot that can't be made keeps the soldier from starting.\n- **M1-AC12** Text from a fake claude holding ESC, a bidirectional control and a zero-width character shows each as a placeholder in the mod's transcript lines, and reaches Claude escaped the same way; its other characters are kept (SEC-6).\n"
+ ],
+ [
+  "  - commits with `--no-verify` (2.0 GIT-4).\n",
+  "  - commits with `--no-verify` (2.0 GIT-4);\n  - runs a git found by its absolute path on `PATH` alone, as CH-1 starts each CLI, never one in the folder, a worktree or a snapshot.\n"
+ ],
+ [
+  "that turn's guard and audit run before anything else (PO-8, →M2).\n",
+  "that turn's guard and audit run before anything else (PO-8, →M2).\n- **WSP-11** (M1; I, F) **Before a soldier has its worktree** (from v1's design rules). Until WSP-1 (→M6) gives each soldier its worktree, each session opens in its own throwaway snapshot of HEAD under `.shadow/v2/`, made by harness git (WSP-10) when the session opens and removed when it closes.\n  - A restart that opens a fresh session (PO-1) gets a new snapshot. A resumed session (CH-9, →M2) keeps its snapshot, so the paths in its history still hold.\n  - A soldier whose snapshot can't be made does not start, and its log says why; it never runs in the folder itself.\n  - A file it writes in its snapshot is discarded before its next turn and reported as a read-violation, as ARM-6 (→M2) says for agy.\n  - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended. It covers the checkout and the paths that ARM-6 (→M2) hashes. Until the attribution card exists, any change it finds fails the turn: the soldier's log names each path, and Claude's transcript gets one line.\n"
+ ],
+ [
+  "- **Snapshot:** a throwaway copy of a base, whose writes are discarded and reported (ARM-6).",
+  "- **Snapshot:** a throwaway copy of a base, whose writes are discarded and reported (ARM-6, WSP-11)."
+ ],
+ [
+  "  - The handoff instruction (SES-4, →M4).",
+  "  - The handoff instruction: when asked for a handoff (SES-4, →M4), reply under working on, done, decided, files and open."
+ ],
+ [
+  "  - codex-astra (Bellion) takes review and hard builds, as claude-opus does. It is listed after claude-opus, because v1's router breaks ties by roster order: v1 then still ranks claude-opus first for reviews and hard builds, until LEG-1 (→M6).",
+  "  - codex-astra (Bellion) takes review and hard builds (`build` with `buildFor: [hard]`), as claude-opus does, and keeps `orchestrate`, so v1's `monarch` block and v1's Monarch stay as they are until LEG-1 (→M6). It is listed after claude-opus in `orchestratorDelegate.md`, whose order is the roster order, as v1 reads it (`src/core/roster.ts`). v1's router breaks ties by that order, so v1 still ranks claude-opus first for reviews and hard builds."
+ ],
+ [
+  "v2 ignores the `orchestrate` role and the `monarch` block (ARM-1, ARM-3).",
+  "v2 ignores the `orchestrate` role and the `monarch` block, and v1 still plans with codex-astra, its `monarch.default`. A duplicate shadow name, in any case, or a name that is another soldier's key, is refused at start, naming both soldiers (ARM-1, ARM-3)."
+ ],
+ [
+  "  No code is left out of the count, and neither bar is lowered, to pass.",
+  "  Code that a child process runs lives in a file of its own, never in a string, so its lines count like any other. Code in another language, such as a native helper or a PowerShell script, keeps the same bars through that language's own coverage tool, counted over the systems it runs on (VER-2). No code is left out of the count, and neither bar is lowered, to pass."
+ ],
+ [
+  "Decide before v2.0.0.\n",
+  "Decide before v2.0.0.\n- **Q9** How does a claude soldier take its `send` credential with nothing on its command line or on disk: `setMcpServers` over its stream-json input, or a `headersHelper`? A probe settles it before M3 (PO-4).\n"
+ ]
+]

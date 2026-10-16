@@ -1,0 +1,1 @@
+- **SEC-4** (M1; X) Logs and records hold nothing that `redact()` matches (WSP-8). A test writes each kind and finds none of it in a log or a record. A secret of another form, such as one a soldier quotes, isn't recognized and can be written: a stated residual risk.
