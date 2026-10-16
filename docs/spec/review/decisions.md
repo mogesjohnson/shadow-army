@@ -25,7 +25,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-17 | One army per repository, or one per working tree (R-M1-67) | big (A changes what the owner can run; B changes what the guard trusts) | card drafted 2026-10-16, to send | — |
 | D-18 | How a turn cut short by the post office's end is checked before M3 (R-M1-66) | technical | (b) chosen by the orchestrator, 2026-10-16; amended for R-M1-81 | with M1-FC1's repairs |
 | D-19 | Whether claude soldiers share the owner's auto memory (R-M1-82) | big (a vendor default in the soldiers' harness, or a residual to accept) | card drafted 2026-10-16; probe P-12 first | — |
-| D-20 | Whether v2.0 leaves macOS out for now (the owner's question) | big (which systems 2.0 runs on) | card drafted 2026-10-16, in the decisions doc | — |
+| D-20 | Whether v2.0 leaves macOS out for now (the owner's question) | big (which systems 2.0 runs on) | **A**, the owner's answer, 2026-10-16: macOS stays in 2.0 | nothing to change: the spec keeps macOS |
 | D-21 | One clean round per unit instead of two (the owner's question) | big (it changes the owner's own convergence rule) | card drafted 2026-10-16, in the decisions doc | — |
 
 ---
@@ -377,6 +377,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   - Probes P-5, P-6 and P-8 need a Mac. So does VER-10's live run, and R-F-50 asks who runs it.
   - In Codex's M1, the macOS half of `native/process-supervisor.c` and `src/v2/processTree.ts` (about 50 of their 790 lines, built on Apple's private structures) goes away.
 - **Options:** A keep macOS in 2.0, as the spec says now; B leave it out: Windows and Linux only, with macOS in a later release; C keep macOS in CI so the code stays portable, but start no soldier on macOS until its containment is built after 2.0 (the mod says why, as it does in the Desktop app).
+- **Answer: A** (the owner, in chat, 2026-10-16: "i will keep the mac users"). The spec keeps macOS in 2.0, and D-3 stands as judged.
 - **Card** (drafted 2026-10-16, in the decisions doc):
 
   ```
