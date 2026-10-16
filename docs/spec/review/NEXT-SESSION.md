@@ -11,7 +11,7 @@ Continue the Shadow Army spec 2.0 review (issue #63). The review lives on PR #77
 
 Read, in this order: CLAUDE.md, CONTRIBUTING.md, docs/spec/review/NEXT-SESSION.md (all of it), docs/spec/review/STATE.md, docs/spec/review/spec2.0_review_flow.md (the rules; it wins over PLAYBOOK.md), then the ledger and decisions.md as you need them.
 
-The spec is v0.8. M1's round 1 is fixed and fix-checked, and its 21 follow-ups (R-M1-62 to R-M1-82) need repairs. First, with no agent: write drafts/M1-r1-fc/fc2.txt for M1-FC2's findings, amend fc1.txt for R-M1-81, dry-run both, apply them as v0.9, and run the checkers. Then ask me how much credit is left, and run at most two agents at a time: a fix check of the P1 repairs (R-M1-70, R-M1-73) beside D-7's option C drafter, then D-7's judge, then round 2 for M1 and F. My answers to the eleven open cards are in the doc "Spec 2.0 Review: Your Decisions" (https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844): read its "Your answer" column and comments with the docs tools at the start, and again before each report, and apply each answer as it comes. Commit and push after every result that changes a doc, and after every pass update STATE.md and comment on PR #77.
+The spec is v0.8. M1's round 1 is fixed and fix-checked, and its 21 follow-ups (R-M1-62 to R-M1-82) need repairs. First, with no agent: write drafts/M1-r1-fc/fc2.txt for M1-FC2's findings, amend fc1.txt for R-M1-81, dry-run both, apply them as v0.9, and run the checkers. Then ask me how much credit is left, and run at most two agents at a time: a fix check of the P1 repairs (R-M1-70, R-M1-73) beside D-7's option C drafter, then D-7's judge, then round 2 for M1 and F. My answers to the open cards are in the doc "Spec 2.0 Review: Your Decisions" (https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844): read its "Your answer" column and comments with the docs tools at the start, and again before each report, and apply each answer as it comes. Commit and push after every result that changes a doc, and after every pass update STATE.md and comment on PR #77.
 
 Answer me straight to the point. I answer only big questions, as short decision cards with a tested recommendation.
 ```
@@ -22,9 +22,9 @@ Answer me straight to the point. I answer only big questions, as short decision 
 
 - **PR #77** (draft) is stacked on #76. The spec is v0.8 (`1580e87`), and both checkers give 0 problems (101 requirements, 61 ACs). `main` is v0.5.
 - **F:** round 1 closed (v0.7, fix-checked twice). **M1:** round 1 fixed (v0.8) and fix-checked. M1-FC1 and M1-FC2 passed all twelve P1 fixes and found R-M1-62 to R-M1-82. The open P1s are R-M1-70 and R-M1-73 (repairs to write) and R-M1-59 (with D-3's answer).
-- **Decisions:** 19 in all.
-  - Settled: D-2, D-6, D-12 to D-15 and D-18.
-  - With the owner: D-1, D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16 and D-17 (cards sent on 2026-10-16), and D-19 (its card goes with the first report).
+- **Decisions:** 20 in all.
+  - Settled: D-1 (A, the owner's answer of 2026-10-16), D-2, D-6, D-12 to D-15 and D-18.
+  - With the owner, in the decisions doc: D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16, D-17, D-19 and D-20 (whether 2.0 leaves macOS out for now; if B or C, D-3 is judged again without macOS).
   - In a bake-off: D-7 (option A drafted; option C and a judge next).
 - **Probes** P-1 to P-13 wait for the owner's go.
 - **Progress:** about a tenth of the whole review. Two of 15 units are through round 1, and 34 agent reports are saved, of the 250 to 300 the playbook expects.

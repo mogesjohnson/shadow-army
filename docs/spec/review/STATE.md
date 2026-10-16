@@ -33,7 +33,7 @@ Last updated: 2026-10-16, end of session 3. Unit F's round 1 is closed (v0.7; fi
 
 | Decision | State |
 |---|---|
-| D-1 the spec's name and revision | Big. Card re-sent 2026-10-16; no answer yet. |
+| D-1 the spec's name and revision | Answered **A** by the owner on 2026-10-16, in the decisions doc. Applied last, with the final rename. |
 | D-2 the lease | Decided 2026-10-15 (A: the owner's 10 s / 30 s, technical); applied in v0.8. |
 | D-3 Q8, the process helper | Big. Judged 2026-10-16: B, the helper prebuilt and checksummed. Card sent 2026-10-16. |
 | D-4 a threat model; D-5 limits; D-8 the live checks' budget | Big. Cards sent 2026-10-16. |
@@ -42,7 +42,8 @@ Last updated: 2026-10-16, end of session 3. Unit F's round 1 is closed (v0.7; fi
 | D-9, D-10, D-11, D-16, D-17 | Big. Cards sent 2026-10-16. |
 | D-12 to D-15 | Technical, chosen 2026-10-15; applied in v0.8. |
 | D-18 how a cut-short turn is checked before M3 | Technical, (b), amended for R-M1-81; goes in with M1-FC1's repairs. |
-| D-19 soldiers and the owner's auto memory | Big. Card drafted 2026-10-16, to send; probe P-12 first. |
+| D-19 soldiers and the owner's auto memory | Big. Card in the decisions doc; probe P-12 first. |
+| D-20 leaving macOS out of 2.0 for now | Big; the owner's question of 2026-10-16. Card in the decisions doc, recommending C: macOS stays in CI, and no soldier starts on macOS until after 2.0. Measured: it saves the review only about 3 to 5%. If the owner picks B or C, D-3 is judged again without macOS (one agent). |
 | Values set in the fix pass | A summary line is at most 120 characters; the parity task reads `README.md` and `package.json`, with live at most 1.05 times headless and two repeats on a token failure; a background task's follow-up wait is 30 s; a crashed channel restarts after 1 s, 5 s and 30 s. Recorded in `decisions.md`; the owner may overrule any. |
 
 ## Next, in order
@@ -70,7 +71,7 @@ Ask the owner how much credit is left before starting any agent; run at most two
 
 ## Waiting on the owner
 
-- The eleven open cards (D-1, D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16, D-17, D-19) are in the doc "Spec 2.0 Review: Your Decisions", https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844, made 2026-10-16. The owner answers in its "Your answer" column and in comments; read it with the docs tools at the start of each session.
+- The open cards (D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16, D-17, D-19, D-20) are in the doc "Spec 2.0 Review: Your Decisions", https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844, made 2026-10-16. D-1 is answered there (A). The owner answers in its "Your answer" column and in comments; read it with the docs tools at the start of each session.
 - Probes (`probes.md`), each needing the owner's go:
   - P-1 and P-2 finish spike S6;
   - P-3: does an installed mod load in a claude soldier;

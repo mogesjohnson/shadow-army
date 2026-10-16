@@ -6,7 +6,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 
 | ID | Question | Kind | Status | Applied |
 |---|---|---|---|---|
-| D-1 | The spec's name and revision scheme | big | card sent to the owner 2026-10-14 | — |
+| D-1 | The spec's name and revision scheme | big | **A**, the owner's answer, 2026-10-16 (the decisions doc) | last, with the final rename |
 | D-2 | The lease timing: do the owner's 10 s / 30 s hold up against Codex's 5 s / 20 s? | technical unless the timing changes (then big) | judged 2026-10-15: A, the owner's 10 s / 30 s, technical | v0.8: PO-7, HOST-2, CH-6, MSG-4, SEC-3, M1-AC1, §5.1 F, M2-AC7, M2-AC8, M3-AC11 |
 | D-4 | A threat model (R-F-5) | big | card to batch | — |
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
@@ -25,6 +25,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-17 | One army per repository, or one per working tree (R-M1-67) | big (A changes what the owner can run; B changes what the guard trusts) | card drafted 2026-10-16, to send | — |
 | D-18 | How a turn cut short by the post office's end is checked before M3 (R-M1-66) | technical | (b) chosen by the orchestrator, 2026-10-16; amended for R-M1-81 | with M1-FC1's repairs |
 | D-19 | Whether claude soldiers share the owner's auto memory (R-M1-82) | big (a vendor default in the soldiers' harness, or a residual to accept) | card drafted 2026-10-16; probe P-12 first | — |
+| D-20 | Whether v2.0 leaves macOS out for now (the owner's question) | big (which systems 2.0 runs on) | card drafted 2026-10-16, in the decisions doc | — |
 
 ---
 
@@ -36,7 +37,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   - B: the same title, with the revision following the product (2.0-draft.7 … then 2.0).
   - C: keep "Shadow Army v2: Specification" and 0.x versions.
 - **Recommended:** A. It keeps the document's revision apart from the product's version, and keeps the path that CI, `CLAUDE.md`, the ADRs and many comments cite. Renaming the old archived "2.0" draft to "the 2.0 draft" means "2.0" names one thing.
-- **Card:** sent in the chat on 2026-10-14. Answer: pending.
+- **Card:** sent in the chat on 2026-10-14, and again in the decisions doc on 2026-10-16. **Answer: A**, picked by the owner in the doc's "Your answer" column on 2026-10-16.
 - **Applied:** last, with the final rename (PLAYBOOK section 11), together with `trace-v2.mjs`'s carried-over pattern.
 
 ## D-2 The lease timing
@@ -361,6 +362,28 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   Tested: fix check M1-FC2, from Claude Code's memory docs: auto memory is on by default, and all worktrees of one repository share one memory directory, whose first 200 lines load into every conversation. So a soldier reads your MEMORY.md, and a soldier misled by a file it read could save a memory that your next session loads. Probe P-12 checks whether a -p soldier writes memory at all.
   Recommended: A, because it keeps your rule that soldiers never share context with one documented setting, and it closes a way for a misled soldier to reach your own sessions.
   For you: soldiers stop seeing your saved memories; your own sessions keep theirs. Can be undone: yes, one setting.
+  ```
+
+## D-20 Whether v2.0 leaves macOS out for now (the owner's question, 2026-10-16)
+
+- **Kind:** big: it changes which systems 2.0 runs on, and VER-2's and VER-10's three systems.
+- **Question:** the owner asked whether taking macOS out for now would speed up or simplify the work, and by how much.
+- **Measured** (2026-10-16, v0.8, the ledger and Codex's draft):
+  - macOS appears in 8 of the spec's 1,250 lines: PO-1's residual list, PO-7's sleep note, VER-2, VER-10, M1-AC1's SIGSTOP case, M6-AC8, Q6 and Q8.
+  - It appears in 4 of the ledger's 149 findings: R-F-50, R-M1-5, R-M1-59 and R-M1-61.
+  - The review's remaining cost comes from its units and rounds, so leaving macOS out saves about 3 to 5% of it.
+  - The larger effects are elsewhere. D-3 loses its hardest part: Apple's unpublished interfaces, notarization, and the Developer ID at 99 USD a year. Option C loses its macOS escape, so D-3 would be judged again (one agent).
+  - Probes P-5, P-6 and P-8 need a Mac. So does VER-10's live run, and R-F-50 asks who runs it.
+  - In Codex's M1, the macOS half of `native/process-supervisor.c` and `src/v2/processTree.ts` (about 50 of their 790 lines, built on Apple's private structures) goes away.
+- **Options:** A keep macOS in 2.0, as the spec says now; B leave it out: Windows and Linux only, with macOS in a later release; C keep macOS in CI so the code stays portable, but start no soldier on macOS until its containment is built after 2.0 (the mod says why, as it does in the Desktop app).
+- **Card** (drafted 2026-10-16, in the decisions doc):
+
+  ```
+  D-20 Should v2.0 leave macOS out for now?
+  Options: A keep macOS in 2.0, as the spec says now; B leave it out: Windows and Linux only, macOS in a later release; C keep macOS in CI so the code stays portable, but start no soldier on macOS until its containment is built after 2.0.
+  Tested: macOS is 8 of the spec's 1,250 lines and 4 of 149 findings, so the review shrinks only about 3 to 5%. It does remove D-3's hardest part (Apple's unpublished interfaces, notarization, 99 USD a year), probes P-5, P-6 and P-8, and the live run on a Mac before 2.0.0.
+  Recommended: C, because it drops the riskiest code and every Mac-only check, while the code keeps building on macOS, so macOS can return without a rewrite.
+  For you: no Mac or Apple account needed before 2.0.0; Mac users wait for a later release; D-3 gets one quick re-judge. Can be undone: yes.
   ```
 
 ## Values set in the fix pass
