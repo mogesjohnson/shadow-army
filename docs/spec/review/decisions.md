@@ -14,9 +14,9 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-7 | How the settled read-only rule reaches every soldier (R-F-3) | technical if A or C, big if B or D | bake-off in the fix pass | — |
 | D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A, B and C drafted, the Linux prototype done; next a judge, then the card | — |
 | D-8 | The live checks' $2 budget per release: how a CLI that reports no cost counts, and what happens when it runs out (R-F-33, R-F-20) | big (money) | card to batch | — |
-| D-9 | B2: how far PO-3 goes, and what each credential defends against (R-M1-1, R-F-29) | big (security posture; a residual to accept) | first verifier M1-V1 done; second verifier, then a card with D-4 | — |
-| D-10 | How far the folder's own config and policy files are trusted (R-M1-2) | big (a trust boundary; A adds a card the owner answers) | first verifier M1-V1 done; second verifier, then a card | — |
-| D-11 | What `/clear`, `/resume` and `/branch` do to the army (R-M1-20, R-F-38; with H38) | big (what the owner keeps, loses and pays) | first verifier M1-V2 done; a card to batch | — |
+| D-9 | B2: how far PO-3 goes, and what each credential defends against (R-M1-1, R-F-29) | big (security posture; a residual to accept) | verified twice (M1-V1, M1-V7); card drafted 2026-10-16, to batch with D-4 | v0.8: the technical rule only (no soldier credential on a command line: PO-4, SEC-5, Q9) |
+| D-10 | How far the folder's own config and policy files are trusted (R-M1-2) | big (a trust boundary; A adds a card the owner answers) | verified twice (M1-V1, M1-V7); card drafted 2026-10-16, to batch | v0.8: the technical rule only (programs from PATH alone; `cli` one of the four adapters) |
+| D-11 | What `/clear`, `/resume` and `/branch` do to the army (R-M1-20, R-F-38; with H38) | big (what the owner keeps, loses and pays) | verified (M1-V2); card drafted 2026-10-16, to batch | v0.8 reads as B until the owner answers |
 | D-12 | A mod reload or a lost hooks worker leaves a post office the new mod instance can't command (R-F-30) | technical if (a); (b) and (c) are big | (a) chosen by the orchestrator, 2026-10-15; M1-V8 agrees | v0.8: HOST-2, M1-AC1, §5.1 F |
 | D-13 | What starts the army in M1, which has no command or tool (R-M1-27) | technical | A chosen by the orchestrator, 2026-10-15 | v0.8: HOST-2, M1-AC8 |
 | D-14 | A line a CLI writes that can't be parsed (R-M1-18; H2) | technical | (c) chosen by the orchestrator, 2026-10-15 | v0.8: CH-1, PO-1, §5.1 F; H2 Same |
@@ -186,14 +186,32 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   - A: harden where the system allows and state the rest. PO-3's MUST NOT names disk, command lines, environment variables, output and logs; the post office checks and logs the protection it relies on (Linux `ptrace_scope` 1 or more; a Windows process security descriptor where one can be set), with an X test; each soldier credential stays off command lines and disk where the CLI allows (codex and grok over stdio; claude over its stream-json input if a probe confirms it, else an owner-only file removed once the session is up); SEC-5 and ADR-0012's consequences narrowed; the residual in D-4;
   - B: soldiers run as another OS user or in a sandbox, so PO-3 and SEC-5 hold as written (a new capability and a setup change);
   - C: as A, and on Linux at scope 0 soldiers start only if the owner allows it.
-- **Next:** the second verifier (M1-V7/V8), then a card with D-4. Under A, the hardening mechanism is technical and goes to a bake-off.
+- **Second verifier:** M1-V7 agrees (big), and folds R-F-2 and R-M1-32 into it. Its technical rule is applied in v0.8 whatever wins: no soldier credential appears on any process's command line (PO-4, SEC-5, Q9). Under A, the hardening mechanism is technical and goes to a bake-off.
+- **Card** (drafted 2026-10-16, to send with D-3's and D-4's):
+
+  ```
+  D-9 How far must the Monarch's secret resist a soldier that can run code as you?
+  Options: A harden where the system allows (the post office shields its own memory and logs which protection each machine has), and accept the rest in D-4's threat model: on Windows, and on Linux at ptrace_scope 0, such a soldier can read the secret and act as the Monarch; B run soldiers as another OS user or in a sandbox, so the secret holds everywhere (each CLI's login moves to that user); C as A, and on Linux at ptrace_scope 0 a soldier starts only once you allow it.
+  Tested: verifiers M1-V1 and M1-V7: the mod and the post office hold the secret all session; on Windows, Claude Code's own process holds the mod's copy, and nothing shields it from your other processes; at Linux scope 1 (Ubuntu's default) soldiers can't read it, since they descend from both. SEC-2's tests pass while the gap is open. The credential half is fixed in v0.8: no soldier credential on any command line.
+  Recommended: A, because nothing closes the gap on Windows, so one accepted residual covers every system and the log names each machine's protection; and B is a new capability that moves every CLI's login to another user.
+  For you: you accept the residual in writing, with D-4; daily use doesn't change. Can be undone: yes; B can come after 2.0.
+  ```
 
 ## D-10 How far the folder's own config is trusted (from R-M1-2)
 
 - **Kind:** big: a trust boundary, and what a repository may change without the owner. The program-resolution rule inside it is technical and is fixed in M1's fix pass whatever wins.
 - **Question:** v1 and Codex's draft read the folder's `shadow.config.json` first, so a cloned repository sets every soldier's autonomy, up to claude's `bypassPermissions`, which Claude Code itself refuses from a project's settings. The archived 2.0 draft had a trust card for this (D9, POL-1, POL-2) that v2 didn't carry over.
 - **Options** (verifier M1-V1): A, carry over 2.0's POL-1 and POL-2: the folder's `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md` are hashed, and a new or changed one shows a trust card before any soldier starts, the only way the folder raises autonomy above supervised; B, `cli`, `model` and `autonomy` come only from the owner's own config outside the folder, and the folder's files may only restrict; C, trust the folder, and say so in D-4's threat model.
-- **Next:** the second verifier, then a card.
+- **Second verifier:** M1-V7 agrees (big). The technical rule is applied in v0.8 whatever wins: each CLI and git start from an absolute path found on PATH alone, never in the folder, a worktree or a snapshot; `cli` names one of the four adapters; an X test plants `claude.cmd`, `claude.exe`, `git.exe` and a bare `claude`.
+- **Card** (drafted 2026-10-16, to send with D-3's):
+
+  ```
+  D-10 Should a repository's own Shadow Army files be trusted when the army runs in it?
+  Options: A carry over the 2.0 draft's trust card: the folder's shadow.config.json, orchestratorDelegate.md, rules.md and agent.md are hashed, a new or changed one shows you a card before any soldier starts, and only that card lets the folder raise autonomy above supervised; B cli, model and autonomy come only from your own config outside the folder, and the folder's files may only restrict; C trust the folder, and say so in D-4's threat model.
+  Tested: verifiers M1-V1 and M1-V7: v1 and Codex's draft read the folder's config first, so a cloned repository can set every soldier to full autonomy, which becomes claude's bypassPermissions, a mode Claude Code itself ignores in a project's settings. The 2.0 draft had this card (D9, POL-1, POL-2). A CLI or git planted in the folder is already fixed in v0.8.
+  Recommended: A, because it closes the cloned-repository route the way Claude Code guards its own project settings, and your committed roster keeps working (B moves it out of the repository).
+  For you: a trust card the first time the army runs in a folder, and after each change to those files; until you accept it, no soldier starts there. Can be undone: yes.
+  ```
 
 ## D-11 What `/clear`, `/resume` and `/branch` do to the army (from R-M1-20 and R-F-38)
 
@@ -201,7 +219,16 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** HOST-2, PO-7, SES-1 and WSP-1 depend on "the session", which the spec never defines. Claude Code's mod reference says `session.end` fires when the session ends or `/clear`, `/resume` or `/branch` runs, and no `session.start` fires after them; the process goes on under a new session id. Both D-2 drafts already end the army when the session id changes, so closing D-2 would decide this silently.
 - **Options** (verifier M1-V2): A, the army lives as long as the Claude Code process and its mod, and `/clear`, `/resume` and `/branch` keep the soldiers and their sessions, with a summary card for an earlier brief arriving in the new conversation, marked as from the earlier one; B, each Claude session has its own army: any `session.end` ends it as PO-7 says, and the next use starts a new one; C, `/clear` keeps the army, and `/resume` and `/branch` end it, because another conversation takes over (what a resumed conversation gets stays with H38).
 - **Applied meanwhile:** D-2's shutdown text goes in without its session-id clause until this is decided.
-- **Next:** a card, batched with the other big ones.
+- **Facts for the card** (2026-10-16): `session.end` carries a `reason`: `clear` for `/clear`, `resume` for `/resume` and for `/branch`, which reports as resume (`evidence/mod-api-2.1.294/claude-code.d.ts` 10984-11012; the mod reference). So the mod can tell `/clear` apart, and C can be built. v0.8's PO-7 ends the army at every `session.end`, and M1-AC8 checks `/clear` that way, so the text reads as B until the owner answers.
+- **Card** (drafted 2026-10-16, to send with D-3's):
+
+  ```
+  D-11 Should /clear, /resume and /branch end the army?
+  Options: A none of them: the army lives as long as Claude Code and its mod, and a report for an earlier brief arrives in the new conversation, marked as from the earlier one; B all three: each conversation has its own army, as v0.8 says now (SES-1, PO-7); C /clear keeps the army, while /resume and /branch end it, since another conversation takes over.
+  Tested: verifier M1-V2, from Claude Code's mod reference: all three fire session.end, and Claude Code then goes on under a new session id with no session.start; the mod is told which it was (/branch reports as resume). Under v0.8, a /clear stops every running soldier turn and closes the soldiers' sessions, so their context is rebuilt at your cost.
+  Recommended: C, because /clear is how you trim the Monarch's context, and it shouldn't cost you the soldiers' running work and warm sessions; and /resume and /branch move to another conversation, so the soldiers stay with the one that briefed them (what a resumed conversation gets stays with H38).
+  For you: /clear no longer stops your soldiers; a report for a brief sent before it arrives marked so. /resume and /branch still end the army. Can be undone: yes, a rule in PO-7 and SES-1.
+  ```
 
 ## D-12 A mod reload leaves a post office the new instance can't command (from R-F-30)
 
