@@ -49,7 +49,7 @@ Last updated: 2026-10-16, end of session 3. Unit F's round 1 is closed (v0.7; fi
 
 Ask the owner how much credit is left before starting any agent; run at most two at a time; commit and push after every result that changes a doc. `NEXT-SESSION.md` has the setup and the prompts.
 
-1. **The owner's answers** to any card, applied as they come, each recorded in `decisions.md` and on its ledger rows. Send D-19's card with the first report.
+1. **The owner's answers** to any card, read from the decisions doc (above, "Waiting on the owner") and applied as they come, each recorded in `decisions.md` and on its ledger rows.
 2. **M1's repairs, no agent.**
    - Write `drafts/M1-r1-fc/fc2.txt` for R-M1-70 and R-M1-72 to R-M1-80, as each ledger row's Resolution says.
    - Amend `fc1.txt`'s D-18 blocks for R-M1-81.
@@ -70,7 +70,7 @@ Ask the owner how much credit is left before starting any agent; run at most two
 
 ## Waiting on the owner
 
-- Cards sent on 2026-10-16: D-1 (re-sent), D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16 and D-17. To send: D-19.
+- The eleven open cards (D-1, D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16, D-17, D-19) are in the doc "Spec 2.0 Review: Your Decisions", https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844, made 2026-10-16. The owner answers in its "Your answer" column and in comments; read it with the docs tools at the start of each session.
 - Probes (`probes.md`), each needing the owner's go:
   - P-1 and P-2 finish spike S6;
   - P-3: does an installed mod load in a claude soldier;
