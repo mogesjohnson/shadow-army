@@ -12,7 +12,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
 | D-6 | How G7's "traced in CI" is met (R-F-36) | technical | decided 2026-10-15 by the orchestrator: option (a) | v0.7: VER-7, Appendix B rule 9, M1-AC7 |
 | D-7 | How the settled read-only rule reaches every soldier (R-F-3) | technical if A or C, big if B or D | bake-off in the fix pass | — |
-| D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | options A, B and C drafted, the Linux prototype done; next a judge, then the card | — |
+| D-3 | Q8: how the C process helper ships (compile at first use, prebuilt, or another containment) | big | judged 2026-10-16: B recommended; card to batch | — |
 | D-8 | The live checks' $2 budget per release: how a CLI that reports no cost counts, and what happens when it runs out (R-F-33, R-F-20) | big (money) | card to batch | — |
 | D-9 | B2: how far PO-3 goes, and what each credential defends against (R-M1-1, R-F-29) | big (security posture; a residual to accept) | verified twice (M1-V1, M1-V7); card drafted 2026-10-16, to batch with D-4 | v0.8: the technical rule only (no soldier credential on a command line: PO-4, SEC-5, Q9) |
 | D-10 | How far the folder's own config and policy files are trusted (R-M1-2) | big (a trust boundary; A adds a card the owner answers) | verified twice (M1-V1, M1-V7); card drafted 2026-10-16, to batch | v0.8: the technical rule only (programs from PATH alone; `cli` one of the four adapters) |
@@ -92,7 +92,39 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 
     - A helper compiled with gcc 13 on Ubuntu 24.04 needs GLIBC_2.34 when linked dynamically (so it won't run on glibc 2.28 to 2.33, such as RHEL 8 or Ubuntu 20.04); `-static` removes that. Compiling at first use took 114 ms (dynamic) or 151 ms (static). Binary facts: `prototypes/D-3/results/binfacts-20261014-063708.txt`.
     - What it means: on Linux, process groups and polling are not enough; a subreaper, a cgroup scope or a PID namespace all hold. A systemd user manager or unprivileged user namespaces give a no-compiler route where present. macOS has no public equivalent (to research, for option C).
-  - **Next:** redraft B and C; one judge over the three drafts, the prototype and the docs; then the card to the owner.
+- **Judge** (2026-10-16, `raw/D-3-judge.md`; the rerun, against v0.8): on the seven criteria A scores 4, 4, 4, 2, 5, 4, 5; B 5, 5, 4, 4, 2, 2, 4; C 2, 2, 2, 2, 4, 2, 3. It recommends **B**. B keeps the containment that held in every prototype run, and it ends a tree at once when the post office dies. Every machine runs one reproducible, checksummed binary that CI tested, with no compiler. A instead builds a different binary on each machine, whose hash no release can name, and keeps it in a cache that any process of the owner's user can replace. Kind: big (PLAYBOOK §14: Q8 changes what users install; B raises what the owner pays; C needs a residual accepted; a repository made public is hard to undo).
+  - **B takes from A:**
+    - the macOS guardian: it connects back with a nonce, ends the coalition when the post office is gone, and has launchd remove its job (B has no such process);
+    - "as if started directly", the post office's resource limits included;
+    - NEW-3's listing, with identities a reused pid can't match (PO-8, MSG-9);
+    - NEW-2's order and "only the system's word counts", timed to v0.8's PO-7;
+    - NEW-4's outcome on each system for a guardian ended from outside;
+    - NEW-6's list of unpublished Apple interfaces, looked up at run time with size checks;
+    - the self-test's proof by a pipe that reaches end-of-file, in place of B's signal-0 check;
+    - "containment is cleanup, not a sandbox" (for D-4);
+    - A's live macOS check, with the checkout in `~/Documents`.
+  - **B takes from C:**
+    - the Windows text, whichever option wins: the script ships as a file at a fixed path (M1 writes it from a string into a temporary folder, which VER-6 now forbids and an AppLocker path rule can't allow); it detects ConstrainedLanguage mode and refuses with that reason; an administrator allows it by hash or publisher;
+    - the on-disk record of each tree (with each session's launchd label and coalition id), and the sweep before any channel opens, as the backstop for a guardian killed with the post office;
+    - "what the owner is told";
+    - `redact()` on the command line of each process left running;
+    - spike S7's items, for every option.
+  - B's changed lines cite v0.6. v0.8 already carries the rule (PO-1 202-203, PO-7 237), so B supplies only the mechanism, and its PO-1 replacement is dropped.
+  - **Found by the judge, for every option:** R-M1-59 (PO-1's 10 seconds fail when the guardian dies with the post office: in M1's draft one `killall node` ends both), R-M1-60 (more work that escapes every option) and R-M1-61 (code in strings, and C# coverage, under VER-6).
+  - **Residuals:**
+    - C needs one accepted: a macOS escape, and a cgroup move on Linux.
+    - A and B add two lines to D-4. A guardian killed from outside lets processes escape. macOS containment rests on unpublished Apple interfaces, so an update can stop every macOS soldier until a release; that fails closed.
+    - On Windows, under AppLocker or App Control, no soldier starts until an administrator allows the script, whichever option wins.
+  - **Probes it leaves:** P-5 to P-10 in `probes.md`.
+- **Card** (drafted 2026-10-16, to send with the batch):
+
+  ```
+  D-3 How should Shadow Army make sure nothing a soldier started outlives its session?
+  Options: A compile Codex's small C helper on your machine at first use (needs a C compiler; on macOS, Xcode's command-line tools); B ship that helper prebuilt and checksummed for each system, built and tested in CI (no compiler; 99 USD a year for Apple's Developer ID); C no native helper: each system's own tools, with an escape on macOS that you accept or refuse.
+  Tested: a Linux prototype, 20 runs per mechanism: the helper left 0 of 2,279 daemons running, while killing the process group or polling let every double-forked daemon escape. The judge scored B first on safety, your goals and enterprise readiness, and A first on cost. Under C a soldier's processes also outlive a post office killed together with its mod.
+  Recommended: B, because every machine runs one checksummed binary that CI tested, with nothing to install, and its helper ends a soldier's processes at once when the post office dies.
+  For you: 99 USD a year (probe P-6 might remove it) and macOS and arm64 CI minutes. Can be undone: yes, unless the repository is made public for attestations, which B leaves optional.
+  ```
 
 ---
 
