@@ -10,6 +10,7 @@ Last updated: 2026-10-16, end of session 3. Unit F's round 1 is closed (v0.7; fi
 - **The spec is v0.8** (`1580e87`): M1's round-1 fixes, with D-2 and D-12 to D-15. `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <previous snapshot>` gives 0 problems (101 requirements, 61 ACs), and `tools/check-appendix-c.mjs` gives 0 problems. The trace script checks Appendix B's rules 1 to 6 and 8 (forward citations marked →Mx) and, given a previous version, that no ID is gone.
 - **Snapshots** (in the main checkout's `.shadow/v2-tools/review/snapshots/`): `v2@be9deb0.md`, which round 1 reviewed, and `v2@1580e87.md`, v0.8, which D-7's drafters read. Rebuild one with `git show <sha>:docs/spec/v2.md`.
 - **Agents running:** none. Every report is saved in `raw/`.
+- **Status board with Codex** (from 2026-10-16): `C:\Users\johns\projects\AIConnections\codex-claude-status.md`, local and excluded from git. Claude ticks the Review column at each step and Codex the Build column. The order: the review leads, Codex builds a milestone only once its spec is marked converged, and then Codex builds milestone N while the review does N+1.
 - **Done in session 3** (2026-10-16):
   - Session 2's cut-off fix check M1-FC1 and D-3 judge were rerun, since a new session can't resume them.
   - The D-3 judge recommends B, big (`raw/D-3-judge.md`). Its findings are R-M1-59 to R-M1-61, and its probes P-5 to P-10.
