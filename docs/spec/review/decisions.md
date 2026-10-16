@@ -26,6 +26,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-18 | How a turn cut short by the post office's end is checked before M3 (R-M1-66) | technical | (b) chosen by the orchestrator, 2026-10-16; amended for R-M1-81 | with M1-FC1's repairs |
 | D-19 | Whether claude soldiers share the owner's auto memory (R-M1-82) | big (a vendor default in the soldiers' harness, or a residual to accept) | card drafted 2026-10-16; probe P-12 first | — |
 | D-20 | Whether v2.0 leaves macOS out for now (the owner's question) | big (which systems 2.0 runs on) | card drafted 2026-10-16, in the decisions doc | — |
+| D-21 | One clean round per unit instead of two (the owner's question) | big (it changes the owner's own convergence rule) | card drafted 2026-10-16, in the decisions doc | — |
 
 ---
 
@@ -384,6 +385,26 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   Tested: macOS is 8 of the spec's 1,250 lines and 4 of 149 findings, so the review shrinks only about 3 to 5%. It does remove D-3's hardest part (Apple's unpublished interfaces, notarization, 99 USD a year), probes P-5, P-6 and P-8, and the live run on a Mac before 2.0.0.
   Recommended: C, because it drops the riskiest code and every Mac-only check, while the code keeps building on macOS, so macOS can return without a rewrite.
   For you: no Mac or Apple account needed before 2.0.0; Mac users wait for a later release; D-3 gets one quick re-judge. Can be undone: yes.
+  ```
+
+## D-21 One clean round per unit instead of two (the owner's question, 2026-10-16)
+
+- **Kind:** big: it changes the owner's own rule (spec2.0_review_flow.md section 6, "Done. Two clean rounds in a row, then two PASS sign-offs"; the owner's words, "2 agents verify the same section 2 or 3 times").
+- **Question:** the owner asked whether the two clean rounds per unit have been needed.
+- **Measured** (2026-10-16, the ledger):
+  - No unit has had a clean round yet, so the rule itself is untested.
+  - Every recheck of fixed text found real problems. F's round 1 raised 52 findings (16 P1); its first fix check found 12 more in the fixes (2 P1, 6 P2). M1's round 1 raised 56 (16 P1); its fix checks found 21 more (R-M1-62 to R-M1-82: 3 P1 with R-M1-70, 13 P2), and the D-3 judge one more P1.
+  - The one recheck after a clean look, F's second fix check, found only 2 P3 notes (R-F-65, R-F-66).
+  - Dropping the second clean round saves about one round per unit (two reviewers, their verifiers, a fix check: about 5 runs), roughly 15 to 20% of what is left.
+- **Options:** A keep the rule; B one clean round, then the two sign-offs, where a FAIL sends the unit back for another round; C decide after F's and M1's round 2.
+- **Card** (drafted 2026-10-16, in the decisions doc):
+
+  ```
+  D-21 Should a unit need one clean round instead of two, with the two sign-offs as its second look?
+  Options: A keep the rule: two clean rounds in a row, then two sign-offs; B one clean round, then the two sign-offs (an implementer and a red team, each PASS or FAIL), a FAIL sending the unit back for another round; C decide after F's and M1's round 2.
+  Tested: no unit has had a clean round yet. Every recheck of fixed text found real problems: F's first fix check 12 (2 P1), M1's fix checks 21 (3 P1). The one recheck after a clean look, F's second fix check, found only 2 wording notes.
+  Recommended: B, because it saves about one round per unit, roughly 15 to 20% of the remaining agent runs, and the finished text still gets four independent looks.
+  For you: the review ends sooner, and a sign-off can still fail a unit. Can be undone: yes, at any round.
   ```
 
 ## Values set in the fix pass
