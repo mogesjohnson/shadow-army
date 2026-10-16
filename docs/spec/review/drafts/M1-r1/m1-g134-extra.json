@@ -110,5 +110,13 @@
  [
   "  - a header with name · id · model (never dropped),",
   "  - a header with name · id · the model in use (CH-2), never dropped,"
+ ],
+ [
+  "- **OBS-3** (M4; U) Each turn's usage is recorded with the CLI's raw fields kept beside the normalized ones.",
+  "- **OBS-3** (M4; U) Each turn's usage is recorded with the CLI's raw fields kept beside the normalized ones. A turn's figures are its own: SES-7 and HOST-15 (→M5) add each turn's per-model figures, which count subagents, never running totals (CH-2, CH-5)."
+ ],
+ [
+  "| **Version** | 0.7, 2026-10-15: the first fixes from the spec's review (PR #77), for the frame (unit F, round 1).",
+  "| **Version** | 0.8, 2026-10-16: the review's round-1 fixes for M1, the post office and the claude channel (unit M1), with decisions D-2 and D-12 to D-15. 0.7, 2026-10-15: the first fixes from the spec's review (PR #77), for the frame (unit F, round 1)."
  ]
 ]

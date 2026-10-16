@@ -7,7 +7,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | ID | Question | Kind | Status | Applied |
 |---|---|---|---|---|
 | D-1 | The spec's name and revision scheme | big | card sent to the owner 2026-10-14 | — |
-| D-2 | The lease timing: do the owner's 10 s / 30 s hold up against Codex's 5 s / 20 s? | technical unless the timing changes (then big) | judged 2026-10-15: A, the owner's 10 s / 30 s, technical; to apply in M1's fix pass | — |
+| D-2 | The lease timing: do the owner's 10 s / 30 s hold up against Codex's 5 s / 20 s? | technical unless the timing changes (then big) | judged 2026-10-15: A, the owner's 10 s / 30 s, technical | v0.8: PO-7, HOST-2, CH-6, MSG-4, SEC-3, M1-AC1, §5.1 F, M2-AC7, M2-AC8, M3-AC11 |
 | D-4 | A threat model (R-F-5) | big | card to batch | — |
 | D-5 | Limits on queues, sends, sizes and logs (R-F-7) | big | card to batch | — |
 | D-6 | How G7's "traced in CI" is met (R-F-36) | technical | decided 2026-10-15 by the orchestrator: option (a) | v0.7: VER-7, Appendix B rule 9, M1-AC7 |
@@ -17,10 +17,10 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-9 | B2: how far PO-3 goes, and what each credential defends against (R-M1-1, R-F-29) | big (security posture; a residual to accept) | first verifier M1-V1 done; second verifier, then a card with D-4 | — |
 | D-10 | How far the folder's own config and policy files are trusted (R-M1-2) | big (a trust boundary; A adds a card the owner answers) | first verifier M1-V1 done; second verifier, then a card | — |
 | D-11 | What `/clear`, `/resume` and `/branch` do to the army (R-M1-20, R-F-38; with H38) | big (what the owner keeps, loses and pays) | first verifier M1-V2 done; a card to batch | — |
-| D-12 | A mod reload or a lost hooks worker leaves a post office the new mod instance can't command (R-F-30) | technical if (a); (b) and (c) are big | (a) chosen by the orchestrator, 2026-10-15; second verifier due | — |
-| D-13 | What starts the army in M1, which has no command or tool (R-M1-27) | technical | A chosen by the orchestrator, 2026-10-15 | — |
-| D-14 | A line a CLI writes that can't be parsed (R-M1-18; H2) | technical | (c) chosen by the orchestrator, 2026-10-15 | — |
-| D-15 | What M1 does with a claude permission request before the relay (R-M1-4) | technical | (a) chosen by the orchestrator, 2026-10-15 | — |
+| D-12 | A mod reload or a lost hooks worker leaves a post office the new mod instance can't command (R-F-30) | technical if (a); (b) and (c) are big | (a) chosen by the orchestrator, 2026-10-15; M1-V8 agrees | v0.8: HOST-2, M1-AC1, §5.1 F |
+| D-13 | What starts the army in M1, which has no command or tool (R-M1-27) | technical | A chosen by the orchestrator, 2026-10-15 | v0.8: HOST-2, M1-AC8 |
+| D-14 | A line a CLI writes that can't be parsed (R-M1-18; H2) | technical | (c) chosen by the orchestrator, 2026-10-15 | v0.8: CH-1, PO-1, §5.1 F; H2 Same |
+| D-15 | What M1 does with a claude permission request before the relay (R-M1-4) | technical | (a) chosen by the orchestrator, 2026-10-15 | v0.8: CH-2 |
 | D-16 | What a supervised claude soldier may run without the owner (R-M1-57) | big (what runs without the owner) | card drafted, to batch | — |
 
 ---

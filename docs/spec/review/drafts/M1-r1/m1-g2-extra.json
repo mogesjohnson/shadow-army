@@ -21,7 +21,7 @@
  ],
  [
   "  - a CLI whose turn does not end after a stop;\n",
-  "  - a CLI whose turn does not end after a stop;\n  - the mod's renewals stopping; a sleep, a suspended or stalled post office, a stopped mod and a wall-clock change, on a fake clock (PO-7);\n  - the lease lapsing, and the session ending, while an approval request, an attribution card and a queued message are open;\n  - the post office killed mid-turn, with a message queued, an approval request open and a child running;\n"
+  "  - a CLI whose turn does not end after a stop;\n  - the mod's renewals stopping; a sleep, a suspended or stalled post office, a stopped mod and a wall-clock change, on a fake clock (PO-7);\n  - the lease lapsing, and the session ending, while an approval request, an attribution card and a queued message are open;\n  - the post office killed mid-turn, with a message queued, an approval request open and a child running;\n  - a mod reload mid-turn: the old post office ends, its turns are cut short, and the new mod instance starts its own at the next use;\n"
  ],
  [
   "  - a malformed or split JSON line;\n",
