@@ -164,8 +164,8 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 
   ```
   D-5 Should v2.0 limit queues, sends, message and report sizes, and logs?
-  Options: A caps on all of them now, log size and rotation included (pulls H62 into 2.0); B caps on queue depth, send rate and sizes now, logs after 2.0 with the disk risk stated; C no limits in 2.0, with the risk stated.
-  Tested: verifier F-V1: nothing bounds a queue, a message, a report or a log; a runaway soldier's sends each become a paid turn (G5); MSG-3's "nothing is dropped silently" allows a refusal with its reason.
+  Options: A caps on all of them now, log size, rotation and expiry included (pulls H62 into 2.0); B caps on queue depth, send rate and sizes now, logs after 2.0 with the disk risk stated; C no limits in 2.0, with the risk stated.
+  Tested: verifier F-V1: nothing bounds a queue, a message, a report or a log; a runaway soldier's sends each become a paid turn (G5); MSG-3's "nothing is dropped silently" allows a refusal with its reason. Since v0.8 the logs are kept until you delete them (R-M1-52; the archived 2.0 draft's 30-day pruning is not carried).
   Recommended: B, because it bounds what costs you money now, and it leaves log rotation, a new feature, after 2.0 as you planned it (H62).
   For you: a flood of sends is refused with a reason, and the agents set the cap values. Can be undone: yes.
   ```
