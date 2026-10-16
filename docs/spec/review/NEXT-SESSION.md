@@ -23,8 +23,8 @@ Answer me straight to the point. I answer only big questions, as short decision 
 - **PR #77** (draft) is stacked on #76. The spec is v0.8 (`1580e87`), and both checkers give 0 problems (101 requirements, 61 ACs). `main` is v0.5.
 - **F:** round 1 closed (v0.7, fix-checked twice). **M1:** round 1 fixed (v0.8) and fix-checked. M1-FC1 and M1-FC2 passed all twelve P1 fixes and found R-M1-62 to R-M1-82. The open P1s are R-M1-70 and R-M1-73 (repairs to write) and R-M1-59 (with D-3's answer).
 - **Decisions:** 21 in all.
-  - Settled: D-1 (A) and D-20 (A: macOS stays in 2.0), the owner's answers of 2026-10-16; D-2, D-6, D-12 to D-15 and D-18.
-  - With the owner, in the decisions doc: D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16, D-17, D-19 and D-21 (one clean round per unit instead of two; until answered, the rule stays two).
+  - Settled: D-1 (A), D-20 (A: macOS stays in 2.0) and D-21 (A: keep every recheck, two clean rounds included), the owner's answers of 2026-10-16; D-2, D-6, D-12 to D-15 and D-18.
+  - With the owner, in the decisions doc: D-3, D-4, D-5, D-8, D-9, D-10, D-11, D-16, D-17 and D-19.
   - In a bake-off: D-7 (option A drafted; option C and a judge next).
 - **Probes** P-1 to P-13 wait for the owner's go.
 - **Progress:** about a tenth of the whole review. Two of 15 units are through round 1, and 34 agent reports are saved, of the 250 to 300 the playbook expects.

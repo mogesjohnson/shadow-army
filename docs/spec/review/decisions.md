@@ -26,7 +26,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-18 | How a turn cut short by the post office's end is checked before M3 (R-M1-66) | technical | (b) chosen by the orchestrator, 2026-10-16; amended for R-M1-81 | with M1-FC1's repairs |
 | D-19 | Whether claude soldiers share the owner's auto memory (R-M1-82) | big (a vendor default in the soldiers' harness, or a residual to accept) | card drafted 2026-10-16; probe P-12 first | — |
 | D-20 | Whether v2.0 leaves macOS out for now (the owner's question) | big (which systems 2.0 runs on) | **A**, the owner's answer, 2026-10-16: macOS stays in 2.0 | nothing to change: the spec keeps macOS |
-| D-21 | One clean round per unit instead of two (the owner's question) | big (it changes the owner's own convergence rule) | card drafted 2026-10-16, in the decisions doc | — |
+| D-21 | One clean round per unit instead of two (the owner's question) | big (it changes the owner's own convergence rule) | **A**, the owner's answer, 2026-10-16: keep every recheck, two clean rounds included | nothing to change: the flow's rule stands |
 
 ---
 
@@ -398,6 +398,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
   - The one recheck after a clean look, F's second fix check, found only 2 P3 notes (R-F-65, R-F-66).
   - Dropping the second clean round saves about one round per unit (two reviewers, their verifiers, a fix check: about 5 runs), roughly 15 to 20% of what is left.
 - **Options:** A keep the rule; B one clean round, then the two sign-offs, where a FAIL sends the unit back for another round; C decide after F's and M1's round 2.
+- **Answer: A** (the owner, in chat, 2026-10-16: "we will keep the reruns. i want a fully working product"). Every recheck stays: a second verifier for each P1, fix checks, two clean rounds in a row and two sign-offs.
 - **Card** (drafted 2026-10-16, in the decisions doc):
 
   ```
