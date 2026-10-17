@@ -1,4 +1,4 @@
-Repairs for fix check M1-FC1's findings (raw/M1-r1-fixcheck-FC1.md), against v0.8. Not applied yet.
+Repairs for fix check M1-FC1's findings (raw/M1-r1-fixcheck-FC1.md), against v0.8. D-18's blocks are amended for R-M1-81 (M1-FC2's FC2-12), as decisions.md D-18's "Amended" line says. Applied first, then fc2.txt.
 Apply: node tools/pairs.mjs drafts/M1-r1-fc/fc1.txt <scratch>/fc1.json, then node tools/rep.mjs ../v2.md <scratch>/fc1.json.
 
 R-M1-67, its technical part: outside a git working tree the army doesn't start (PO-1).
@@ -38,21 +38,44 @@ R-M1-62, R-M1-63, R-M1-65 and R-M1-66 (D-18, option b): what the next post offic
     - Each turn still open is finished (PO-8, →M2). Its guard is closed against the baseline kept on disk for it (WSP-11), and any change goes on that turn's attribution card (ARM-6, →M2), or before M2 into one line in Claude's transcript. That check can't tell the turn's changes from later ones, so the card or the line says that it compares the checkout now with the turn's start, gives the time the last post office's log ends, and says that changes made since then, the owner's own included, show on it too. A turn whose guard had already closed is not checked again (PO-8, →M2).
     - Each message still recorded as delivered ends as interrupted, and each queued message ends as not delivered. Both carry the reason `the post office stopped unexpectedly`, and nothing is sent again by itself (MSG-4, →M3).
     - Each attribution or handoff card left open is kept in the records as unanswered, with its paths and hashes from the log, as PO-7 says (ARM-6, →M2; SES-4, →M4; PO-6, →M3).
-    - In each snapshot the last one left (WSP-11; ARM-6, →M2), every file written is reported as a read-violation, in the log and in one line in Claude's transcript. Then the snapshot is removed, and so is any instructions file the last one left (CH-2).
+    - In each snapshot the last one left (WSP-11; ARM-6, →M2), every write is reported as a read-violation, in the log and in one line in Claude's transcript. Then the snapshot is removed, and so is any instructions file the last one left (CH-2).
 >>> END
 
-D-18 (b): turns are logged, so the next post office finds one left open (PO-5).
+D-18 (b), amended for R-M1-81: turns are logged, so the next post office finds one left open, and the line that opens a turn is the one log line that can stop it (PO-5).
 <<< OLD
   - Each decision (HOST-14, →M5) is logged when it opens and when it closes, so a post office ended outright loses none.
+  - A log never stops a soldier or a turn.
 === NEW
-  - Each decision (HOST-14, →M5) is logged when it opens and when it closes, so a post office ended outright loses none. So is each turn, when its message goes in and when it is over, with where its guard's baseline is kept (WSP-11), so the next post office finds a turn left open (PO-1).
+  - Each decision (HOST-14, →M5) is logged when it opens and when it closes, so a post office ended outright loses none. So is each turn, when its message goes in and when it is over, with where its guard's baseline is kept (WSP-11), so the next post office finds a turn left open (PO-1). The line that opens a turn is written and flushed before its message goes in.
+  - A log never stops a soldier or a turn, except that a message whose turn's opening line can't be written isn't sent (WSP-11).
 >>> END
 
-D-18 (b): from M1, a turn's guard baseline is on disk before its message goes in (WSP-11).
+D-18 (b), amended for R-M1-81: from M1, a turn's guard baseline and its opening log line are written before its message goes in, or the message isn't sent (WSP-11).
 <<< OLD
   - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended.
 === NEW
-  - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended. Its baseline is on disk before the message goes in, so a post office that dies mid-turn leaves it for the next one (PO-1).
+  - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended. Its baseline, and the log line that opens the turn (PO-5), are written and flushed before the message goes in, so a post office that dies mid-turn leaves both for the next one (PO-1). If either can't be written, the message isn't sent, and Claude's transcript gets one line with the reason; from M3 the message stays queued instead, as for a record that can't be written (MSG-4, →M3).
+>>> END
+
+R-M1-81: a snapshot that can't be made also gets a transcript line, since the disk that refused it can lose the log line too (WSP-11).
+<<< OLD
+  - A soldier whose snapshot can't be made does not start, and its log says why; it never runs in the folder itself.
+=== NEW
+  - A soldier whose snapshot can't be made does not start: its log and one line in Claude's transcript say why. It never runs in the folder itself.
+>>> END
+
+R-M1-81: M1-AC4's failed log writes include the line that opens a turn.
+<<< OLD
+  - log writes fail in the middle of a turn: the turn completes, one line reports it, and the log resumes once writes succeed;
+=== NEW
+  - log writes fail in the middle of a turn: the turn completes, one line reports it, and the log resumes once writes succeed. When they fail as a message is about to go in, the turn's opening line can't be written: the message isn't sent, and Claude's transcript gets one line with the reason;
+>>> END
+
+R-M1-81: section 5.1's fault test of a failed log write.
+<<< OLD
+  - a failed log write: the turn goes on, the failure is reported once, and the log resumes with the count of lost lines;
+=== NEW
+  - a failed log write: the turn goes on, the failure is reported once, and the log resumes with the count of lost lines. A turn whose opening line or guard baseline can't be written is not started, and Claude's transcript says why;
 >>> END
 
 R-M1-69 (3): a reloaded mod's old post office ends with the module or through its lease's shutdown.

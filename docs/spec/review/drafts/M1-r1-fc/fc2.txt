@@ -1,0 +1,178 @@
+Repairs for fix check M1-FC2's findings (raw/M1-r1-fixcheck-FC2.md): R-M1-70 and R-M1-72 to R-M1-80, as each ledger row's Resolution says. Written against v0.8 as fc1.txt leaves it, so apply fc1.txt first.
+R-M1-71 is parked for M2, R-M1-81 is in fc1.txt (D-18's blocks), and R-M1-82 is decision D-19.
+Apply: node tools/pairs.mjs drafts/M1-r1-fc/fc2.txt <scratch>/fc2.json, then node tools/rep.mjs ../v2.md <scratch>/fc2.json.
+
+R-M1-79: the version bullet repeats a phrase (CH-2).
+<<< OLD
+A later version is needed where a field this adapter reads needs one where a field this adapter reads needs one; each such need
+=== NEW
+A later version is needed where a field this adapter reads needs one; each such need
+>>> END
+
+R-M1-75: a zero total is never a baseline, and a total that starts over gives the turn its own figures (CH-2). Until spike S6's recording shows what a stop does to the totals, the stop is named only where the recording shows it (probe P-11).
+<<< OLD
+    - A zero or falling total is never a baseline: the next result's cost also reads "not reported", since its difference would include an earlier turn's spend, and that result's totals become the baseline.
+    - A result whose `usage`, `total_cost_usd` and `modelUsage` are all zero, as after a crash or a stop (spike S6), reports nothing. That turn's input and cache are summed the same way, its output and cost read "not reported", and it is never the result before the next turn.
+=== NEW
+    - A result whose `usage`, `total_cost_usd` and `modelUsage` are all zero, as after a crash, and after a stop where spike S6's recording shows it, reports nothing. That turn's input and cache are summed the same way, and its output and cost read "not reported".
+    - A result whose `total_cost_usd` is zero is never a baseline: the next result has no result before it, so its cost reads "not reported", its tokens are its main-loop ones, and its totals become the baseline.
+    - claude starts its totals over after a message that is `/clear`, `/reset` or `/new`: that turn's result's own totals are its figures, and it is the next baseline. A result whose `total_cost_usd` is above zero but below the baseline's has started over too, and is taken the same way.
+>>> END
+
+R-M1-75: OBS-3 adds the turns whose figures are their main-loop ones.
+<<< OLD
+SES-7 and HOST-15 (→M5) add each turn's per-model figures, which count subagents, never running totals (CH-2, CH-5).
+=== NEW
+SES-7 and HOST-15 (→M5) add each turn's per-model figures, which count subagents, or its main-loop ones where CH-2 gives a turn only those, and never running totals (CH-2, CH-5).
+>>> END
+
+R-M1-72: a CLI can start in another mode than the one passed, and the owner is told (CH-7).
+<<< OLD
+Each adapter passes its CLI's permission mode at every autonomy level, on every start and resume, so the mode never comes from a settings file or the CLI's own default: claude's in CH-2, and codex's, grok's and agy's with their channels (CH-3 to CH-5, →M2).
+=== NEW
+Each adapter passes its CLI's permission mode at every autonomy level, on every start and resume, so the mode comes from the autonomy level, not from a settings file or the CLI's own default: claude's in CH-2, and codex's, grok's and agy's with their channels (CH-3 to CH-5, →M2). A CLI can still refuse the mode passed: claude starts in Manual when auto mode isn't available to the session, as when a settings file sets `disableAutoMode` or the model has none. Wherever the mode a CLI reports differs from the one passed (claude's `system/init` `permissionMode`), the soldier's log and one line in Claude's transcript name both.
+>>> END
+
+R-M1-72: M1-AC5 tests the mode a fake reports.
+<<< OLD
+each autonomy level's arguments carry exactly its permission mode (SI-1, SI-3, CH-7, CH-2).
+=== NEW
+each autonomy level's arguments carry exactly its permission mode. A fake claude whose `system/init` reports another mode than the one passed gets one line in Claude's transcript that names both (SI-1, SI-3, CH-7, CH-2).
+>>> END
+
+R-M1-73 (P1): an approval request reaches its card whole, and is redacted wherever else it goes (WSP-8). This restores CH-6's and SEC-6's "word for word".
+<<< OLD
+on every event the post office sends the mod, where each streamed fragment is redacted on its own (from 2.0 SAFE-6).
+=== NEW
+on every event the post office sends the mod, where each streamed fragment is redacted on its own (from 2.0 SAFE-6). An approval request's tool input and options are the one exception: its event carries them whole, so its card shows them word for word (CH-6, →M2), and the mod redacts them wherever they reach Claude, as when `/decisions` prints them (HOST-14, →M5). The post office's log of them is redacted.
+>>> END
+
+R-M1-73 (P1): M2-AC2 adds a request that holds secrets.
+<<< OLD
+- **M2-AC2** An approval request from claude, codex and grok is shown word for word with its own options, and the owner's answer goes back unchanged. No code path answers one by itself. The agy adapter never sends agy a control message, and shows each denial agy reports word for word (CH-6, SEC-3).
+=== NEW
+- **M2-AC2** An approval request from claude, codex and grok is shown word for word with its own options, and the owner's answer goes back unchanged. A request whose command holds `GH_TOKEN=…` and a `Bearer` value is shown with both whole, and the post office's log of it has both redacted. No code path answers one by itself. The agy adapter never sends agy a control message, and shows each denial agy reports word for word (CH-6, SEC-3, WSP-8).
+>>> END
+
+R-M1-74: the held secrets in each encoding (WSP-8, SEC-4).
+<<< OLD
+the Monarch's secret and each soldier credential, in any letter case; a `Bearer` token
+=== NEW
+the Monarch's secret and each soldier credential, in each encoding Shadow Army uses for them and in any letter case (SEC-4); a `Bearer` token
+>>> END
+
+R-M1-74: where a match starts and where a value ends, and the cases that must be kept (WSP-8).
+<<< OLD
+in `key=value`, `key: value` and JSON. A count such as `input_tokens` is kept. The unit test has one case for each kind, with its source.
+=== NEW
+in `key=value`, `key: value` and JSON.
+  - A match never starts inside a word: the character before it, if any, is not a letter, a digit or `_`. A name is an identifier, with no spaces. Its value has at least 8 characters and no space, and ends at whitespace, a quote, `,`, `;`, `}` or the end of the line. So `input_tokens: 5`, `primary key: id` and the `sk-` inside `task-notification` are kept.
+  - The unit test has one case for each kind, with its source, and for each kind a case that must be kept.
+>>> END
+
+R-M1-80: records are PO-6's, from M3 (SEC-4).
+<<< OLD
+- **SEC-4** (M1; X) Logs and records hold nothing that `redact()` matches (WSP-8):
+=== NEW
+- **SEC-4** (M1; X) Logs, and records (PO-6, →M3), hold nothing that `redact()` matches (WSP-8):
+>>> END
+
+R-M1-80: SEC-4's test finds nothing in a log, and from M3 in a record.
+<<< OLD
+A test writes each kind and finds none of it in a log or a record.
+=== NEW
+A test writes each kind and finds none of it in a log, and from M3 in a record.
+>>> END
+
+R-M1-80 and R-M1-74: M1-AC2 tests the log half, and the text that must be kept.
+<<< OLD
+Each kind `redact()` matches, written to a log and a record, appears in neither, and a key
+=== NEW
+Each kind `redact()` matches, written to a log, appears nowhere in it, while each kind's text that must be kept is kept, and a key
+>>> END
+
+R-M1-80: M3-AC2 tests the record half.
+<<< OLD
+- **M3-AC2** A summary of at most five lines comes back as a card with the report's path. A longer reply is cut and kept whole on disk (MSG-5, PO-6, HOST-11).
+=== NEW
+- **M3-AC2** A summary of at most five lines comes back as a card with the report's path. A longer reply is cut and kept whole on disk. Each kind `redact()` matches, sent in a brief and in a reply, appears in neither's record nor in the report (MSG-5, PO-6, HOST-11, SEC-4, WSP-8).
+>>> END
+
+R-M1-70 (P1): harness git trusts what its own commands did to worktree metadata, and says what that metadata is (WSP-10, from 2.0 GIT-3).
+<<< OLD
+and each worktree's metadata are compared with the state Shadow Army last trusted: their state when the post office started, or as the owner last accepted it (2.0 GIT-3).
+=== NEW
+and each worktree's metadata are compared with the state Shadow Army last trusted: their state when the post office started, as Shadow Army's own command left it when it made or removed a snapshot or a worktree, or as the owner last accepted it (2.0 GIT-3). A worktree's metadata is its `gitdir`, `commondir` and `config.worktree`. The HEAD of each of Shadow Army's own snapshots and worktrees is not hashed but checked against the commit Shadow Army expects there (2.0 GIT-3); in a soldier's snapshot, a HEAD that moved is a write there (WSP-11).
+>>> END
+
+R-M1-70 (P1): ARM-6 hashes worktree metadata as WSP-10 defines it.
+<<< OLD
+and each worktree's metadata; `.githooks/`
+=== NEW
+and each worktree's metadata, as WSP-10 defines it; `.githooks/`
+>>> END
+
+R-M1-70 (P1): ARM-6's trusted records include Shadow Army's own snapshot and worktree commands.
+<<< OLD
+    - the Monarch's edits through Claude Code's file tools, which the mod records from Claude Code's tool hooks, with each file's hash before and after.
+=== NEW
+    - the Monarch's edits through Claude Code's file tools, which the mod records from Claude Code's tool hooks, with each file's hash before and after;
+    - Shadow Army's own commands that made or removed a snapshot or a worktree, for the worktree metadata they changed (WSP-10).
+>>> END
+
+R-M1-76: the snapshot is made outside the folder's directory tree, so claude loads none of the folder's own instruction files (WSP-11).
+<<< OLD
+each session opens in its own throwaway snapshot of HEAD under `.shadow/v2/`, made by harness git (WSP-10) when the session opens and removed when it closes.
+=== NEW
+each session opens in its own throwaway snapshot of HEAD, made by harness git (WSP-10) when the session opens and removed when it closes.
+  - The snapshot is made outside the folder's directory tree, because claude also loads `CLAUDE.md` and `CLAUDE.local.md` from every folder above its working directory. It goes in Shadow Army's own folder in the user's home, `~/.shadow-army/snapshots/`: in a subfolder for each folder, named for the folder's name and a hash of its path, and there in a folder of its own for each session.
+>>> END
+
+R-M1-77: a restart reports the old snapshot's writes before it removes it (WSP-11).
+<<< OLD
+  - A restart that opens a fresh session (PO-1) gets a new snapshot. A resumed session (CH-9, →M2) keeps its snapshot, so the paths in its history still hold.
+=== NEW
+  - A restart that opens a fresh session (PO-1) gets a new snapshot, and the old one's writes are reported as below before it is removed. A resumed session (CH-9, →M2) keeps its snapshot, so the paths in its history still hold.
+>>> END
+
+R-M1-77 and R-M1-70: writes in the snapshot are found when each turn is over, and a moved HEAD is one (WSP-11).
+<<< OLD
+  - A file it writes in its snapshot is discarded before its next turn and reported as a read-violation, as ARM-6 (→M2) says for agy.
+=== NEW
+  - A file it writes in its snapshot, or a commit that moves the snapshot's HEAD, is a write there. Its writes are found once each turn is over, when the turn's guard closes, and reported then as a read-violation, as ARM-6 (→M2) says for agy; they are discarded before its next turn. A snapshot is removed only after its writes are reported.
+>>> END
+
+R-M1-78: until PO-8, M1's guard stays open while work the turn left running runs (WSP-11).
+<<< OLD
+or until its process tree has been ended. Its baseline, and the log line that opens the turn (PO-5),
+=== NEW
+or until its process tree has been ended. Until PO-8 (→M2), it also stays open past the end event while a task the turn started is running (claude's `task_started` with no `task_notification` for it yet), or while a process that joined the process tree during the turn hasn't exited; it closes when that work ends or the session closes, and the soldier's next message waits until then. Its baseline, and the log line that opens the turn (PO-5),
+>>> END
+
+R-M1-70 (P1): the guard reads worktree metadata as WSP-10 does, and Shadow Army's own snapshots, worktrees and files are not the checkout (WSP-11).
+<<< OLD
+It covers the checkout and the paths that ARM-6 (→M2) hashes. Until the attribution card exists, any change it finds fails the turn:
+=== NEW
+It covers the checkout and the paths that ARM-6 (→M2) hashes, with each worktree's metadata as WSP-10 defines and trusts it, so another soldier's snapshot made or removed during the turn is no change. Shadow Army's own snapshots and worktrees, and its files under `.shadow/v2/`, are not the checkout: a change in the soldier's own snapshot is a write there. Until the attribution card exists, any other change it finds fails the turn:
+>>> END
+
+R-M1-70, R-M1-76, R-M1-77 and R-M1-78: M1-AC11's cases.
+<<< OLD
+- **M1-AC11** A fake claude soldier at `auto` (WSP-11, PO-1):
+  - its session opens in a snapshot of HEAD under `.shadow/v2/`, never in the folder;
+  - a file it writes there is gone before its next turn, and its log reports a read-violation;
+  - a tracked checkout file changed during a turn fails that turn, and so does an ignored `.claude/settings.local.json`; the log names the path;
+  - an edit made between turns raises nothing;
+  - a restart opens a new snapshot, and closing the session removes it;
+  - a snapshot that can't be made keeps the soldier from starting.
+=== NEW
+- **M1-AC11** A fake claude soldier at `auto` (WSP-11, PO-1, WSP-10):
+  - its session opens in a snapshot of HEAD in Shadow Army's own folder, outside the folder's directory tree, never in the folder;
+  - a file it writes there, and a commit it makes there, are reported as a read-violation once the turn is over, and are gone before its next turn;
+  - a tracked checkout file changed during a turn fails that turn, and so does an ignored `.claude/settings.local.json`; the log names the path;
+  - a child it starts in the background, which writes a checkout file after the turn's end event, fails that turn, and the next message waits until the child has exited;
+  - an edit made between turns raises nothing;
+  - a second fake soldier's session opens, restarts and closes during the first one's turn: harness git is never held, and the first turn passes;
+  - a crash after a write in the snapshot: the restart reports the write and removes the old snapshot. A close right after a turn that wrote a file reports the file, then removes the snapshot;
+  - a snapshot that can't be made keeps the soldier from starting, and its log and Claude's transcript say why.
+>>> END
