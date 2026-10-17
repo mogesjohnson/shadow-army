@@ -2,14 +2,14 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-Last updated: 2026-10-17, session 4. Unit F's round 1 is closed (v0.7; fix checks F-FC1 and F-FC2 passed), and its round 2 has started. M1's round 1 is closed: fixed (v0.8), fix-checked (M1-FC1, M1-FC2), its follow-ups repaired (v0.9, `b6f4315`), the two P1 repairs fix-checked (M1-FC3: both FIXED), and M1-FC3's six follow-ups repaired (v0.10, `e7c33b4`). Left open: R-M1-71 (parked for M2), R-M1-82 (D-19) and R-M1-59 (D-3). Running: D-7's option C drafter and F's round-2 test author. Queued, two at a time: M1's round 2 (test author, vendor-fact checker), F's consistency auditor, D-7's judge.
+Last updated: 2026-10-17, session 4. Unit F's round 1 is closed (v0.7; fix checks F-FC1 and F-FC2 passed), and its round 2 has started. M1's round 1 is closed: fixed (v0.8), fix-checked (M1-FC1, M1-FC2), its follow-ups repaired (v0.9, `b6f4315`), the two P1 repairs fix-checked (M1-FC3: both FIXED), and M1-FC3's six follow-ups repaired (v0.10, `e7c33b4`). Left open: R-M1-71 (parked for M2), R-M1-82 (D-19) and R-M1-59 (D-3). Running: D-7's judge (option C is drafted) and F's round-2 test author. Queued, two at a time: M1's round 2 (test author, vendor-fact checker), then F's consistency auditor.
 
 ## Where things are
 
 - **Branch** `claude/63-ultimate-spec-review`, PR #77, "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`).
 - **The spec is v0.10** (`e7c33b4`, 2026-10-17): M1-FC3's follow-ups (`drafts/M1-r1-fc/fc3.txt`), on v0.9 (`b6f4315`: the repairs for M1-FC1's and M1-FC2's findings, `fc1.txt`, with D-18 amended for R-M1-81, and `fc2.txt`), on v0.8 (`1580e87`: M1's round-1 fixes, with D-2 and D-12 to D-15). `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <previous snapshot>` gives 0 problems (101 requirements, 61 ACs), and `tools/check-appendix-c.mjs` gives 0 problems. The trace script checks Appendix B's rules 1 to 6 and 8 (forward citations marked →Mx) and, given a previous version, that no ID is gone.
 - **Snapshots** (in the main checkout's `.shadow/v2-tools/review/snapshots/`): `v2@be9deb0.md`, which round 1 reviewed; `v2@1580e87.md`, v0.8, which D-7's drafters read; `v2@b6f4315.md`, v0.9, which M1-FC3 checked and F's round 2 reads; and `v2@e7c33b4.md`, v0.10, which M1's round 2 reads. Rebuild one with `git show <sha>:docs/spec/v2.md` from Git Bash (PowerShell's pipe re-encodes it).
-- **Agents running** (started 2026-10-17): D-7's option C drafter and F's round-2 test author. Their prompts, and the queued ones, are in `decisions.md`, "Prompts to rerun"; rerun them from there if a new session finds them cut off. Every earlier report is saved in `raw/`, M1-FC3's as `raw/M1-r1-fixcheck-FC3.md`.
+- **Agents running** (started 2026-10-17): D-7's judge and F's round-2 test author. Their prompts, and the queued ones, are in `decisions.md`, "Prompts to rerun"; rerun them from there if a new session finds them cut off. Every earlier report is saved in `raw/`, M1-FC3's as `raw/M1-r1-fixcheck-FC3.md`.
 - **Status board with Codex** (from 2026-10-16): `C:\Users\johns\projects\AIConnections\codex-claude-status.md`, local and excluded from git. Claude ticks the Review column at each step and Codex the Build column. The order: the review leads, Codex builds a milestone only once its spec is marked converged, and then Codex builds milestone N while the review does N+1.
 - **Done in session 4** (2026-10-17):
   - The decisions doc had no new answers (D-1, D-20 and D-21 were already recorded).
@@ -42,7 +42,7 @@ Last updated: 2026-10-17, session 4. Unit F's round 1 is closed (v0.7; fix check
 | D-3 Q8, the process helper | Big. Judged 2026-10-16: B, the helper prebuilt and checksummed. Card sent 2026-10-16. |
 | D-4 a threat model; D-5 limits; D-8 the live checks' budget | Big. Cards sent 2026-10-16. |
 | D-6 how G7's "traced in CI" is met | Decided (a); applied in v0.7. |
-| D-7 how the read-only rule reaches every soldier | Bake-off: option A drafted 2026-10-16; option C's drafter started 2026-10-17 (prompt in `decisions.md`, "Prompts to rerun"). Next: a judge. A makes every message without a kind read-only, the owner's own typed messages included, so the judge must say whether that part needs a card. |
+| D-7 how the read-only rule reaches every soldier | Bake-off: option A drafted 2026-10-16, option C 2026-10-17 (`raw/D-7-option-C.md`: as read, only codex's `readOnly` at `full` holds, so C is A plus that case). The judge started 2026-10-17 (prompt in `decisions.md`, "Prompts to rerun"). A makes every message without a kind read-only, the owner's own typed messages included, so the judge must say whether that part needs a card. |
 | D-9, D-10, D-11, D-16, D-17 | Big. Cards sent 2026-10-16. |
 | D-12 to D-15 | Technical, chosen 2026-10-15; applied in v0.8. |
 | D-18 how a cut-short turn is checked before M3 | Technical, (b), amended for R-M1-81; applied in v0.9 with M1-FC1's repairs. |
@@ -57,7 +57,7 @@ Ask the owner how much credit is left before starting any agent; run at most two
 
 1. **The owner's answers** to any card, read from the decisions doc (above, "Waiting on the owner") and applied as they come, each recorded in `decisions.md` and on its ledger rows.
 2. ~~M1's repairs, no agent~~: done, v0.9 (`b6f4315`, 2026-10-17).
-3. ~~Fix check M1-FC3~~: done, both FIXED; its follow-ups repaired in v0.10 (`e7c33b4`). D-7's option C drafter is running: save its report as `raw/D-7-option-C.md`.
+3. ~~Fix check M1-FC3~~: done, both FIXED; its follow-ups repaired in v0.10 (`e7c33b4`). D-7's option C is drafted (`raw/D-7-option-C.md`), and its judge is running.
 4. **D-7's judge** over A and C. Apply the winner if it is technical; otherwise write its card.
 5. **Round 2 for M1 and F**, on a frozen snapshot of v0.9, two reviewers each: M1 with the test author and the vendor-fact checker; F with the test author and the consistency auditor (PLAYBOOK section 6). Give each reviewer the findings already refuted or declined for its unit. Then verify, fix and fix-check, as in round 1.
 6. **C's rows that M1 touches.** These need the owner's `the-future` folder.
