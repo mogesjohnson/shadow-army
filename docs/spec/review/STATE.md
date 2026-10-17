@@ -2,14 +2,14 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-Last updated: 2026-10-17, session 4. Unit F's round 1 is closed (v0.7; fix checks F-FC1 and F-FC2 passed). M1's round 1 is verified, fixed (v0.8) and fix-checked, and the fix checks' 21 follow-ups are repaired in v0.9 (`b6f4315`), except R-M1-71 (parked for M2) and R-M1-82 (D-19). Running: fix check M1-FC3 of the two P1 repairs (R-M1-70, R-M1-73), beside D-7's option C drafter.
+Last updated: 2026-10-17, session 4. Unit F's round 1 is closed (v0.7; fix checks F-FC1 and F-FC2 passed), and its round 2 has started. M1's round 1 is closed: fixed (v0.8), fix-checked (M1-FC1, M1-FC2), its follow-ups repaired (v0.9, `b6f4315`), the two P1 repairs fix-checked (M1-FC3: both FIXED), and M1-FC3's six follow-ups repaired (v0.10, `e7c33b4`). Left open: R-M1-71 (parked for M2), R-M1-82 (D-19) and R-M1-59 (D-3). Running: D-7's option C drafter and F's round-2 test author. Queued, two at a time: M1's round 2 (test author, vendor-fact checker), F's consistency auditor, D-7's judge.
 
 ## Where things are
 
 - **Branch** `claude/63-ultimate-spec-review`, PR #77, "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`).
-- **The spec is v0.9** (`b6f4315`, 2026-10-17): the repairs for M1-FC1's and M1-FC2's findings (`drafts/M1-r1-fc/fc1.txt`, with D-18 amended for R-M1-81, and `fc2.txt`), on v0.8 (`1580e87`: M1's round-1 fixes, with D-2 and D-12 to D-15). `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <previous snapshot>` gives 0 problems (101 requirements, 61 ACs), and `tools/check-appendix-c.mjs` gives 0 problems. The trace script checks Appendix B's rules 1 to 6 and 8 (forward citations marked →Mx) and, given a previous version, that no ID is gone.
-- **Snapshots** (in the main checkout's `.shadow/v2-tools/review/snapshots/`): `v2@be9deb0.md`, which round 1 reviewed; `v2@1580e87.md`, v0.8, which D-7's drafters read; and `v2@b6f4315.md`, v0.9, which M1-FC3 checks. Rebuild one with `git show <sha>:docs/spec/v2.md` from Git Bash (PowerShell's pipe re-encodes it).
-- **Agents running** (started 2026-10-17): fix check M1-FC3 (`batches/M1-FC3.md`) and D-7's option C drafter. Their prompts are in `decisions.md`, "Prompts to rerun"; rerun them from there if a new session finds them cut off. Every earlier report is saved in `raw/`.
+- **The spec is v0.10** (`e7c33b4`, 2026-10-17): M1-FC3's follow-ups (`drafts/M1-r1-fc/fc3.txt`), on v0.9 (`b6f4315`: the repairs for M1-FC1's and M1-FC2's findings, `fc1.txt`, with D-18 amended for R-M1-81, and `fc2.txt`), on v0.8 (`1580e87`: M1's round-1 fixes, with D-2 and D-12 to D-15). `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <previous snapshot>` gives 0 problems (101 requirements, 61 ACs), and `tools/check-appendix-c.mjs` gives 0 problems. The trace script checks Appendix B's rules 1 to 6 and 8 (forward citations marked →Mx) and, given a previous version, that no ID is gone.
+- **Snapshots** (in the main checkout's `.shadow/v2-tools/review/snapshots/`): `v2@be9deb0.md`, which round 1 reviewed; `v2@1580e87.md`, v0.8, which D-7's drafters read; `v2@b6f4315.md`, v0.9, which M1-FC3 checked and F's round 2 reads; and `v2@e7c33b4.md`, v0.10, which M1's round 2 reads. Rebuild one with `git show <sha>:docs/spec/v2.md` from Git Bash (PowerShell's pipe re-encodes it).
+- **Agents running** (started 2026-10-17): D-7's option C drafter and F's round-2 test author. Their prompts, and the queued ones, are in `decisions.md`, "Prompts to rerun"; rerun them from there if a new session finds them cut off. Every earlier report is saved in `raw/`, M1-FC3's as `raw/M1-r1-fixcheck-FC3.md`.
 - **Status board with Codex** (from 2026-10-16): `C:\Users\johns\projects\AIConnections\codex-claude-status.md`, local and excluded from git. Claude ticks the Review column at each step and Codex the Build column. The order: the review leads, Codex builds a milestone only once its spec is marked converged, and then Codex builds milestone N while the review does N+1.
 - **Done in session 4** (2026-10-17):
   - The decisions doc had no new answers (D-1, D-20 and D-21 were already recorded).
@@ -30,8 +30,8 @@ Last updated: 2026-10-17, session 4. Unit F's round 1 is closed (v0.7; fix check
 
 | Unit | State |
 |---|---|
-| F | Round 1 closed. 51 findings; 32 verified: 25 confirmed (5 P1, 14 P2, 6 P3), 4 decisions, 2 refuted, 2 duplicates; R-F-52 parked for M3. All 25 fixed in v0.7; F-FC1 and F-FC2 passed the fixes and their repairs. R-F-58 waits for D-7. Next: round 2 (two reviewers), then a second clean round and two sign-offs. |
-| M1 | Round 1: 56 findings, 40 verified (every P1 twice), and 3 more that verifiers raised; all confirmed findings fixed in v0.8. M1-FC1 and M1-FC2 passed all twelve P1 fixes and found R-M1-62 to R-M1-82. All repaired in v0.9 except R-M1-71 (parked for M2) and R-M1-82 (D-19). Open P1s: R-M1-70 and R-M1-73 (repaired; fix check M1-FC3 running) and R-M1-59 (with D-3's answer). Next: M1-FC3's result, then round 2. |
+| F | Round 1 closed. 51 findings; 32 verified: 25 confirmed (5 P1, 14 P2, 6 P3), 4 decisions, 2 refuted, 2 duplicates; R-F-52 parked for M3. All 25 fixed in v0.7; F-FC1 and F-FC2 passed the fixes and their repairs. R-F-58 waits for D-7. Round 2 started 2026-10-17: the test author is running on v0.9; the consistency auditor is queued. Then a second clean round and two sign-offs. |
+| M1 | Round 1: 56 findings, 40 verified (every P1 twice), and 3 more that verifiers raised; all confirmed findings fixed in v0.8. M1-FC1 and M1-FC2 passed all twelve P1 fixes and found R-M1-62 to R-M1-82. All repaired in v0.9 except R-M1-71 (parked for M2) and R-M1-82 (D-19). M1-FC3 passed both P1 repairs (R-M1-70, R-M1-73) and found R-M1-83 to R-M1-88, repaired in v0.10. Open P1: R-M1-59 (with D-3's answer). Next: round 2 (test author, vendor-fact checker) on v0.10. |
 | C (M1's rows) | Not started. |
 | M2–M6, C, X1–X5 | Not started. |
 
@@ -57,7 +57,7 @@ Ask the owner how much credit is left before starting any agent; run at most two
 
 1. **The owner's answers** to any card, read from the decisions doc (above, "Waiting on the owner") and applied as they come, each recorded in `decisions.md` and on its ledger rows.
 2. ~~M1's repairs, no agent~~: done, v0.9 (`b6f4315`, 2026-10-17).
-3. **Two agents, running since 2026-10-17:** fix check M1-FC3 of the P1 repairs (R-M1-70, R-M1-73; `batches/M1-FC3.md`), beside D-7's option C drafter. Save each report to `raw/` (`M1-r1-fixcheck-FC3.md`, `D-7-option-C.md`), commit, and repair whatever M1-FC3 finds.
+3. ~~Fix check M1-FC3~~: done, both FIXED; its follow-ups repaired in v0.10 (`e7c33b4`). D-7's option C drafter is running: save its report as `raw/D-7-option-C.md`.
 4. **D-7's judge** over A and C. Apply the winner if it is technical; otherwise write its card.
 5. **Round 2 for M1 and F**, on a frozen snapshot of v0.9, two reviewers each: M1 with the test author and the vendor-fact checker; F with the test author and the consistency auditor (PLAYBOOK section 6). Give each reviewer the findings already refuted or declined for its unit. Then verify, fix and fix-check, as in round 1.
 6. **C's rows that M1 touches.** These need the owner's `the-future` folder.
