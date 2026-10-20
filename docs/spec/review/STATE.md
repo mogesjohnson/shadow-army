@@ -4,7 +4,12 @@ Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update
 
 Last updated: 2026-10-17, end of session 4. The spec is v0.10 (`e7c33b4`). M1's round 1 is closed: fixed (v0.8), fix-checked, follow-ups repaired (v0.9), the P1 repairs fix-checked (M1-FC3), and M1-FC3's follow-ups repaired (v0.10). F's round 2 has started: its test author raised R-F-68 to R-F-85, not yet verified. D-7 is judged: A, technical, with parts of C; its two big parts are on a card. The owner answered ten cards on 2026-10-17, and none is applied yet. No agent is running: the owner asked to stop after this pass.
 
-**Session 5 (2026-10-20), running.** The decisions doc is unchanged since rev 39: D-7's card and D-11's note are still with the owner. Five drafters started together for v0.11 (`drafts/answers/PROMPTS.md`): D-3 (B, with R-M1-59, R-M1-61, R-F-68); D-9, D-10 and D-19 (with R-M1-82); D-8, D-16 and D-17; D-4's appendix; D-5's caps. Next: number their IDs, reconcile overlaps, dry-run, apply as v0.11, both checkers, then a fix check and round 2.
+**Session 5 (2026-10-20), running.** The decisions doc is unchanged since rev 39: D-7's card and D-11's note are still with the owner.
+- Five drafters ran together (`drafts/answers/PROMPTS.md`, reports `raw/D-3-merge-draft.md`, `D-4-draft.md`, `D-5-draft.md`, `D-8-16-17-draft.md`, `D-9-10-19-draft.md`; 130k to 240k tokens each). Their 65 blocks applied with no overlap; `drafts/answers/ids.json` numbered the new IDs (PO-9 to PO-21, ARM-7, M1-AC13 to M1-AC22, M3-AC14, M6-AC9), and `d4-ids.txt` pointed Appendix D at them.
+- **Spec v0.11** (`af97372`, snapshot `v2@af97372.md`): D-3, D-4, D-5, D-8, D-9, D-10, D-16, D-17 and D-19 applied. Trace 0 problems (115 requirements, 73 ACs); Appendix C 0 problems.
+- The drafters raised R-F-89 to R-F-93 and R-M1-89 to R-M1-107; seven are fixed in v0.11. Two P1s: R-M1-89 (`claude -p` connects a repository's `.mcp.json` servers and runs its hooks with no trust dialog) and R-M1-92 (a `claude --worktree` worktree nested in `.claude/worktrees/` sits inside the outer army's guard under D-17's B).
+- Running: verifiers ANS-V1 (13 findings) and ANS-V2 (6, with the two P1s' second check), and fix check ANS-FC1 on v0.11.
+- Next: their verdicts and repairs (cards for any big ones), then round 2 on v0.11's snapshot: M1's test author and vendor-fact checker, F's consistency auditor, and verifiers for R-F-68 to R-F-85.
 
 ## Where things are
 
