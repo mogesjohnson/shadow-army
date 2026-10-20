@@ -1,0 +1,79 @@
+Appendix D's marks for answers whose requirements now exist, applied after ids.json has numbered the other drafts. A residual's heading keeps its decision mark: it names the owner's decision that accepted it.
+
+<<< OLD
+A mark such as (D-9) names an owner's decision whose requirement this text does not have yet.
+=== NEW
+A mark such as (D-9) beside a residual risk names the owner's decision that accepted it.
+>>> END
+
+<<< OLD
+the owner's Claude Code memory (D-19) |
+=== NEW
+the owner's Claude Code memory, which claude soldiers don't use (CH-2) |
+>>> END
+
+<<< OLD
+Trusted once the owner accepts their trust card (D-10). |
+=== NEW
+Trusted once the owner accepts their trust card (ARM-7). |
+>>> END
+
+<<< OLD
+and logs which protection each machine gives it (D-9). |
+=== NEW
+and logs which protection each machine gives it (PO-3). |
+>>> END
+
+<<< OLD
+the only way the folder raises autonomy above `supervised` (D-10). A delegate file can only restrict (ARM-2). | (D-10); ARM-2 (U) |
+=== NEW
+the only way the folder raises autonomy above `supervised` (ARM-7). A delegate file can only restrict (ARM-2). | ARM-7 (U, I, X), ARM-2 (U); M1-AC13 |
+>>> END
+
+<<< OLD
+a Job Object on Windows (D-3). | PO-1 (I, F), PO-7 (U, I, F); M1-AC1, M1-AC4 |
+=== NEW
+a Job Object on Windows (PO-9 to PO-19). | PO-1 (I, F), PO-7 (U, I, F), PO-9 (I, F), PO-10 (I, F), PO-16 (I, F); M1-AC1, M1-AC4, M1-AC15 to M1-AC22 |
+>>> END
+
+<<< OLD
+Each claude soldier runs with auto memory off (D-19). | (D-19) |
+=== NEW
+Each claude soldier runs with auto memory off (CH-2). | CH-2 (C, L); M1-AC14 |
+>>> END
+
+<<< OLD
+each refused with its reason (D-5), and the meter (G5). | (D-5) |
+=== NEW
+each refused with its reason (MSG-1, MSG-3, MSG-6, PO-6), and the meter (G5). | MSG-1 (R, I), MSG-3 (I, F), MSG-6 (I), PO-6 (U, F); M3-AC14 |
+>>> END
+
+<<< OLD
+The post office logs which protection each machine has (D-9). A soldier
+=== NEW
+The post office logs which protection each machine has (PO-3). A soldier
+>>> END
+
+<<< OLD
+lets its tree escape until the next start sweeps it (D-3).
+=== NEW
+lets its tree escape until the next start sweeps it (PO-16).
+>>> END
+
+<<< OLD
+until a release; it fails closed (D-3).
+=== NEW
+until a release; it fails closed (PO-18).
+>>> END
+
+<<< OLD
+until an administrator allows the containment script (D-3).
+=== NEW
+until an administrator allows the containment script (PO-19).
+>>> END
+
+<<< OLD
+turn `useAutoModeDuringPlan` off (D-16).
+=== NEW
+turn `useAutoModeDuringPlan` off (CH-2).
+>>> END

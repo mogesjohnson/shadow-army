@@ -72,7 +72,7 @@ D-3, R-M1-59, R-M1-61 and R-F-68: the new requirements, inserted after PO-8. The
   - **As if started directly.** The guardian starts the CLI with exactly the program, arguments, environment and working directory that the post office gives it, and on Linux and macOS with the post office's resource limits. What the post office writes reaches the CLI's standard input. The CLI's standard output and error reach the post office byte for byte, each in order. Containment adds nothing to the CLI's command and removes nothing from it (CH-7).
   - The post office learns when the CLI's own process exits, with its exit code or signal, even while the rest of its tree runs on (PO-1).
   - **At start.** A session whose containment isn't ready within 10 seconds, or whose macOS coalition isn't new (NEW-D3-10), doesn't start its CLI. Anything already started is ended, and the containment has failed (NEW-D3-7).
-  - **What it is not.** Containment is cleanup, not a sandbox: it sets no file, network or permission policy. What Shadow Army enforces is the checkout guard and the claim audit (ARM-6, →M2; WSP-2, WSP-4, →M6). PO-1 lists the work it doesn't reach.
+  - **What it is not.** Containment is cleanup, not a sandbox: it sets no file, network or permission policy. What Shadow Army enforces is the checkout guard and the claim audit (ARM-6, →M2; WSP-2, →M6; WSP-4, →M6). PO-1 lists the work it doesn't reach.
 - **NEW-D3-2** (M1; I, F) **Ending a tree.** The post office ends a CLI's tree when its channel closes or restarts (PO-1), and when a stop falls back to ending the CLI (CH-10, →M2).
   - **In order.**
     - The CLI is asked to exit through its own exit, as PO-7 closes a session.
