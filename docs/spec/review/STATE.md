@@ -4,6 +4,8 @@ Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update
 
 Last updated: 2026-10-17, end of session 4. The spec is v0.10 (`e7c33b4`). M1's round 1 is closed: fixed (v0.8), fix-checked, follow-ups repaired (v0.9), the P1 repairs fix-checked (M1-FC3), and M1-FC3's follow-ups repaired (v0.10). F's round 2 has started: its test author raised R-F-68 to R-F-85, not yet verified. D-7 is judged: A, technical, with parts of C; its two big parts are on a card. The owner answered ten cards on 2026-10-17, and none is applied yet. No agent is running: the owner asked to stop after this pass.
 
+**Session 5 (2026-10-20), running.** The decisions doc is unchanged since rev 39: D-7's card and D-11's note are still with the owner. Five drafters started together for v0.11 (`drafts/answers/PROMPTS.md`): D-3 (B, with R-M1-59, R-M1-61, R-F-68); D-9, D-10 and D-19 (with R-M1-82); D-8, D-16 and D-17; D-4's appendix; D-5's caps. Next: number their IDs, reconcile overlaps, dry-run, apply as v0.11, both checkers, then a fix check and round 2.
+
 ## Where things are
 
 - **Branch** `claude/63-ultimate-spec-review`, PR #77, "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`).
