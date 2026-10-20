@@ -28,7 +28,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 | D-20 | Whether v2.0 leaves macOS out for now (the owner's question) | big (which systems 2.0 runs on) | **A**, the owner's answer, 2026-10-16: macOS stays in 2.0 | nothing to change: the spec keeps macOS |
 | D-21 | One clean round per unit instead of two (the owner's question) | big (it changes the owner's own convergence rule) | **A**, the owner's answer, 2026-10-16: keep every recheck, two clean rounds included | nothing to change: the flow's rule stands |
 | D-22 | A repository's own `.mcp.json` servers in claude soldiers (R-M1-89) | big (a trust boundary, or a residual to accept) | card sent 2026-10-20; recommended A | — |
-| D-23 | A `claude --worktree` worktree nested in the folder, under D-17's B (R-M1-92) | big (what the guard sees) | card sent 2026-10-20; recommended A | — |
+| D-23 | The repository's other working trees and an army's guard, under D-17's B: a nested one's files (R-M1-92) and any one's metadata added or removed (R-M1-108) | big (what the guard sees) | card sent 2026-10-20, widened the same day for R-M1-108; recommended A | — |
 
 ---
 
@@ -452,6 +452,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** `claude --worktree` (and subagent and background-session worktrees) put their worktree under `.claude/worktrees/<name>/` at the repository root (https://code.claude.com/docs/en/worktrees), and ARM-6 hashes all of `.claude/`, even where git ignores it. So under D-17's B, every edit in a nested worktree fails the outer army's turns in M1 and cards them from M2. v0.11's M1-AC11 places its linked worktree outside the folder, so it doesn't show this.
 - **Options:** (a) another working tree of the repository nested in the folder, from `git worktree list`, is not this army's checkout, and ARM-6 and WSP-11 skip it, with the blind spot in Appendix D; (b) keep hashing it, state the friction, and add a nested case to M1-AC11; (c) refuse an army whose folder lies inside another working tree of the repository (reverses part of D-17's B).
 - **Card** (sent 2026-10-20, the decisions doc, rev 40): recommended A, because it makes D-17's B work in Claude Code's default layout, and the nested tree has its own army's guard whenever one runs there.
+- **Widened** (2026-10-20, rev 47, from fix check ANS-FC1's R-M1-108): WSP-10's "another army's" covers only Shadow Army's own snapshots and worktrees, so creating or removing any linked working tree (`claude --worktree`, its automatic cleanup, a subagent's `isolation: worktree`) is a metadata change that fails every other army's running turn in M1 and cards it from M2. Option A now also leaves each linked working tree's metadata out of WSP-10's comparison, with its add or removal logged in one transcript line; the shared config, `hooks/` and `info/` are still compared. B keeps both as changes.
 
 ## Values set in the fix pass
 
