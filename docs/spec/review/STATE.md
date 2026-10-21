@@ -14,7 +14,9 @@ Last updated: 2026-10-17, end of session 4. The spec is v0.10 (`e7c33b4`). M1's 
 - **Spec v0.12** (`2493a82`, snapshot `v2@2493a82.md`): the repairs from ANS-V1, ANS-V2 and ANS-FC1 (`drafts/v012/repairs1.txt`, 52 blocks by a drafter, `raw/v012-repairs-draft.md`; `repairs1b.txt`, 2 by the orchestrator for the drafter's R-M1-151 and R-M1-155). Trace 0 problems (115 requirements, 75 ACs); Appendix C 0 problems. The drafter's other follow-ups: R-M1-152 (NEEDS-PROBE in S7), R-M1-153 (technical, per working tree, done), R-M1-154 (duplicate of R-F-99).
 - The usage limit cut off M1-R2-V1 to V3 once; all three were resumed in this session.
 - The owner logged in with another account during the session, and the decisions doc then refused reads ("not shared"); D-7, D-11, D-22 and D-23's answers can't be read until the doc is shared with that account or the owner logs back in.
-- Next: when M1-R2-V1 to V3 report, one drafter for every confirmed round-2 repair (F and M1) against `v2@2493a82.md`, as v0.13; then a fix check of v0.12 and v0.13 together; then round 3 for F and M1.
+- M1-R2-V1 (`raw/M1-r2-verify-V1.md`) and M1-R2-V3 (`raw/M1-r2-verify-V3.md`) are recorded: R-M1-114 to R-M1-126 and R-M1-140 to R-M1-150 have verdicts. Technical choices by the orchestrator, within the owner's answers (the owner may overrule): R-M1-140 (b), the Windows guardian gets PO-3's DACL and the parent-spoofing escape is stated beside WMI's (D-3 B); R-M1-141 (a), the post office's threads and token default DACL hardened too (D-9 A). R-F-109 and R-M1-119 raised to P2 together.
+- **The owner asked to stop the agents** (2026-10-20). M1-R2-V2 (R-M1-127 to R-M1-139) was running and is let finish; no new agent starts until the owner says so.
+- Next, when the owner allows agents again: record M1-R2-V2 if not yet done; one drafter for every confirmed round-2 repair (F's and M1's "repair pending (v0.13)" rows in the ledger) against `v2@2493a82.md`, as v0.13; a fix check of v0.12 and v0.13 together; then round 3 for F and M1.
 
 ## Where things are
 
