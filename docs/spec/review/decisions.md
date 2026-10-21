@@ -465,6 +465,21 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Widened** (2026-10-20, rev 47, from fix check ANS-FC1's R-M1-108): WSP-10's "another army's" covers only Shadow Army's own snapshots and worktrees, so creating or removing any linked working tree (`claude --worktree`, its automatic cleanup, a subagent's `isolation: worktree`) is a metadata change that fails every other army's running turn in M1 and cards it from M2. Option A now also leaves each linked working tree's metadata out of WSP-10's comparison, with its add or removal logged in one transcript line; the shared config, `hooks/` and `info/` are still compared. B keeps both as changes.
 - **Answer** (2026-10-20, pasted in chat): **A**, as widened: another working tree of the repository nested in the folder (from `git worktree list`) is not this army's checkout, so ARM-6 and WSP-11 skip it; WSP-10 leaves each linked working tree's metadata out of its comparison and logs its add or removal in one transcript line; the blind spot goes in Appendix D. Applied in v0.13.
 
+## D-24 An owner's edit before a turn the CLI starts by itself (from R-F-117)
+
+- **Kind:** big: accepting a remaining risk, and option B adds a card the owner answers (PLAYBOOK section 14). Raised by D-7's merge drafter, verified as DECISION by fix check V13-FC1 (`raw/V13-FC1.md`).
+- **Question:** after a builder's read-only turn is reverted, claude can start a turn by itself once a background task ends (PO-8, at least 30 s later). WSP-12 (v0.14) starts that turn from the state saved once the first turn was reverted, so an edit the owner makes in that worktree in between is reverted with it, and no copy is kept. D-7's card named only edits made during the turn.
+- **Options:** A accept it as residual 11's bullet states (M6-AC13 as is); B before that turn's revert, a card lists each path that changed between the saved state and the turn's first event: y keeps them as the owner's, n reverts them (the attribution card's y and n, ARM-6); C the post office refreshes the saved state from changes it sees while the soldier is idle, accepting that a write the turn makes before its first event is read can survive as the owner's.
+- **Tested:** V13-FC1 confirmed the gap and found no technical fix without a tradeoff: refreshing while idle races the turn's first write (claude can run a tool before the post office reads its event), and file times can be faked. v0.14 already adds the exception to WSP-12's "everything the turn didn't change" and PO-8's "the owner's edits between turns", whichever is chosen.
+- **Card** (2026-10-21, the new cards doc): recommended **B**, because nothing the owner writes is lost without the owner's say, and it reuses the y/n of the attribution card; it shows only when a self-started read-only turn follows an edit in a soldier's worktree, which is rare. C is rejected on safety: it lets a read-only turn's write survive.
+
+## D-25 Whether a reply to a brief from before `/clear` wakes the Monarch (from R-M1-160)
+
+- **Kind:** big: it changes what the owner sees, and starts paid turns (PLAYBOOK section 14). A detail of D-11 that fix check V13-FC1 flagged.
+- **Question:** v0.13 (MSG-5) lets a summary for a brief sent before `/clear`, `/resume` or `/branch` arrive in the new conversation, marked so, but wake nobody: it waits for Claude's next turn. The owner's D-11 answer was "do as claude has", and Claude Code starts a turn when a background task finishes, and sends the output of a task started before `/clear` to the new conversation (https://github.com/anthropics/claude-code/issues/32052; `decisions.md`, D-11).
+- **Options:** A it wakes Claude as any reply does (MSG-8), marked `a brief from before /clear`; B it waits for the owner's next message (v0.14 as written).
+- **Card** (2026-10-21): recommended **A**, because it is what Claude Code does, which the owner asked for, and a soldier's answer is never left unseen until the owner types; the mark tells the Monarch the brief came from the earlier conversation.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
