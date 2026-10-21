@@ -13,7 +13,7 @@ Read, in this order: CLAUDE.md, CONTRIBUTING.md, docs/spec/review/NEXT-SESSION.m
 
 The spec is v0.12. Round 2 of F and M1 is reviewed and verified (on v0.11) and not clean. My answers to every card are recorded in decisions.md (D-7 A, D-11 read as A, D-22 A, D-23 A on 2026-10-20). Write every ledger row marked "repair pending (v0.13)" as spec v0.13, those answers included: draft the small repairs yourself as OLD/NEW blocks, and use a Sonnet drafter only for a big merge. Run both checkers, then one fix check of v0.12 and v0.13 together on Opus. Then round 3 for F and M1. Follow spec2.0_review_flow.md section 4's token rules: two or three agents at a time, never five; verify only P0 to P2; Sonnet for mechanical agents; tight packets; a fresh session after each big pass. Commit and push after every result that changes a doc, and after every pass update STATE.md and comment on PR #77. Keep C:\Users\johns\projects\AIConnections\codex-claude-status.md current: tick the Review column and lists at each step (Codex keeps the Build column), and mark a milestone converged only after its two clean rounds and two sign-offs, since that is Codex's signal to build it.
 
-Answer me straight to the point. I answer only big questions, as short decision cards with a tested recommendation.
+Answer me straight to the point. I answer only big questions, as short decision cards with a tested recommendation. Put new cards in an artifact; the old decisions doc no longer opens from my account, so make a new one, and I'll answer in it or paste my answers back in chat.
 ```
 
 ## 2. Where things stand
