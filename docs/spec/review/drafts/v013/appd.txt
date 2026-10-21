@@ -1,0 +1,112 @@
+v0.13 repairs, Appendix D (R-F-97, R-F-100, R-F-104, R-F-106, R-M1-140, R-M1-141, R-M1-142, R-M1-143, D-22, D-23). Written by the orchestrator against v0.12 (v2@2493a82.md). D-7's residual 11 is d7.txt's.
+
+R-M1-142: other plugins in the owner's session. R-F-100: other local users. D-22: .mcp.json.
+<<< OLD
+| The folder's own `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md` | Trusted once the owner accepts their trust card (ARM-7). |
+| Other processes of the owner's user | As far as the owner's user goes: as much as a `full` soldier. |
+| Other local users, and the network | Not trusted. They reach only a loopback port, which refuses them without a credential (PO-2, PO-3, PO-4). |
+=== NEW
+| The folder's own `shadow.config.json`, `orchestratorDelegate.md`, `rules.md`, `agent.md` and `.mcp.json` | Trusted once the owner accepts their trust card (ARM-7). |
+| Other plugins in the owner's Claude Code session | As the owner's own code: they can steer the Monarch, and see and change the post office's input, the Monarch's secret included, and its events (PO-3, residual 1). |
+| Other processes of the owner's user | As far as the owner's user goes: as much as a `full` soldier. |
+| Other local users, and the network | Not trusted. They reach only a loopback port, which refuses them without a credential (PO-2, PO-3, PO-4), and the army's files are the owner's alone (PO-5). |
+>>> END
+
+D-23: a working tree nested in the folder.
+<<< OLD
+| ARM-6 (I, X, F), WSP-11 (I, F), WSP-4 (I); M1-AC11, M2-AC5, M2-AC8, M2-AC9, M6-AC1 | detected, not prevented: nothing write-protects the checkout, and the guard reverts nothing |
+=== NEW
+| ARM-6 (I, X, F), WSP-11 (I, F), WSP-4 (I); M1-AC11, M2-AC5, M2-AC8, M2-AC9, M6-AC1 | detected, not prevented: nothing write-protects the checkout, and the guard reverts nothing; a working tree nested in the folder is outside it (residual 12) |
+>>> END
+
+D-22 and R-F-97: row 10 covers .mcp.json, and the card's own gaps.
+<<< OLD
+| 10 | The folder's own Shadow Army files to each soldier's CLI and autonomy |
+=== NEW
+| 10 | The folder's own Shadow Army files and `.mcp.json` to each soldier's CLI and autonomy |
+>>> END
+
+<<< OLD
+| ARM-7 (U, I, X), ARM-2 (U); M1-AC13 | prevented, except residual 4 |
+=== NEW
+| ARM-7 (U, I, X), ARM-2 (U); M1-AC13 | prevented, except residuals 4 and 10 |
+>>> END
+
+<<< OLD
+A `claude -p` run uses the repository's settings-file hooks, its `env` block and helper commands, and its `.mcp.json` servers, with no trust dialog.
+=== NEW
+A `claude -p` run uses the repository's settings-file hooks, its `env` block and helper commands with no trust dialog, as the owner's own trusted session does; its `.mcp.json` servers wait for the trust card (row 10).
+>>> END
+
+R-F-104: an approval request's whole copy.
+<<< OLD
+| `redact()` runs on every log, record, report, brief and event (WSP-8), and the Monarch's secret and each soldier credential appear in none of them (SEC-4). |
+=== NEW
+| `redact()` runs on every log, record, report and brief, and on every event except an approval request's whole copy, which the card shows word for word (WSP-8); the Monarch's secret and each soldier credential appear in no log or record (SEC-4). |
+>>> END
+
+R-F-106: a report is cut, not refused; the meter is SES-2.
+<<< OLD
+| Caps on queue depth, send rate, and message and report size, each refused with its reason (MSG-1, MSG-3, MSG-6, PO-6), and the meter (G5). |
+=== NEW
+| Caps on queue depth, send rate and message size, each refused with its reason (MSG-1, MSG-3, MSG-6), a report cut at 2 MiB (PO-6), and the meter (SES-2, →M4). |
+>>> END
+
+D-23: the summary paragraph.
+<<< OLD
+It only detects a soldier's direct change to the checkout (row 6) and a git config change made while harness git runs (residual 7).
+=== NEW
+It only detects a soldier's direct change to the checkout (row 6), a git config change made while harness git runs (residual 7), and a working tree added inside the folder (residual 12).
+>>> END
+
+R-M1-141, R-M1-142: residual 1.
+<<< OLD
+and on Windows where its DACL couldn't be set; and on Windows from any process through `SeDebugPrivilege` when Claude Code runs elevated.
+=== NEW
+and on Windows where its DACL, or a thread's, couldn't be set; and on Windows from any process through `SeDebugPrivilege` when Claude Code runs elevated.
+>>> END
+
+<<< OLD
+either allows only `send` as that soldier (PO-4).
+2. **What remains of shared memory**
+=== NEW
+either allows only `send` as that soldier (PO-4). Another plugin in the owner's Claude Code session runs as the owner inside the Monarch's host: a `process.spawn` hook sees the secret in the post office's input and every event on its output, and can change them, on every system and at any `ptrace_scope` (PO-3).
+2. **What remains of shared memory**
+>>> END
+
+R-M1-140: residual 3, a process with a parent outside the tree.
+<<< OLD
+or a vendor's own background service. No guard or audit sees what it changes after the turn.
+=== NEW
+or a vendor's own background service; and, on Windows, a process created with a parent outside the tree, which takes that parent's job. No guard or audit sees what it changes after the turn.
+>>> END
+
+R-F-104: residual 5, what an approval card shows.
+<<< OLD
+5. **Secrets that `redact()` doesn't match** (SEC-4). Any other secret a soldier's CLI writes into its session, such as a value it read from a file or its environment, is logged as the CLI wrote it.
+=== NEW
+5. **Secrets that `redact()` doesn't match** (SEC-4). Any other secret a soldier's CLI writes into its session, such as a value it read from a file or its environment, is logged as the CLI wrote it. An approval request's card shows what the request holds, secrets included (WSP-8).
+>>> END
+
+R-M1-143: residual 7 on git 2.54.
+<<< OLD
+WSP-10's command-line settings still keep hooks, the file system monitor, the pager, signing, external diffs and text conversion off.
+=== NEW
+WSP-10's command-line settings still keep hooks, the file system monitor, the pager, signing, external diffs and text conversion off. On git 2.54, which has no per-event hook switch, a hook defined in the config within that window, under a name the check didn't see, runs too.
+>>> END
+
+D-22: residual 8 keeps the hooks and the env block; .mcp.json goes to the card.
+<<< OLD
+For a `claude -p` soldier, that includes hooks, the `env` block, helper commands and `.mcp.json` servers, with no trust dialog.
+=== NEW
+For a `claude -p` soldier, that includes hooks, the `env` block and helper commands, with no trust dialog, which the owner's own trusted session runs too. Its `.mcp.json` servers connect only once the owner has accepted the file on the trust card (ARM-7), and as it was accepted.
+>>> END
+
+R-F-97: residual 10, the trust card's own gaps. D-23: residual 12, working trees nested in the folder.
+<<< OLD
+Logs are kept until the owner deletes them (WSP-8), so they can fill the disk; a failed write is handled as PO-5 says.
+=== NEW
+Logs are kept until the owner deletes them (WSP-8), so they can fill the disk; a failed write is handled as PO-5 says.
+10. **The trust card's own gaps** (ARM-7). A PreToolUse hook, the owner's or one in the folder's own Claude Code settings, can answer the card's dialog. Any process of the owner's user, a soldier that runs code included, can write the record in `~/.shadow-army/trust/`. v1's commands, until LEG-1, read the folder's files with no card.
+12. **Working trees nested in the folder** (D-23). Another working tree of the repository inside the folder, such as one `claude --worktree` makes under `.claude/worktrees/`, is not this army's checkout, so this army's guard sees nothing written there (WSP-11, ARM-6), and adding or removing one holds no harness git (WSP-10). A soldier that runs git can add one and write in it unseen; only the transcript line that names each working tree added or removed shows it. The nested tree's own army, whenever one runs there, guards it during that army's turns.
+>>> END
