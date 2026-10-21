@@ -2,10 +2,14 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-Last updated: 2026-10-21, session 7. The spec is v0.13 (`ecf1e80`): round 2's repairs of F and M1 and the owner's answers to D-7, D-11, D-22 and D-23. Fix check V13-FC1 (v0.12 and v0.13 together) is running.
+Last updated: 2026-10-21, end of session 7. The spec is v0.14 (`02d5f84`): fix check V13-FC1's repairs, on v0.13 (`ecf1e80`: round 2's repairs and the owner's answers to D-7, D-11, D-22 and D-23). Two new cards, D-24 and D-25, wait for the owner. No agent is running. Next, in a fresh session: fix check V14-FC1 and round 3 (`drafts/r3/PROMPTS.md`).
 
-**Session 7 (2026-10-21).**
-- Session 6's run of V13-FC1 was cut off by the usage limit and left no report, so this session reran it (Opus, high; prompt in `drafts/v013/PROMPTS.md`).
+**Session 7 (2026-10-21), ended.**
+- Session 6's run of V13-FC1 was cut off by the usage limit and left no report, so this session reran it (Opus, high; prompt in `drafts/v013/PROMPTS.md`; 324k tokens, 63 tool calls, 14 minutes; `raw/V13-FC1.md`).
+- **V13-FC1's verdict:** every v0.12 and v0.13 repair FIXED, the three P1s (R-F-3, R-M1-89, R-M1-92) and D-19's repair included, and the owner's four answers do what the owner chose, except R-M1-108 NOT FIXED: ARM-6 and WSP-11 still hashed every other working tree's metadata (R-M1-156). Of the packet's new findings: R-F-120 CONFIRMED P2 (technical, option b), R-F-114 CONFIRMED as P3, R-F-117 a DECISION, big. New: R-F-126 (P2, a pending revert lost when the post office ends), R-M1-156 (P2), and eight P3s (R-F-127 to R-F-131, R-M1-157 to R-M1-159). Two P3s applied in v0.13 were off (R-F-125, R-M1-147) and R-F-110's Snapshot entry cited the wrong base; all re-fixed.
+- The orchestrator checked N1 and N2 against v0.13's text and the auto-mode vendor fact (R-M1-159) against the vendor's page, then wrote **v0.14** (`02d5f84`, snapshot `v2@02d5f84.md`; `drafts/v014/repairs.txt`, 25 blocks). Trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems. The ledger marks 83 v0.12 and v0.13 rows "Fix-checked: FIXED (V13-FC1)" and four P2 rows of v0.14 "To fix-check".
+- **New cards** in a new doc the owner's current account owns, "Spec 2.0 Review: New Decisions" (https://claude.ai/artifact/KpmKMUugoKwc1W4F65C931): **D-24** (R-F-117, an owner's edit in a soldier's worktree before a turn the CLI starts by itself; recommended B, a y/n card) and **D-25** (R-M1-160, whether a reply to a brief sent before `/clear` wakes the Monarch; recommended A, wake, as Claude Code does). Records in `decisions.md`.
+- Set up for the next session: the packet `batches/V14-FC1.md` and every prompt for V14-FC1 and round 3 in `drafts/r3/PROMPTS.md`.
 
 **Session 6 (2026-10-20), ended.**
 - **v0.13** (`ecf1e80`, snapshot `v2@ecf1e80.md`): 182 blocks in `drafts/v013/`. D-7's merge was drafted by a Sonnet drafter at effort high (`raw/D-7-merge-draft.md`, 54 blocks, 350k tokens) and reconciled by the orchestrator: ARM-8, WSP-12 and CH-11 are new, with M6-AC12 to M6-AC17. The orchestrator wrote the other 128 blocks: D-11 (A: `/clear`, `/resume` and `/branch` keep the army; `/logout` and any other `session.end` end it), D-22 (A: ARM-7 covers `.mcp.json`), D-23 (A: another working tree is not this army's checkout; residual 13), HOST-16 (new, M3), and every confirmed round-2 repair. Trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems.
@@ -30,9 +34,9 @@ Last updated: 2026-10-21, session 7. The spec is v0.13 (`ecf1e80`): round 2's re
 ## Where things are
 
 - **Branch** `claude/63-ultimate-spec-review`, PR #77, "#63 Ultimate Spec Review" (draft), stacked on #76 (`claude/63-spec-ideas`, spec v0.6 at `be9deb0`).
-- **The spec is v0.13** (`ecf1e80`, 2026-10-20; snapshot `v2@ecf1e80.md`). Before it, v0.10 (`e7c33b4`, 2026-10-17): M1-FC3's follow-ups (`drafts/M1-r1-fc/fc3.txt`), on v0.9 (`b6f4315`: the repairs for M1-FC1's and M1-FC2's findings, `fc1.txt`, with D-18 amended for R-M1-81, and `fc2.txt`), on v0.8 (`1580e87`: M1's round-1 fixes, with D-2 and D-12 to D-15). `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <previous snapshot>` gives 0 problems (101 requirements, 61 ACs), and `tools/check-appendix-c.mjs` gives 0 problems (on v0.13: 119 requirements, 81 ACs; Appendix C 118 rows). The trace script checks Appendix B's rules 1 to 6 and 8 (forward citations marked →Mx) and, given a previous version, that no ID is gone.
-- **Snapshots** (in the main checkout's `.shadow/v2-tools/review/snapshots/`): `v2@be9deb0.md`, which round 1 reviewed; `v2@1580e87.md`, v0.8, which D-7's drafters read; `v2@b6f4315.md`, v0.9, which M1-FC3 checked and F's round-2 test author read; `v2@e7c33b4.md`, v0.10, which D-7's judge read and the queued reviewers' prompts name. Rebuild one with `git show <sha>:docs/spec/v2.md` from Git Bash (PowerShell's pipe re-encodes it).
-- **Running:** fix check V13-FC1 (see "Next"). Prompts that ran are in `decisions.md` ("Prompts to rerun"), `drafts/answers/PROMPTS.md` and `drafts/v013/PROMPTS.md`.
+- **The spec is v0.14** (`02d5f84`, 2026-10-21; snapshot `v2@02d5f84.md`), V13-FC1's repairs on v0.13 (`ecf1e80`, 2026-10-20; snapshot `v2@ecf1e80.md`). Before them, v0.10 (`e7c33b4`, 2026-10-17): M1-FC3's follow-ups (`drafts/M1-r1-fc/fc3.txt`), on v0.9 (`b6f4315`: the repairs for M1-FC1's and M1-FC2's findings, `fc1.txt`, with D-18 amended for R-M1-81, and `fc2.txt`), on v0.8 (`1580e87`: M1's round-1 fixes, with D-2 and D-12 to D-15). `node docs/spec/review/tools/trace-v2.mjs docs/spec/v2.md <previous snapshot>` gives 0 problems (101 requirements, 61 ACs), and `tools/check-appendix-c.mjs` gives 0 problems (on v0.13: 119 requirements, 81 ACs; Appendix C 118 rows). The trace script checks Appendix B's rules 1 to 6 and 8 (forward citations marked →Mx) and, given a previous version, that no ID is gone.
+- **Snapshots** (in the main checkout's `.shadow/v2-tools/review/snapshots/`): `v2@be9deb0.md`, which round 1 reviewed; `v2@1580e87.md`, v0.8, which D-7's drafters read; `v2@b6f4315.md`, v0.9, which M1-FC3 checked and F's round-2 test author read; `v2@e7c33b4.md`, v0.10, which D-7's judge read; `v2@af97372.md`, v0.11, which round 2 reviewed; `v2@2493a82.md`, v0.12; `v2@ecf1e80.md`, v0.13, which V13-FC1 checked; `v2@02d5f84.md`, v0.14, which round 3 reviews. Rebuild one with `git show <sha>:docs/spec/v2.md` from Git Bash (PowerShell's pipe re-encodes it).
+- **No agent is running.** Prompts that ran are in `decisions.md` ("Prompts to rerun"), `drafts/answers/PROMPTS.md` and `drafts/v013/PROMPTS.md`; the next five are in `drafts/r3/PROMPTS.md`.
 - **Status board with Codex** (from 2026-10-16): `C:\Users\johns\projects\AIConnections\codex-claude-status.md`, local and excluded from git. Claude ticks the Review column at each step and Codex the Build column. The order: the review leads, Codex builds a milestone only once its spec is marked converged, and then Codex builds milestone N while the review does N+1.
 - **Pace** (the owner, 2026-10-20, replacing 2026-10-17's "more than two in a fresh window"): two or three agents at a time, never five; only P0 to P2 findings are verified; small repairs are drafted in the main session; Sonnet runs mechanical agents at a set effort (drafters and prototype builders `high`, simple verifiers `medium`, never `xhigh` or `max`); a fresh main session after each big pass (`spec2.0_review_flow.md` section 4, rules 4 to 9). Earlier: drop back to two once the owner says the weekly limit is close. Claude can't see the limits. On 2026-10-17 the owner also asked to stop after the last pass, so session 4 ended there.
 - **Done in session 4** (2026-10-17):
@@ -50,8 +54,8 @@ Last updated: 2026-10-21, session 7. The spec is v0.13 (`ecf1e80`): round 2's re
 
 | Unit | State |
 |---|---|
-| F | Round 1 closed (v0.7; F-FC1 and F-FC2 passed). Round 2 on v0.11 (test author, consistency auditor) verified: not clean; repaired in v0.13 with R-F-58 and D-7's merge, fix check V13-FC1 running. Then round 3, a second clean round and two sign-offs. |
-| M1 | Round 1 closed (v0.8 to v0.10, fix-checked). The owner's answers applied in v0.11 (ANS-FC1), repaired in v0.12. Round 2 on v0.11 (test author, vendor-fact checker) verified: not clean; repaired in v0.13 with D-11, D-22 and D-23, fix check V13-FC1 running. R-M1-71 is parked for M2. |
+| F | Round 1 closed (v0.7; F-FC1 and F-FC2 passed). Round 2 on v0.11 (test author, consistency auditor) verified: not clean; repaired in v0.13 with R-F-58 and D-7's merge, fix-checked by V13-FC1 (all FIXED), its follow-ups repaired in v0.14. Next: V14-FC1 and round 3 (implementer, owner's advocate), then a second clean round and two sign-offs. D-24 is open. |
+| M1 | Round 1 closed (v0.8 to v0.10, fix-checked). The owner's answers applied in v0.11 (ANS-FC1), repaired in v0.12. Round 2 on v0.11 (test author, vendor-fact checker) verified: not clean; repaired in v0.13 with D-11, D-22 and D-23, fix-checked by V13-FC1 (all FIXED but R-M1-108's guard half), repaired in v0.14. Next: V14-FC1 and round 3 (red team, enterprise operator). D-25 is open. R-M1-71 is parked for M2. |
 | C (M1's rows) | Not started. |
 | M2–M6, C, X1–X5 | Not started. |
 
@@ -76,16 +80,18 @@ Last updated: 2026-10-21, session 7. The spec is v0.13 (`ecf1e80`): round 2's re
 | D-20 macOS in 2.0 | Answered **A** on 2026-10-16: macOS stays. |
 | D-21 one clean round instead of two | Answered **A** on 2026-10-16: keep every recheck. |
 | D-22 a repository's `.mcp.json` servers in claude soldiers | Answered **A** on 2026-10-20: ARM-7's trust card also covers the folder's `.mcp.json`. Applied in v0.13. |
-| D-23 the repository's other working trees and the guard | Answered **A** on 2026-10-20, as widened: the guard skips them, nested files and metadata added or removed. Applied in v0.13 (WSP-10, ARM-6, WSP-11, residual 13). |
+| D-23 the repository's other working trees and the guard | Answered **A** on 2026-10-20, as widened: the guard skips them, nested files and metadata added or removed. Applied in v0.13 (WSP-10, ARM-6, WSP-11, residual 13); the guard's half completed in v0.14 (R-M1-156). |
+| D-24 an owner's edit before a turn the CLI starts by itself (R-F-117) | Card sent 2026-10-21 (new doc): A accept, B a y/n card, C refresh while idle; recommended **B**. v0.14 keeps A's text, with the exception stated in WSP-12 and PO-8. |
+| D-25 a reply to a brief from before `/clear` (R-M1-160) | Card sent 2026-10-21 (new doc): A wake the Monarch, as Claude Code does; B wait for the owner's next message (v0.14's text); recommended **A**. |
 | Values set in the fix pass | A summary line is at most 120 characters; the parity task reads `README.md` and `package.json`, with live at most 1.05 times headless and two repeats on a token failure; a background task's follow-up wait is 30 s; a crashed channel restarts after 1 s, 5 s and 30 s. Recorded in `decisions.md`; the owner may overrule any. |
 
 ## Next, in order
 
 Follow the owner's token rules (`spec2.0_review_flow.md` sections 3 and 4): two or three agents at a time, never five; verify only P0 to P2; small repairs drafted in the main session; Sonnet for mechanical agents, at the effort rule 6 sets for each; tight packets; a fresh session after each big pass. Commit and push after every result that changes a doc. `NEXT-SESSION.md` has the setup and the prompt.
 
-1. ~~v0.13~~ done (`ecf1e80`).
-2. **The fix check V13-FC1** (Opus, running; rerun in session 7) of v0.12 and v0.13 together; then repair what it finds (v0.14 if needed).
-3. **Round 3 for F and M1** on v0.13's snapshot; then their second clean rounds and sign-offs.
+1. ~~v0.13~~ done (`ecf1e80`). ~~V13-FC1~~ done; its repairs are v0.14 (`02d5f84`).
+2. **The owner's answers to D-24 and D-25**, if they have come (the new doc's table, or chat): apply them as v0.15, a few OLD/NEW blocks (D-24 B: a card in WSP-12, M6-AC13 and residual 11; D-25 A: MSG-5's last sentence), with both checkers. Otherwise go on, and apply them when they come.
+3. **Fix check V14-FC1 and round 3 for F and M1**, five agents, at most three at a time, M1 first, all prompts in `drafts/r3/PROMPTS.md`: V14-FC1 (Opus, high), M1's red team and enterprise operator, then F's implementer and owner's advocate (each `spec-reviewer`, Opus, high). Then verify their P0 to P2 (Sonnet `medium` for simple ones, Opus `high` for P1, security and vendor, `xhigh` for a P0), repair as v0.15 or v0.16, and count: a round with no confirmed P0 to P2 is clean. Then their second clean rounds and sign-offs.
 4. **C's rows that M1 touches.** These need the owner's `the-future` folder.
 5. **The first batch to Codex**, through the owner, with "For Codex" below.
 
@@ -98,8 +104,9 @@ Follow the owner's token rules (`spec2.0_review_flow.md` sections 3 and 4): two 
 
 ## Waiting on the owner
 
-- Every card in the doc "Spec 2.0 Review: Your Decisions" (https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844) is answered, D-22 and D-23 included (2026-10-20). The doc doesn't open from the account the owner now uses, so new cards go to the owner in chat, or in the doc once they log back in.
-- Whether "do as claude has" for D-11 means A (the reading recorded) or C.
+- **D-24 and D-25**, in the new doc "Spec 2.0 Review: New Decisions" (https://claude.ai/artifact/KpmKMUugoKwc1W4F65C931, made 2026-10-21 under the owner's current account; doc id `986fc398-4395-4c2b-853e-c1895870b9ac`, body node `69857ecc-1142`, the answer table `m05fpwrw4rr.150`, answers are dropdowns of the enum `71ccf7f8-8a0f`; rev 4 when sent). The owner may also paste answers in chat.
+- Every card in the old doc "Spec 2.0 Review: Your Decisions" (https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844) is answered, D-22 and D-23 included (2026-10-20). It doesn't open from the owner's current account.
+- Whether "do as claude has" for D-11 means A (the reading recorded) or C; D-25 asks the one detail of A that V13-FC1 flagged.
 - Probes (`probes.md`), each needing the owner's go:
   - P-1 and P-2 finish spike S6;
   - P-3: does an installed mod load in a claude soldier;
@@ -115,6 +122,7 @@ Follow the owner's token rules (`spec2.0_review_flow.md` sections 3 and 4): two 
 - Drafters: D-3's B and C drafters 286k and 332k.
 - On 2026-10-16: the D-3 judge 217k (48, 16 min); M1-FC1 306k (72, 22 min); M1-FC2 410k and D-7's option A drafter 265k, both counted at the end of a resumed run.
 - On 2026-10-17: M1-FC3 202k (60, 18 min); D-7's option C drafter 391k (76, 32 min); F's round-2 test author 238k and D-7's judge 232k, both counted at the end of a resumed run. Two agents running together hit the five-hour limit once, in the afternoon.
+- On 2026-10-20 and 21: D-7's merge drafter (Sonnet, high) 350k (94, 16.5 min); fix check V13-FC1 324k (63, 14 min).
 
 ## Only on the owner's Windows machine
 
