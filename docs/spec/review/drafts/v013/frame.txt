@@ -21,11 +21,11 @@ It ships prebuilt in Shadow Army's package, one for each supported system and pr
 It ships prebuilt in Shadow Army's package: one Linux binary for each supported processor, and one universal macOS binary (PO-12, PO-13).
 >>> END
 
-D-11: the army lasts as long as the owner's Claude Code process.
+D-11: WSP-1's worktree per Claude Code process (the glossary's Worktree entry is in d7.txt).
 <<< OLD
-- **Worktree:** a soldier's own git worktree and branch, one per soldier per Claude session (WSP-1).
+One worktree per soldier per Claude session (from 2.0 WS-1).
 === NEW
-- **Worktree:** a soldier's own git worktree and branch, one per soldier per Claude Code process (WSP-1).
+One worktree per soldier per Claude Code process (from 2.0 WS-1).
 >>> END
 
 R-F-112: no MUST in section 5.1.
@@ -47,6 +47,7 @@ R-F-77: no approval path without the owner.
   - The mod has no approval path.
 === NEW
   - The mod never approves by itself: none of its Claude Code hooks allows a tool call or a permission (HOST-12), and it passes on a soldier's approval request only with the owner's own answer, unchanged (CH-6, SEC-3).
+  - A read-only turn does each of these: commits on its own branch, moves another soldier's branch, adds an ignore rule over a file it writes, replaces a file with a link to a checkout file, and writes `.claude/settings.local.json` in its worktree. None of it reaches `/diff`, `/apply` or a later turn, the checkout file is unchanged, and the other branch's move is on the attribution card (WSP-12, WSP-4). A start state that the turn rewrote is not restored from (WSP-12).
 >>> END
 
 <<< OLD

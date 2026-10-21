@@ -16,7 +16,7 @@ D-23: a working tree nested in the folder.
 <<< OLD
 | ARM-6 (I, X, F), WSP-11 (I, F), WSP-4 (I); M1-AC11, M2-AC5, M2-AC8, M2-AC9, M6-AC1 | detected, not prevented: nothing write-protects the checkout, and the guard reverts nothing |
 === NEW
-| ARM-6 (I, X, F), WSP-11 (I, F), WSP-4 (I); M1-AC11, M2-AC5, M2-AC8, M2-AC9, M6-AC1 | detected, not prevented: nothing write-protects the checkout, and the guard reverts nothing; a working tree nested in the folder is outside it (residual 12) |
+| ARM-6 (I, X, F), WSP-11 (I, F), WSP-4 (I); M1-AC11, M2-AC5, M2-AC8, M2-AC9, M6-AC1 | detected, not prevented: nothing write-protects the checkout, and the guard reverts nothing; a working tree nested in the folder is outside it (residual 13) |
 >>> END
 
 D-22 and R-F-97: row 10 covers .mcp.json, and the card's own gaps.
@@ -56,7 +56,7 @@ D-23: the summary paragraph.
 <<< OLD
 It only detects a soldier's direct change to the checkout (row 6) and a git config change made while harness git runs (residual 7).
 === NEW
-It only detects a soldier's direct change to the checkout (row 6), a git config change made while harness git runs (residual 7), and a working tree added inside the folder (residual 12).
+It only detects a soldier's direct change to the checkout (row 6), a git config change made while harness git runs (residual 7), and a working tree added inside the folder (residual 13).
 >>> END
 
 R-M1-141, R-M1-142: residual 1.
@@ -102,11 +102,10 @@ For a `claude -p` soldier, that includes hooks, the `env` block, helper commands
 For a `claude -p` soldier, that includes hooks, the `env` block and helper commands, with no trust dialog, which the owner's own trusted session runs too. Its `.mcp.json` servers connect only once the owner has accepted the file on the trust card (ARM-7), and as it was accepted.
 >>> END
 
-R-F-97: residual 10, the trust card's own gaps. D-23: residual 12, working trees nested in the folder.
+R-F-97: residual 10, the trust card's own gaps (residual 13, D-23's, is in fixup.txt, after D-7's 11 and 12).
 <<< OLD
 Logs are kept until the owner deletes them (WSP-8), so they can fill the disk; a failed write is handled as PO-5 says.
 === NEW
 Logs are kept until the owner deletes them (WSP-8), so they can fill the disk; a failed write is handled as PO-5 says.
 10. **The trust card's own gaps** (ARM-7). A PreToolUse hook, the owner's or one in the folder's own Claude Code settings, can answer the card's dialog. Any process of the owner's user, a soldier that runs code included, can write the record in `~/.shadow-army/trust/`. v1's commands, until LEG-1, read the folder's files with no card.
-12. **Working trees nested in the folder** (D-23). Another working tree of the repository inside the folder, such as one `claude --worktree` makes under `.claude/worktrees/`, is not this army's checkout, so this army's guard sees nothing written there (WSP-11, ARM-6), and adding or removing one holds no harness git (WSP-10). A soldier that runs git can add one and write in it unseen; only the transcript line that names each working tree added or removed shows it. The nested tree's own army, whenever one runs there, guards it during that army's turns.
 >>> END

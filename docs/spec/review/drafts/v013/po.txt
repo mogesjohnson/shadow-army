@@ -154,3 +154,10 @@ proves that the post office's log names the memory protection it has, and that w
 === NEW
 proves that the post office's log names the memory protection it has, and that where it has one, a fake soldier can neither read its memory nor change its DACL, and on Windows can neither open its threads to read or change their context nor start a process with the post office as its parent.
 >>> END
+
+D-11: HOST-2's first use is per army, not per conversation.
+<<< OLD
+The mod starts the post office the first time the army is used in a session, and again
+=== NEW
+The mod starts the post office the first time the army is used, and again
+>>> END
