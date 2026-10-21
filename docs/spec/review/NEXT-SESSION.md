@@ -34,7 +34,8 @@ Answer me straight to the point. I answer only big questions, as short decision 
 ## 3. Setup
 
 **On the owner's Windows machine:**
-- The worktree `../AIConnections-review` already has the branch, and `.claude/agents/` in the main checkout already holds `spec-reviewer` and `spec-verifier`.
+- **Effort:** this session writes v0.13, so start it with `claude --effort xhigh` or run `/effort xhigh` (flow section 4, rule 6). Don't use `CLAUDE_CODE_EFFORT_LEVEL`, which overrides every agent's effort.
+- The worktree `../AIConnections-review` already has the branch, and `.claude/agents/` in the main checkout already holds `spec-reviewer` and `spec-verifier` (both `effort: high` since 2026-10-20, as in `docs/spec/review/agents/`).
 - Check that the worktree is clean and up to date: `git -C ../AIConnections-review status`, then `git -C ../AIConnections-review pull`.
 - The snapshots are in `.shadow/v2-tools/review/snapshots/`: `v2@be9deb0.md` (round 1), `v2@1580e87.md` (v0.8), `v2@b6f4315.md` (v0.9), `v2@e7c33b4.md` (v0.10), `v2@af97372.md` (v0.11, which round 2 reviewed) and `v2@2493a82.md` (v0.12). Make v0.13's the same way once it lands: `git show <sha>:docs/spec/v2.md > .shadow/v2-tools/review/snapshots/v2@<sha>.md`, from Git Bash.
 - Claude Code's mod typings are in `.shadow/v2-tools/review/evidence/mod-api-2.1.294/`.
