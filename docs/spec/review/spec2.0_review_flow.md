@@ -26,7 +26,7 @@ Written 2026-10-14 by session 7ac7daad, from the owner's instructions that day.
 | Fix checker | `spec-verifier` | Checks each P0 and P1 fix: FIXED or NOT FIXED, and what it broke |
 | Drafter | `spec-reviewer` | Writes one option of a decision as spec text |
 | Judge | `spec-verifier` | Scores a decision's options and recommends one |
-| Prototype builder | `general-purpose`, **Sonnet** | Builds and runs an offline experiment in `prototypes/D-<n>/`; never calls a model or a vendor CLI |
+| Prototype builder | `general-purpose`, **Sonnet**, effort `high` (section 4, rule 6) | Builds and runs an offline experiment in `prototypes/D-<n>/`; never calls a model or a vendor CLI |
 
 The two definitions are in [`agents/`](agents/). On a new machine, copy them into `.claude/agents/` (keep that folder out of git, through `.git/info/exclude`).
 
@@ -53,7 +53,13 @@ Adopted 2026-10-20, at the owner's ask, after session 5 spent most of its tokens
 
 4. **Only P0 to P2 findings are verified.** A P3 (editorial, wording, a test-wording gap) goes straight into the next repair batch as the reviewer proposed it, and the next fix check catches a wrong one. Its ledger row says "P3, applied unverified".
 5. **The orchestrator drafts small repairs itself.** Where a verifier or reviewer already gives the fix text, the orchestrator turns it into OLD/NEW blocks in the main session (as for v0.12's `repairs1b.txt`). A drafter agent is only for a big merge, such as a decision's text across many requirements (D-3's).
-6. **Sonnet for mechanical agents.** A drafter working from fix text that verifiers already wrote, and a verifier of simple findings (editorial, a missing AC case, a wrong citation), run on Sonnet (the Agent tool's `model: "sonnet"`). Reviewers, the red team, judges, fix checks and verifiers of P0, P1 and security or vendor findings stay on Opus. Sonnet shares Claude's five-hour window with Opus, but costs less of it per token.
+6. **Sonnet for mechanical agents, each at a set effort.** These run on Sonnet (the Agent tool's `model: "sonnet"`), always with the Agent tool's `effort` set as below. Sonnet 5.5 defaults to `high`, and its levels were recalibrated from Sonnet 5, so leaving the effort unset means guessing.
+   - **A drafter** working from fix text that verifiers or a judge already wrote, which after rule 5 means a big merge such as D-7's: **`high`**. It decides, requirement by requirement, what the current version already says or contradicts, and it keeps Appendix B's citations and →Mx markers right. A slip costs an Opus fix check and a repair version, far more than the extra thinking. Use `medium` only for a drafter whose every block is given text to transcribe.
+   - **A verifier of simple findings** (editorial, a missing AC case, a wrong citation): **`medium`**. To refute a finding it must grep the whole spec for text that already covers it. At `low`, Sonnet is more likely to stop early and skip checks on a long tool-using task, which turns a verifier into a rubber stamp.
+   - **A prototype builder** (section 2): **`high`**, with the check sentence in PLAYBOOK section 12's prototype prompt. Its results settle a question of fact, and a judge trusts them. At lower effort, Sonnet sometimes reports code as done without a run that exercises it.
+   - **Never `xhigh` or `max` on Sonnet.** Anthropic reserves them for a measured quality gain, and none has been measured here. A job that seems to need more than `high` belongs on Opus.
+
+   Reviewers, the red team, judges, fix checks and verifiers of P0, P1 and security or vendor findings stay on Opus. Sonnet shares Claude's five-hour window with Opus, but costs less of it per token. The effort guidance is Anthropic's for Sonnet 5.5 as of 2026-10: `medium` as the starting point for multistep tool use and agentic coding, `low` for simple tasks. Revisit these levels if a Sonnet agent's work fails a fix check.
 7. **Two or three agents at a time, never five** (section 3). Resuming an agent cut off by the limit re-sends its whole transcript.
 8. **Tighter packets.** Each agent gets exact line ranges and the findings' text inline in its packet, so it reads as little of the spec and the raw reports as it can.
 9. **A fresh main session after each big pass** (a round reviewed and verified, a version applied and fix-checked). `STATE.md` and `NEXT-SESSION.md` carry everything forward, and a short context is cheap.

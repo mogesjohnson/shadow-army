@@ -41,7 +41,7 @@ The session that runs this is the **orchestrator**. It plans the rounds, spawns 
 - **Fix checkers**: `spec-verifier` with the fix-check task, for every P0 and P1 fix.
 - **Drafters**: `spec-reviewer` agents that write a decision's options as spec text (section 14).
 - **Judges**: `spec-verifier` agents that score a decision's tested options and recommend one.
-- **Prototype builders**: `general-purpose` agents with `model: "sonnet"`, which build and run small offline experiments in `.shadow/v2-tools/review/prototypes/` only.
+- **Prototype builders**: `general-purpose` agents with `model: "sonnet"` and `effort: "high"` (`spec2.0_review_flow.md` section 4, rule 6), which build and run small offline experiments in `.shadow/v2-tools/review/prototypes/` only.
 - **Codex**: the cross-model gate on each batch PR, through the owner.
 - **The owner**: answers only big questions (section 14), approves live probes, merges as before, and accepts the final text. Everything else the agents decide, record and report.
 
@@ -275,7 +275,7 @@ Return one verdict per finding: CONFIRMED, DECISION, DUPLICATE (of which), REFUT
 
 **Option reviewer**: the reviewer template, with the drafted text of one option in place of the unit. "This is option <X> of decision D-<n>, proposed as a change to the spec. Review it as if it were in the spec, against the spec around it."
 
-**Prototype** (to a `general-purpose` agent with `model: "sonnet"`):
+**Prototype** (to a `general-purpose` agent with `model: "sonnet"` and `effort: "high"`; the flow's section 4, rule 6, says why):
 
 ```
 Decision D-<n> turns on a question of fact: <the question>.
@@ -283,6 +283,7 @@ Work only in .shadow/v2-tools/review/prototypes/D-<n>/. Build the smallest exper
 Use Node built-ins unless the question is about a dependency.
 Never call a model or a vendor CLI, never write outside that folder, and never use code from the leaked Claude Code source or from the-future/order.
 Run it, then return: what you built (paths), how to rerun it, the results, and what they mean for each option.
+Report a result only from a run that actually exercised it, with that run's output. A syntax check, or a command that failed to start, doesn't count. If something couldn't run, say what and why instead of reporting a result.
 ```
 
 **Judge** (to a `spec-verifier` agent):
