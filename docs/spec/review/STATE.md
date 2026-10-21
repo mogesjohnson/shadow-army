@@ -15,7 +15,7 @@ Last updated: 2026-10-17, end of session 4. The spec is v0.10 (`e7c33b4`). M1's 
 - The usage limit cut off M1-R2-V1 to V3 once; all three were resumed in this session.
 - The owner logged in with another account during the session, and the decisions doc then refused reads ("not shared"); D-7, D-11, D-22 and D-23's answers can't be read until the doc is shared with that account or the owner logs back in.
 - M1-R2-V1 (`raw/M1-r2-verify-V1.md`) and M1-R2-V3 (`raw/M1-r2-verify-V3.md`) are recorded: R-M1-114 to R-M1-126 and R-M1-140 to R-M1-150 have verdicts. Technical choices by the orchestrator, within the owner's answers (the owner may overrule): R-M1-140 (b), the Windows guardian gets PO-3's DACL and the parent-spoofing escape is stated beside WMI's (D-3 B); R-M1-141 (a), the post office's threads and token default DACL hardened too (D-9 A). R-F-109 and R-M1-119 raised to P2 together.
-- **The owner asked to stop the agents** (2026-10-20). M1-R2-V2 (R-M1-127 to R-M1-139) was running and is let finish; no new agent starts until the owner says so.
+- **The owner asked to stop the agents** (2026-10-20). M1-R2-V2 (R-M1-127 to R-M1-139), already running, finished and is recorded (`raw/M1-r2-verify-V2.md`: 7 confirmed, 4 refuted, 2 duplicates of R-F-76). Round 2 is fully verified for F and M1, and neither is clean. No agent is running, and none starts until the owner says so.
 - Next, when the owner allows agents again: record M1-R2-V2 if not yet done; one drafter for every confirmed round-2 repair (F's and M1's "repair pending (v0.13)" rows in the ledger) against `v2@2493a82.md`, as v0.13; a fix check of v0.12 and v0.13 together; then round 3 for F and M1.
 
 ## Where things are
