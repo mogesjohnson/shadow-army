@@ -30,10 +30,10 @@ Written 2026-10-14 by session 7ac7daad, from the owner's instructions that day.
 
 The two definitions are in [`agents/`](agents/). On a new machine, copy them into `.claude/agents/` (keep that folder out of git, through `.git/info/exclude`).
 
-## 3. Running agents: two at a time
+## 3. Running agents: two or three at a time
 
-- **At most two agents run at once** (the owner, 2026-10-14). Start the next one when one comes back. Order the queue so that verification and fixes of the unit nearest done come first: M1 unblocks Codex.
-- The lineup stays the one round 1 used: three reviewers for each unit in round 1, verifiers for every finding, drafters, prototypes and a judge for each decision. Only the pace changes.
+- **At most three agents run at once, and two once the owner says the weekly limit is close** (the owner, 2026-10-14; widened to three on 2026-10-20, after five at once hit the five-hour limit twice that day). Start the next one when one comes back. Order the queue so that verification and fixes of the unit nearest done come first: M1 unblocks Codex.
+- The lineup stays the one round 1 used: three reviewers for each unit in round 1, verifiers for every P0 to P2 finding (section 4), drafters, prototypes and a judge for each decision. Only the pace changes.
 - **Why:** on 2026-10-14, thirteen agents at once used up a five-hour usage window in about ten minutes, three times. Every agent cut off mid-run had to be resumed later, which re-reads its whole transcript (100k–300k tokens) at full price.
 - **The rate, measured:** one verifier (F-V1) alone used about 243k tokens, 68 tool calls and 16 minutes.
 - **When a usage or rate limit cuts agents off:**
@@ -49,7 +49,16 @@ Adopted 2026-10-14, at the owner's ask ("if using less agents is smarter then sk
 2. **From round 2, a unit's round has two reviewers, not three.** Round 1 keeps three, for breadth. A unit still needs two clean rounds in a row and then two sign-offs (an implementer and a red team). Saves one run per round per unit.
 3. **A P1's second verifier runs only when the first one CONFIRMS it or calls it a DECISION.** When the first refutes a P1, the orchestrator decides, and asks a second only if it doubts the refutation. P0s always get two.
 
-Kept as they are, because cutting them would cost quality: three reviewers in round 1; a verifier for every finding; a fix check for every P0 and P1; two sign-offs; a judge for every bake-off; cards for big decisions.
+Adopted 2026-10-20, at the owner's ask, after session 5 spent most of its tokens on verifiers for small findings and on agents cut off by the limit:
+
+4. **Only P0 to P2 findings are verified.** A P3 (editorial, wording, a test-wording gap) goes straight into the next repair batch as the reviewer proposed it, and the next fix check catches a wrong one. Its ledger row says "P3, applied unverified".
+5. **The orchestrator drafts small repairs itself.** Where a verifier or reviewer already gives the fix text, the orchestrator turns it into OLD/NEW blocks in the main session (as for v0.12's `repairs1b.txt`). A drafter agent is only for a big merge, such as a decision's text across many requirements (D-3's).
+6. **Sonnet for mechanical agents.** A drafter working from fix text that verifiers already wrote, and a verifier of simple findings (editorial, a missing AC case, a wrong citation), run on Sonnet (the Agent tool's `model: "sonnet"`). Reviewers, the red team, judges, fix checks and verifiers of P0, P1 and security or vendor findings stay on Opus. Sonnet shares Claude's five-hour window with Opus, but costs less of it per token.
+7. **Two or three agents at a time, never five** (section 3). Resuming an agent cut off by the limit re-sends its whole transcript.
+8. **Tighter packets.** Each agent gets exact line ranges and the findings' text inline in its packet, so it reads as little of the spec and the raw reports as it can.
+9. **A fresh main session after each big pass** (a round reviewed and verified, a version applied and fix-checked). `STATE.md` and `NEXT-SESSION.md` carry everything forward, and a short context is cheap.
+
+Kept as they are, because cutting them would cost quality: three reviewers in round 1; a verifier for every P0 to P2 finding; a fix check for every version; two sign-offs; a judge for every bake-off; cards for big decisions.
 
 How to keep each agent small:
 - Give exact line ranges, from a frozen snapshot. Tell it to read only what it needs, and to grep big files (the archived 2.0 draft, Codex's draft, vendor typings) instead of reading them whole.

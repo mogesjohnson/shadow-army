@@ -1,6 +1,6 @@
 # Handoff to the next session
 
-Written 2026-10-14 at the end of session 7ac7daad; rewritten 2026-10-16 at the end of session 3, and 2026-10-17 at the end of session 4. Paste the prompt in section 1. Sections 2 to 6 give the detail the prompt points to. `STATE.md` is newer than this file wherever they differ.
+Written 2026-10-14 at the end of session 7ac7daad; rewritten 2026-10-16 at the end of session 3, 2026-10-17 at the end of session 4, and 2026-10-20 at the end of session 5. Paste the prompt in section 1. Sections 2 to 6 give the detail the prompt points to. `STATE.md` is newer than this file wherever they differ.
 
 ## 1. The prompt
 
@@ -11,23 +11,24 @@ Continue the Shadow Army spec 2.0 review (issue #63). The review lives on PR #77
 
 Read, in this order: CLAUDE.md, CONTRIBUTING.md, docs/spec/review/NEXT-SESSION.md (all of it), docs/spec/review/STATE.md, docs/spec/review/spec2.0_review_flow.md (the rules; it wins over PLAYBOOK.md), then the ledger and decisions.md as you need them.
 
-The spec is v0.10. I answered ten cards on 2026-10-17, and D-7's card is new. First read my decisions doc (https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844): its "Your answer" column and comments, with the docs tools, at the start and again before each report. Then apply my answers as v0.11, with D-7's merge once I've answered it, run the checkers, and fix-check what changed. Then run round 2 for M1 and F on v0.11, and verify F's round-2 findings. If the session starts in a fresh five-hour window, run more than two agents at a time, until I say the weekly limit is close. Commit and push after every result that changes a doc, and after every pass update STATE.md and comment on PR #77. Keep C:\Users\johns\projects\AIConnections\codex-claude-status.md current: tick the Review column and lists at each step (Codex keeps the Build column), and mark a milestone converged only after its two clean rounds and two sign-offs, since that is Codex's signal to build it.
+The spec is v0.12. Round 2 of F and M1 is reviewed and verified (on v0.11) and not clean. First read my decisions doc (https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844) with the docs tools: the answers to D-7, D-11 (my note on "Other"), D-22 and D-23, and any comment; record each in decisions.md. Then write every ledger row marked "repair pending (v0.13)" as spec v0.13, with my answers where given: draft the small repairs yourself as OLD/NEW blocks, and use a Sonnet drafter only for a big merge. Run both checkers, then one fix check of v0.12 and v0.13 together on Opus. Then round 3 for F and M1. Follow spec2.0_review_flow.md section 4's token rules: two or three agents at a time, never five; verify only P0 to P2; Sonnet for mechanical agents; tight packets; a fresh session after each big pass. Commit and push after every result that changes a doc, and after every pass update STATE.md and comment on PR #77. Keep C:\Users\johns\projects\AIConnections\codex-claude-status.md current: tick the Review column and lists at each step (Codex keeps the Build column), and mark a milestone converged only after its two clean rounds and two sign-offs, since that is Codex's signal to build it.
 
 Answer me straight to the point. I answer only big questions, as short decision cards with a tested recommendation.
 ```
 
 ## 2. Where things stand
 
-`STATE.md` has the detail. In short, on 2026-10-17:
+`STATE.md` has the detail. In short, on 2026-10-20:
 
-- **PR #77** (draft) is stacked on #76. The spec is v0.10 (`e7c33b4`), and both checkers give 0 problems (101 requirements, 61 ACs). `main` is v0.5.
-- **M1:** round 1 closed (fixed in v0.8, fix-checked three times, follow-ups repaired in v0.9 and v0.10). Open: R-M1-59 (P1, with D-3) and R-M1-82 (D-19), both now answerable; R-M1-71 is parked for M2.
-- **F:** round 1 closed (v0.7). Round 2's test author raised R-F-68 to R-F-85 (1 P1, 15 P2, 2 P3) on v0.9; none is verified.
-- **Decisions:**
-  - The owner's answers of 2026-10-17, none applied yet: D-3 **B**, D-4 **A**, D-5 **B**, D-8 **B**, D-9 **A**, D-10 **A**, D-16 **A** (over the recommended B), D-17 **B**, D-19 **A**. D-11 is marked **Other** with no note, and a comment on its row asks what the owner wants.
-  - D-7: judged A, technical, with parts of C. Its two big parts are on a card sent 2026-10-17: every message without a kind is read-only, the owner's own included, and NEW-2's residual.
-  - Settled earlier: D-1 (A), D-2, D-6, D-12 to D-15, D-18, D-20 (A), D-21 (A).
-- **Probes** P-1 to P-13 wait for the owner's go. P-12 shows how D-19's answer is applied.
+- **PR #77** (draft) is stacked on #76. The spec is **v0.12** (`2493a82`), and both checkers give 0 problems (115 requirements, 75 ACs). `main` is v0.5.
+- **v0.11** (`af97372`) applied the owner's answers to D-3, D-4, D-5, D-8, D-9, D-10, D-16, D-17 and D-19, fix-checked by ANS-FC1. **v0.12** repaired what ANS-V1, ANS-V2 and ANS-FC1 found. v0.12 is not fix-checked yet: the next fix check covers v0.12 and v0.13 together.
+- **Round 2, on v0.11**, is reviewed and verified for both units, and neither is clean:
+  - F: the test author (R-F-68 to R-F-85) and the consistency auditor (R-F-97 to R-F-112); verifiers F-R2-V1 and V2.
+  - M1: the test author (R-M1-114 to R-M1-139) and the vendor-fact checker (R-M1-140 to R-M1-150); verifiers M1-R2-V1 to V3.
+  - Every confirmed one has a ledger row whose resolution starts "repair pending (v0.13)", with its fix text there or in the verifier's raw report. Technical choices already made: R-F-73 (c), R-F-74 (b), R-F-79 (a), R-F-80 (a), R-M1-140 (b), R-M1-141 (a).
+- **Decisions with the owner:** D-7 (card sent 2026-10-17), D-11 (the owner's "Other" needs a note), and the new **D-22** (R-M1-89: a repository's `.mcp.json` servers in claude soldiers) and **D-23** (R-M1-92 with R-M1-108: the repository's other working trees and the guard), both sent 2026-10-20, recommended A. Settled: D-1 to D-6, D-8 to D-10, D-12 to D-21.
+- **The decisions doc** stopped opening when the owner logged in with another account on 2026-10-20 ("not shared", even after sharing; it isn't listed among shared artifacts, maybe because it is another organization's). If it still fails, ask the owner for the link, or to log in with the account that made it.
+- **Probes** P-1 to P-13 wait for the owner's go. Spike S7 runs in M1 on CI's runners; its Mac questions are M6 (R-M1-151).
 - **M1 (#75)** is Codex's draft, paused at `04ab953` until the spec's M1 text converges. Read it, never write to it. On the owner's machine it is in `../AIConnections-m1`.
 
 ## 3. Setup
@@ -35,7 +36,7 @@ Answer me straight to the point. I answer only big questions, as short decision 
 **On the owner's Windows machine:**
 - The worktree `../AIConnections-review` already has the branch, and `.claude/agents/` in the main checkout already holds `spec-reviewer` and `spec-verifier`.
 - Check that the worktree is clean and up to date: `git -C ../AIConnections-review status`, then `git -C ../AIConnections-review pull`.
-- The snapshots are in `.shadow/v2-tools/review/snapshots/`: `v2@be9deb0.md` (round 1), `v2@1580e87.md` (v0.8), `v2@b6f4315.md` (v0.9) and `v2@e7c33b4.md` (v0.10). Make v0.11's the same way once it lands: `git show <sha>:docs/spec/v2.md > .shadow/v2-tools/review/snapshots/v2@<sha>.md`, from Git Bash.
+- The snapshots are in `.shadow/v2-tools/review/snapshots/`: `v2@be9deb0.md` (round 1), `v2@1580e87.md` (v0.8), `v2@b6f4315.md` (v0.9), `v2@e7c33b4.md` (v0.10), `v2@af97372.md` (v0.11, which round 2 reviewed) and `v2@2493a82.md` (v0.12). Make v0.13's the same way once it lands: `git show <sha>:docs/spec/v2.md > .shadow/v2-tools/review/snapshots/v2@<sha>.md`, from Git Bash.
 - Claude Code's mod typings are in `.shadow/v2-tools/review/evidence/mod-api-2.1.294/`.
 
 **On a cloud machine:**
@@ -50,20 +51,18 @@ The cloud machine has no `the-future` idea files, no `.shadow/`, no WSL and none
 
 ## 4. What to do first
 
-1. **Read the decisions doc** with the docs tools: D-7's answer, D-11's note (the comment on its row in the "At a glance" table), and anything new. Record each answer in `decisions.md` (index and record).
-2. **Apply the answers as v0.11**, one OLD/NEW file per decision in `drafts/answers/` (the format is in `tools/pairs.mjs`). Read each decision's record in `decisions.md` and its ledger rows, and only the v0.10 lines they name.
-   - **D-3 (B):** `raw/D-3-option-B.md`, merged onto v0.10's PO-1 to PO-3 (193-216) and Q8, with R-M1-59 (the guardian dying with the post office), R-M1-61 and R-F-68 (a soldier whose containment can't be set up doesn't start).
-   - **D-16 (A), D-17 (B), D-19 (A), D-9 (A), D-10 (A), D-8 (B):** short; their cards and records give the text. D-19 goes with R-M1-82.
-   - **D-4 (A, an informative appendix) and D-5 (B, the caps now, logs after 2.0)** need their text drafted first: a drafter each (section 5), or by hand. D-4 can start from the 2.0 draft's threat model (`docs/legacy/spec/shadow-army-2.0.md` 147-170).
-   - **D-7**, once answered: the merge plan is in `decisions.md`, D-7, with R-F-58 and R-F-86 to R-F-88.
-   - **D-11**, once the owner says what "Other" means.
-   - Dry-run every file on a scratch copy, in order, and run `tools/trace-v2.mjs <copy> <v2@e7c33b4.md>`. Then apply, bump the header to 0.11 with a one-line summary, run both checkers, commit, and mark the ledger rows.
-3. **A fix check** of what v0.11 changed (packet `batches/ANS-FC1.md`, the way `M1-FC3.md` is written), beside the D-4 and D-5 drafters if they still run.
-4. **Round 2 on v0.11's snapshot:** M1's test author and vendor-fact checker, F's consistency auditor, and verifiers for R-F-68 to R-F-85, whose line numbers are v0.9's.
+1. **Read the decisions doc** with the docs tools: the doc was at rev 48 at the end of session 5 (D-22 and D-23's cards added at rev 40 to 48). Record any answer to D-7, D-11, D-22 or D-23 in `decisions.md` (index and record).
+2. **Write v0.13** from the ledger rows marked "repair pending (v0.13)": grep `ledger.md` for them (about 45 rows, F's and M1's). Each row's resolution, or its verifier's raw report (`raw/F-r2-verify-V1.md`, `V2.md`, `raw/M1-r2-verify-V1.md` to `V3.md`), gives the fix. Work against `v2@2493a82.md` (v0.12), whose lines differ from the v0.11 lines the findings cite.
+   - Draft them yourself as OLD/NEW blocks in `drafts/v013/`, a file per area (CH-2 and PO-1; PO-3, PO-19 and Windows hardening; ARM-7; M1's ACs; §5.1 and VER; Appendix D), the way `drafts/v012/repairs1b.txt` is written. A Sonnet drafter only if one area grows into a big merge.
+   - Where two rows touch one AC or requirement (R-M1-116 with R-M1-139; R-M1-126 with R-M1-137; R-M1-124 with R-M1-111's v0.12 text), write one block.
+   - Add the owner's answers to D-22, D-23 and D-7 (the merge plan in `decisions.md`, D-7, with R-F-58 and R-F-86 to R-F-88) if they have come.
+   - Dry-run on a copy of v0.12, run `tools/trace-v2.mjs <copy> <v2@2493a82.md>` and `tools/check-appendix-c.mjs`, then apply, bump the header to 0.13, commit, snapshot, and mark the rows "fixed (v0.13)".
+3. **One fix check** (Opus) of v0.12 and v0.13 together, against v0.11: a packet like `batches/ANS-FC1.md` listing each repair's rows and where it landed.
+4. **Round 3 for F and M1** on v0.13's snapshot, two reviewers per unit, with lenses not yet used and always the implementer or the red team (PLAYBOOK section 6): for M1, the red team and the enterprise operator; for F, the implementer and the owner's advocate. Verify only their P0 to P2.
 
 ## 5. Agent prompts
 
-- **Round 2 reviewers** (`spec-reviewer`): in `decisions.md`, "Prompts to rerun". They name v0.10's snapshot and line ranges: change both to v0.11's. Each reviewer sees only its own lens and none of the round's open findings. Already refuted, not to raise again without new evidence: R-M1-54, R-M1-19's mid-turn half and R-M1-62's declined variant for M1; R-F-4 and R-F-46 for F.
+- **Reviewers** (`spec-reviewer`, Opus): in `decisions.md`, "Prompts to rerun", and the round-2 versions in `drafts/answers/PROMPTS.md` ("After v0.11"), which give v0.11's line ranges and paste the lens charter from PLAYBOOK section 6. For round 3, change the snapshot and line ranges to v0.13's, and the lens. Each reviewer sees only its own lens and none of the round's open findings. Already refuted or declined, not to raise again without new evidence: for M1, R-M1-54, R-M1-19's mid-turn half, R-M1-62's variant, R-M1-101, R-M1-107, R-M1-114, R-M1-128, R-M1-131, R-M1-132, R-M1-138 and R-M1-149; for F, R-F-4, R-F-46, R-F-69 and R-F-108.
 - **Fix check** (`spec-verifier`): the M1-FC3 prompt in `decisions.md`, with the packet, the version and the snapshot changed.
 - **Drafter for D-4 or D-5** (`spec-reviewer`): the D-7 option A drafter's prompt in `decisions.md`, with its task sentence replaced by the owner's answer (D-4: "an informative appendix: assets, actors, trust boundaries, and what is prevented versus only detected, including the residuals the owner accepted in D-7, D-9 and D-19"; D-5: "caps on queues, sends and sizes, each with its value, what happens at the cap, and its AC; logs after 2.0"), and the v0.11 snapshot.
 - **Verifier** (one packet per `spec-verifier` agent):
@@ -88,6 +87,7 @@ The cloud machine has no `the-future` idea files, no `.shadow/`, no WSL and none
 - **An agent cut off by a usage limit:** in the same session, send it a message (SendMessage) once the limit resets, and it continues; that worked for M1-FC2 and D-7's drafter on 2026-10-16, and for D-7's judge and F's test author on 2026-10-17. A new session can't resume it, so rerun it from its prompt. Keep every prompt you send in `decisions.md` or here.
 - **A spec that moves:** give an agent that runs while you edit a frozen snapshot. Never edit the spec while a fix checker reads it: draft the repairs, and apply them once it reports.
 - **The shell:** Git Bash collapses `\\` in a command, even inside a quoted heredoc, and a heredoc of long table rows can fail to parse. Write scripts and rows with the Write tool, then insert them with a small node script.
-- **The decisions doc:** `read` with the doc's id, then `read` the body node `7cf8171f-cab5` (prose) with `{"kind":"view","sinceRev":<last rev>}` to see only what changed; the "At a glance" table is `m3ws82nnxhc.587`, and its answers are dropdowns of the enum `22af9813-6ac5`. Comments: `query` utterances under the tab `5a151593-8371`. The doc was at rev 39 at the end of session 4.
-- **Pace:** an agent takes 15 to 30 minutes and 200k to 400k tokens. On 2026-10-17 two agents running together hit the five-hour limit in the afternoon.
+- **The decisions doc:** `read` with the doc's id, then `read` the body node `7cf8171f-cab5` (prose) with `{"kind":"view","sinceRev":<last rev>}` to see only what changed; the "At a glance" table is `m3ws82nnxhc.587`, and its answers are dropdowns of the enum `22af9813-6ac5`. Comments: `query` utterances under the node `7cf8171f-cab5`. A card is a `## D-n.` heading, "Recommended:", a list of options, "**Tested:**" and "**For you:**"; a new row's answer cell takes a dropdown chip of that enum. The doc was at rev 48 at the end of session 5.
+- **Pace:** an agent takes 5 to 15 minutes and 130k to 290k tokens (session 5's verifiers, drafters and reviewers). On 2026-10-20 five agents at once hit the five-hour limit twice; the owner then set the token rules (`spec2.0_review_flow.md` section 4, rules 4 to 9).
+- **Ledger rows by script:** session 5 inserted rows with small node scripts that splice after the last `| R-F-` or `| R-M1-` row, and set verdicts with `tools/set-verdicts.mjs`. `tools/fence.mjs` copies a report's fenced OLD/NEW blocks into a draft, and `tools/number.mjs` turns placeholder IDs (`NEW-D3-1`) into real ones from a JSON map.
 - **Keep the orchestrator's own context small.** Read the ledger and raw files in parts, and start a new session once a large pass is done.
