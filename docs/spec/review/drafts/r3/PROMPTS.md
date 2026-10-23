@@ -61,3 +61,7 @@ Return only findings in the schema (docs/spec/review/PLAYBOOK.md lines 305-315),
 ## Fix check V16-FC1 (written 2026-10-23, session 8, Fork 2)
 
 The prompt sent: as V14-FC1's above, with the packet `batches/V16-FC1.md`, "spec v0.16", the snapshot `v2@bfa5d6f.md` (v0.15 `v2@8e45853.md`, v0.14 `v2@02d5f84.md`), the repairs `drafts/v015/repairs.txt` and `drafts/v016/repairs.txt` to `repairs7.txt`, the reports `raw/V14-FC1.md`, `raw/M1-r3-verify-V1.md` to `V3.md` and `raw/F-r3-verify-V1.md` to `V3.md`, open cards D-26 to D-33, and "look hardest" at the P1s R-M1-161, R-M1-168 and R-M1-169, R-M1-172's versions against WSP-10 and CH-2, and R-M1-176's limits against PO-8 and WSP-11. Report: `raw/V16-FC1.md`.
+
+## Fix check V17-FC1 (written 2026-10-23, session 8, Fork 3)
+
+The prompt sent: as V14-FC1's above, with the packet `batches/V17-FC1.md`, "spec v0.17", the snapshot `v2@785cc17.md` (v0.16 `v2@bfa5d6f.md`), the repairs `drafts/v017/repairs.txt`, the report `raw/V16-FC1.md`, the owner's answers D-26 to D-29 (open cards D-30 to D-33), and "look hardest" at the P1 R-M1-182 and at whether D-26 to D-29's repairs do what the owner chose and nothing more. Report: `raw/V17-FC1.md`.
