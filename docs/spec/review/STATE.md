@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Session 8 (2026-10-23, Fork 1), running.** The owner pasted D-24 **B** and D-25 **A**; applied as **v0.15** (`drafts/v015/repairs.txt`, 9 blocks; trace 0 problems, 119 requirements, 81 ACs; Appendix C 0 problems). Running on v0.14's snapshot: fix check V14-FC1, M1's round-3 red team and enterprise operator. v0.15's own blocks get a fix check with round 3's repairs.
+
 Last updated: 2026-10-21, end of session 7. The spec is v0.14 (`02d5f84`): fix check V13-FC1's repairs, on v0.13 (`ecf1e80`: round 2's repairs and the owner's answers to D-7, D-11, D-22 and D-23). Two new cards, D-24 and D-25, wait for the owner. No agent is running. Next, in a fresh session: fix check V14-FC1 and round 3 (`drafts/r3/PROMPTS.md`).
 
 **Session 7 (2026-10-21), ended.**
@@ -81,8 +83,8 @@ Last updated: 2026-10-21, end of session 7. The spec is v0.14 (`02d5f84`): fix c
 | D-21 one clean round instead of two | Answered **A** on 2026-10-16: keep every recheck. |
 | D-22 a repository's `.mcp.json` servers in claude soldiers | Answered **A** on 2026-10-20: ARM-7's trust card also covers the folder's `.mcp.json`. Applied in v0.13. |
 | D-23 the repository's other working trees and the guard | Answered **A** on 2026-10-20, as widened: the guard skips them, nested files and metadata added or removed. Applied in v0.13 (WSP-10, ARM-6, WSP-11, residual 13); the guard's half completed in v0.14 (R-M1-156). |
-| D-24 an owner's edit before a turn the CLI starts by itself (R-F-117) | Card sent 2026-10-21 (new doc): A accept, B a y/n card, C refresh while idle; recommended **B**. v0.14 keeps A's text, with the exception stated in WSP-12 and PO-8. |
-| D-25 a reply to a brief from before `/clear` (R-M1-160) | Card sent 2026-10-21 (new doc): A wake the Monarch, as Claude Code does; B wait for the owner's next message (v0.14's text); recommended **A**. |
+| D-24 an owner's edit before a turn the CLI starts by itself (R-F-117) | Answered **B** on 2026-10-23 (pasted in chat): a y/n card before that turn's revert. Applied in v0.15 (WSP-12, HOST-2, M6-AC13, residual 11). To fix-check. |
+| D-25 a reply to a brief from before `/clear` (R-M1-160) | Answered **A** on 2026-10-23 (pasted in chat): it wakes the Monarch, as Claude Code does. Applied in v0.15 (MSG-5, M3-AC2). To fix-check. |
 | Values set in the fix pass | A summary line is at most 120 characters; the parity task reads `README.md` and `package.json`, with live at most 1.05 times headless and two repeats on a token failure; a background task's follow-up wait is 30 s; a crashed channel restarts after 1 s, 5 s and 30 s. Recorded in `decisions.md`; the owner may overrule any. |
 
 ## Next, in order

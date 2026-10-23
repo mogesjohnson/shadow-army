@@ -472,6 +472,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Options:** A accept it as residual 11's bullet states (M6-AC13 as is); B before that turn's revert, a card lists each path that changed between the saved state and the turn's first event: y keeps them as the owner's, n reverts them (the attribution card's y and n, ARM-6); C the post office refreshes the saved state from changes it sees while the soldier is idle, accepting that a write the turn makes before its first event is read can survive as the owner's.
 - **Tested:** V13-FC1 confirmed the gap and found no technical fix without a tradeoff: refreshing while idle races the turn's first write (claude can run a tool before the post office reads its event), and file times can be faked. v0.14 already adds the exception to WSP-12's "everything the turn didn't change" and PO-8's "the owner's edits between turns", whichever is chosen.
 - **Card** (2026-10-21, the new cards doc): recommended **B**, because nothing the owner writes is lost without the owner's say, and it reuses the y/n of the attribution card; it shows only when a self-started read-only turn follows an edit in a soldier's worktree, which is rare. C is rejected on safety: it lets a read-only turn's write survive.
+- **Answer** (2026-10-23, the doc's table pasted in chat; the doc refused reads from this session's account): **B**. Applied in v0.15 (`drafts/v015/repairs.txt`): WSP-12 saves a copy of each audited path changed between the saved state and the self-started turn's first event, with its hash in the log; before the revert a y/n card lists them (y keeps them as at the first event, n reverts them), the queue held; a card open at shutdown is shown again by the next post office before the revert. HOST-2's keys and decisions list, M6-AC13 and residual 11 follow.
 
 ## D-25 Whether a reply to a brief from before `/clear` wakes the Monarch (from R-M1-160)
 
@@ -479,6 +480,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Question:** v0.13 (MSG-5) lets a summary for a brief sent before `/clear`, `/resume` or `/branch` arrive in the new conversation, marked so, but wake nobody: it waits for Claude's next turn. The owner's D-11 answer was "do as claude has", and Claude Code starts a turn when a background task finishes, and sends the output of a task started before `/clear` to the new conversation (https://github.com/anthropics/claude-code/issues/32052; `decisions.md`, D-11).
 - **Options:** A it wakes Claude as any reply does (MSG-8), marked `a brief from before /clear`; B it waits for the owner's next message (v0.14 as written).
 - **Card** (2026-10-21): recommended **A**, because it is what Claude Code does, which the owner asked for, and a soldier's answer is never left unseen until the owner types; the mark tells the Monarch the brief came from the earlier conversation.
+- **Answer** (2026-10-23, pasted in chat): **A**. Applied in v0.15: MSG-5's summary for a brief from before `/clear`, `/resume` or `/branch` wakes Claude as any summary does (MSG-8); M3-AC2 tests it.
 
 ## Values set in the fix pass
 
