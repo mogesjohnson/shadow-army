@@ -2,7 +2,11 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-**Session 8 (2026-10-23, Fork 1), running.** The owner pasted D-24 **B** and D-25 **A**; applied as **v0.15** (`drafts/v015/repairs.txt`, 9 blocks; trace 0 problems, 119 requirements, 81 ACs; Appendix C 0 problems). Running on v0.14's snapshot: fix check V14-FC1, M1's round-3 red team and enterprise operator. v0.15's own blocks get a fix check with round 3's repairs.
+**Session 8 (2026-10-23, Fork 1), ended at the 150k save point.** The handoff is [`handoffs/LATEST.md`](handoffs/LATEST.md); read it first.
+- The owner pasted D-24 **B** and D-25 **A**; applied as **v0.15** (`8e45853`, snapshot `v2@8e45853.md`; trace 0 problems, 119 requirements, 81 ACs; Appendix C 0 problems).
+- Fix check **V14-FC1**: every v0.14 repair FIXED; its follow-ups R-F-132 to R-F-136 and R-M1-164 to R-M1-166 repaired; R-M1-163 is card D-26.
+- **Round 3**: all five reviewers done. M1's findings verified (M1-R3-V1 to V3): R-M1-161, R-M1-168, R-M1-169 confirmed P1, so M1's round 3 is not clean; R-M1-161 repaired. D-27, D-28 and D-29 opened; R-M1-175, 178, 179, 180 parked. F's 17 P2s (R-F-137 to R-F-143, R-F-147 to R-F-156) wait for verifiers F-R3-V1 to V3, packets built.
+- Next: M1's other confirmed repairs, F's verifiers, v0.16 and fix check V16-FC1 (LATEST.md has the steps). Cards D-26 to D-29 wait for the owner, sent in chat.
 
 Last updated: 2026-10-21, end of session 7. The spec is v0.14 (`02d5f84`): fix check V13-FC1's repairs, on v0.13 (`ecf1e80`: round 2's repairs and the owner's answers to D-7, D-11, D-22 and D-23). Two new cards, D-24 and D-25, wait for the owner. No agent is running. Next, in a fresh session: fix check V14-FC1 and round 3 (`drafts/r3/PROMPTS.md`).
 
@@ -85,6 +89,10 @@ Last updated: 2026-10-21, end of session 7. The spec is v0.14 (`02d5f84`): fix c
 | D-23 the repository's other working trees and the guard | Answered **A** on 2026-10-20, as widened: the guard skips them, nested files and metadata added or removed. Applied in v0.13 (WSP-10, ARM-6, WSP-11, residual 13); the guard's half completed in v0.14 (R-M1-156). |
 | D-24 an owner's edit before a turn the CLI starts by itself (R-F-117) | Answered **B** on 2026-10-23 (pasted in chat): a y/n card before that turn's revert. Applied in v0.15 (WSP-12, HOST-2, M6-AC13, residual 11). To fix-check. |
 | D-25 a reply to a brief from before `/clear` (R-M1-160) | Answered **A** on 2026-10-23 (pasted in chat): it wakes the Monarch, as Claude Code does. Applied in v0.15 (MSG-5, M3-AC2). To fix-check. |
+| D-26 branches made with another working tree, and other armies' branches, from M6 (R-M1-163) | Card sent in chat 2026-10-23: A exempt them (recommended), B keep the card. |
+| D-27 Windows Group Policy AllSigned or Restricted (R-M1-167) | Card sent in chat 2026-10-23: A sign with a certificate (a yearly cost), B a non-goal with a message (recommended for 2.0). |
+| D-28 how the mod and the release package are installed together (R-M1-170) | Card sent in chat 2026-10-23: A the package as a directory marketplace (recommended), B the git install, C both. |
+| D-29 where snapshots of the owner's code live (R-M1-173) | Card sent in chat 2026-10-23: A an owner's variable moves `snapshots/` (recommended), B a non-goal. |
 | Values set in the fix pass | A summary line is at most 120 characters; the parity task reads `README.md` and `package.json`, with live at most 1.05 times headless and two repeats on a token failure; a background task's follow-up wait is 30 s; a crashed channel restarts after 1 s, 5 s and 30 s. Recorded in `decisions.md`; the owner may overrule any. |
 
 ## Next, in order
