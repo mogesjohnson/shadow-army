@@ -24,9 +24,14 @@ Rules:
 - After every pass, update both `STATE.md` files, comment on PR #77, and keep `codex-claude-status.md` current. Claude ticks Review and Codex ticks Build. A milestone is converged only after two clean rounds and two sign-offs.
 - Answer the owner straight to the point. The owner answers only big questions, as short decision cards with a tested recommendation, in the decisions doc or in chat.
 
-## 3. At about 150k tokens
+## 3. The context limit: 120k and 150k, strictly enforced
 
-Check `/context` at each milestone. From about 120k, start no new agent. Let running agents finish and save their reports: a cut-off agent can only be resumed in the session that started it.
+**This limit is a hard rule, set by the owner (2026-10-23). It is not a guideline.**
+
+- **Measure it with `/context`** (or the owner's figure), before every agent start and at every milestone. Never estimate it from the `total_tokens left` counter, which undercounts context badly: Fork 3 judged itself at about 50k when it was at 232k. If you can't tell, assume you are over 120k.
+- **At 120k:** start no agent, for any reason, the agents this runbook owes included. Let the agents already running finish, and save each report to `raw/` the moment it arrives. A cut-off agent can only be resumed in the session that started it.
+- **From 120k to 150k:** only finish what is in hand: save reports, commit, push. Start no new pass: no verifying, no repair drafting, no new spec version.
+- **At 150k, or as soon as the running agents have reported, whichever comes first:** go to the save point below, then hand off or stop. Never work past 150k.
 
 **Save point (always):**
 1. Commit everything, work in progress included, to `claude/63-ultimate-spec-review`, and push.
