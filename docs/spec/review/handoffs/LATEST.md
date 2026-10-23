@@ -22,7 +22,7 @@ Written by **Fork 3** at its save point. It was written while three agents were 
 | Agent | Prompt | Report to save |
 |---|---|---|
 | Fix check V17-FC1 (spec-verifier, Opus high) | `drafts/r3/PROMPTS.md`, last entry; packet `batches/V17-FC1.md` | `raw/V17-FC1.md`: **saved**. R-M1-182 NOT FIXED (relative PATH entries), R-M1-183 NOT FIXED (the hold from M2 to M4), D-26 to D-29 and R-M1-184 FIXED; R-M1-186 and 187 wrong; new N1 to N13 (N1 to N4 P2). Not yet in the ledger |
-| M1 round 4, chaos engineer (spec-reviewer) | `drafts/r4/PROMPTS.md` | `raw/M1-r4-chaos.md` |
+| M1 round 4, chaos engineer (spec-reviewer) | `drafts/r4/PROMPTS.md` | `raw/M1-r4-chaos.md`: **saved**. 3 P1 (a deferred guard lost at a clean shutdown; how `sa live` reaches the post office; M1 has no session-service exception, so a language server blocks the soldier), 10 P2, 1 P3. No IDs or ledger rows yet (R-M1-193 on, after V17-FC1's) |
 | F round 4, consistency auditor (spec-reviewer) | `drafts/r4/PROMPTS.md` | `raw/F-r4-consistency.md` |
 
 ## Next, in order
