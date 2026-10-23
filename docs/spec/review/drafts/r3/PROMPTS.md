@@ -57,3 +57,7 @@ Other sources you may read: docs/adr/ (ADR-0014 and ADR-0015 for the owner's adv
 
 Return only findings in the schema (docs/spec/review/PLAYBOOK.md lines 305-315), most severe first, then "Coverage: <the requirement IDs and sections you checked>". If you find nothing at P0 to P2, say so, and list what you checked. Read only the lines you need, and grep big files. No preamble and no summary.
 ```
+
+## Fix check V16-FC1 (written 2026-10-23, session 8, Fork 2)
+
+The prompt sent: as V14-FC1's above, with the packet `batches/V16-FC1.md`, "spec v0.16", the snapshot `v2@bfa5d6f.md` (v0.15 `v2@8e45853.md`, v0.14 `v2@02d5f84.md`), the repairs `drafts/v015/repairs.txt` and `drafts/v016/repairs.txt` to `repairs7.txt`, the reports `raw/V14-FC1.md`, `raw/M1-r3-verify-V1.md` to `V3.md` and `raw/F-r3-verify-V1.md` to `V3.md`, open cards D-26 to D-33, and "look hardest" at the P1s R-M1-161, R-M1-168 and R-M1-169, R-M1-172's versions against WSP-10 and CH-2, and R-M1-176's limits against PO-8 and WSP-11. Report: `raw/V16-FC1.md`.

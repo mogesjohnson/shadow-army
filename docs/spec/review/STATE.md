@@ -2,6 +2,13 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Session 8, Fork 2 (2026-10-23).**
+- M1's round-3 confirmed findings repaired (`drafts/v016/repairs4.txt`, `26d6db5`): R-M1-168 and R-M1-169 (P1), R-M1-172, R-M1-173's technical half, R-M1-174, R-M1-176 (P2), R-M1-171 and R-M1-177 (P3). Values set: Node.js 22, git 2.34 (Ubuntu 22.04 LTS's), host Claude Code 2.1.286; advisories of moderate and above fail CI.
+- **F's round 3 verified** (F-R3-V1 to V3, `raw/F-r3-verify-V1.md` to `V3.md`): confirmed R-F-137, 139, 143, 147, 148 (the list), 149, 151 (P2) and R-F-152, 154, 155 (P3, were P2); refuted R-F-138, 141, 142; decisions R-F-148's re-show (**D-32**), R-F-150 (**D-33**), R-F-153 (**D-30**), R-F-156 (**D-31**, with R-F-140). All repaired (`repairs5.txt` to `repairs7.txt`). **F's round 3 is not clean.**
+- **v0.16** (`bfa5d6f`, snapshot `v2@bfa5d6f.md`): trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems.
+- Fix check **V16-FC1** (Opus, high; packet `batches/V16-FC1.md`, prompt in `drafts/r3/PROMPTS.md`) started.
+- Round 3 counted: **neither unit is clean** (M1 has confirmed P1s, F confirmed P2s), so both streaks stay at 0. Round 4 needs new lenses (flow section 6): chaos and consistency, with an implementer or red team.
+
 **Session 8 (2026-10-23, Fork 1), ended at the 150k save point.** The handoff is [`handoffs/LATEST.md`](handoffs/LATEST.md); read it first.
 - The owner pasted D-24 **B** and D-25 **A**; applied as **v0.15** (`8e45853`, snapshot `v2@8e45853.md`; trace 0 problems, 119 requirements, 81 ACs; Appendix C 0 problems).
 - Fix check **V14-FC1**: every v0.14 repair FIXED; its follow-ups R-F-132 to R-F-136 and R-M1-164 to R-M1-166 repaired; R-M1-163 is card D-26.
@@ -114,6 +121,8 @@ Follow the owner's token rules (`spec2.0_review_flow.md` sections 3 and 4): two 
 
 ## Waiting on the owner
 
+- **D-26 to D-29**, in the doc "Spec 2.0 Review: Decisions D-26 to D-29" (https://claude.ai/artifact/5KpM8yYoanEJbhSKVQwEio, doc id `23051f0a-159c-41cd-a6a8-e4348c50f1ac`): read its answer table for the owner's answers. Recommended: D-26 A, D-27 B for 2.0, D-28 A, D-29 A.
+- **D-30 to D-33**, sent in chat 2026-10-23 (records in `decisions.md`): D-30 accepting residuals 7, 8 and 12 (recommended A, accept), D-31 soldiers in a new Claude Code process, with R-F-140 (recommended A, fresh, with R-F-140's b), D-32 the trust card's dialog after "Not now" (recommended A, only the owner's own uses), D-33 the shipped copy's autonomy (recommended A, all `supervised`).
 - **D-24 and D-25**, in the new doc "Spec 2.0 Review: New Decisions" (https://claude.ai/artifact/KpmKMUugoKwc1W4F65C931, made 2026-10-21 under the owner's current account; doc id `986fc398-4395-4c2b-853e-c1895870b9ac`, body node `69857ecc-1142`, the answer table `m05fpwrw4rr.150`, answers are dropdowns of the enum `71ccf7f8-8a0f`; rev 4 when sent). The owner may also paste answers in chat.
 - Every card in the old doc "Spec 2.0 Review: Your Decisions" (https://claude.ai/code/artifact/783b080a-cade-4038-9c8a-6a6738ccb844) is answered, D-22 and D-23 included (2026-10-20). It doesn't open from the owner's current account.
 - Whether "do as claude has" for D-11 means A (the reading recorded) or C; D-25 asks the one detail of A that V13-FC1 flagged.
