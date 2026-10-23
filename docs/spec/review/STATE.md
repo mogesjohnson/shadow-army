@@ -2,6 +2,12 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Session 8, Fork 3 (2026-10-23).**
+- The owner answered **D-26 A**, **D-27 B** ("and list for future version"), **D-28 A**, **D-29 A** in the doc "Spec 2.0 Review: Decisions D-26 to D-29" (rev 41). Recorded in `decisions.md`.
+- V16-FC1's verdicts marked in the ledger; its new findings are **R-M1-182 to R-M1-192** (N1 P1, N2 and N3 P2, N4 to N11 P3).
+- **v0.17** (`785cc17`, snapshot `v2@785cc17.md`; `drafts/v017/repairs.txt`, 33 blocks): the four answers and every V16-FC1 repair, R-M1-176's guard half and R-M1-171 included. Trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems. Technical choices by the orchestrator: `NoDefaultCurrentDirectoryInExePath=1` for the CLI's `cmd.exe` (R-M1-182), host floor 2.1.294 (R-M1-187), `taskkill /t /f` on Windows (R-M1-186).
+- Running: fix check **V17-FC1** (Opus high, `batches/V17-FC1.md`), round 4's **M1 chaos engineer** and **F consistency auditor** (`drafts/r4/PROMPTS.md`). Owed: M1 implementer and F red team.
+
 **Session 8, Fork 2 (2026-10-23).**
 - M1's round-3 confirmed findings repaired (`drafts/v016/repairs4.txt`, `26d6db5`): R-M1-168 and R-M1-169 (P1), R-M1-172, R-M1-173's technical half, R-M1-174, R-M1-176 (P2), R-M1-171 and R-M1-177 (P3). Values set: Node.js 22, git 2.34 (Ubuntu 22.04 LTS's), host Claude Code 2.1.286; advisories of moderate and above fail CI.
 - **F's round 3 verified** (F-R3-V1 to V3, `raw/F-r3-verify-V1.md` to `V3.md`): confirmed R-F-137, 139, 143, 147, 148 (the list), 149, 151 (P2) and R-F-152, 154, 155 (P3, were P2); refuted R-F-138, 141, 142; decisions R-F-148's re-show (**D-32**), R-F-150 (**D-33**), R-F-153 (**D-30**), R-F-156 (**D-31**, with R-F-140). All repaired (`repairs5.txt` to `repairs7.txt`). **F's round 3 is not clean.**
