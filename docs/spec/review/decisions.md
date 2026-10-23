@@ -504,6 +504,13 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Options:** A the release package is also a directory marketplace: its `.claude-plugin/marketplace.json` lists the mod by a relative path, the mod finds the post office and helpers inside the same package, the owner loads it with `--plugin-dir <package>/plugin`, and an administrator deploys it through managed `extraKnownMarketplaces` and `enabledPlugins`; HOST-1 drops "installed from this repository". B keep the git install: the mod finds an npm-installed package by a stated rule and refuses a version mismatch; managed fleets with those policies are a non-goal. C both, with A the only supported managed path. M1-AC22 names how the mod is loaded in each.
 - **Card** (2026-10-23, in chat): recommended **A**, because one package carries exactly the code CI tested (with R-M1-169's pinning) and it is the only path the vendor's managed policy allows.
 
+## D-29 Where soldiers' snapshots of the owner's code live (R-M1-173)
+
+- **Kind:** big: a new setting, or accepting a data-location risk. Verified by M1-R3-V3 (`raw/M1-r3-verify-V3.md`), whose other half (the guard baseline's place, rights and removal) is a technical repair.
+- **Question:** each session's snapshot is a full checkout of HEAD in `~/.shadow-army/snapshots/` (WSP-11), with no way to move it. A company that keeps source only on an approved volume, or uses Windows roaming profiles (which copy `%USERPROFILE%\.shadow-army` at logoff; only `AppData\Local` and `AppData\LocalLow` are left out by default), gets its code copied off that volume.
+- **Options:** A the owner's own setting outside the folder, an environment variable as Claude Code's `CLAUDE_CONFIG_DIR`, moves `snapshots/` only, never `trust/`; B a non-goal that states the location and the roaming-profile exposure.
+- **Card** (2026-10-23, in chat): recommended **A**, because it is one variable that no repository can set, and B leaves regulated users with no fix.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
