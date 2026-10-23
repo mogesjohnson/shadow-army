@@ -490,6 +490,20 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Tested:** V14-FC1 read WSP-4, WSP-10, M2-AC5 and M6-AC9 against Claude Code's worktree docs (https://code.claude.com/docs/en/worktrees: a new branch `worktree-<name>`, removed at cleanup) and git's (https://git-scm.com/docs/git-worktree: a branch is made when no commit-ish is given). With B, M2-AC5 as written fails from M6.
 - **Card** (2026-10-23, in chat; the decisions doc refuses reads from this session's account): recommended **A**, because it finishes what the owner chose in D-23 (Claude Code's default worktree layout works with no cards), and another army's own branches are already outside this army's trust; a ref moved on any other branch is still carded.
 
+## D-27 Windows machines whose Group Policy allows only signed scripts (R-M1-167)
+
+- **Kind:** big: money (a code-signing certificate) and which managed fleets are supported (PLAYBOOK section 14). Raised by M1's round-3 enterprise operator, verified as DECISION by M1-R3-V2 (`raw/M1-r3-verify-V2.md`).
+- **Question:** a Group Policy execution policy of AllSigned or Restricted overrides `-ExecutionPolicy Bypass` (Microsoft's about_Execution_Policies), so the unsigned guardian script never runs: no Windows soldier starts, and no PO-14 message fits. Signing the script writes a signature block into it, which PO-13's checksum then refuses. M1-AC15 tests AllSigned only at the user scope.
+- **Options:** A PO-20's release workflow Authenticode-signs the script and the DLL with a project certificate before checksumming (a yearly cost, as PO-18's Apple ID is); PO-14 names Group Policy and Trusted Publishers; M1-AC18 adds MachinePolicy AllSigned and Restricted. B a non-goal: such machines run no soldier, with that PO-14 message and an M1-AC18 case. (C, run the guardian through `-Command` to dodge the policy, is rejected: it defeats an administrator's control.)
+- **Card** (2026-10-23, in chat): recommended **B** for 2.0, because it costs nothing, fails closed with a clear message, and A can be added in a patch release once a fleet asks; A if managed Windows fleets matter for 2.0.
+
+## D-28 How the mod and the release package are installed together (R-M1-170)
+
+- **Kind:** big: how the owner installs, which install paths and enterprise policies are supported, and HOST-1's MUST. Verified as DECISION by M1-R3-V2.
+- **Question:** HOST-1 lets the mod be loaded with `--plugin-dir` or installed from this repository, but a checkout holds no binaries (PO-13), and nothing links the mod to the installed npm package. Under Claude Code's documented organization policy (`allowManagedModsOnly`, `disableSideloadFlags`), only a mod loaded in place from an administrator's directory marketplace runs (https://code.claude.com/docs/en/plugins/mods/admin).
+- **Options:** A the release package is also a directory marketplace: its `.claude-plugin/marketplace.json` lists the mod by a relative path, the mod finds the post office and helpers inside the same package, the owner loads it with `--plugin-dir <package>/plugin`, and an administrator deploys it through managed `extraKnownMarketplaces` and `enabledPlugins`; HOST-1 drops "installed from this repository". B keep the git install: the mod finds an npm-installed package by a stated rule and refuses a version mismatch; managed fleets with those policies are a non-goal. C both, with A the only supported managed path. M1-AC22 names how the mod is loaded in each.
+- **Card** (2026-10-23, in chat): recommended **A**, because one package carries exactly the code CI tested (with R-M1-169's pinning) and it is the only path the vendor's managed policy allows.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
