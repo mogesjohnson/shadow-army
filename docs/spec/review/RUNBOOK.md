@@ -24,9 +24,9 @@ Rules:
 - After every pass, update both `STATE.md` files, comment on PR #77, and keep `codex-claude-status.md` current. Claude ticks Review and Codex ticks Build. A milestone is converged only after two clean rounds and two sign-offs.
 - Answer the owner straight to the point. The owner answers only big questions, as short decision cards with a tested recommendation, in the decisions doc or in chat.
 
-## 3. At about 300k tokens
+## 3. At about 150k tokens
 
-Check `/context` at each milestone. From about 250k, start no new agent. Let running agents finish and save their reports: a cut-off agent can only be resumed in the session that started it.
+Check `/context` at each milestone. From about 120k, start no new agent. Let running agents finish and save their reports: a cut-off agent can only be resumed in the session that started it.
 
 **Save point (always):**
 1. Commit everything, work in progress included, to `claude/63-ultimate-spec-review`, and push.
