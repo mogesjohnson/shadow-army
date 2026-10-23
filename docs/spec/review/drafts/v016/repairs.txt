@@ -1,0 +1,62 @@
+v0.16 repairs, part 1: fix check V14-FC1's findings (raw/V14-FC1.md), against v0.15 (v2@8e45853.md). Written by the orchestrator, session 8, 2026-10-23. R-M1-163 (N1) is card D-26 and not here.
+
+R-F-132 (N3, P2) and R-F-133 (N4, P3): a later post office finds a pending revert when it starts, before any channel, /diff or /apply; a revert's success is logged; a worktree no post office uses again is named.
+<<< OLD
+A revert still pending or failed is recorded in the soldier's log (PO-5), so it outlives the post office however that ends, a shutdown (PO-7) or a mod reload included: before a later post office uses that worktree again, it finds the record, checks the start state's hash, and tries the revert again, with the soldier held and `/apply` refused until it succeeds, or held as the next bullet says where the hash fails.
+=== NEW
+A revert still pending or failed is recorded in the soldier's log (PO-5), and so is a revert that succeeds, so a pending one outlives the post office however that ends, a shutdown (PO-7) or a mod reload included. When a later post office starts, before it opens any channel or serves `/diff` or `/apply`, it finds each such record of this army's, checks the start state's hash, and tries the revert again, with the soldier held and `/apply` refused until it succeeds, or held as the next bullet says where the hash fails. A worktree that it won't use again, such as one a Claude Code process that has exited kept (PO-7), and one whose revert still fails, are named in its log and in one line in Claude's transcript each.
+>>> END
+
+R-F-134 (N5, P2): ARM-6 reports agy's writes as WSP-11 defines them.
+<<< OLD
+  - Any file it writes is discarded and reported as a read-violation (from 2.0 WS-3).
+=== NEW
+  - Each write it makes there, as WSP-11 defines one, is discarded and reported as a read-violation; other output that git ignores is discarded and not reported (from 2.0 WS-3).
+>>> END
+
+R-M1-166 (N7, P3): ARM-6 keeps WSP-10's limit.
+<<< OLD
+less what WSP-10 leaves out: another army's, and that of any other working tree of the repository (WSP-10);
+=== NEW
+less what WSP-10 leaves out: another army's, and that of any working tree that is neither this army's folder nor one of its own snapshots and worktrees (WSP-10);
+>>> END
+
+R-F-136 (N9, P3): a snapshot's ignore rules at the turn's start are saved with its baseline.
+<<< OLD
+  - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended. Until PO-8 (→M2), it also stays open past the end event while a task the turn started is running (claude's `task_started` with no `task_notification` for it yet), or while a process that joined the process tree during the turn hasn't exited; it closes when that work ends or the session closes, and the soldier's next message waits until then. Its baseline, and the log line that opens the turn (PO-5),
+=== NEW
+  - The checkout guard covers each of its turns, from the moment its message goes in until its end event, or until its process tree has been ended. Until PO-8 (→M2), it also stays open past the end event while a task the turn started is running (claude's `task_started` with no `task_notification` for it yet), or while a process that joined the process tree during the turn hasn't exited; it closes when that work ends or the session closes, and the soldier's next message waits until then. Its baseline, which holds the ignore rules the snapshot had then, and the log line that opens the turn (PO-5),
+>>> END
+
+R-F-135 (N8, P3): the exception is a soldier's worktree, not only a builder's.
+<<< OLD
+so the owner's own edits between turns stay exempt, except in a builder's worktree, as WSP-12
+=== NEW
+so the owner's own edits between turns stay exempt, except in a soldier's worktree, as WSP-12
+>>> END
+
+<<< OLD
+WSP-12 reverts a read-only turn's writes in a builder's worktree, except where git ignores files.
+=== NEW
+WSP-12 reverts a read-only turn's writes in a soldier's worktree, except where git ignores files.
+>>> END
+
+<<< OLD
+(build output, caches, installed packages) stays in a builder's worktree for its later turns,
+=== NEW
+(build output, caches, installed packages) stays in a soldier's worktree for its later turns,
+>>> END
+
+R-M1-164 (N2, P2): a working tree is found only around a harness git command.
+<<< OLD
+  - during an agy turn, `git worktree add` makes a linked working tree outside the folder, and `git worktree remove` removes it. The turn passes with no card, harness git is never held, and Claude's transcript gets one line for each (WSP-10);
+=== NEW
+  - during an agy turn, `git worktree add` makes a linked working tree outside the folder, and after the turn's guard has closed, `git worktree remove` removes it. The turn passes with no card, harness git is never held, and Claude's transcript gets one line for each (WSP-10);
+>>> END
+
+R-M1-164 (N2) and R-M1-165 (N6, P3): residual 13 covers every other working tree, and a tree added and removed unseen.
+<<< OLD
+13. **Working trees nested in the folder** (D-23). Another working tree of the repository inside the folder, such as one `claude --worktree` makes under `.claude/worktrees/`, is not this army's checkout, so this army's guard sees nothing written there (WSP-11, ARM-6), and adding or removing one holds no harness git (WSP-10). A soldier that runs git can add one and write in it unseen; only the transcript line that names each working tree added or removed shows it. The nested tree's own army, whenever one runs there, guards it during that army's turns.
+=== NEW
+13. **The repository's other working trees** (D-23). Another working tree of the repository inside the folder, such as one `claude --worktree` makes under `.claude/worktrees/`, is not this army's checkout, so this army's guard sees nothing written there (WSP-11, ARM-6), and adding or removing one holds no harness git (WSP-10). A soldier that runs git can add one and write in it unseen; only the transcript line that names each working tree added or removed shows it, and a tree added and removed between two harness git commands shows no line at all. The metadata of any working tree that is neither this army's folder nor one of its own snapshots and worktrees, wherever it lies, its `config.worktree` included, is compared by neither the guard nor harness git; only an add or a removal is logged. The nested tree's own army, whenever one runs there, guards it during that army's turns.
+>>> END

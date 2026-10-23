@@ -1,0 +1,86 @@
+[m4 #1] before close: d3hb processes=756; daemon c pid=449 ppid=293 (Relay(294)      /init) sid=449 pgid=449 (cli pgid=n/a)
+    [m4 #1 table]     439     384     294     294 R+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh /tmp/d3run.E6x47Q/m4-1 /tmp/d3run.E6x47Q/bin/d3hb poll
+    [m4 #1 table]     443     439     294     294 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.E6x47Q/m4-1 /tmp/d3run.E6x47Q/bin/d3hb
+    [m4 #1 table]     445     443     294     294 S+   d3hb            /tmp/d3run.E6x47Q/bin/d3hb beat /tmp/d3run.E6x47Q/m4-1/a.hb
+    [m4 #1 table]     446     443     294     294 S+   d3hb            /tmp/d3run.E6x47Q/bin/d3hb beat /tmp/d3run.E6x47Q/m4-1/b.hb
+    [m4 #1 table]     449     293     449     449 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb daemon /tmp/d3run.E6x47Q/m4-1/c.hb
+    [m4 #1 table]     450     443     294     294 S+   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m4-1/d 2000 500
+    [m4 #1 table]     452     293     452     452 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m4-1/d 2000 500
+    [m4 #1 table]     454     293     454     454 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m4-1/d 2000 500
+    [m4 #1 table]     456     293     456     456 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m4-1/d 2000 500
+    [m4 #1 table]     458     293     458     458 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m4-1/d 2000 500
+    [m4 #1 table]     460     293     460     460 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m4-1/d 2000 500
+    [m4 #1 table]     463     293     463     463 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m4-1/d 2000 500
+[m4 #1] survivors by ps: d3hb=1036, their ppids:  1036 293 
+[m4 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 1035 1035 
+[m4 #1] poll scans=14 avg_scan_us=44919 max_start_to_start_us=76474 recorded=4 killed=4 
+[m4 #2] survivors by ps: d3hb=858, their ppids:  858 293 
+[m4 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 857 857 
+[m4 #2] poll scans=12 avg_scan_us=34932 max_start_to_start_us=61206 recorded=4 killed=4 
+[m4 #3] survivors by ps: d3hb=858, their ppids:  858 293 
+[m4 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 857 857 
+[m4 #3] poll scans=12 avg_scan_us=32787 max_start_to_start_us=60691 recorded=4 killed=4 
+[m4 #4] survivors by ps: d3hb=835, their ppids:  835 293 
+[m4 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 834 834 
+[m4 #4] poll scans=12 avg_scan_us=33831 max_start_to_start_us=66287 recorded=4 killed=4 
+[m4 #5] survivors by ps: d3hb=846, their ppids:  846 293 
+[m4 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 845 845 
+[m4 #5] poll scans=12 avg_scan_us=32810 max_start_to_start_us=58690 recorded=4 killed=4 
+[m4 #6] survivors by ps: d3hb=842, their ppids:  842 293 
+[m4 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 841 841 
+[m4 #6] poll scans=12 avg_scan_us=32567 max_start_to_start_us=57662 recorded=4 killed=4 
+[m4 #7] survivors by ps: d3hb=856, their ppids:  856 293 
+[m4 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 855 855 
+[m4 #7] poll scans=12 avg_scan_us=32323 max_start_to_start_us=59031 recorded=4 killed=4 
+[m4 #8] survivors by ps: d3hb=865, their ppids:  865 293 
+[m4 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 864 864 
+[m4 #8] poll scans=12 avg_scan_us=33132 max_start_to_start_us=62101 recorded=4 killed=4 
+[m4 #9] survivors by ps: d3hb=866, their ppids:  866 293 
+[m4 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 865 865 
+[m4 #9] poll scans=12 avg_scan_us=33482 max_start_to_start_us=63726 recorded=4 killed=4 
+[m4 #10] survivors by ps: d3hb=841, their ppids:  841 293 
+[m4 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 840 840 
+[m4 #10] poll scans=12 avg_scan_us=32066 max_start_to_start_us=55942 recorded=4 killed=4 
+[m5 #1] before close: d3hb processes=771; daemon c pid=18238 ppid=293 (Relay(294)      /init) sid=18238 pgid=18238 (cli pgid=n/a)
+    [m5 #1 table]   18228     384     294     294 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh /tmp/d3run.E6x47Q/m5-1 /tmp/d3run.E6x47Q/bin/d3hb envtag
+    [m5 #1 table]   18232   18228     294     294 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.E6x47Q/m5-1 /tmp/d3run.E6x47Q/bin/d3hb
+    [m5 #1 table]   18234   18232     294     294 S+   d3hb            /tmp/d3run.E6x47Q/bin/d3hb beat /tmp/d3run.E6x47Q/m5-1/a.hb
+    [m5 #1 table]   18235   18232     294     294 S+   d3hb            /tmp/d3run.E6x47Q/bin/d3hb beat /tmp/d3run.E6x47Q/m5-1/b.hb
+    [m5 #1 table]   18238     293   18238   18238 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb daemon /tmp/d3run.E6x47Q/m5-1/c.hb
+    [m5 #1 table]   18239   18232     294     294 S+   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m5-1/d 2000 500
+    [m5 #1 table]   18241     293   18241   18241 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m5-1/d 2000 500
+    [m5 #1 table]   18243     293   18243   18243 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m5-1/d 2000 500
+    [m5 #1 table]   18245     293   18245   18245 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m5-1/d 2000 500
+    [m5 #1 table]   18248     293   18248   18248 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m5-1/d 2000 500
+    [m5 #1 table]   18250     293   18250   18250 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m5-1/d 2000 500
+    [m5 #1 table]   18252     293   18252   18252 Ss   d3hb            /tmp/d3run.E6x47Q/bin/d3hb loop /tmp/d3run.E6x47Q/m5-1/d 2000 500
+[m5 #1] survivors by ps: d3hb=0, their ppids: 
+[m5 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 919 0 
+[m5 #1] envtag passes=3 
+[m5 #2] survivors by ps: d3hb=0, their ppids: 
+[m5 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 827 0 
+[m5 #2] envtag passes=3 
+[m5 #3] survivors by ps: d3hb=0, their ppids: 
+[m5 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 815 0 
+[m5 #3] envtag passes=9 
+[m5 #4] survivors by ps: d3hb=0, their ppids: 
+[m5 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 802 0 
+[m5 #4] envtag passes=3 
+[m5 #5] survivors by ps: d3hb=0, their ppids: 
+[m5 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 869 0 
+[m5 #5] envtag passes=3 
+[m5 #6] survivors by ps: d3hb=0, their ppids: 
+[m5 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 797 0 
+[m5 #6] envtag passes=3 
+[m5 #7] survivors by ps: d3hb=0, their ppids: 
+[m5 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 813 0 
+[m5 #7] envtag passes=3 
+[m5 #8] survivors by ps: d3hb=0, their ppids: 
+[m5 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 827 0 
+[m5 #8] envtag passes=3 
+[m5 #9] survivors by ps: d3hb=0, their ppids: 
+[m5 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 782 0 
+[m5 #9] envtag passes=3 
+[m5 #10] survivors by ps: d3hb=0, their ppids: 
+[m5 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 817 0 
+[m5 #10] envtag passes=3 

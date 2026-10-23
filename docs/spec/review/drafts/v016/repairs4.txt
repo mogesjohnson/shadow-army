@@ -1,0 +1,131 @@
+v0.16 repairs, part 4: M1's round-3 confirmed findings, from M1-R3-V2's and V3's fixes. Written by the orchestrator (Fork 2), session 8, 2026-10-23.
+
+R-M1-168 (P1) and R-M1-172 (P2): HOST-2 finds Node.js by an absolute path, and states the supported versions.
+<<< OLD
+so it offers no army.
+  - A mod instance owns only the post office it started.
+=== NEW
+so it offers no army.
+  - The mod starts the post office with the Node.js executable it finds by its absolute path on `PATH` alone, as CH-1 finds each CLI: never one in the folder, a worktree or a snapshot, and never through a relative or empty `PATH` entry. On Windows the current folder is never searched. The mod passes that absolute path as the command it starts.
+  - **Versions.** Shadow Army supports Node.js 22 or later, git 2.34 or later, and Claude Code 2.1.286 or later as the host, the first version with mods on by default; the package's `engines.node` field says `>=22`. A claude soldier's oldest version is CH-2's. Before it first starts the post office, the mod checks each one: the host's through `$.session.version()`, and Node.js's and git's by running each, found as above, with `--version`. One that is missing or too old starts nothing, and Claude's transcript gets one line naming what is needed, as in `Shadow Army needs Node.js 22 or later on PATH; none was found`. CI runs the oldest and the newest Node.js and git (PO-21).
+  - A mod instance owns only the post office it started.
+>>> END
+
+R-M1-174 (P2): PO-2, no outbound connection and no telemetry.
+<<< OLD
+That includes the port a macOS guardian connects back to (PO-18). The containment helper listens on no port (PO-17).
+=== NEW
+That includes the port a macOS guardian connects back to (PO-18). The containment helper listens on no port (PO-17). Shadow Army's own code, the mod, the post office and each guardian, opens no network connection except on the loopback address, and sends no telemetry, crash report or update check. Data leaves the machine only through the soldiers' CLIs and the owner's Claude Code, and through git where the owner's own config makes it fetch, as an LFS filter or a partial clone's missing objects do while a snapshot is made (WSP-10).
+>>> END
+
+R-M1-174 (P2): M1-AC1 checks every connection.
+<<< OLD
+It binds only the loopback address and refuses `0.0.0.0` with an error. Tests of the lock
+=== NEW
+It binds only the loopback address and refuses `0.0.0.0` with an error, and every connection the post office and the mod open during these tests, as Node.js's `net.client.socket` diagnostics channel reports them, is to the loopback address. Tests of the lock
+>>> END
+
+R-M1-172 (P2): M1-AC1 checks the versions.
+<<< OLD
+  - a reloaded fake mod starts its own post office at the next use once the old one has exited, and Claude's transcript gets one line.
+=== NEW
+  - with the host's version faked as 2.1.285, and in turn with no `node` on `PATH`, a Node.js 20 and a git 2.33, the first use starts no post office, and Claude's transcript gets the line naming what is needed;
+  - a reloaded fake mod starts its own post office at the next use once the old one has exited, and Claude's transcript gets one line.
+>>> END
+
+R-M1-171 (P3): PO-1, a start refused by a setting is not a crash.
+<<< OLD
+    - A login needed never restarts the channel, whether the CLI keeps running or exits after it: the soldier shows "log in" until the owner reconnects it.
+=== NEW
+    - A start the CLI refuses because of a setting, such as an organization's managed `permissions.disableBypassPermissionsMode` at `full`, is not a crash and is never restarted. The adapter knows it by the CLI's message, as its contract fixtures record it (section 5.1 C). The soldier is down with the CLI's words, and its log and one line in Claude's transcript name the soldier, its autonomy and the refused flag, as in `Kaisel can't start at full: your organization's managed settings refuse it · lower its autonomy`.
+    - A login needed never restarts the channel, whether the CLI keeps running or exits after it: the soldier shows "log in" until the owner reconnects it.
+>>> END
+
+R-M1-171 (P3): M1-AC4's case.
+<<< OLD
+  - a claude older than CH-2's oldest opens no session and never counts as a crash, and its log and Claude's transcript say why;
+=== NEW
+  - a claude older than CH-2's oldest opens no session and never counts as a crash, and its log and Claude's transcript say why;
+  - a fake claude that exits before its first event with the recorded message of a flag refused by managed settings is not restarted, and its log and Claude's transcript give PO-1's line;
+>>> END
+
+R-M1-169 (P1): PO-13 pins the runtime dependencies.
+<<< OLD
+Shadow Army makes no network request of its own for the helper, so once installed it works offline.
+=== NEW
+Shadow Army makes no network request of its own for the helper, so once installed it works offline.
+  - **Dependencies.** The release package fixes the exact version and integrity hash of every runtime dependency, in the `npm-shrinkwrap.json` it carries or by bundling them into the post office's code, so installing a release installs exactly the code CI tested. CI fails on a runtime dependency with a known advisory of moderate severity or above (`npm audit --omit=dev --audit-level=moderate`), or with a license outside the allowlist kept in the repository. Each release's notes list its runtime dependencies, with their versions and licenses.
+>>> END
+
+R-M1-169 (P1) and R-M1-172 (P2): PO-21's install test and versions.
+<<< OLD
+The test passes only if the helper is still executable and every checksum still matches.
+=== NEW
+The test passes only if the helper is still executable and every checksum still matches. It installs once more from a local registry that also holds a newer patch release of a runtime dependency, and passes only if the pinned version is the one installed (PO-13).
+  - **Versions.** The install test and the containment tests run on Node.js 22 and on the newest Node.js release, and M1-AC10's git cases on git 2.34, git 2.54 and the newest git (HOST-2).
+>>> END
+
+R-M1-169 (P1): M1-AC17's install case.
+<<< OLD
+Installed with `--ignore-scripts` and the network off, it starts a fake soldier, running the helper or the script from the installed package.
+=== NEW
+Installed with `--ignore-scripts` and the network off, it starts a fake soldier, running the helper or the script from the installed package. Installed from a local registry that also holds a newer patch release of a runtime dependency, it has the version its `npm-shrinkwrap.json` or bundle pins (PO-13).
+>>> END
+
+R-M1-176 (P2): WSP-10, no prompt and a time limit for harness git.
+<<< OLD
+  - runs a git found by its absolute path on `PATH` alone, as CH-1 starts each CLI, never one in the folder, a worktree or a snapshot.
+=== NEW
+  - runs a git found by its absolute path on `PATH` alone, as CH-1 starts each CLI, never one in the folder, a worktree or a snapshot;
+  - runs with `GIT_TERMINAL_PROMPT=0` in its environment and `-c credential.interactive=false`, so no credential prompt waits for an answer, and is ended, with every process it started, filters included, after 30 minutes on the monotonic clock when it makes or brings a snapshot or a worktree, and after 5 minutes for any other command. A snapshot that times out is one that can't be made (WSP-11), with the reason, as in `snapshot not made · git took longer than 30 min`. A guard or audit command that times out holds harness git, with that reason.
+>>> END
+
+R-M1-176 (P2) and R-M1-168 (P1): M1-AC10's cases.
+<<< OLD
+On git 2.54 and on the newest git, the git commands
+=== NEW
+On git 2.34, git 2.54 and the newest git, the git commands
+>>> END
+
+<<< OLD
+  - a `claude.cmd`, `claude.exe`, `claude` and `git.exe` committed at the repository's root, and in a soldier's snapshot, never run, also with `.`, an empty entry and `node_modules/.bin` on `PATH` ahead of `test/fakes/`: the CLI and git come from the first absolute entry on `PATH` that holds them (CH-1, WSP-10).
+=== NEW
+  - a fake git on `PATH` that never exits is ended at each limit on a fake monotonic clock, with the process it started: at a soldier's first start the soldier doesn't start, and its log and Claude's transcript give the reason; during a turn's guard, harness git is held with the reason. Every harness git command's environment holds `GIT_TERMINAL_PROMPT=0`;
+  - a `claude.cmd`, `claude.exe`, `claude`, `git.exe`, `node`, `node.exe` and `node_modules/.bin/node` committed at the repository's root, and in a soldier's snapshot, never run, also with `.`, an empty entry and `node_modules/.bin` on `PATH` ahead of `test/fakes/`: the CLI, git and the post office's Node.js come from the first absolute entry on `PATH` that holds them (CH-1, WSP-10, HOST-2).
+>>> END
+
+R-M1-168 (P1): Appendix D row 9.
+<<< OLD
+| 9 | The repository to the programs that start | Each CLI and git start from an absolute path found on `PATH` alone, and `cli` names one of the four adapters (CH-1, WSP-10). | CH-1 (U, C), WSP-10 (X); M1-AC10 | prevented |
+=== NEW
+| 9 | The repository to the programs that start | Each CLI, git and the post office's Node.js start from an absolute path found on `PATH` alone, and `cli` names one of the four adapters (CH-1, WSP-10, HOST-2). | CH-1 (U, C), WSP-10 (X), HOST-2 (I); M1-AC10 | prevented |
+>>> END
+
+R-M1-173 (P2, technical half): WSP-11, where a turn's baseline is kept.
+<<< OLD
+Its baseline, which holds the ignore rules the snapshot had then, and the log line that opens the turn (PO-5), are written and flushed before the message goes in,
+=== NEW
+Its baseline, which holds the ignore rules the snapshot had then, is kept beside the session's log under `.shadow/v2/logs/` (PO-5), never in a worktree, a snapshot or the system's temporary folder, and is removed once the turn's guard has closed. The baseline and the log line that opens the turn (PO-5) are written and flushed before the message goes in,
+>>> END
+
+R-M1-173 (P2): Appendix D's assets.
+<<< OLD
+| Secrets in the army's files | logs, records and reports (PO-5, PO-6, WSP-8) |
+=== NEW
+| Secrets in the army's files | logs, records and reports (PO-5, PO-6, WSP-8) |
+| Copies of the owner's code | each session's snapshot in `~/.shadow-army/snapshots/` (WSP-11), each turn's guard baseline and start state beside its log (WSP-11, WSP-12), and the logs, which hold every tool result whole (PO-5) |
+>>> END
+
+R-M1-177 (P3): WSP-11, when a session opens.
+<<< OLD
+made by harness git (WSP-10) when the session opens and removed when it closes.
+=== NEW
+made by harness git (WSP-10) when the session opens and removed when it closes. A soldier's session opens at its first use, `sa live`'s open in M1 and, from M3, the first message to it (HOST-10, →M3); `/army` opens none.
+>>> END
+
+R-M1-177 (P3): PO-5's disk note.
+<<< OLD
+The owner frees space by deleting old logs under `.shadow/v2/logs/`.
+=== NEW
+The owner frees space by deleting old logs under `.shadow/v2/logs/`. Each open session's snapshot is a full checkout of HEAD (WSP-11), so on a large repository each soldier's snapshot takes about as much disk as the checkout.
+>>> END

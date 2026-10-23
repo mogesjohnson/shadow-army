@@ -1,0 +1,13 @@
+D-29 card.
+<<< OLD
+## Values set in the fix pass
+=== NEW
+## D-29 Where soldiers' snapshots of the owner's code live (R-M1-173)
+
+- **Kind:** big: a new setting, or accepting a data-location risk. Verified by M1-R3-V3 (`raw/M1-r3-verify-V3.md`), whose other half (the guard baseline's place, rights and removal) is a technical repair.
+- **Question:** each session's snapshot is a full checkout of HEAD in `~/.shadow-army/snapshots/` (WSP-11), with no way to move it. A company that keeps source only on an approved volume, or uses Windows roaming profiles (which copy `%USERPROFILE%\.shadow-army` at logoff; only `AppData\Local` and `AppData\LocalLow` are left out by default), gets its code copied off that volume.
+- **Options:** A the owner's own setting outside the folder, an environment variable as Claude Code's `CLAUDE_CONFIG_DIR`, moves `snapshots/` only, never `trust/`; B a non-goal that states the location and the roaming-profile exposure.
+- **Card** (2026-10-23, in chat): recommended **A**, because it is one variable that no repository can set, and B leaves regulated users with no fix.
+
+## Values set in the fix pass
+>>> END
