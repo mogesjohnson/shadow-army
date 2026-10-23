@@ -6,7 +6,7 @@ Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update
 - M1's round-3 confirmed findings repaired (`drafts/v016/repairs4.txt`, `26d6db5`): R-M1-168 and R-M1-169 (P1), R-M1-172, R-M1-173's technical half, R-M1-174, R-M1-176 (P2), R-M1-171 and R-M1-177 (P3). Values set: Node.js 22, git 2.34 (Ubuntu 22.04 LTS's), host Claude Code 2.1.286; advisories of moderate and above fail CI.
 - **F's round 3 verified** (F-R3-V1 to V3, `raw/F-r3-verify-V1.md` to `V3.md`): confirmed R-F-137, 139, 143, 147, 148 (the list), 149, 151 (P2) and R-F-152, 154, 155 (P3, were P2); refuted R-F-138, 141, 142; decisions R-F-148's re-show (**D-32**), R-F-150 (**D-33**), R-F-153 (**D-30**), R-F-156 (**D-31**, with R-F-140). All repaired (`repairs5.txt` to `repairs7.txt`). **F's round 3 is not clean.**
 - **v0.16** (`bfa5d6f`, snapshot `v2@bfa5d6f.md`): trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems.
-- Fix check **V16-FC1** (Opus, high; packet `batches/V16-FC1.md`, prompt in `drafts/r3/PROMPTS.md`) started.
+- Fix check **V16-FC1** (`raw/V16-FC1.md`): every repair FIXED but R-M1-176's guard half; R-M1-171 (P3) wrong; new N1 (P1, Windows `cmd.exe` searches the current folder), N2, N3 (P2), N4 to N11 (P3). Next: their ledger rows and v0.17 (`handoffs/LATEST.md`).
 - Round 3 counted: **neither unit is clean** (M1 has confirmed P1s, F confirmed P2s), so both streaks stay at 0. Round 4 needs new lenses (flow section 6): chaos and consistency, with an implementer or red team.
 
 **Session 8 (2026-10-23, Fork 1), ended at the 150k save point.** The handoff is [`handoffs/LATEST.md`](handoffs/LATEST.md); read it first.
