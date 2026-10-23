@@ -482,6 +482,14 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Card** (2026-10-21): recommended **A**, because it is what Claude Code does, which the owner asked for, and a soldier's answer is never left unseen until the owner types; the mark tells the Monarch the brief came from the earlier conversation.
 - **Answer** (2026-10-23, pasted in chat): **A**. Applied in v0.15: MSG-5's summary for a brief from before `/clear`, `/resume` or `/branch` wakes Claude as any summary does (MSG-8); M3-AC2 tests it.
 
+## D-26 Branches that come with another working tree, and other armies' branches, under the guard from M6 (R-M1-163)
+
+- **Kind:** big: option A narrows what the guard sees, a follow-up to D-23 (big). Raised by fix check V14-FC1 (`raw/V14-FC1.md`, N1).
+- **Question:** D-23's answer leaves every other working tree's metadata out of the guard, so `claude --worktree` works in Claude Code's default layout. But from M6 the guard also covers refs (WSP-4), which WSP-10 never compares. `claude --worktree fix-1` makes the branch `worktree-fix-1` (and its cleanup deletes it), and `git worktree add <path>` with no `-b` makes a branch too. Both are "any other ref move", so the attribution card comes back from M6. So does a commit that another army's builder makes on its own `shadow/` branch during this army's turn.
+- **Options:** A WSP-4 exempts a branch made or deleted together with a working tree WSP-10 leaves out (that tree's HEAD names it), and every ref under another army's mark, each logged with the working tree's transcript line; B keep the card from M6, state the friction in residual 13, and make M1-AC11 and M2-AC5 use `git worktree add --detach`.
+- **Tested:** V14-FC1 read WSP-4, WSP-10, M2-AC5 and M6-AC9 against Claude Code's worktree docs (https://code.claude.com/docs/en/worktrees: a new branch `worktree-<name>`, removed at cleanup) and git's (https://git-scm.com/docs/git-worktree: a branch is made when no commit-ish is given). With B, M2-AC5 as written fails from M6.
+- **Card** (2026-10-23, in chat; the decisions doc refuses reads from this session's account): recommended **A**, because it finishes what the owner chose in D-23 (Claude Code's default worktree layout works with no cards), and another army's own branches are already outside this army's trust; a ref moved on any other branch is still carded.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
