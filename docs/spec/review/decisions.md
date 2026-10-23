@@ -525,6 +525,20 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Options:** A start fresh in every new process, as written; state it in SES-1 and close H38; B each soldier resumes its last session by id (CH-9) where its worktree or snapshot still exists, which needs WSP-1 to keep the earlier worktree, since claude keys a session to its folder; C B, but only on the owner's y on a card listing the soldiers that can be resumed.
 - **Card** (2026-10-23, in chat): recommended **A** for 2.0, because it is the text as written, costs nothing, and a fresh soldier gets its brief again from the Monarch; C can come after 2.0 with H38.
 
+## D-32 When the trust card's dialog shows again after "Not now" (R-F-148)
+
+- **Kind:** big: it changes when the owner is asked (PLAYBOOK section 14). Verified by F-R3-V2 (`raw/F-r3-verify-V2.md`), whose other half (the card in HOST-14's list) is repaired in v0.16.
+- **Question:** ARM-7 says "the next use shows the card again" after `Not now`. From M3 Claude's `send` is a use (HOST-2), so every brief Claude sends reopens the modal dialog over the owner's typing.
+- **Options:** A only the owner's own uses (`/army`, `/send`, r, or the list's row) show the dialog again; Claude's `send` returns `queued · waits · trust card` and shows none; B every use shows it again, Claude's sends included (as written).
+- **Card** (2026-10-23, in chat): recommended **A**, because the owner already chose "Not now" and the card stays in the one list, and B interrupts the owner each time Claude sends a brief.
+
+## D-33 The autonomy a fresh repository's soldiers start at (R-F-150)
+
+- **Kind:** big: security posture, what runs without the owner's approval (PLAYBOOK section 14). Verified by F-R3-V2 (`raw/F-r3-verify-V2.md`).
+- **Question:** a folder with no policy files of its own uses the copies shipped in the package, which need no trust card (ARM-7), and the spec never names their autonomy levels. v1's shipped `shadow.config.json` sets codex, grok and agy to `full` and both claude soldiers to `auto`, so a new repository could start soldiers at `full` with nothing shown.
+- **Options:** A the shipped copy sets every soldier to `supervised`, and ARM-7 says so; B keep its levels, name them in ARM-7, and the first start of a soldier above `supervised` from the shipped copy in a folder shows one notice row with its name, `cli`, `model` and autonomy; C as B, with `/army` also listing each soldier's autonomy and where it came from (shipped or the folder's). Whichever is chosen, ARM-7 names the shipped levels.
+- **Card** (2026-10-23, in chat): recommended **A**, because a new repository then never runs a soldier above `supervised` until the owner raises it through the trust card, which ARM-7 already requires for the folder's own files, and it costs one config edit.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
