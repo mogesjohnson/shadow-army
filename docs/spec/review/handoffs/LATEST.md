@@ -27,7 +27,7 @@ Written by **Fork 1 of session 10** (no fork name and no handoff message reached
 
 ## The owner's open questions
 
-- **D-30 to D-33** are still unanswered (chat 2026-10-23, records in `decisions.md`; A recommended for each). v0.18 now lists in residual 13 that refs under another army's mark move uncarded (R-M1-204's half); that acceptance goes with D-30.
+- **D-30 to D-33 answered: all A** (2026-10-26, in chat, picked on the page https://claude.ai/artifact/MxaMyxHYcNYAhMiHsdmCyN). Recorded in `decisions.md`; **not yet in the spec**. Apply them first in v0.19, as OLD/NEW blocks with both checkers: D-30, residuals 7, 8, 12 and residual 13's other-army refs become "accepted (D-30)"; D-31, SES-1 says soldiers start fresh in a new process, H38 closed for 2.0, and R-F-140 (b) (earlier worktrees with unapplied commits named at start; `/diff` and `/apply` accept them); D-32, ARM-7's re-show only on the owner's own uses, Claude's `send` returns `queued · waits · trust card`; D-33, ARM-7 says the shipped copy sets every soldier to `supervised`.
 - The go on M1's probes (`probes.md`).
 - PR #82 (Grok's alpha plan) still waits for review; not part of this runbook.
 
