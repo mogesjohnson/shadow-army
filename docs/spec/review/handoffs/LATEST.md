@@ -6,7 +6,7 @@ Written by **Fork 1 of session 10** (no fork name and no handoff message reached
 
 - Start `3c70397` (session 9 Fork 1's handoff). End: the commit that last changed this file (`git log -1 -- docs/spec/review/handoffs/LATEST.md`).
 - `git diff 3c70397..<end> --stat`: `docs/spec/v2.md`, `ledger.md`, `drafts/v018/repairs.txt` and `fixed.mjs`, `STATE.md`, this file.
-- The spec is **v0.18** (`f48b957`, snapshot `v2@f48b957.md` in the main checkout's `.shadow/v2-tools/review/snapshots/`).
+- The spec is **v0.19** (`65d0b43`, snapshot `v2@65d0b43.md` in the main checkout's `.shadow/v2-tools/review/snapshots/`), on v0.18 (`f48b957`).
 
 ## Finished
 
@@ -21,18 +21,18 @@ Written by **Fork 1 of session 10** (no fork name and no handoff message reached
 
 ## Next, in order
 
-1. **Verify round 4's P1 and P2** (R-M1-206 to 218, R-F-157, R-F-158) at rule 6's efforts: Opus high for the three P1s (206, 207, 208) and anything security-related, Sonnet medium for simple ones. Two or three at a time, tight packets first (`tools/packet.mjs`). Reports: `raw/M1-r4-chaos.md`, `raw/F-r4-consistency.md`. Then repair the confirmed findings as v0.19, with round 4's P3s (R-M1-219, R-F-159 to R-F-165, "to apply unverified").
+1. **Verify round 4's P1 and P2** (R-M1-206 to 218, R-F-157, R-F-158) at rule 6's efforts: Opus high for the three P1s (206, 207, 208) and anything security-related, Sonnet medium for simple ones. Two or three at a time, tight packets first (`tools/packet.mjs`). Reports: `raw/M1-r4-chaos.md`, `raw/F-r4-consistency.md`. Then repair the confirmed findings as v0.20, with round 4's P3s (R-M1-219, R-F-159 to R-F-165, "to apply unverified").
 2. **Owed for round 4:** M1's implementer and F's red team (`drafts/r4/PROMPTS.md`), on v0.18 (`v2@f48b957.md`).
-3. **Fix check V18-FC1** of v0.18 (and v0.19 if it's written by then), then count round 4. Both streaks are 0; round 5 is the cap (PLAYBOOK section 7).
+3. **Fix check V18-FC1** of v0.18 and v0.19 together (and v0.20 if round 4's repairs are in by then), then count round 4. Both streaks are 0; round 5 is the cap (PLAYBOOK section 7).
 
 ## The owner's open questions
 
-- **D-30 to D-33 answered: all A** (2026-10-26, in chat, picked on the page https://claude.ai/artifact/MxaMyxHYcNYAhMiHsdmCyN). Recorded in `decisions.md`; **not yet in the spec**. Apply them first in v0.19, as OLD/NEW blocks with both checkers: D-30, residuals 7, 8, 12 and residual 13's other-army refs become "accepted (D-30)"; D-31, SES-1 says soldiers start fresh in a new process, H38 closed for 2.0, and R-F-140 (b) (earlier worktrees with unapplied commits named at start; `/diff` and `/apply` accept them); D-32, ARM-7's re-show only on the owner's own uses, Claude's `send` returns `queued · waits · trust card`; D-33, ARM-7 says the shipped copy sets every soldier to `supervised`.
+- **D-30 to D-33 answered: all A** (2026-10-26, in chat, picked on the page https://claude.ai/artifact/MxaMyxHYcNYAhMiHsdmCyN), and **applied as v0.19** (`65d0b43`, snapshot `v2@65d0b43.md`; `drafts/v019/repairs.txt` and `repairs2.txt`, 16 blocks) at the owner's "write it now". Trace 0 problems, Appendix C 0 problems (H38 moved to the after-2.0 list: v2.0 8, after 23). D-30: residuals 7, 8, 12 and residual 13's other-army refs "accepted, D-30". D-31: SES-1 starts soldiers fresh in a new process; R-F-140 (b) in WSP-1, with `/diff` and `/apply` taking `<soldier>@<n>` (WSP-9, HOST-9's table); that notation is the orchestrator's choice. D-32 and D-33 in ARM-7. V18-FC1 should check v0.18 and v0.19 together.
 - The go on M1's probes (`probes.md`).
 - PR #82 (Grok's alpha plan) still waits for review; not part of this runbook.
 
 ## What the files don't say
 
-- The v0.18 commit is 279 lines in 4 files, over the 200-line commit default (WORKFLOW.md, 2026-10-25), because `repairs.txt` is a 175-line draft. PR #77 predates that budget and is far over it anyway; nothing was rewritten.
+- The v0.19 commit is 159 lines in 5 files, one over the 4-file default. The v0.18 commit is 279 lines in 4 files, over the 200-line commit default (WORKFLOW.md, 2026-10-25), because `repairs.txt` is a 175-line draft. PR #77 predates that budget and is far over it anyway; nothing was rewritten.
 - The untracked JSON drafts in `drafts/r3/` and `drafts/v015/` can be rebuilt; leave them untracked.
 - The main checkout's `story.txt` (staged) and `moges*.md` belong to the owner; don't commit them.
