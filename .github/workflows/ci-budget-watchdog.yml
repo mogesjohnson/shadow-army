@@ -16,7 +16,7 @@ on:
         default: false
 
 permissions:
-  actions: read
+  actions: write # cancel_queued POSTs to /actions/runs/{id}/cancel
   issues: write
 
 concurrency:

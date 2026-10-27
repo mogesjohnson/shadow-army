@@ -97,7 +97,12 @@ async function paginate(path, { key, params } = {}) {
 
 function monthWindow(ym) {
   const [y, m] = ym.split("-").map(Number);
-  return { start: new Date(Date.UTC(y, m - 1, 1)) };
+  // Half-open [start, end): a past BILLING_MONTH must not count later months.
+  return { start: new Date(Date.UTC(y, m - 1, 1)), end: new Date(Date.UTC(y, m, 1)) };
+}
+
+function isoSeconds(date) {
+  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 function statusFor(pct) {
@@ -154,11 +159,13 @@ function renderReport({ monthLabel, total, byWorkflow, byOs, top, daysElapsed, d
 }
 
 async function main() {
-  const { start } = monthWindow(billingMonth);
+  const { start, end } = monthWindow(billingMonth);
   const now = new Date();
+  // GitHub's range syntax is inclusive on both ends, so stop 1s before the next month.
+  const last = new Date(end.getTime() - 1000);
   const runs = await paginate(`/repos/${owner}/${repo}/actions/runs`, {
     key: "workflow_runs",
-    params: { created: `>${start.toISOString()}` },
+    params: { created: `${isoSeconds(start)}..${isoSeconds(last)}` },
   });
 
   let total = 0;
@@ -199,7 +206,7 @@ async function main() {
 
   const pct = (total / budget) * 100;
   const status = statusFor(pct);
-  const daysElapsed = Math.max((now - start) / 86400000, 1 / 24);
+  const daysElapsed = Math.max((Math.min(now, end) - start) / 86400000, 1 / 24);
   const daysInMonth = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0)).getUTCDate();
   const projected = Math.round((total / daysElapsed) * daysInMonth);
   const monthLabel = start.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });

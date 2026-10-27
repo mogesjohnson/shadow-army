@@ -38,7 +38,7 @@ This is an estimate. GitHub's billing page is the source of truth.
 
 | Env | Default | Meaning |
 |---|---|---|
-| `GITHUB_TOKEN` | — | needs `actions:read`, `issues:write` |
+| `GITHUB_TOKEN` | — | needs `actions:read`, `issues:write` (`actions:write` when `CANCEL_QUEUED` is set) |
 | `GITHUB_REPOSITORY` | — | `owner/repo` |
 | `ISSUE_NUMBER` | — | issue for the living report comment |
 | `BUDGET_MINUTES` | `3000` | monthly budget |
