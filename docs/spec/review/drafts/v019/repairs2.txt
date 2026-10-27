@@ -1,0 +1,15 @@
+v0.19, second pass: the trace checker's mark (Claude's `send` is PO-4's, M3), and HOST-9's table takes D-31's `<soldier>@<n>`.
+
+<<< OLD
+A `send` from Claude (HOST-2, →M3) shows none;
+=== NEW
+A `send` from Claude (PO-4, →M3) shows none;
+>>> END
+
+<<< OLD
+    | `/diff` | `<soldier>` | the changes on its branch |
+    | `/apply` | `<soldier\|undo>` | apply its changes to the folder, or undo |
+=== NEW
+    | `/diff` | `<soldier>` or `<soldier>@<n>` | the changes on its branch, or on an earlier process's worktree (WSP-1, →M6) |
+    | `/apply` | `<soldier\|undo>` or `<soldier>@<n>` | apply its changes to the folder, or undo |
+>>> END
