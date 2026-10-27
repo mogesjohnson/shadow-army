@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Session 10, Fork 1 (2026-10-26).** No agent was started. **v0.18** (`f48b957`, snapshot `v2@f48b957.md`; `drafts/v018/repairs.txt`, 26 blocks) applies every V17-FC1 repair (R-M1-193 to R-M1-205, finishing R-M1-182, 183, 186 and 187). Trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems. The session stopped at the save point because it couldn't read `/context`; next steps are in [`handoffs/LATEST.md`](handoffs/LATEST.md): round 4's verifiers, the owed implementer (M1) and red team (F), then V18-FC1.
+
 **Session 9, Fork 1 (2026-10-26).** No agent was started. The session stopped at the save point near 120k; [`handoffs/LATEST.md`](handoffs/LATEST.md) has the next steps.
 - V17-FC1's verdicts are in the ledger (`03145f2`): R-M1-182 and R-M1-183 NOT FIXED; R-M1-186 and R-M1-187 wrong as applied; D-26 to D-29 and the rest FIXED. Its new findings are **R-M1-193 to R-M1-205** (four P2), all repair pending (v0.18).
 - Round 4's findings have rows (`3672297`): M1 chaos **R-M1-206 to R-M1-219** (3 P1, 10 P2, 1 P3), F consistency **R-F-157 to R-F-165** (2 P2, 7 P3). The P1 and P2 rows wait for verifiers.
