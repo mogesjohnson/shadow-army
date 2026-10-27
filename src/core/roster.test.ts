@@ -40,7 +40,8 @@ describe("buildRoster", () => {
 describe("the shipped files", () => {
   it("agree with each other", () => {
     const r = loadRoster();
-    expect([...r.soldiers.keys()]).toEqual(["codex-astra", "codex-sol", "claude-opus", "claude-sonnet", "grok", "agy"]);
+    expect([...r.soldiers.keys()]).toEqual(["codex-sol", "claude-opus", "codex-astra", "claude-sonnet", "grok", "agy"]);
+    expect(r.soldiers.get("codex-astra")).toMatchObject({ roles: ["review", "build"], buildFor: ["hard"] });
     expect(r.soldiers.get("agy")).toMatchObject({ cli: "agy", write: false, roles: ["research", "test"] });
     expect(r.soldiers.get("grok")).toMatchObject({ cli: "grok", forbidden: ["review"] });
     expect(r.guide.length).toBeGreaterThan(100);

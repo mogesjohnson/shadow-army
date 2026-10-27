@@ -22,6 +22,7 @@ import { registerWorkspaceCommands } from "./workspace/cli.js";
 import { registerRunCommand } from "./monarch/cli.js";
 import { getAdapter } from "./adapters/registry.js";
 import type { Effort, Role } from "./adapters/Adapter.js";
+import { registerLiveCommand } from "./v2/cli.js";
 
 /** Load config + delegate; a bad file is a clean one-screen error, not a stack trace. */
 function rosterOrExit(): Roster | undefined {
@@ -222,5 +223,6 @@ program
 registerVaultCommands(program);
 registerWorkspaceCommands(program);
 registerRunCommand(program, rosterOrExit);
+registerLiveCommand(program);
 
 await program.parseAsync(process.argv);

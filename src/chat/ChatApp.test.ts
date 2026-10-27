@@ -49,8 +49,8 @@ function chat(over: Partial<ChatDeps> = {}) {
       await new Promise((r) => setTimeout(r, 25));
     }
   };
-  const sees = (text: string | RegExp) =>
-    vi.waitFor(() => (typeof text === "string" ? expect(term.text()).toContain(text) : expect(term.text()).toMatch(text)), { timeout: 10_000, interval: 25 });
+  const sees = (text: string | RegExp, timeout = 10_000) =>
+    vi.waitFor(() => (typeof text === "string" ? expect(term.text()).toContain(text) : expect(term.text()).toMatch(text)), { timeout, interval: 25 });
   return { session, deps, term, press, sees };
 }
 
@@ -248,11 +248,12 @@ describe("the chat screen", () => {
     });
     await press("make one file", KEY.enter);
     await sees("> make one file");
-    await sees("Plan by codex-astra: make one.txt");
+    await sees("Plan by claude-opus: make one.txt");
     await sees("Run this task?");
     await press(KEY.enter);
     await sees(/a\s+grok\s+build\s+running/);
-    await sees(/Finished\s+1\/1 done/);
+    // This boundary includes Git worktree, guard, audit and apply work, not just a screen render.
+    await sees(/Finished\s+1\/1 done/, 30_000);
     await sees("Report from the soldiers' reports");
     await vi.waitFor(() => expect(session.idle).toBe(true));
     expect(session.getState().entries.map((e) => e.kind)).toEqual(["welcome", "user", "steps", "text", "dashboard", "text"]);
