@@ -2,6 +2,11 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Session 9, Fork 1 (2026-10-26).** No agent was started. The session stopped at the save point near 120k; [`handoffs/LATEST.md`](handoffs/LATEST.md) has the next steps.
+- V17-FC1's verdicts are in the ledger (`03145f2`): R-M1-182 and R-M1-183 NOT FIXED; R-M1-186 and R-M1-187 wrong as applied; D-26 to D-29 and the rest FIXED. Its new findings are **R-M1-193 to R-M1-205** (four P2), all repair pending (v0.18).
+- Round 4's findings have rows (`3672297`): M1 chaos **R-M1-206 to R-M1-219** (3 P1, 10 P2, 1 P3), F consistency **R-F-157 to R-F-165** (2 P2, 7 P3). The P1 and P2 rows wait for verifiers.
+- Next: draft v0.18 in the main session, then round 4's verifiers, then the owed implementer (M1) and red team (F). D-30 to D-33 are still with the owner.
+
 **Session 8, Fork 3 (2026-10-23).**
 - The owner answered **D-26 A**, **D-27 B** ("and list for future version"), **D-28 A**, **D-29 A** in the doc "Spec 2.0 Review: Decisions D-26 to D-29" (rev 41). Recorded in `decisions.md`.
 - V16-FC1's verdicts marked in the ledger; its new findings are **R-M1-182 to R-M1-192** (N1 P1, N2 and N3 P2, N4 to N11 P3).
