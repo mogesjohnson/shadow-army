@@ -81,6 +81,8 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
       - run: npm test
+      - name: Native TypeScript 7 language server
+        run: npm run test:lsp
       # The commit-msg hook is a POSIX sh script; check it under a real sh, not only Git for Windows'.
       - name: commit-msg hook under sh
         if: runner.os != 'Windows'
