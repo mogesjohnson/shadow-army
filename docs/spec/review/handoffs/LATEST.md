@@ -1,47 +1,38 @@
-# Handoff: session 11 (2026-10-27)
+# Handoff: session 12, Fork 1 (2026-10-27)
 
-Written by **session 11** (no fork name). It started no agent and changed no spec text. It collected the owner's answers on a questions page, found why PR #77 closed, then stopped at the save point: it couldn't read `/context`, and the owner chose a fresh session over working past 120k. Read this after the runbook's section 1.
+Written by **Fork 1** of session 12 (session name `aiconnections-19`). It started no agent. It wrote spec v0.20, opened the review's new draft PR #83, and wrote the version-control rules (issue #84, draft PR #85). Then it stopped at the save point near 120k, before the probes and round 4. Read this after the runbook's section 1.
 
 ## The range
 
-- Start `f1a98ad` (session 10 Fork 1's handoff). End: the commit that last changed this file (`git log -1 -- docs/spec/review/handoffs/LATEST.md`).
-- `git diff f1a98ad..<end> --stat`: this file and `STATE.md` only. The spec is still **v0.19** (`65d0b43`).
+- Start `8a4f2b6` (session 11's handoff). End: the commit that last changed this file (`git log -1 -- docs/spec/review/handoffs/LATEST.md`).
+- `git diff 8a4f2b6..<end> --stat -- docs/spec`: `drafts/v020/repairs.txt` (+131), `v2.md` (+20 −6), `ledger.md` (+1), `STATE.md`, and this file. The merge commit `bc16888` also brings in main's other files (12 files from #71, #76, #79 and #82). The spec is unchanged by the merge.
+- Commits: `4575980` (repair draft), `4f481fc` (**spec v0.20**, snapshot `.shadow/v2-tools/review/snapshots/v2@4f481fc.md`), `d9e4934` (ledger R-M1-220 and STATE), `bc16888` (merge of `origin/main` at `72eba4d`, keeping this branch's spec).
 
-## What happened outside this branch (2026-10-27)
+## What is finished
 
-- From 03:46 to 03:53 UTC, the owner's housekeeping session (in `C:\Users\johns\projects`, session `432ab393`, Opus subagents, on the owner's "review and merge") squash-merged #79, #82, #76 and #71. Main's CI at `72eba4d` passed on all three systems. Codex reviewed none of them.
-- **#77 closed by itself** at 03:47:04Z: its base `claude/63-spec-ideas` (#76's branch) was deleted on merge. Nothing was lost. Main's `docs/spec/v2.md` is `be9deb0`, #76's head, which this branch contains, so `git merge origin/main` here conflicts only in `docs/spec/v2.md`; keep this branch's copy (`git checkout --ours docs/spec/v2.md`).
-- The worktree `../AIConnections-v06` still has `claude/63-spec-ideas` checked out (gone on GitHub). Leave it; the owner cleans up with `!` commands.
+- **v0.20** (the owner's Smart App Control request). PO-19 gets a **Smart App Control** bullet beside ConstrainedLanguage mode: what it blocks, its `VerifiedAndReputablePolicyState` value (0 off, 1 on, 2 evaluation, which can turn itself on later), turning it off as the remedy, and S7 to settle whether it puts the script in ConstrainedLanguage mode or blocks the DLL. PO-14 gets a message for it and "turn Smart App Control off" as a way forward, and M1-AC18 a unit case: with the value faked as 1, the message names it. S7 adds the question and records the value on each Windows runner. The non-goal and residual 3 name it too. §0 defines **Likely cause on Windows:** notes (informative, no IDs), and a note sits just before each of 13 places: PO-3's DACL run, PO-9's Windows guardian, PO-13's package, PO-14's step 1, PO-19's `Add-Type -Path` (Win32 error 4551, `ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION`, `0x800711C7`), PO-21's Windows runners, VER-6's C# coverage, M1-AC15, M1-AC18, and residual row 12. Trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems.
+- **Correction to session 11's handoff:** GitHub's Windows **arm64** runner runs Windows 11, not Windows Server, so the spec doesn't claim that no runner has Smart App Control. S7 records each runner's value instead.
+- **PR #83** (draft, base `main`): replaces #77, carries this branch, and is linked on #77 and #63. Its `format` check passes. Full three-OS CI runs only when a PR is ready (#79). Milestone comments go on #83 from now on.
+- **Version-control rules:** issue #84, branch `claude/84-version-control-rules` (worktree `../AIConnections-vc`), draft **PR #85** (`8c72cea`, 67 lines, 2 files). `docs/version-control.md` has rules V1 to V18 from the BEST-OF-AI-DEV `template/RULES.md` (kept where practical, with a "not kept" list) and this repo's incidents. Among them: V6 size limits with totals in the PR body, V13 merge commits and no squash, V14 retargeting stacked PRs before their base merges, V11 no merge without the reviewer at the current head. The PR body lists 5 proposed `CLAUDE.md` changes for the owner; `CLAUDE.md` is unchanged. GitHub enforces nothing on `main` (no ruleset, no protection, every merge method allowed).
 
-## The owner's answers
+## Half-done
 
-From the questions page https://claude.ai/artifact/FsB2fmhYKMpsTUTgeqR14P (read with `ArtifactData`, action `list`, collection `answers`):
-
-- **pr77 A:** merge main into this branch, keeping its spec, and open a new draft PR to main that links #77. Milestones go there.
-- **budget A:** the review's PR may stay over 400 lines as a record (one exception). From now on each spec version goes in commits of at most 200 lines and 4 files: repair drafts, spec text, then ledger and state.
-- **probes-short A:** run P-1, P-2, P-3 and P-10 to P-15 between agent passes (about 15 short sessions on the owner's logins, throwaway folders, approving nothing); results into `probes.md`, the ledger and the next version.
-- **probe-p4 A:** later, before M3.
-- **mac-ci A:** P-6 and P-8 now, on GitHub's macOS runners, from a workflow on its own branch that runs on push (nothing on main, no model call). P-6 records `spctl --status` first. P-5 stays a stated risk: the runner image gives `bash` and the runner Full Disk Access (`actions/runner-images`, `images/macos/scripts/build/configure-tccdb-macos.sh`).
-- **tech A:** keep every technical choice of v0.16 to v0.19 (Node.js 22, git 2.34, host 2.1.294, moderate advisories fail CI, `NoDefaultCurrentDirectoryInExePath`, `taskkill /t /f`, N1 to N4, `<soldier>@<n>`, the defaults table in `decisions.md`).
-- **probe-sac B** (said in chat; recorded on the page by Claude): leave Smart App Control off on the owner's PC; spike S7 settles it in M1. Facts: off here (`VerifiedAndReputablePolicyState` 0); this PC's build 26200.9711 can turn it on and off without reinstalling (the April 2026 update); GitHub's Windows runners are Windows Server, which has none.
-- **alpha-q1 A:** carve #75 into slices; close it when the last lands. **alpha-q2 A:** a one-command session is fine as a step toward M1. Alpha Q3 and Q4: unanswered.
-- **order:** no choice; the owner's note: "i want better commit and pr version control habits, we have had bad stuff. can you access the BEST-OF-AI-DEV template and keep what is good and practical? it is not done, grokbots made it and it has no reveiw!! i want you to access and make the rules going forward till i update."
+- `~/projects/GITHUB_VERSION_CONTROL_PROMPT` isn't updated with V1 to V18 yet. Do it once the owner accepts #85, or says to apply the rules as they stand.
 
 ## Next, in order
 
-1. **v0.20: Smart App Control in the spec.** The owner, in chat: "update this in the spec, and set reminders all along the current spec till the end. so its always fresh. mark it right before places were the error is mostliky going to happen so the model will know that the error was that!!"
-   - PO-19 (v0.19 line 450): a **Smart App Control** bullet beside ConstrainedLanguage mode. Windows 11's Smart App Control runs on App Control's engine and blocks code that is unsigned and unknown to Microsoft, DLLs and some scripts included, with no exception for one app. Until S7 it is unknown whether it runs the script in ConstrainedLanguage mode or blocks the DLL; either way the check fails (PO-14) and no soldier starts. The remedy on that machine is turning it off, since there is no hash rule for it and signing is a non-goal of v2.0. The owner's PC has it off (2026-10-27), so nothing there tests it.
-   - One short "likely cause" note right before each place that failure shows, so a model debugging it knows the cause. Define the marker once in §0 (for example **Likely cause on Windows:** …) and keep each note non-normative (no new IDs), so the trace checker stays at 0. Places, by v0.19 line: 236 (the DACL run: the script's first run, before the secret), 316 (the guardian makes the Job Object), 357 (the package holds the script and DLL), 366 (the check's step 1), 374 (the refusal message: name Smart App Control as a cause too), 447 (`Add-Type -Path`), 467 (containment tests; the windows runner has no Smart App Control), 994 (VER-6 coverage of the C#), 1033 (S7: its Smart App Control result goes into PO-19), 1108 (M1-AC15), 1128 (M1-AC18), and the residual rows 1790 (12) and 1803 (3).
-   - Both checkers; a ledger row for the owner's request; commits within budget A.
-2. **The new draft PR** (pr77 A): in `../AIConnections-review`, `git merge origin/main` keeping this branch's spec, push, then `gh pr create --draft` with the template pasted in (title `#63 …`, `Validation:`, `Tracking: #63`, replaces #77, the six boxes, no closing keyword, budget A's exception named). Comment the link on #77 and #63.
-3. **BEST-OF-AI-DEV rules** (the owner's note): review https://github.com/mogesjohnson/BEST-OF-AI-DEV `template/` (made by Grok bots, unreviewed), keep what is good and practical, and write the commit, PR and version-control rules this repo follows until the owner changes them. Weigh it against `CLAUDE.md`, `CONTRIBUTING.md`, the budgets in `Obsidian-codex-setup/docs/WORKFLOW.md`, and `~/projects/GITHUB_VERSION_CONTROL_PROMPT` (update that too). Its own issue and small PR on main; show the owner before replacing any `CLAUDE.md` rule.
-4. The short probes (probes-short A) and P-6 and P-8 on CI (mac-ci A), between agent passes.
-5. Then the earlier plan: round 4's verifiers (R-M1-206 to 218, R-F-157, R-F-158), M1's implementer and F's red team (`drafts/r4/PROMPTS.md`), and V18-FC1 over v0.18 to v0.20.
+1. The owner's word on #85's five `CLAUDE.md` proposals, and Codex's review of #85.
+2. The short probes (probes-short A: P-1, P-2, P-3, P-10 to P-15; owner's logins, throwaway folders, approving nothing; results to `probes.md`, the ledger, the next version) and P-6 and P-8 on macOS CI (mac-ci A: a workflow on a branch of its own that runs on push; P-6 records `spctl --status` first).
+3. Round 4's verifiers (R-M1-206 to 218, R-F-157, R-F-158), M1's implementer and F's red team (`drafts/r4/PROMPTS.md`), and fix check **V18-FC1 over v0.18 to v0.20**. It now includes R-M1-220, the Smart App Control text, which nobody has verified yet.
+
+## The owner's open questions
+
+- Alpha Q3 and Q4 remain unanswered (questions page https://claude.ai/artifact/FsB2fmhYKMpsTUTgeqR14P).
+- #85's `CLAUDE.md` proposals.
 
 ## What the files don't say
 
-- Correction given to the owner: P-5 to P-8 are also in spike S7, which whoever builds M1 runs (Codex today); the review's own probes are the CLI ones.
-- PR #81 has fix `adf0896` from the housekeeping agents, untested live, still a draft.
-- The main checkout's `main` is 61 commits behind `origin/main`. Don't pull there: the owner's `story.txt` (staged) and `moges*.md` are in it.
-- The status board wasn't touched; the dashboard is refreshed only when the owner asks.
-- The untracked JSON drafts in `drafts/r3/` and `drafts/v015/` stay untracked.
+- In the CRLF working copy that `git checkout --ours` leaves, the trace checker reports `M1 implements unknown SHA-256`. The committed file (`git show :docs/spec/v2.md`) has 0 problems, so run the checkers on an LF copy.
+- The untracked JSON drafts in `drafts/r3/`, `drafts/v015/`, `drafts/v016/` and `drafts/v020/pairs.json` stay untracked.
+- The main checkout is untouched (the owner's `story.txt` is staged there). `../AIConnections-v06` is still stale, and the owner removes it.
+- The status board and the dashboard weren't touched.
