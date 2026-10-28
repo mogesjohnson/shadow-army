@@ -26,6 +26,8 @@ A personal CLI that commands other AI coding CLIs as a disciplined army.
 
 > **v1 is legacy.** This README describes v1, the `sa` CLI that starts a new process for every message. Shadow Army is moving to a Claude-first design: your Claude Code session is the Monarch, and every soldier is a live session of its own CLI. See [docs/claude-first.md](docs/claude-first.md) and #63. v1 is frozen at the `v1.0.0` tag.
 
+For an optional native TypeScript 7 language server in a Claude Code session, see [the plugin setup](plugins/typescript7-lsp/README.md). This is a standalone plugin; v2 soldier attachment remains planned.
+
 ---
 
 ## What is this?

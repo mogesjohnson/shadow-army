@@ -1,22 +1,76 @@
 name: CI
 
+# Minutes budget (#78): macOS minutes bill at 10x and Windows at 2x on this private repo.
+# - Draft PRs get ubuntu only (same steps, same "test (ubuntu-latest)" check name).
+# - The full ubuntu + macos + windows matrix runs when a PR is ready for review (opened, pushed,
+#   reopened or marked ready while not a draft), on pushes to main, daily if main changed, and by hand.
+# - push is limited to main so a PR branch is never built twice (push + pull_request).
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    # Prose-only files. Not "**/*.md": rules.md, agent.md and orchestratorDelegate.md ship in the
+    # package and are read by the tests.
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/pull_request_template.md"
+  schedule:
+    # Once a day, off-peak (07:23 UTC); skipped by the gate job when main has not changed in 24h.
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+# A newer push to the same PR or branch cancels the run it replaces.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  # Scheduled runs only: is there anything on main from the last day to test?
+  gate:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.recent.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: recent
+        shell: bash
+        run: |
+          age=$(( $(date +%s) - $(git log -1 --format=%ct HEAD) ))
+          if [ "$age" -lt 90000 ]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
+          echo "main's last commit is ${age}s old"
+
   test:
+    needs: gate
+    # gate is skipped for every event except schedule; then only its answer matters.
+    if: ${{ !cancelled() && (needs.gate.result == 'skipped' || needs.gate.outputs.run == 'true') }}
     name: test (${{ matrix.os }})
     strategy:
       # One system failing must not hide the others' results.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.draft && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
+    # Normal runs take 1-6 minutes (windows is the slowest); this only stops hung runs.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,6 +81,8 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm run build
       - run: npm test
+      - name: Native TypeScript 7 language server
+        run: npm run test:lsp
       # The commit-msg hook is a POSIX sh script; check it under a real sh, not only Git for Windows'.
       - name: commit-msg hook under sh
         if: runner.os != 'Windows'
