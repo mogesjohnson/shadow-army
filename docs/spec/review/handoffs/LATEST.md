@@ -1,38 +1,47 @@
-# Handoff: session 10, Fork 1 (2026-10-26)
+# Handoff: session 11 (2026-10-27)
 
-Written by **Fork 1 of session 10** (no fork name and no handoff message reached it). It started no agent. It wrote v0.18, then stopped at the save point: it couldn't read `/context` itself, and the runbook says to assume 120k then. Read this after the runbook's section 1.
+Written by **session 11** (no fork name). It started no agent and changed no spec text. It collected the owner's answers on a questions page, found why PR #77 closed, then stopped at the save point: it couldn't read `/context`, and the owner chose a fresh session over working past 120k. Read this after the runbook's section 1.
 
 ## The range
 
-- Start `3c70397` (session 9 Fork 1's handoff). End: the commit that last changed this file (`git log -1 -- docs/spec/review/handoffs/LATEST.md`).
-- `git diff 3c70397..<end> --stat`: `docs/spec/v2.md`, `ledger.md`, `drafts/v018/repairs.txt` and `fixed.mjs`, `STATE.md`, this file.
-- The spec is **v0.19** (`65d0b43`, snapshot `v2@65d0b43.md` in the main checkout's `.shadow/v2-tools/review/snapshots/`), on v0.18 (`f48b957`).
+- Start `f1a98ad` (session 10 Fork 1's handoff). End: the commit that last changed this file (`git log -1 -- docs/spec/review/handoffs/LATEST.md`).
+- `git diff f1a98ad..<end> --stat`: this file and `STATE.md` only. The spec is still **v0.19** (`65d0b43`).
 
-## Finished
+## What happened outside this branch (2026-10-27)
 
-- **v0.18** (`f48b957`; `drafts/v018/repairs.txt`, 26 blocks): every V17-FC1 repair, N1 to N13 (R-M1-193 to R-M1-205), which also finish R-M1-182 (N1), R-M1-183 (N7), R-M1-186 (N8) and R-M1-187 (N9). Trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems. The ledger marks all 17 rows "repaired in v0.18; to fix-check".
-- Technical choices by the orchestrator, beyond V17-FC1's fix text (the owner may overrule):
-  - N1: the `PATH` cleaning applies on every system, not just Windows, so `#!/usr/bin/env node` is covered too; M1-AC10 tests both.
-  - N2: the post office reads `disableSideloadFlags` from Claude Code's managed settings before starting a claude soldier. Without Q9's stream-json route, that soldier runs without `send`, as agy does.
-  - N3: HOST-1 moved to M1's Implements and out of M5's; M5-AC3 still cites it ("loaded from its release package").
-  - N4: the folders above the snapshots folder are checked for ownership, and those outside the owner's home must hold no `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` or `AGENTS.md`.
-  - N11: M6-AC9's cleanup runs in the soldier's next turn, so both halves of the exemption (made and deleted) are tested. A new case also cards deleting the owner's existing `hotfix` branch with its worktree (N12).
-  - N12: the post office's log records each branch-and-tree pair when both appear, which is how the guard knows a branch was "made with" its tree.
+- From 03:46 to 03:53 UTC, the owner's housekeeping session (in `C:\Users\johns\projects`, session `432ab393`, Opus subagents, on the owner's "review and merge") squash-merged #79, #82, #76 and #71. Main's CI at `72eba4d` passed on all three systems. Codex reviewed none of them.
+- **#77 closed by itself** at 03:47:04Z: its base `claude/63-spec-ideas` (#76's branch) was deleted on merge. Nothing was lost. Main's `docs/spec/v2.md` is `be9deb0`, #76's head, which this branch contains, so `git merge origin/main` here conflicts only in `docs/spec/v2.md`; keep this branch's copy (`git checkout --ours docs/spec/v2.md`).
+- The worktree `../AIConnections-v06` still has `claude/63-spec-ideas` checked out (gone on GitHub). Leave it; the owner cleans up with `!` commands.
+
+## The owner's answers
+
+From the questions page https://claude.ai/artifact/FsB2fmhYKMpsTUTgeqR14P (read with `ArtifactData`, action `list`, collection `answers`):
+
+- **pr77 A:** merge main into this branch, keeping its spec, and open a new draft PR to main that links #77. Milestones go there.
+- **budget A:** the review's PR may stay over 400 lines as a record (one exception). From now on each spec version goes in commits of at most 200 lines and 4 files: repair drafts, spec text, then ledger and state.
+- **probes-short A:** run P-1, P-2, P-3 and P-10 to P-15 between agent passes (about 15 short sessions on the owner's logins, throwaway folders, approving nothing); results into `probes.md`, the ledger and the next version.
+- **probe-p4 A:** later, before M3.
+- **mac-ci A:** P-6 and P-8 now, on GitHub's macOS runners, from a workflow on its own branch that runs on push (nothing on main, no model call). P-6 records `spctl --status` first. P-5 stays a stated risk: the runner image gives `bash` and the runner Full Disk Access (`actions/runner-images`, `images/macos/scripts/build/configure-tccdb-macos.sh`).
+- **tech A:** keep every technical choice of v0.16 to v0.19 (Node.js 22, git 2.34, host 2.1.294, moderate advisories fail CI, `NoDefaultCurrentDirectoryInExePath`, `taskkill /t /f`, N1 to N4, `<soldier>@<n>`, the defaults table in `decisions.md`).
+- **probe-sac B** (said in chat; recorded on the page by Claude): leave Smart App Control off on the owner's PC; spike S7 settles it in M1. Facts: off here (`VerifiedAndReputablePolicyState` 0); this PC's build 26200.9711 can turn it on and off without reinstalling (the April 2026 update); GitHub's Windows runners are Windows Server, which has none.
+- **alpha-q1 A:** carve #75 into slices; close it when the last lands. **alpha-q2 A:** a one-command session is fine as a step toward M1. Alpha Q3 and Q4: unanswered.
+- **order:** no choice; the owner's note: "i want better commit and pr version control habits, we have had bad stuff. can you access the BEST-OF-AI-DEV template and keep what is good and practical? it is not done, grokbots made it and it has no reveiw!! i want you to access and make the rules going forward till i update."
 
 ## Next, in order
 
-1. **Verify round 4's P1 and P2** (R-M1-206 to 218, R-F-157, R-F-158) at rule 6's efforts: Opus high for the three P1s (206, 207, 208) and anything security-related, Sonnet medium for simple ones. Two or three at a time, tight packets first (`tools/packet.mjs`). Reports: `raw/M1-r4-chaos.md`, `raw/F-r4-consistency.md`. Then repair the confirmed findings as v0.20, with round 4's P3s (R-M1-219, R-F-159 to R-F-165, "to apply unverified").
-2. **Owed for round 4:** M1's implementer and F's red team (`drafts/r4/PROMPTS.md`), on v0.18 (`v2@f48b957.md`).
-3. **Fix check V18-FC1** of v0.18 and v0.19 together (and v0.20 if round 4's repairs are in by then), then count round 4. Both streaks are 0; round 5 is the cap (PLAYBOOK section 7).
-
-## The owner's open questions
-
-- **D-30 to D-33 answered: all A** (2026-10-26, in chat, picked on the page https://claude.ai/artifact/MxaMyxHYcNYAhMiHsdmCyN), and **applied as v0.19** (`65d0b43`, snapshot `v2@65d0b43.md`; `drafts/v019/repairs.txt` and `repairs2.txt`, 16 blocks) at the owner's "write it now". Trace 0 problems, Appendix C 0 problems (H38 moved to the after-2.0 list: v2.0 8, after 23). D-30: residuals 7, 8, 12 and residual 13's other-army refs "accepted, D-30". D-31: SES-1 starts soldiers fresh in a new process; R-F-140 (b) in WSP-1, with `/diff` and `/apply` taking `<soldier>@<n>` (WSP-9, HOST-9's table); that notation is the orchestrator's choice. D-32 and D-33 in ARM-7. V18-FC1 should check v0.18 and v0.19 together.
-- The go on M1's probes (`probes.md`).
-- PR #82 (Grok's alpha plan) still waits for review; not part of this runbook.
+1. **v0.20: Smart App Control in the spec.** The owner, in chat: "update this in the spec, and set reminders all along the current spec till the end. so its always fresh. mark it right before places were the error is mostliky going to happen so the model will know that the error was that!!"
+   - PO-19 (v0.19 line 450): a **Smart App Control** bullet beside ConstrainedLanguage mode. Windows 11's Smart App Control runs on App Control's engine and blocks code that is unsigned and unknown to Microsoft, DLLs and some scripts included, with no exception for one app. Until S7 it is unknown whether it runs the script in ConstrainedLanguage mode or blocks the DLL; either way the check fails (PO-14) and no soldier starts. The remedy on that machine is turning it off, since there is no hash rule for it and signing is a non-goal of v2.0. The owner's PC has it off (2026-10-27), so nothing there tests it.
+   - One short "likely cause" note right before each place that failure shows, so a model debugging it knows the cause. Define the marker once in §0 (for example **Likely cause on Windows:** …) and keep each note non-normative (no new IDs), so the trace checker stays at 0. Places, by v0.19 line: 236 (the DACL run: the script's first run, before the secret), 316 (the guardian makes the Job Object), 357 (the package holds the script and DLL), 366 (the check's step 1), 374 (the refusal message: name Smart App Control as a cause too), 447 (`Add-Type -Path`), 467 (containment tests; the windows runner has no Smart App Control), 994 (VER-6 coverage of the C#), 1033 (S7: its Smart App Control result goes into PO-19), 1108 (M1-AC15), 1128 (M1-AC18), and the residual rows 1790 (12) and 1803 (3).
+   - Both checkers; a ledger row for the owner's request; commits within budget A.
+2. **The new draft PR** (pr77 A): in `../AIConnections-review`, `git merge origin/main` keeping this branch's spec, push, then `gh pr create --draft` with the template pasted in (title `#63 …`, `Validation:`, `Tracking: #63`, replaces #77, the six boxes, no closing keyword, budget A's exception named). Comment the link on #77 and #63.
+3. **BEST-OF-AI-DEV rules** (the owner's note): review https://github.com/mogesjohnson/BEST-OF-AI-DEV `template/` (made by Grok bots, unreviewed), keep what is good and practical, and write the commit, PR and version-control rules this repo follows until the owner changes them. Weigh it against `CLAUDE.md`, `CONTRIBUTING.md`, the budgets in `Obsidian-codex-setup/docs/WORKFLOW.md`, and `~/projects/GITHUB_VERSION_CONTROL_PROMPT` (update that too). Its own issue and small PR on main; show the owner before replacing any `CLAUDE.md` rule.
+4. The short probes (probes-short A) and P-6 and P-8 on CI (mac-ci A), between agent passes.
+5. Then the earlier plan: round 4's verifiers (R-M1-206 to 218, R-F-157, R-F-158), M1's implementer and F's red team (`drafts/r4/PROMPTS.md`), and V18-FC1 over v0.18 to v0.20.
 
 ## What the files don't say
 
-- The v0.19 commit is 159 lines in 5 files, one over the 4-file default. The v0.18 commit is 279 lines in 4 files, over the 200-line commit default (WORKFLOW.md, 2026-10-25), because `repairs.txt` is a 175-line draft. PR #77 predates that budget and is far over it anyway; nothing was rewritten.
-- The untracked JSON drafts in `drafts/r3/` and `drafts/v015/` can be rebuilt; leave them untracked.
-- The main checkout's `story.txt` (staged) and `moges*.md` belong to the owner; don't commit them.
+- Correction given to the owner: P-5 to P-8 are also in spike S7, which whoever builds M1 runs (Codex today); the review's own probes are the CLI ones.
+- PR #81 has fix `adf0896` from the housekeeping agents, untested live, still a draft.
+- The main checkout's `main` is 61 commits behind `origin/main`. Don't pull there: the owner's `story.txt` (staged) and `moges*.md` are in it.
+- The status board wasn't touched; the dashboard is refreshed only when the owner asks.
+- The untracked JSON drafts in `drafts/r3/` and `drafts/v015/` stay untracked.

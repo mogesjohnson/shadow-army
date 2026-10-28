@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Session 11 (2026-10-27).** No agent was started and the spec is unchanged (v0.19, `65d0b43`). **PR #77 closed by itself** when #76 merged (its base branch was deleted); nothing was lost, and the owner chose a new draft PR (pr77 A). The owner answered a questions page (https://claude.ai/artifact/FsB2fmhYKMpsTUTgeqR14P): budget A, the short probes A, P-4 later, P-6 and P-8 on CI, the technical choices kept, Smart App Control left off with spike S7 to settle it, alpha Q1 and Q2 A, and a request for new commit and PR rules from the BEST-OF-AI-DEV template. Next, in [`handoffs/LATEST.md`](handoffs/LATEST.md): v0.20 with the Smart App Control notes, the new PR, the rules, then round 4.
+
 **Session 10, Fork 1 (2026-10-26 and 27).** **v0.19** (`65d0b43`, snapshot `v2@65d0b43.md`) applies the owner's D-30 A, D-31 A (with R-F-140 b), D-32 A and D-33 A; both checkers 0 problems. No agent was started. **v0.18** (`f48b957`, snapshot `v2@f48b957.md`; `drafts/v018/repairs.txt`, 26 blocks) applies every V17-FC1 repair (R-M1-193 to R-M1-205, finishing R-M1-182, 183, 186 and 187). Trace 0 problems (119 requirements, 81 ACs); Appendix C 0 problems. The session stopped at the save point because it couldn't read `/context`; next steps are in [`handoffs/LATEST.md`](handoffs/LATEST.md): round 4's verifiers, the owed implementer (M1) and red team (F), then V18-FC1. **The owner answered D-30 to D-33, all A** (2026-10-26, in chat); recorded in `decisions.md`, to apply first in v0.19.
 
 **Session 9, Fork 1 (2026-10-26).** No agent was started. The session stopped at the save point near 120k; [`handoffs/LATEST.md`](handoffs/LATEST.md) has the next steps.
