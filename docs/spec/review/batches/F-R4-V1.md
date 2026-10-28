@@ -1,0 +1,21 @@
+# Packet F-R4-V1: F, round 4, consistency auditor's P2 findings (raised on v0.17, v2@785cc17.md; check them against v0.20, v2@4f481fc.md)
+
+## R-F-157
+
+- severity: P2
+  type: contradiction
+  location: §2 Transcript line (v2@785cc17.md:90); MSG-9 (:633), MSG-10 (:636-637), MSG-6 (:620); HOST-11 (:186-187); M3-AC3 (:1208), M3-AC4 (:1209), M3-AC10 (:1220)
+  claim: The v0.16 glossary repair (R-F-151) says a transcript line never reaches Claude's conversation unless its requirement says so, but MSG-9, MSG-10 and three M3 ACs still word their lines as reaching Claude.
+  scenario: The owner cancels a brief Claude queued for Iron (MSG-10), or stops Iron's turn on that brief (MSG-9). Reading A follows the glossary and HOST-11:187 ("the other rows are for the owner only"): the line is a notice row, so Claude never learns the brief was cancelled or stopped. MSG-8 then wakes Claude when the brief "ended", with nothing in its conversation to say why, and Claude can tell the owner it is still waiting for Iron or send the brief again. Reading B follows MSG-9's "so Claude knows the turn was stopped" and M3-AC10's "Claude gets one line for its own briefs": the line goes into Claude's conversation. A test of M3-AC3 ("Claude gets one line" for a soldier-to-soldier message) that checks Claude's conversation fails against HOST-11, which keeps that row for the owner only. M3-AC4 checks only "Claude's transcript", while MSG-7 requires Claude's conversation.
+  evidence: :90 "a notice row in the owner's transcript, which is not added to Claude's conversation and wakes nobody, unless its requirement says it goes to Claude's conversation"; :187 "Of these, the summary card and MSG-7's line also go into Claude's conversation (MSG-5, MSG-7); the other rows are for the owner only"; :633 "Claude's transcript gets one line, so Claude knows the turn was stopped"; :637 "When the message was Claude's brief, Claude's transcript gets one line saying it was cancelled or changed"; :1208 "Claude gets one line"; :1220 "Claude gets one line for its own briefs ... and Claude gets no line"; :1209 "adds one line to Claude's transcript (MSG-7)"; ledger R-F-151 (repair named only the glossary, MSG-7 and H52).
+  fix: For each line, say where it goes. For example, MSG-9: "Claude's conversation gets one line, so Claude knows the turn was stopped"; MSG-10: "When the message was Claude's brief, Claude's conversation gets one line saying it was cancelled or changed"; add both to HOST-11:187's list. In M3-AC3, write "Claude's transcript (not its conversation) gets one line". In M3-AC4, write "adds one line to Claude's conversation". In M3-AC10, write "Claude's conversation gets one line". If the owner wants these lines for the owner only, drop "so Claude knows" instead.
+
+## R-F-158
+
+- severity: P2
+  type: ambiguity
+  location: VER-6 (v2@785cc17.md:992)
+  claim: VER-6 says code in another language "keeps the same bars through that language's own coverage tool", then says the helper's C, the script and the DLL's C# "join the same count", so a per-language 85% bar and one pooled count are both valid readings.
+  scenario: The C helper reaches 40% line coverage, and the TypeScript post office and channels reach 95% over many more lines. Reading A applies the bar per language: CI fails, because the C is below 85%. Reading B pools the lines into one post-office count of about 90%: CI passes with most of the helper's paths untested. That helper is the code that holds containment (PO-9) and is checked by PO-17. Each CI implementer gates differently.
+  evidence: :992 "Code in another language ... keeps the same bars through that language's own coverage tool ... The containment helper's C counts as the post office's: its lines are measured ... and join the same count ... The Windows script counts the same way, and so does the DLL's C#"; :989 "the post office and the channels keep at least 85% line coverage, counted over the three systems' runs together"; settled.md "Coverage" ("85% line coverage combined over the three systems ... No code excluded, no bar lowered").
+  fix: Choose one and state it. Either "Each language's code keeps 85% line coverage on its own, measured by its own tool, and its lines also join the post office's count", or "Its lines join the post office's one count; no language has a bar of its own."
