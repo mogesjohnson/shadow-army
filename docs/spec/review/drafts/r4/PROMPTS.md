@@ -35,3 +35,7 @@ Other sources you may read: docs/adr/; docs/spec/review/evidence/ (its README li
 
 Return only findings in the schema (docs/spec/review/PLAYBOOK.md lines 305-315), most severe first, then "Coverage: <the requirement IDs and sections you checked>". If you find nothing at P0 to P2, say so, and list what you checked. Read only the lines you need, and grep big files. No preamble and no summary.
 ```
+
+## Round 4's last lenses on v0.20 (2026-10-28, session 15, fork1)
+
+M1's implementer (`raw/M1-r4-implementer.md`) and F's red team (`raw/F-r4-redteam.md`) ran on v0.20 (`v2@4f481fc.md`), with the prompts above changed as follows: the snapshot and every line range moved to v0.20 (M1: HOST 114-120, PO 209-484, CH-1/2 487-514, CH-7 544-547, SI 582-589, ARM-1 699-701, ARM-3 704, ARM-7 732-744, WSP-8 773-776, WSP-10/11 781-804, SEC 852-858, VER 994-1008, M1 1029-1164, frame 1-109, Levels 910-991, Appendix D 1757-1834; F: 1-109, 910-991, 1376-1443, 1757-1834, VER 992-1010, milestones from 1015); D-1 to D-34, all answered, with no open decisions; the charter given by PLAYBOOK line range rather than pasted; and the rows waiting for v0.21 (R-M1-206 to R-M1-234, R-F-157 to R-F-165) listed as not to raise again. Both on `spec-reviewer`, Opus, `high`. R-M1-221 and R-M1-222's verifier: `batches/M1-R4-V3.md`, `spec-verifier`, `high`.
