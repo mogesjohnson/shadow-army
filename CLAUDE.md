@@ -14,10 +14,12 @@ node dist/cli.js army  # run the built CLI (or `sa` after `npm link`)
 
 ## Commits
 
+- The numbered rules in `docs/version-control.md` apply; cite them as V<n>.
 - Subject: `#<issue> <concise action>`, or `[F<n>] <concise action>` for local feature IDs (`[F0]` = repo bootstrap docs). Imperative mood. No `feat:` / `fix:` / `docs:` prefixes.
 - End every commit message with the attribution trailer the session gives (`Co-Authored-By: Claude <model> <noreply@anthropic.com>`). Use the exact line from the session's reminder.
 - Stage files by explicit path. Never `git add -A` or `git add .`: other agents leave untracked files in the working tree.
 - Never force-push, `filter-branch`, or otherwise rewrite pushed history unless the user explicitly asks for it in that session.
+- Size (V6): at most 200 changed lines and 4 files per commit, and 400 lines and 6 files per PR, counting tests, docs, records and lockfiles. Read `git diff --cached --numstat` before each commit, and put the PR's totals in its body as `Size: <lines> lines, <files> files, <commits> commits`. Going over needs the owner's yes before the commit, recorded in the body as `Size exception: <reason>, "<the owner's words>", <date>`.
 - Enforced, not just asked: the `commit-msg` hook in `.githooks/` (turned on by `npm install`) rejects a wrong subject, and the `PR format` workflow checks every PR's title, body and commit subjects. If either rejects, fix the text. Never bypass with `--no-verify`.
 
 ## Pull requests
@@ -25,7 +27,7 @@ node dist/cli.js army  # run the built CLI (or `sa` after `npm link`)
 Follow `.github/pull_request_template.md` exactly.
 
 - Title: `#<issue> <concise action>`.
-- Body: one or two sentences on the resulting behavior and how it is implemented; a short `Validation:` line (checks run, results, material limitations); a `Tracking:` line with the issue and, for stacked work, the base branch; then the checklist.
+- Body: one or two sentences on the resulting behavior and how it is implemented; a short `Validation:` line giving each check one status, `pass`, `fail`, `blocked` or `not_run`, with its command or evidence, and the material limitations (V9; a CI run stopped by billing, quota or an outage is `blocked`, never `pass`); a `Tracking:` line with the issue and, for stacked work, the base branch; then the checklist.
 - `gh pr create --body` skips the template file, so paste the template's checklist into the body yourself.
 - Tick a checklist box only for something actually verified. Leave the rest unchecked and say why on the line.
 - Put the detailed AC-to-evidence mapping and the limitations in a PR comment, not in the body.
@@ -33,11 +35,14 @@ Follow `.github/pull_request_template.md` exactly.
 - The `PR format` check needs: a `#N`/`[F<n>]` title, `Validation:`, `Tracking:`, `Checklist:` with all 6 boxes, and no closing keyword. Edit the PR body to re-run it.
 - Open as a draft unless all required evidence and human acceptance exist. End the body with the PR attribution line the session gives.
 - Stacked work: base the PR on the previous feature branch and name it in `Tracking:`.
+- An owner's explicit instruction that overrides a rule goes in the body as `Overrides: V<n>, "<the owner's words>", <date>`. It covers that one task only.
 
 ## Issues and merging
 
 - Every feature gets an issue with acceptance criteria (AC1, AC2, ...) and the handoff block from `CONTRIBUTING.md`. Branch: `claude/<issue number>-<short-purpose>`.
 - Codex reviews and merges. Claude does not merge, and does not close an issue by assertion.
+- Merge with a merge commit (`gh pr merge <n> --merge`), never squash or rebase (V13): a squash drops the commits a stacked branch shares, so the stacked PR then conflicts.
+- Before merging a PR, retarget each PR based on its branch to the base's own target (`gh pr list --base <branch>`, then `gh pr edit <n> --base main`), and delete the branch only once no open PR names it as its base (V14).
 - Close an issue only when its acceptance is actually complete, and record the exact acceptance scope. If something was not verified (POSIX, a real terminal), say so in a comment on the issue.
 - Comment on the issue or PR at milestones (behavior, evidence, remaining work, blockers), not once per tool call.
 - Do not generate a replacement feature when an issue closes.

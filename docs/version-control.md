@@ -2,7 +2,7 @@
 
 These are the commit, branch, PR and merge rules for this repository. They apply from 2026-10-27 until the owner changes them (#84).
 
-They come from two places. Some are rules from the BEST-OF-AI-DEV template (`template/RULES.md`, v1, written by bots and not yet reviewed), kept where they are good and practical here. The rest are this repository's own rules from `CLAUDE.md`, `CONTRIBUTING.md` and the agents' commit and PR budgets, plus what the incidents of 2026-10-27 taught. Where a rule here differs from `CLAUDE.md`, `CLAUDE.md` wins until the owner accepts the change.
+They come from two places. Some are rules from the BEST-OF-AI-DEV template (`template/RULES.md`, v1, written by bots and not yet reviewed), kept where they are good and practical here. The rest are this repository's own rules from `CLAUDE.md`, `CONTRIBUTING.md` and the agents' commit and PR budgets, plus what the incidents of 2026-10-27 taught. The owner accepted these rules and the matching `CLAUDE.md` changes on PR #85 (2026-10-28), so `CLAUDE.md` now cites them.
 
 Each rule names what enforces it. "Honor" means only this text does, so a reviewer must check it.
 
