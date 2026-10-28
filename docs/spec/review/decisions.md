@@ -548,6 +548,17 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Card** (2026-10-23, in chat): recommended **A**, because a new repository then never runs a soldier above `supervised` until the owner raises it through the trust card, which ARM-7 already requires for the folder's own files, and it costs one config edit.
 - **Answer:** **A**, 2026-10-26, from the owner in chat (picked on the page https://claude.ai/artifact/MxaMyxHYcNYAhMiHsdmCyN): the shipped copy sets every soldier to `supervised`, and ARM-7 says so. Applied in v0.19 (`drafts/v019/repairs.txt`, `repairs2.txt`); to fix-check.
 
+## D-34 Checks we can't run: say they weren't done (the owner's rule, 2026-10-28)
+
+- **Kind:** big: it decides how the spec reports what was never tested.
+- **Context:** the owner has no Mac. GitHub's macOS runners ran P-8, but they have SIP disabled and even ran an unsigned arm64 binary (runs 40711500801 and 40712313007), so anything that depends on Apple's own enforcement can't be settled there. That covers code signing, Gatekeeper and quarantine (P-6), and privacy prompts, which need a person at the screen (P-5). Live soldier runs on a Mac would also need the owner's vendor logins on CI.
+- **Answer** (the owner, in chat, 2026-10-28): "i dont have a mac ... whatever we cant do we will say that testing was not done for that section." D-20 still stands: macOS stays in 2.0.
+- **How to apply:**
+  - Any check that can't be run (no stock Mac, or no machine or login to run it on) gets a **Not tested:** note at the spec section it covers. The note names the check, says why it couldn't run, and says what the section therefore assumes. The section's requirement stays as written.
+  - It goes in the residual list too, and the release notes say it.
+  - A check that runs on CI with a stated limit (P-8: SIP off) counts as tested, and its limit is written beside it.
+  - Now: P-5 and P-6 are **not tested**. So is VER-10's live run on a Mac, unless it can run on CI without the owner's logins. They go into the next version with D-3's macOS parts and R-M1-59.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.

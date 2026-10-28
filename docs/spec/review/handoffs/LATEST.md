@@ -31,7 +31,7 @@ Written by **Fork 1** of session 13 (session name `aiconnections-fe`). It starte
 
 - Alpha Q3 and Q4 (https://claude.ai/artifact/FsB2fmhYKMpsTUTgeqR14P).
 - PR #85: the owner accepted it ("this looks sound, go ahead and implement", 2026-10-28T02:23Z). It waits for Codex's review. Proposal 5 (merge settings) needs the owner's `gh api` command.
-- P-6 on a stock Mac: who runs it.
+- P-6 on a stock Mac: answered by **D-34** (2026-10-28). The owner has no Mac, and any check we can't run gets a **Not tested:** note at its spec section, in the residuals and in the release notes. P-5, P-6 and VER-10's Mac live run are not tested. Put the notes into the next version.
 
 ## What the files don't say
 
