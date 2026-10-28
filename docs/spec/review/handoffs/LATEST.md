@@ -5,7 +5,7 @@ Written by session 15's starter (session name `Second brain standby ⑂`), Fork 
 ## The range
 
 - Start `15d1020`. End: the commit that last changed this file (`git log -1 -- docs/spec/review/handoffs/LATEST.md`).
-- `git diff 15d1020..<end> --stat -- docs/spec`: `review/raw/F-R4-V1.md`, `raw/M1-R4-V1b.md`, `raw/M1-R4-V2.md`, `raw/V18-FC1.md` (reports), `review/probes.md` (P-1, P-2, P-3, P-11, P-12, P-13 and P-15 done), `review/ledger.md` (verdicts, and the new rows R-M1-221 to R-M1-223), `STATE.md` and this file.
+- `git diff 15d1020..<end> --stat -- docs/spec`: `review/raw/F-R4-V1.md`, `raw/M1-R4-V1b.md`, `raw/M1-R4-V2.md`, `raw/V18-FC1.md` (reports), `review/probes.md` (P-1, P-2, P-3, P-11, P-12, P-13 and P-15 done), `review/ledger.md` (verdicts, and the new rows R-M1-221 to R-M1-234), `STATE.md` and this file.
 - Helper scripts, untracked, in `drafts/v021/`: `s15-records.mjs`, `s15-verdicts.mjs`, and `handback.mjs`, which prints a subagent's report from its transcript (`node drafts/v021/handback.mjs ~/.claude/projects/C--Users-johns-projects-AIConnections/<session id>/subagents/agent-<agent id>.jsonl`). On this machine the task `.output` files are empty, so save reports this way rather than retyping them.
 
 ## What is finished
@@ -18,13 +18,13 @@ Written by session 15's starter (session name `Second brain standby ⑂`), Fork 
   - R-M1-222, P2: a claude stop zeroes nothing and loses the stopped turn's cost, so CH-2 511's "reports nothing" should say "not reported". To verify.
   - R-M1-223, P3, applied unverified: record the answers of P-3 (`enabledPlugins` false is what holds; user hooks, skills and MCP servers still load) and P-15 (ExitPlanMode leaves `plan` for `default`; grok lists no modes and takes any `session/set_mode` string).
   - No row for P-13's claude rule file or P-15's grok modes: v0.20 already says both (WSP-11 836, Appendix D 1830; CH-11 575, M6's fake case 1370).
-- **V18-FC1**: still running when this was written; see the last section.
+- **V18-FC1** (`raw/V18-FC1.md`, Opus): no P0; three P2 and eight P3, ledger R-M1-224 to R-M1-234. **R-M1-194 is not fixed** (N1: the post office can't read the managed settings claude reads, since the admin console's come over the network; react to claude's own `disableSideloadFlags` refusal instead). N2: WSP-11's "every folder above it writable by no other user" fails on every Windows drive root, and `.claude/AGENTS.md` is missing from its list. N3: after D-31 nothing tells Claude a soldier is fresh in a new process. Every other repair group landed. It also lists where D-34's **Not tested:** notes go (P-6: 449, 1043, 1321; P-5: 1043, 1321; VER-10's Mac run: 1009, 1318). Fix-check P2s are recorded as "P2, from the fix check", as V17-FC1's were, and go into v0.21 with the rest.
 
 ## Next, in order
 
 1. Measure `/context` first (ask the owner).
 2. Agents, two or three at a time: R-M1-221's verifier (Opus, high: vendor and P1), with R-M1-222 in the same packet; M1's implementer and F's red team (`drafts/r4/PROMPTS.md`, with the snapshot changed to v0.20's `v2@4f481fc.md`, and D-1 to D-34). Those two are round 4's last lenses.
-3. v0.21, drafted in the main session (flow rule 5): the fixes of M1-R4-V1 (R-M1-206 to 211, with V1b's text for 206), M1-R4-V2, F-R4-V1 and V18-FC1, the P3 rows marked "to apply unverified" (R-M1-219, R-M1-223, R-F-159 to R-F-165), R-M1-222 once verified, and D-34's **Not tested:** notes (P-5, P-6, VER-10's Mac live run). Run both checkers, then fix check V21-FC1.
+3. v0.21, drafted in the main session (flow rule 5): the fixes of M1-R4-V1 (R-M1-206 to 211, with V1b's text for 206), M1-R4-V2, F-R4-V1 and V18-FC1 (R-M1-224 to R-M1-234), the P3 rows marked "to apply unverified" (R-M1-219, R-M1-223, R-F-159 to R-F-165), R-M1-222 once verified, and D-34's **Not tested:** notes (P-5, P-6, VER-10's Mac live run). Run both checkers, then fix check V21-FC1.
 4. A side point from V1b, to check before raising: once the restart lifts M1's hold, WSP-10 784 and 790 trust the config as it then stands, so a `filter.*` driver the soldier added counts as the owner's and runs in harness git, the deferred guard included. Grep the ledger for an earlier row on WSP-10's filters first.
 
 ## The owner's open questions
