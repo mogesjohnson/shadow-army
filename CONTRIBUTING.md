@@ -5,6 +5,7 @@ Shadow Army is built one feature at a time. Every change has an issue, a branch,
 ## Ground rules
 
 - **One feature, one issue, one PR.** Keep PRs focused. Stacked work names its required base branch.
+- **Version control.** Commits, branches, PRs, reviews and merges follow the numbered rules in [`docs/version-control.md`](docs/version-control.md), including the size limits, retargeting stacked PRs before their base merges, and merging with a merge commit.
 - **Soldiers stay isolated.** No adapter may read another soldier's transcript or private Vault directory. Only briefs and reports cross the boundary.
 - **Thin orchestrator.** Shadow Army routes work, tracks who owns what, and records history. Behavior that belongs to a model or a CLI stays there. Before adding orchestration logic, check each CLI for a flag, setting, event or output format that already does it, and pass that through instead of rebuilding it.
 - **Hard rules are code.** Routing rules in `orchestratorDelegate.md` (Grok never reviews, `agy` never writes) must be enforced by the router, not just documented.
