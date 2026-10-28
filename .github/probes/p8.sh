@@ -40,7 +40,7 @@ waitn() { # wait up to $2 s for start number $1; prints its log line
   done; return 1
 }
 field() { echo "$1" | tr ' ' '\n' | grep "^$2=" | cut -d= -f2; }
-coal() { sudo launchctl procinfo "$1" 2>&1 | grep -i -E 'coalition|responsible' | tr -s ' \t' ' ' | tr '\n' ';'; }
+coal() { sudo launchctl procinfo "$1" 2>&1 | grep -i -A3 'coalition = {' | grep -i -E 'coalition|ID' | tr -s ' \t' ' ' | tr '\n' ';'; }
 alive() { ps -p "$1" >/dev/null 2>&1 && echo alive || echo gone; }
 
 r "bootstrap: $(launchctl bootstrap "$DOM" "$P" 2>&1; echo "rc=$?")"

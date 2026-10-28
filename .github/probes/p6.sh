@@ -5,6 +5,7 @@ set -u
 r() { echo "P6|$*"; }
 r "spctl-status: $(spctl --status 2>&1)"
 r "os: $(sw_vers -productVersion) $(uname -m)"
+r "sip: $(csrutil status 2>&1 | tr '\n' ';') boot-args: $(nvram boot-args 2>&1 | tr '\n' ';') amfi: $(sysctl -n kern.bootargs 2>&1)"
 
 check() { # $1 label, $2 path, $3 args
   local h="$2"
