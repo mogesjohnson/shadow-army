@@ -1,0 +1,23 @@
+# Probes P-6 and P-8 of the spec 2.0 review (#63). Runs only on pushes to this probe branch.
+name: mac probes
+on:
+  push:
+    branches: [claude/63-mac-probes]
+  workflow_dispatch:
+jobs:
+  probes:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: P-6 ad-hoc signed helper through npm
+        run: bash .github/probes/p6.sh
+      - name: P-8 launchd restarts a killed guardian
+        run: bash .github/probes/p8.sh
