@@ -22,7 +22,7 @@ Each rule names what enforces it. "Honor" means only this text does, so a review
 
 **V4. Stage explicit paths, and only your own files.** Never `git add -A` or `git add .`. Don't commit files you didn't write, such as `.review-*.md` or another agent's untracked files, and never commit `.shadow/`. *Enforced by:* honor; `.gitignore` covers `.shadow/`.
 
-**V5. Commit format.** Subject `#<issue> <action>`, or `[F<n>] <action>` for a local feature ID. Use the imperative mood, at most 72 characters, no `feat:`-style prefix, and no closing keyword (`closes`, `fixes`, `resolves`). The message ends with the attribution trailer the session gives. *Enforced by:* `.githooks/commit-msg` (on after `npm install`) and the `PR format` workflow, both on the subject; the length and the trailer are honor.
+**V5. Commit format.** Subject `#<issue> <action>`, or `[F<n>] <action>` for a local feature ID. Use the imperative mood, at most 72 characters, no `feat:`-style prefix, and no closing keyword (`closes`, `fixes`, `resolves`). The message ends with the attribution trailer the session gives. *Enforced by:* `.githooks/commit-msg` (on after `npm install`) and the `PR format` workflow, both only for the `#<issue>` or `[F<n>]` prefix and a non-empty action. The imperative mood, the length, the closing-keyword ban and the trailer are honor and review: both gates accept `#84 Fixes #63`.
 
 **V6. Size.** One commit is at most 200 changed lines (added plus deleted) and 4 files. One PR is at most 400 lines and 6 files, aiming for two or three cohesive commits. Everything counts: tests, docs, records, generated reports and lockfiles. Before each commit, read `git diff --cached --numstat`. Before opening a PR, read `git diff --numstat origin/main...HEAD`, or the stacked base's diff, and put the totals in the PR body as `Size: <lines> lines, <files> files, <commits> commits`. Split work that would go over a limit. Going over needs the owner's yes before the commit, recorded in the body as `Size exception: <reason>, "<the owner's words>", <date>`. *Enforced by:* honor; no size gate is installed. The standing exception is the spec review's record (#83, the owner's budget A, 2026-10-27).
 
@@ -46,7 +46,7 @@ Each rule names what enforces it. "Honor" means only this text does, so a review
 
 **V14. Retarget stacked PRs before their base merges.** Before merging a PR, list the PRs based on its branch (`gh pr list --base <branch>`), and retarget each one to the base's own target (`gh pr edit <n> --base main`). Then merge, and delete the branch only once no open PR names it as its base. *Enforced by:* honor. On 2026-10-27, #77 closed by itself when #76's merge deleted its base branch.
 
-**V15. Issues close on acceptance.** Link work with `Tracking: #<n>`, never a closing keyword. Close an issue only when its acceptance is complete, and record the exact scope accepted. Whatever wasn't verified (POSIX, a real terminal, a live run) goes in a comment on the issue. *Enforced by:* the `PR format` workflow, for closing keywords; the rest is honor.
+**V15. Issues close on acceptance.** Link work with `Tracking: #<n>`, never a closing keyword. Close an issue only when its acceptance is complete, and record the exact scope accepted. Whatever wasn't verified (POSIX, a real terminal, a live run) goes in a comment on the issue. *Enforced by:* the `PR format` workflow, for closing keywords in the PR body only (commit subjects aren't checked for them, see V5); the rest is honor.
 
 ## Safety and cleanup
 
