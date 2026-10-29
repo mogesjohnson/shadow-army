@@ -21,6 +21,9 @@
  *   CANCEL_QUEUED      (default "false") when "true" and status is CRITICAL,
  *                      cancel queued runs (in_progress runs are never touched)
  *
+ * With --gate, prints only "stale=true" or "stale=false" for the workflow's
+ * gate job: stale when no workflow other than this one ran in the last 25h.
+ *
  * Exit 0 on a completed report. API/network errors exit 1 so the workflow
  * run shows red and gets noticed.
  *
@@ -37,6 +40,8 @@ const MULTIPLIERS = { linux: 1, windows: 2, macos: 10 };
 const WARN_AT = 50;
 const HIGH_AT = 80;
 const CRITICAL_AT = 95;
+const WATCHDOG_WORKFLOW = ".github/workflows/ci-budget-watchdog.yml";
+const IDLE_HOURS = 25;
 
 export function osOf(labels) {
   const l = (labels || []).join(" ").toLowerCase();
@@ -307,6 +312,24 @@ export async function runWatchdog({
   return { total, status, byOs, report, cancelled };
 }
 
+// The gate job's question: did any workflow other than this watchdog run in
+// the last IDLE_HOURS? The watchdog's own runs (the one asking, and the
+// previous daily one) are not activity, or the gate could never report idle.
+export async function hasOtherRecentRuns({ token, owner, repo, now = new Date(), fetch }) {
+  const { gh } = createClient({ token, fetch });
+  const since = isoSeconds(new Date(now.getTime() - IDLE_HOURS * 3600000));
+  for (let page = 1; page <= 10; page++) {
+    const data = await gh(`/repos/${owner}/${repo}/actions/runs`, {
+      params: { created: `>${since}`, per_page: "100", page: String(page) },
+    });
+    const batch = data.workflow_runs || [];
+    // A run's path can carry an @ref suffix.
+    if (batch.some((r) => (r.path || "").split("@")[0] !== WATCHDOG_WORKFLOW)) return true;
+    if (batch.length < 100) return false;
+  }
+  return true; // 1,000 watchdog runs in a day is activity of its own
+}
+
 function configFromEnv(env) {
   const [owner, repo] = (env.GITHUB_REPOSITORY || "").split("/");
   return {
@@ -327,7 +350,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error("GITHUB_TOKEN and GITHUB_REPOSITORY are required.");
     process.exit(1);
   }
-  runWatchdog(config).catch((err) => {
+  // --gate prints the gate job's `stale=` output line instead of the report.
+  const work =
+    process.argv[2] === "--gate"
+      ? hasOtherRecentRuns(config).then((active) => console.log(`stale=${!active}`))
+      : runWatchdog(config);
+  work.catch((err) => {
     console.error(err && err.message ? err.message : err);
     process.exit(1);
   });

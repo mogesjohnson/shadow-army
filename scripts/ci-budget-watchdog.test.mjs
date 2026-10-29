@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { runWatchdog } from "./ci-budget-watchdog.mjs";
+import { parse } from "yaml";
+import { hasOtherRecentRuns, runWatchdog } from "./ci-budget-watchdog.mjs";
 
 const OWNER = "o";
 const REPO = "r";
@@ -156,6 +158,32 @@ describe("billed-minute estimate", () => {
     });
     const { total } = await watch(fake);
     expect(total).toBe(1);
+  });
+});
+
+describe("idle gate", () => {
+  const WATCHDOG = ".github/workflows/ci-budget-watchdog.yml";
+  const now = new Date("2026-10-29T07:24:00Z");
+  const gate = (runs) =>
+    hasOtherRecentRuns({ token: "t", owner: OWNER, repo: REPO, now, fetch: fakeGitHub({ runs }).fetch });
+  const watchdogRuns = [
+    // This run, asking, and yesterday's scheduled run, both inside the 25 h window.
+    run(2, { name: "CI budget watchdog", path: WATCHDOG, status: "in_progress", created: "2026-10-29T07:23:30Z" }),
+    run(1, { name: "CI budget watchdog", path: `${WATCHDOG}@refs/heads/main`, created: "2026-10-28T07:23:10Z" }),
+  ];
+
+  it("reports idle when only the watchdog itself ran", async () => {
+    expect(await gate([...watchdogRuns, run(3, { created: "2026-10-28T06:00:00Z" })])).toBe(false);
+  });
+
+  it("reports activity when any other workflow ran", async () => {
+    expect(await gate([...watchdogRuns, run(3, { created: "2026-10-29T05:00:00Z" })])).toBe(true);
+  });
+
+  it("is the check the workflow's gate job runs", () => {
+    const workflow = parse(readFileSync(new URL(`../${WATCHDOG}`, import.meta.url), "utf8"));
+    const steps = workflow.jobs.gate.steps.map((s) => s.run).filter(Boolean);
+    expect(steps).toEqual(['node scripts/ci-budget-watchdog.mjs --gate | tee -a "$GITHUB_OUTPUT"']);
   });
 });
 

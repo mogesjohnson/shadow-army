@@ -28,8 +28,9 @@ This is an estimate. GitHub's billing page is the source of truth.
 ## Behavior
 
 - Runs daily (~07:23 UTC) on ubuntu-only, plus on demand via
-  `workflow_dispatch`. A gate job skips the run when no workflow runs
-  happened in the last 25 hours.
+  `workflow_dispatch`. A gate job skips the run when no workflow other than
+  the watchdog itself ran in the last 25 hours (its current run and the
+  previous daily run don't count as activity).
 - Every run rewrites one living report comment on #80
   (`<!-- ci-budget-watchdog:report -->`): total vs budget, per-workflow and
   per-OS breakdowns, top-5 burners, burn rate, month-end projection.
