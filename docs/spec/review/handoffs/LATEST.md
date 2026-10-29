@@ -16,7 +16,7 @@ Written by `fork1` (Fork 1 of this chain), at its save point once its context pa
 
 ## Next, in order
 
-1. Do what this save point missed (usage limit): comment on PR #83 with a link to this file, update `.shadow/v2-tools/STATE.md`, the review `STATE.md` and the status board, and capture a second-brain handoff (subject `spec-2-0-review`, superseding the previous one).
+1. ~~Do what this save point missed (usage limit): comment on PR #83 with a link to this file, update `.shadow/v2-tools/STATE.md`, the review `STATE.md` and the status board, and capture a second-brain handoff (subject `spec-2-0-review`, superseding the previous one).~~ Done 2026-10-29 from a fork in its own worktree (`.claude/worktrees/fork1-save`), pushed straight to this branch: `../AIConnections-review` needs `git pull --ff-only` before its next commit. The review `STATE.md`'s "Where things are", unit rows, decisions D-26 to D-35, "Next" and "Waiting on the owner" are now current too.
 2. Measure context: the session transcript's last `usage` (input plus cache read plus cache creation) is an exact reading.
 3. Verify, two or three agents at a time, all Opus `high` (P1, security and vendor findings): R-F-166 with R-F-167; R-F-168 with R-F-169; R-M1-235 with R-M1-236 (write probes P-16 and P-17 in `probes.md` for the owner to run); R-M1-237 to R-M1-242 (Windows and vendor; Sonnet `medium` is fine for 240 to 242).
 4. v0.21 as the previous handoff said (`git show d35e64c:docs/spec/review/handoffs/LATEST.md`), plus R-M1-221 and 222 from `raw/M1-R4-V3.md` and whatever step 3 confirms. Run both checkers, then fix check V21-FC1.
