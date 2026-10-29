@@ -1,31 +1,31 @@
-# Handoff: session 15, fork1, to the next fork (2026-10-28)
+# Handoff: session 17, Fork 0, to fork1 (2026-10-29)
 
-Written by `fork1` (Fork 1 of this chain), at its save point once its context passed 120k. The spec is unchanged (v0.20, `4f481fc`). Read this after the runbook's section 1. ListAgents shows names in lower case with no space. At this handoff `fork2` was not listed, so this went to `fork3`; it hands on to `fork4`.
+Written by the starter session ("Second brain", Fork 0 of this chain; the owner's forks are `fork1` to `fork5`), at its save point once its context passed 120k. The spec is unchanged (v0.20, `4f481fc`). Read this after the runbook's section 1. fork1 hands on to fork2 only if fork2 is free: on the owner's word, fork2 took PR #81's fixes (Codex's five P2s on the CI budget watchdog); if it is still busy, hand on to fork3.
 
 ## The range
 
-- Start `d35e64c`. End: the commit that last changed this file.
-- New: `batches/M1-R4-V3.md` (packet); `raw/M1-R4-V3.md`, `raw/F-r4-redteam.md`, `raw/M1-r4-implementer.md` (reports); `ledger.md` (R-M1-221 and 222 verdicts; new rows R-F-166 to R-F-170 and R-M1-235 to R-M1-245); `drafts/r4/PROMPTS.md` (the v0.20 prompt changes), `drafts/r4/rows-v020*.txt`.
+- Start `8cb612b`. End: the commit that last changed this file. `git diff 8cb612b..HEAD --stat` shows it all.
+- New: `batches/F-R4-V1.md`, `F-R4-V2.md`, `M1-R4-V4.md`, `M1-R4-V5.md`, `M1-R4-V6.md` (packets); `raw/F-R4-V1.md`, `raw/F-R4-V2.md`, `raw/M1-R4-V4.md` (reports); `ledger.md` (verdicts); `tools/save-report.mjs` (saves a report from `~/.claude/projects/<project>/<session>/subagents/agent-<id>.jsonl`; the task's `.output` file is empty); `drafts/r4/verdicts-fork0.json`.
 
 ## What is finished
 
-- **M1-R4-V3** (Opus, high): R-M1-221 **CONFIRMED P1**, not a decision. CH-7 546 already takes every CLI's mode from the autonomy level, so CH-4 gets a new bullet passing `--permission-mode plan` / `auto` / `--always-approve` (xAI documents the flag as overriding the user config), never `/always-approve` or `_meta.yoloMode`; plus §5.1 C 919, M2-AC11 and a new M2-AC case. It applies parked R-M1-71 for grok, and a contract fixture under `always-approve` config gates it. A D-35 card is drafted in the report only in case this reading is rejected. R-M1-222 **CONFIRMED P2**: replace CH-2 511 with a rule keyed on the adapter's own stop (cost and output "not reported"), §5.1 L 983 "or a stop", M2-AC6 and M1-AC3 cases. The report holds paste-ready text.
-- **F's round 4 red team** (`raw/F-r4-redteam.md`): R-F-166 **P1** (fixtures are protected only by `redact()`; VER-4 needs a clean checkout and the owner reading each fixture; maybe a card: review alone, or plus a CI secret scan), R-F-167 P2 (SEC-6 doesn't cover repository text: paths, diffs, ref names), R-F-168 P2 (Appendix D row 8 says "prevented", but start-time `filter.*` drivers run; this is V1b's side point, now this row), R-F-169 P2 (row 13 says "prevented" with no residual 3 exception), R-F-170 P3. All to verify except the P3.
-- **M1's round 4 implementer** (`raw/M1-r4-implementer.md`): R-M1-235 **P1** (`$.http.fetch` follows the host's proxy variables, so the secret can reach a proxy and renewals fail; needs a probe, maybe a card); R-M1-236 to R-M1-242 P2 (the host kills the post office at unload; Windows DACL grants; the Windows guardian channel; Windows PO-5 checks; the mod can't run the sweep; `sa live` and the trust card, to fold into R-M1-207's repair; log names and `--session-id`); R-M1-243 to 245 P3. 235 and 236 need probes.
-- Round 4 is done for every lens. **Neither F nor M1 is clean.**
+- **F-R4-V1** (Opus, high): R-F-166 **DECISION P1**, card **D-36** below. R-F-167 **CONFIRMED P2**: SEC-6 857 widens to every text the mod draws (repository paths, diffs, ref names), with an M1-AC11 and an M2-AC5 case and Appendix D row 4. Paste-ready text in the report.
+- **F-R4-V2** (Opus, high): R-F-168 and R-F-169 **CONFIRMED, each P3 (was P2)**, on R-F-97's precedent (an informative appendix overclaiming). 168 adds residual 14 (filters in the config at start run as the owner's); re-check its last sentence against R-M1-206's fix. 169: row 13 says "prevented, except residual 3".
+- **M1-R4-V4** (Opus, high): R-M1-235 and R-M1-236, see `raw/M1-R4-V4.md` and the ledger.
 
 ## Next, in order
 
-1. ~~Do what this save point missed (usage limit): comment on PR #83 with a link to this file, update `.shadow/v2-tools/STATE.md`, the review `STATE.md` and the status board, and capture a second-brain handoff (subject `spec-2-0-review`, superseding the previous one).~~ Done 2026-10-29 from a fork in its own worktree (`.claude/worktrees/fork1-save`), pushed straight to this branch: `../AIConnections-review` needs `git pull --ff-only` before its next commit. The review `STATE.md`'s "Where things are", unit rows, decisions D-26 to D-35, "Next" and "Waiting on the owner" are now current too.
-2. Measure context: the session transcript's last `usage` (input plus cache read plus cache creation) is an exact reading.
-3. Verify, two or three agents at a time, all Opus `high` (P1, security and vendor findings): R-F-166 with R-F-167; R-F-168 with R-F-169; R-M1-235 with R-M1-236 (write probes P-16 and P-17 in `probes.md` for the owner to run); R-M1-237 to R-M1-242 (Windows and vendor; Sonnet `medium` is fine for 240 to 242).
-4. v0.21 as the previous handoff said (`git show d35e64c:docs/spec/review/handoffs/LATEST.md`), plus R-M1-221 and 222 from `raw/M1-R4-V3.md` and whatever step 3 confirms. Run both checkers, then fix check V21-FC1.
+1. Measure context (the transcript's last `usage`: input plus cache read plus cache creation).
+2. Start the two packets that are ready: `batches/M1-R4-V5.md` (R-M1-237 to 239, `spec-verifier`, Opus, `high`) and `batches/M1-R4-V6.md` (R-M1-240 to 242, `spec-verifier`, `model: sonnet`, effort `medium`). Prompt: "Verify the findings in the packet `<absolute path>`. Read the packet first and follow it. Repository-relative paths in it are under `C:/Users/johns/projects/AIConnections-review/`. The spec text to judge is the frozen snapshot the packet names. Return findings only, one block per finding in your output format, with paste-ready OLD/NEW text for each CONFIRMED one: no preamble, no summary." Save each with `node tools/save-report.mjs`, then `node tools/set-verdicts.mjs ledger.md <verdicts.json>`.
+3. If M1-R4-V4 asked for probes P-16 and P-17, add them to `probes.md` for the owner.
+4. v0.21 as before (`git show d35e64c:docs/spec/review/handoffs/LATEST.md` and `git show 9f01284:docs/spec/review/handoffs/LATEST.md`): every confirmed round 4 and V18-FC1 fix, R-M1-221 and 222 from `raw/M1-R4-V3.md`, this session's confirmed fixes, the unverified P3s, D-34's **Not tested:** notes, and D-36 once the owner answers. Run both checkers, then fix check V21-FC1.
 
 ## The owner's open questions
 
-The haiku model mismatch. PR #85's proposal 5 is done (only merge commits since 2026-10-29). Alpha Q3 was answered A (found 2026-10-29); alpha Q4 is deferred, to be asked again when A6 comes up (`STATE.md`, "Waiting on the owner", has the owner's note and ADR-0004's summary). D-35 isn't needed unless R-M1-221's CONFIRMED reading is rejected. R-F-166, R-F-168 and R-M1-235 may become cards.
+- **D-36 (new): how committed contract fixtures stay free of secrets** (R-F-166). (a) A clean checkout of the commit under test, no secret in any file or the CLI's environment beyond its login, `redact()`, then the owner reads each fixture whole before commit; VER-4 moves into M1. (b) The same plus a secret scan of `test/fixtures/`, run locally before commit and in CI. Recommended: **(a)**. A scanner is pattern-based like `redact()`, and CI scans only after the branch is public. Either way, add a URL password (`://user:pass@`) to WSP-8's patterns. Asked in chat on 2026-10-29; not yet answered.
+- Unchanged: the haiku model mismatch; alpha Q4 deferred until A6; D-35 only if R-M1-221's reading is rejected; R-M1-235 may become a card.
 
 ## What the files don't say
 
-- The harness flags subagent reports that contain `bypassPermissions` or `settings.json` as "instruction-shaped". Here those were vendor facts in the findings, not instructions.
-- Claude Code stopped `fork1`'s hour timer because the machine was low on memory.
+- Codex re-reviewed PR #85 at `0d46282` (C1 fixed, no new findings), but its head is `428295b`, so Codex still has to review that head. PR #81 is fork2's.
+- The harness blocks the Write tool in the main checkout for a forked session; write in `../AIConnections-review` (a linked worktree) instead.
