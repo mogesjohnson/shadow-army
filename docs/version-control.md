@@ -8,7 +8,7 @@ Each rule names what enforces it. "Honor" means only this text does, so a review
 
 **An owner's explicit instruction in the current session overrides any rule.** Record it in the PR body as `Overrides: V<n>, "<the owner's words>", <date>`. An override covers that one task only.
 
-**What GitHub enforces today: nothing.** `main` has no ruleset and no branch protection (checked 2026-10-27). Squash, merge and rebase merges are all allowed, and a merge doesn't delete its branch unless the merge command asks. So every rule below that a hook or workflow doesn't check is honor, and the `PR format` and CI checks only inform: none of them blocks a merge.
+**What GitHub enforces today: only the merge method.** `main` has no ruleset and no branch protection (checked 2026-10-27). Since 2026-10-29 the repository allows only merge commits: the owner turned squash and rebase merges off (V13). A merge doesn't delete its branch unless the merge command asks. So every other rule below that a hook or workflow doesn't check is honor, and the `PR format` and CI checks only inform: none of them blocks a merge.
 
 ## Scope
 
@@ -42,7 +42,7 @@ Each rule names what enforces it. "Honor" means only this text does, so a review
 
 **V12. Merge only on green.** Wait with `gh pr checks <n> --watch --fail-fast`, and merge only when every check passes. Queued, failing, cancelled and blocked runs are not green, and "it passed locally" doesn't count. *Enforced by:* honor.
 
-**V13. Merge with a merge commit.** Use `gh pr merge <n> --merge`, with the subject `#<issue> Merge PR #<n>: <action>`, as `main`'s history did until 2026-10-27, when #79, #82, #76 and #71 were squashed. Don't squash or rebase a PR: a squash drops the commits that a stacked branch shares, so the stacked PR then conflicts. *Enforced by:* honor. Turning squash and rebase merges off in the repository's settings would enforce it, and that needs the owner's yes (V2).
+**V13. Merge with a merge commit.** Use `gh pr merge <n> --merge`, with the subject `#<issue> Merge PR #<n>: <action>`, as `main`'s history did until 2026-10-27, when #79, #82, #76 and #71 were squashed. Don't squash or rebase a PR: a squash drops the commits that a stacked branch shares, so the stacked PR then conflicts. *Enforced by:* GitHub for the method: since 2026-10-29 the repository's settings allow only merge commits (the owner turned squash and rebase merges off). The subject is honor: pass it with `--subject`.
 
 **V14. Retarget stacked PRs before their base merges.** Before merging a PR, list the PRs based on its branch (`gh pr list --base <branch>`), and retarget each one to the base's own target (`gh pr edit <n> --base main`). Then merge, and delete the branch only once no open PR names it as its base. *Enforced by:* honor. On 2026-10-27, #77 closed by itself when #76's merge deleted its base branch.
 
