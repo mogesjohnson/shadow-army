@@ -211,6 +211,19 @@ describe("idle gate", () => {
     const steps = workflow.jobs.gate.steps.map((s) => s.run).filter(Boolean);
     expect(steps).toEqual(['node scripts/ci-budget-watchdog.mjs --gate | tee -a "$GITHUB_OUTPUT"']);
   });
+
+  it("lets every job that checks out the repository read its contents", () => {
+    const workflow = parse(readFileSync(new URL(`../${WATCHDOG}`, import.meta.url), "utf8"));
+    // Scopes a permissions map leaves out are none, and a job's own map replaces
+    // the workflow's, so a private repository's checkout needs contents: read.
+    const canRead = (p) => p === "read-all" || p === "write-all" || ["read", "write"].includes(p?.contents);
+    const checkouts = Object.entries(workflow.jobs).filter(([, job]) =>
+      job.steps.some((s) => s.uses?.startsWith("actions/checkout@")),
+    );
+    expect(checkouts.map(([name]) => name)).toEqual(["gate", "watchdog"]);
+    const unreadable = checkouts.filter(([, job]) => !canRead(job.permissions ?? workflow.permissions));
+    expect(unreadable.map(([name]) => name)).toEqual([]);
+  });
 });
 
 describe("cancel_queued", () => {

@@ -17,6 +17,7 @@ on:
 
 permissions:
   actions: write # cancel_queued POSTs to /actions/runs/{id}/cancel
+  contents: read # actions/checkout in both jobs; a private repo needs it
   issues: write
 
 concurrency:
