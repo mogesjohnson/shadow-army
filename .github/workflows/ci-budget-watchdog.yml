@@ -1,0 +1,66 @@
+name: CI budget watchdog
+
+# Daily check on billed Actions minutes against the monthly budget (issue #80).
+# Deliberately cheap: ubuntu-only, one short job, skipped when nothing ran
+# recently. See docs/ci-budget-watchdog.md.
+
+on:
+  schedule:
+    # ~07:23 UTC daily, same slot as the CI daily gate in #79.
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+    inputs:
+      cancel_queued:
+        description: 'Cancel queued runs if the budget is critical (each is re-read first; runs that started are left alone)'
+        type: boolean
+        default: false
+
+permissions:
+  actions: write # cancel_queued POSTs to /actions/runs/{id}/cancel
+  contents: read # actions/checkout in both jobs; a private repo needs it
+  issues: write
+
+concurrency:
+  group: ci-budget-watchdog
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    # No run of any other workflow in the last 25h means no burn: skip the
+    # check. The watchdog's own runs (this one and yesterday's) don't count.
+    # A public repository's standard runners are free: skip then too.
+    # workflow_dispatch always runs so the report can be forced.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      stale: ${{ steps.check.outputs.stale }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci-budget-watchdog.mjs
+          sparse-checkout-cone-mode: false
+      - name: Check for other recent workflow runs
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/ci-budget-watchdog.mjs --gate | tee -a "$GITHUB_OUTPUT"
+
+  watchdog:
+    needs: gate
+    if: github.event_name == 'workflow_dispatch' || needs.gate.outputs.stale != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run budget watchdog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: '80'
+          BUDGET_MINUTES: '3000'
+          CANCEL_QUEUED: ${{ inputs.cancel_queued }}
+        run: node scripts/ci-budget-watchdog.mjs
