@@ -81,7 +81,7 @@ Adopted 2026-10-20, at the owner's ask, after session 5 spent most of its tokens
 7. **Two or three agents at a time, never five** (section 3). Resuming an agent cut off by the limit re-sends its whole transcript.
 8. **Tighter packets.** Each agent gets exact line ranges and the findings' text inline in its packet, so it reads as little of the spec and the raw reports as it can.
 9. **A fresh main session after each big pass** (a round reviewed and verified, a version applied and fix-checked). `STATE.md` and `NEXT-SESSION.md` carry everything forward, and a short context is cheap.
-10. **The context limit is strict: 120k and 150k** (the owner, 2026-10-23; `RUNBOOK.md` section 3). Measure with `/context`, never the token counter. From 120k, start no agent and no new pass; at 150k, or once the running agents have reported, take the save point and hand off. Never work past 150k.
+10. **The context limit is strict: 170k and 200k** (the owner, 2026-10-23; raised from 120k and 150k on 2026-10-29; `RUNBOOK.md` section 3). Measure with `/context`, never the token counter. From 170k, start no agent and no new pass; at 200k, or once the running agents have reported, take the save point and hand off. Never work past 200k.
 
 Kept as they are, because cutting them would cost quality: three reviewers in round 1; a verifier for every P0 to P2 finding; a fix check for every version; two sign-offs; a judge for every bake-off; cards for big decisions.
 
