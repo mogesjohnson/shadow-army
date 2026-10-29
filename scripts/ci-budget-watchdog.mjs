@@ -23,7 +23,13 @@
  *
  * Exit 0 on a completed report. API/network errors exit 1 so the workflow
  * run shows red and gets noticed.
+ *
+ * The functions are exported for scripts/ci-budget-watchdog.test.mjs; the
+ * report only runs when this file is executed directly.
  */
+
+import { appendFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const API = "https://api.github.com";
 const REPORT_MARKER = "<!-- ci-budget-watchdog:report -->";
@@ -32,67 +38,60 @@ const WARN_AT = 50;
 const HIGH_AT = 80;
 const CRITICAL_AT = 95;
 
-const token = process.env.GITHUB_TOKEN;
-const repoFull = process.env.GITHUB_REPOSITORY || "";
-const [owner, repo] = repoFull.split("/");
-const issueNumber = process.env.ISSUE_NUMBER || "";
-const budget = Math.max(1, parseInt(process.env.BUDGET_MINUTES || "3000", 10));
-const cancelQueued = /^(true|1|yes)$/i.test(process.env.CANCEL_QUEUED || "");
-const billingMonth = process.env.BILLING_MONTH || new Date().toISOString().slice(0, 7); // YYYY-MM
-
-if (!token || !owner || !repo) {
-  console.error("GITHUB_TOKEN and GITHUB_REPOSITORY are required.");
-  process.exit(1);
-}
-
-function osOf(labels) {
+export function osOf(labels) {
   const l = (labels || []).join(" ").toLowerCase();
   if (l.includes("macos")) return "macos";
   if (l.includes("windows")) return "windows";
   return "linux";
 }
 
-function billedMinutesForJob(job) {
+export function billedMinutesForJob(job) {
   if (!job.started_at || !job.completed_at) return null; // still running: not billable yet
   const ms = new Date(job.completed_at) - new Date(job.started_at);
   const minutes = Math.max(1, Math.ceil(ms / 60000));
   return minutes * MULTIPLIERS[osOf(job.labels)];
 }
 
-async function gh(path, { method = "GET", body, params } = {}) {
-  let url = `${API}${path}`;
-  if (params) url += `?${new URLSearchParams(params)}`;
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "shadow-army-ci-budget-watchdog",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (res.status === 204) return null;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(
-      `GitHub API ${method} ${path}: ${res.status} ${JSON.stringify(data).slice(0, 200)}`
-    );
+export function createClient({ token, fetch = globalThis.fetch }) {
+  async function gh(path, { method = "GET", body, params } = {}) {
+    let url = `${API}${path}`;
+    if (params) url += `?${new URLSearchParams(params)}`;
+    const res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "shadow-army-ci-budget-watchdog",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 204) return null;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(
+        `GitHub API ${method} ${path}: ${res.status} ${JSON.stringify(data).slice(0, 200)}`
+      );
+      err.status = res.status;
+      throw err;
+    }
+    return data;
   }
-  return data;
-}
 
-async function paginate(path, { key, params } = {}) {
-  const items = [];
-  for (let page = 1; page <= 50; page++) {
-    const data = await gh(path, { params: { per_page: "100", page: String(page), ...params } });
-    const batch = key ? data[key] || [] : data;
-    if (!Array.isArray(batch)) throw new Error(`unexpected API shape for ${path}`);
-    items.push(...batch);
-    if (batch.length < 100) break;
+  async function paginate(path, { key, params } = {}) {
+    const items = [];
+    for (let page = 1; page <= 50; page++) {
+      const data = await gh(path, { params: { per_page: "100", page: String(page), ...params } });
+      const batch = key ? data[key] || [] : data;
+      if (!Array.isArray(batch)) throw new Error(`unexpected API shape for ${path}`);
+      items.push(...batch);
+      if (batch.length < 100) break;
+    }
+    return items;
   }
-  return items;
+
+  return { gh, paginate };
 }
 
 function monthWindow(ym) {
@@ -112,25 +111,7 @@ function statusFor(pct) {
   return "OK";
 }
 
-async function upsertComment(body) {
-  const comments = await paginate(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`);
-  const existing = comments.find((c) => (c.body || "").includes(REPORT_MARKER));
-  if (existing) {
-    await gh(`/repos/${owner}/${repo}/issues/comments/${existing.id}`, {
-      method: "PATCH",
-      body: { body },
-    });
-    console.log(`updated report comment ${existing.id}`);
-  } else {
-    const created = await gh(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
-      method: "POST",
-      body: { body },
-    });
-    console.log(`created report comment ${created.id}`);
-  }
-}
-
-function renderReport({ monthLabel, total, byWorkflow, byOs, top, daysElapsed, daysInMonth, projected, pct, status }) {
+function renderReport({ monthLabel, total, budget, byWorkflow, byOs, top, daysElapsed, daysInMonth, projected, pct, status }) {
   const badge = { CRITICAL: "🛑", HIGH: "🔶", WARNING: "⚠️", OK: "✅" }[status];
   const fmt = (n) => n.toLocaleString("en-US");
   let report = `${REPORT_MARKER}\n## CI budget report — ${monthLabel}\n\n`;
@@ -158,9 +139,40 @@ function renderReport({ monthLabel, total, byWorkflow, byOs, top, daysElapsed, d
   return report;
 }
 
-async function main() {
-  const { start, end } = monthWindow(billingMonth);
-  const now = new Date();
+export async function runWatchdog({
+  token,
+  owner,
+  repo,
+  issueNumber = "",
+  budget = 3000,
+  cancelQueued = false,
+  billingMonth,
+  now = new Date(),
+  fetch,
+  log = console.log,
+  stepSummary,
+}) {
+  const { gh, paginate } = createClient({ token, fetch });
+
+  async function upsertComment(body) {
+    const comments = await paginate(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`);
+    const existing = comments.find((c) => (c.body || "").includes(REPORT_MARKER));
+    if (existing) {
+      await gh(`/repos/${owner}/${repo}/issues/comments/${existing.id}`, {
+        method: "PATCH",
+        body: { body },
+      });
+      log(`updated report comment ${existing.id}`);
+    } else {
+      const created = await gh(`/repos/${owner}/${repo}/issues/${issueNumber}/comments`, {
+        method: "POST",
+        body: { body },
+      });
+      log(`created report comment ${created.id}`);
+    }
+  }
+
+  const { start, end } = monthWindow(billingMonth || now.toISOString().slice(0, 7)); // YYYY-MM
   // GitHub's range syntax is inclusive on both ends, so stop 1s before the next month.
   const last = new Date(end.getTime() - 1000);
   const runs = await paginate(`/repos/${owner}/${repo}/actions/runs`, {
@@ -214,6 +226,7 @@ async function main() {
   const report = renderReport({
     monthLabel,
     total,
+    budget,
     byWorkflow,
     byOs,
     top: runRows.slice(0, 5),
@@ -224,29 +237,49 @@ async function main() {
     status,
   });
 
-  console.log(report);
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    const { appendFile } = await import("node:fs/promises");
-    await appendFile(process.env.GITHUB_STEP_SUMMARY, `${report}\n`);
-  }
+  log(report);
+  if (stepSummary) await appendFile(stepSummary, `${report}\n`);
   if (issueNumber) await upsertComment(report);
 
+  const cancelled = [];
   if (cancelQueued) {
     if (status !== "CRITICAL") {
-      console.log(`cancel_queued requested but status is ${status} (< ${CRITICAL_AT}%); nothing cancelled.`);
+      log(`cancel_queued requested but status is ${status} (< ${CRITICAL_AT}%); nothing cancelled.`);
     } else {
-      let cancelled = 0;
       for (const run of queued) {
         await gh(`/repos/${owner}/${repo}/actions/runs/${run.id}/cancel`, { method: "POST" });
-        cancelled++;
-        console.log(`cancelled queued run ${run.id} (${run.name})`);
+        cancelled.push(run.id);
+        log(`cancelled queued run ${run.id} (${run.name})`);
       }
-      console.log(`cancelled ${cancelled} queued run(s); in_progress runs untouched.`);
+      log(`cancelled ${cancelled.length} queued run(s); in_progress runs untouched.`);
     }
   }
+
+  return { total, status, byOs, report, cancelled };
 }
 
-main().catch((err) => {
-  console.error(err && err.message ? err.message : err);
-  process.exit(1);
-});
+function configFromEnv(env) {
+  const [owner, repo] = (env.GITHUB_REPOSITORY || "").split("/");
+  return {
+    token: env.GITHUB_TOKEN,
+    owner,
+    repo,
+    issueNumber: env.ISSUE_NUMBER || "",
+    budget: Math.max(1, parseInt(env.BUDGET_MINUTES || "3000", 10)),
+    cancelQueued: /^(true|1|yes)$/i.test(env.CANCEL_QUEUED || ""),
+    billingMonth: env.BILLING_MONTH,
+    stepSummary: env.GITHUB_STEP_SUMMARY,
+  };
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const config = configFromEnv(process.env);
+  if (!config.token || !config.owner || !config.repo) {
+    console.error("GITHUB_TOKEN and GITHUB_REPOSITORY are required.");
+    process.exit(1);
+  }
+  runWatchdog(config).catch((err) => {
+    console.error(err && err.message ? err.message : err);
+    process.exit(1);
+  });
+}
