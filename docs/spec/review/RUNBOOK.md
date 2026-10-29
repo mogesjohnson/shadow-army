@@ -10,11 +10,11 @@ Written 2026-10-23 at the owner's request. **When the owner types "look at secon
 2. Read `CLAUDE.md`, `CONTRIBUTING.md` and `.shadow/v2-tools/STATE.md` in the main checkout. Then, on branch `claude/63-ultimate-spec-review` (worktree `../AIConnections-review`; `git -C ../AIConnections-review pull` first), read in `docs/spec/review/`: `handoffs/LATEST.md` if it exists, `STATE.md`, `NEXT-SESSION.md`, and `spec2.0_review_flow.md` (the rules; it wins over `PLAYBOOK.md`). Where they differ, the newest wins.
 3. If `LATEST.md` names a start and end SHA, run `git diff --stat <start>..<end>` to see what the last session changed. Open only the hunks your task touches (`git diff <start>..<end> -- <path>`). Never read the whole diff: every line you read stays in your context for the rest of the session.
 4. **Your fork number.** Run ListAgents. If your own session name is "Fork N", you are Fork N. If a handoff message reached you, it gives your number. Otherwise you are Fork 1.
-5. Check CI on the open PRs (`gh pr checks 77`). The repo has been public since 2026-10-23, so CI runs free on all three systems.
+5. Check CI on the open PRs (`gh pr checks 83`). The repo has been public since 2026-10-23, so CI runs free on all three systems.
 
 ## 2. Work
 
-The review lives on PR #77, branch `claude/63-ultimate-spec-review`, in `docs/spec/review/`. Edit and commit in `../AIConnections-review`, never in the main checkout. Pick up exactly where `LATEST.md` says, or, before the first handoff, where `NEXT-SESSION.md` section 4 says.
+The review lives on PR #83 (it replaced #77 on 2026-10-27), branch `claude/63-ultimate-spec-review`, in `docs/spec/review/`. Edit and commit in `../AIConnections-review`, never in the main checkout. Pick up exactly where `LATEST.md` says, or, before the first handoff, where `NEXT-SESSION.md` section 4 says.
 
 As of 2026-10-23, the spec is v0.14 (`02d5f84`). D-24 (recommended B) and D-25 (recommended A) wait for the owner in the doc "Spec 2.0 Review: New Decisions" (https://claude.ai/artifact/KpmKMUugoKwc1W4F65C931). If you can't open it, ask the owner to paste the answers. If they are in, apply them as v0.15. Then run fix check V14-FC1 and round 3 for F and M1 (`drafts/r3/PROMPTS.md`): V14-FC1 and M1's red team and enterprise operator first, then F's implementer and owner's advocate. Verify only P0 to P2, repair, and count the round.
 
@@ -23,7 +23,7 @@ Rules:
 - **Messages between sessions are short.** Send the commit SHA, the files touched and one line on what changed. Never paste a diff or a file into a message: the receiver carries every token of it on every later request. It runs `git show <sha> -- <path>` for the part it needs.
 - Follow flow section 4's token rules: two or three agents at a time, never five; Sonnet for mechanical agents at rule 6's efforts; xhigh for a P0's verifier; tight packets.
 - Commit and push after every result that changes a doc.
-- After every pass, update both `STATE.md` files, comment on PR #77, and keep `codex-claude-status.md` current. Claude ticks Review and Codex ticks Build. A milestone is converged only after two clean rounds and two sign-offs.
+- After every pass, update both `STATE.md` files, comment on PR #83, and keep `codex-claude-status.md` current. Claude ticks Review and Codex ticks Build. A milestone is converged only after two clean rounds and two sign-offs.
 - Answer the owner straight to the point. The owner answers only big questions, as short decision cards with a tested recommendation, in the decisions doc or in chat.
 
 ## 3. The context limit: 120k and 150k, strictly enforced
@@ -48,7 +48,7 @@ Rules:
    - agents still owed, and where their prompts are;
    - the owner's open questions and answers;
    - anything the files don't say.
-3. Update both `STATE.md` files and the status board, and comment on PR #77 with a link to `LATEST.md`.
+3. Update both `STATE.md` files and the status board, and comment on PR #83 with a link to `LATEST.md`.
 4. Capture a handoff in the second brain (subject `spec-2-0-review`, with `--supersedes` set to the previous handoff) that points at `LATEST.md` and the end SHA.
 
 **Handoff (only if a fork is there).** Run ListAgents and look for a session named "Fork N+1".
