@@ -16,8 +16,10 @@ billed = Σ over jobs of ceil(job minutes) × OS multiplier
 
 - Job minutes come from each job's `started_at`/`completed_at`.
 - Private-repo multipliers: Linux 1x, Windows 2x, macOS 10x.
-- Jobs still running are skipped (not billable yet); reruns count twice,
-  because GitHub bills them twice.
+- Jobs still running are skipped (not billable yet).
+- Every attempt counts, because GitHub bills each one: job lists are read
+  with `filter=all`. A job that a re-run carried forward from an earlier
+  attempt (a new id, but the same runner and timings) counts once.
 
 This is an estimate. GitHub's billing page is the source of truth.
 

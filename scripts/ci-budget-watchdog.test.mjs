@@ -120,6 +120,28 @@ describe("billed-minute estimate", () => {
     expect(total).toBe(21);
     expect(status).toBe("OK");
   });
+
+  it("counts every attempt's executions once, not only the latest attempt", async () => {
+    // Job records of run 38412963172: Windows failed, was re-run and failed
+    // again; the re-run carried Ubuntu and macOS forward under new ids.
+    const fake = fakeGitHub({
+      runs: [run(38412963172)],
+      jobs: {
+        38412963172: [
+          job(115349815756, { name: "test (windows-latest)", os: "windows-latest", attempt: 1, runner: 1000000561, conclusion: "failure", start: "2026-10-13T14:23:45Z", end: "2026-10-13T14:28:37Z" }),
+          job(115349816352, { name: "test (ubuntu-latest)", attempt: 1, runner: 1000000562, start: "2026-10-13T14:23:45Z", end: "2026-10-13T14:24:36Z" }),
+          job(115349816480, { name: "test (macos-latest)", os: "macos-latest", attempt: 1, runner: 1000000563, start: "2026-10-13T14:23:49Z", end: "2026-10-13T14:24:24Z" }),
+          job(115407157913, { name: "test (windows-latest)", os: "windows-latest", attempt: 2, runner: 1000000573, conclusion: "failure", start: "2026-10-13T16:18:07Z", end: "2026-10-13T16:23:16Z" }),
+          job(115407160543, { name: "test (macos-latest)", os: "macos-latest", attempt: 2, runner: 1000000563, start: "2026-10-13T14:23:49Z", end: "2026-10-13T14:24:24Z" }),
+          job(115407213420, { name: "test (ubuntu-latest)", attempt: 2, runner: 1000000562, start: "2026-10-13T14:23:45Z", end: "2026-10-13T14:24:36Z" }),
+        ],
+      },
+    });
+    const { total, byOs } = await watch(fake);
+    // Windows 10 + 12, Ubuntu 1, macOS 10: not 23 (latest attempt only) or 44 (copies counted twice).
+    expect(byOs).toEqual({ linux: 1, windows: 22, macos: 10 });
+    expect(total).toBe(33);
+  });
 });
 
 describe("cancel_queued", () => {

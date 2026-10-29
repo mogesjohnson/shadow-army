@@ -52,6 +52,20 @@ export function billedMinutesForJob(job) {
   return minutes * MULTIPLIERS[osOf(job.labels)];
 }
 
+// The jobs endpoint lists only the latest attempt unless asked for filter=all,
+// which lists every attempt. A re-run copies the jobs it did not re-run into
+// the new attempt under new ids but with the original runner and timings, so
+// key each execution on those to count it once.
+export function uniqueExecutions(jobs) {
+  const seen = new Set();
+  return jobs.filter((job) => {
+    const key = [job.name, job.runner_id, job.started_at, job.completed_at].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function createClient({ token, fetch = globalThis.fetch }) {
   async function gh(path, { method = "GET", body, params } = {}) {
     let url = `${API}${path}`;
@@ -201,7 +215,12 @@ export async function runWatchdog({
 
   for (const run of runs) {
     if (run.status === "queued") queued.push(run);
-    const jobs = await paginate(`/repos/${owner}/${repo}/actions/runs/${run.id}/jobs`, { key: "jobs" });
+    const jobs = uniqueExecutions(
+      await paginate(`/repos/${owner}/${repo}/actions/runs/${run.id}/jobs`, {
+        key: "jobs",
+        params: { filter: "all" },
+      })
+    );
     let runBilled = 0;
     for (const job of jobs) {
       const billed = billedMinutesForJob(job);
