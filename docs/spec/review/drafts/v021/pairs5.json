@@ -1,0 +1,18 @@
+[
+ [
+  "as in `Shadow Army can't reach its post office: Claude Code refused the request (your organization's policy doesn't allow web fetch)`.",
+  "as in `Shadow Army can't reach its post office: Claude Code refused the request (your organization's policy doesn't allow web fetch)`. Claude Code sends that fetch, to the loopback address too and with its headers, through a proxy named by `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY` or `http_proxy`, whether it is set in the shell or in a project's `.claude/settings.json` `env`, unless `NO_PROXY` lists `127.0.0.1` (probe P-16). So before it first starts the post office, the mod reads those four variables, `NO_PROXY` and `no_proxy`, through `$.env.get` and in the merged settings' `env` through `$.settings.read()`. Where one of them names a proxy and neither `NO_PROXY` nor `no_proxy` lists `127.0.0.1` or `*`, nothing starts, and one transcript line names the variable and the entry to add, as in `Shadow Army: HTTPS_PROXY would send the army's commands through a proxy · add 127.0.0.1 to NO_PROXY · nothing started`."
+ ],
+ [
+  "gives HOST-2's line, and the army stops with no further command sent.",
+  "gives HOST-2's line, and the army stops with no further command sent. With `HTTPS_PROXY` set through the fake `$.env.get`, and in another case `http_proxy` set in the fake `$.settings.read()`'s `env`, and no `NO_PROXY` entry for `127.0.0.1`, nothing starts and the transcript gives HOST-2's proxy line naming that variable. With `NO_PROXY=127.0.0.1,localhost` added, the post office starts."
+ ],
+ [
+  "When the owner's Claude Code process ends, the post office closes every soldier session through that CLI's own exit, and leaves the worktrees and branches in place.",
+  "When the owner's Claude Code process ends, the post office closes every soldier session through that CLI's own exit, unless it is ended outright first (Containment, below), and leaves the worktrees and branches in place. At every normal exit and at the mod's unload, Claude Code ends the processes a mod started before `session.end` runs: on Linux and macOS with `SIGTERM` and then `SIGKILL` 500 ms later, and on Windows with `TerminateProcess` (probe P-17). So at a normal exit the post office is ended outright, and the next start finishes what it left open (PO-1)."
+ ],
+ [
+  "Each other time the post office, its soldiers and the lock end as HOST-2 and PO-7 say, and the run is written up on the PR (HOST-2, PO-7, VER-8).",
+  "Each other time the post office, its soldiers and the lock end as HOST-2 and PO-7 say. A normal exit ends the post office as PO-7's Containment says, and the next start finishes what it left open (PO-1). The run is written up on the PR (HOST-2, PO-1, PO-7, VER-8)."
+ ]
+]
