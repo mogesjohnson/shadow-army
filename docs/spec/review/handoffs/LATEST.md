@@ -30,3 +30,9 @@ Written by the starter session ("Second brain", Fork 0 of this chain; the owner'
 
 - Codex re-reviewed PR #85 at `0d46282` (C1 fixed, no new findings), but its head is `428295b`, so Codex still has to review that head. PR #81 is fork2's.
 - The harness blocks the Write tool in the main checkout for a forked session; write in `../AIConnections-review` (a linked worktree) instead.
+
+## The owner's answers (2026-10-29, after this handoff)
+
+- **D-36: (a).** A clean checkout, `redact()`, then the owner reads each fixture whole; VER-4 into M1; add URL passwords to WSP-8. Apply in v0.21.
+- **D-37: (c).** Run P-16 first, then choose (expected (b)). HOST-2 and M1-AC1 text from `raw/M1-R4-V4.md` goes into v0.21 now.
+- **Probes P-16 and P-17: go.** Given to fork3 to run; their results settle D-37 and R-M1-236.
