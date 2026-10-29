@@ -142,6 +142,21 @@ describe("billed-minute estimate", () => {
     expect(byOs).toEqual({ linux: 1, windows: 22, macos: 10 });
     expect(total).toBe(33);
   });
+
+  it("charges nothing for a job that was skipped and never got a runner", async () => {
+    // Job records of run 40446447077: the draft gate was skipped; only the 22 s test ran.
+    const fake = fakeGitHub({
+      runs: [run(40446447077, { created: "2026-10-27T03:51:00Z" })],
+      jobs: {
+        40446447077: [
+          job(121998771860, { name: "test (ubuntu-latest)", runner: 1000002025, start: "2026-10-27T03:51:03Z", end: "2026-10-27T03:51:25Z" }),
+          job(121998773507, { name: "gate", runner: null, conclusion: "skipped", start: "2026-10-27T03:51:02Z", end: "2026-10-27T03:51:02Z" }),
+        ],
+      },
+    });
+    const { total } = await watch(fake);
+    expect(total).toBe(1);
+  });
 });
 
 describe("cancel_queued", () => {

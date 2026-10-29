@@ -46,6 +46,9 @@ export function osOf(labels) {
 }
 
 export function billedMinutesForJob(job) {
+  // A skipped job, or one that never got a runner, did not execute and bills
+  // nothing; the one-minute minimum below is only for jobs that ran.
+  if (job.conclusion === "skipped" || (job.runner_id == null && !job.runner_name)) return 0;
   if (!job.started_at || !job.completed_at) return null; // still running: not billable yet
   const ms = new Date(job.completed_at) - new Date(job.started_at);
   const minutes = Math.max(1, Math.ceil(ms / 60000));
