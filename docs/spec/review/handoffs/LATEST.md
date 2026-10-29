@@ -58,13 +58,13 @@ None are running. V21-FC1 is owed once v0.21 is fully applied. P-16 and P-17 are
 ## What the files don't say
 
 - `tools/trace-v2.mjs` on the CRLF working copy of `v2.md` falsely reports `M1 implements unknown SHA-256`. Run it on an LF copy: `tr -d '\r' < docs/spec/v2.md > /tmp/v2lf.md`.
-- The owner raised the context limits on 2026-10-29 to 170k (no new agent or pass) and 200k (save point), with a finish-it rule of up to 30k past them. `RUNBOOK.md` section 3 still says 120k and 150k.
+- The owner set the context limits back to 120k (no new agent or pass) and 150k (save point) on 2026-10-29, with one task per session and a finish-it allowance of 20k (never past 170k). `RUNBOOK.md` sections 2 and 3 have the rules.
 - PR #85 still waits for Codex's re-review at `428295b`; PR #81 is fork2's.
 
 ## Everything else in flight (added 2026-10-29 by the "Second brain" session, at the owner's request)
 
 - **Who has what.** No fork is working: fork1 to fork4 wait on hour timers, fork5 is idle. The review has no owner; the next session takes it from this file ("look at second brain and continue work" in `C:\Users\johns\projects\AIConnections`). Use a fresh session, not a fork of a long one: a fork starts with its parent's whole context.
-- **The owner's rules from 2026-10-29** (`RUNBOOK.md` section 3): the context limit is now 170k (no new agent or pass) and 200k (save point). The finish-it rule: before stopping at either limit, estimate what the task in hand still costs, save point included; if it fits within 30k past that limit, finish it instead of handing it off, and write the estimate here. Never past 230k.
+- **The owner's rules from 2026-10-29** (`RUNBOOK.md` sections 2 and 3): one task per session, started fresh; the context limit is 120k (no new agent or pass) and 150k (save point). The finish-it rule: at 150k, measure what the one task still costs, save point included; if it fits within 20k, finish it and write the estimate here. Never past 170k, and never for a second task. Messages between sessions carry the SHA, the files and one line, never a diff.
 - **The owner's answers**: D-36 (a) and D-37 (c), then (b) from P-16; both probes done by fork3 (`raw/P-16.md`, `raw/P-17.md`). P-16's setup made one model call ($0.24) before its dead-port guard.
 - **PR #81** (#80, the CI budget watchdog; Claude's draft): head `b9dface`, waiting for Codex's re-review. fork2 fixed Codex's five P2s, fork4 its next P2 (`contents: read`). The owner granted a V6 size exception and chose "Skip while public"; AC2 reconciled to 2,986 minutes against #78's 3,000. Not run: a checkout while private, a live cancellation, three-OS CI. The PR body ends with a `Co-Authored-By: Ziggy <noreply@muse.dev>` line no Claude session wrote; ask the owner whether to remove it. Don't merge without the owner's word.
 - **PR #85** (#84, version-control rules): Codex reviewed `0d46282` (C1 fixed, no findings), but the head is `428295b`; Codex still has to review it.

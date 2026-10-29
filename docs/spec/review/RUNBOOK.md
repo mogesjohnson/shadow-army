@@ -8,7 +8,7 @@ Written 2026-10-23 at the owner's request. **When the owner types "look at secon
 
 1. Retrieve the second-brain brief: `bash /c/Users/johns/Obsidian-codex-setup/brain.sh brief --cwd "$PWD" --query 'spec 2.0 review continue work' --json`.
 2. Read `CLAUDE.md`, `CONTRIBUTING.md` and `.shadow/v2-tools/STATE.md` in the main checkout. Then, on branch `claude/63-ultimate-spec-review` (worktree `../AIConnections-review`; `git -C ../AIConnections-review pull` first), read in `docs/spec/review/`: `handoffs/LATEST.md` if it exists, `STATE.md`, `NEXT-SESSION.md`, and `spec2.0_review_flow.md` (the rules; it wins over `PLAYBOOK.md`). Where they differ, the newest wins.
-3. If `LATEST.md` names a start and end SHA, run its `git diff` yourself to see the last session's work.
+3. If `LATEST.md` names a start and end SHA, run `git diff --stat <start>..<end>` to see what the last session changed. Open only the hunks your task touches (`git diff <start>..<end> -- <path>`). Never read the whole diff: every line you read stays in your context for the rest of the session.
 4. **Your fork number.** Run ListAgents. If your own session name is "Fork N", you are Fork N. If a handoff message reached you, it gives your number. Otherwise you are Fork 1.
 5. Check CI on the open PRs (`gh pr checks 77`). The repo has been public since 2026-10-23, so CI runs free on all three systems.
 
@@ -19,22 +19,24 @@ The review lives on PR #77, branch `claude/63-ultimate-spec-review`, in `docs/sp
 As of 2026-10-23, the spec is v0.14 (`02d5f84`). D-24 (recommended B) and D-25 (recommended A) wait for the owner in the doc "Spec 2.0 Review: New Decisions" (https://claude.ai/artifact/KpmKMUugoKwc1W4F65C931). If you can't open it, ask the owner to paste the answers. If they are in, apply them as v0.15. Then run fix check V14-FC1 and round 3 for F and M1 (`drafts/r3/PROMPTS.md`): V14-FC1 and M1's red team and enterprise operator first, then F's implementer and owner's advocate. Verify only P0 to P2, repair, and count the round.
 
 Rules:
+- **One task per session** (the owner, 2026-10-29). Take the next task from `LATEST.md`'s next steps, or the one the owner or the handoff names, and only that one. Size it to about 70k of work, so that it ends with its save point by 150k (a session starts at about 64k); if it won't fit, split it first and write the split in `LATEST.md`. When the task is done, go to the save point and hand off, even with room left: a second task would carry the first one's context on every request. Start each task in a fresh session, or in a fork of a session still at its start; never fork a session that has done work.
+- **Messages between sessions are short.** Send the commit SHA, the files touched and one line on what changed. Never paste a diff or a file into a message: the receiver carries every token of it on every later request. It runs `git show <sha> -- <path>` for the part it needs.
 - Follow flow section 4's token rules: two or three agents at a time, never five; Sonnet for mechanical agents at rule 6's efforts; xhigh for a P0's verifier; tight packets.
 - Commit and push after every result that changes a doc.
 - After every pass, update both `STATE.md` files, comment on PR #77, and keep `codex-claude-status.md` current. Claude ticks Review and Codex ticks Build. A milestone is converged only after two clean rounds and two sign-offs.
 - Answer the owner straight to the point. The owner answers only big questions, as short decision cards with a tested recommendation, in the decisions doc or in chat.
 
-## 3. The context limit: 170k and 200k, strictly enforced
+## 3. The context limit: 120k and 150k, strictly enforced
 
-**Raised on 2026-10-29 by the owner from 120k and 150k to 170k and 200k.** The 30k margin before the save point stays.
+**Set back on 2026-10-29 by the owner from 170k and 200k to 120k and 150k**, together with one task per session (section 2). The 30k margin before the save point stays; the finish-it allowance is now 20k.
 
 **This limit is a hard rule, set by the owner (2026-10-23). It is not a guideline.**
 
-- **Measure it with `/context`** (or the owner's figure), before every agent start and at every milestone. Never estimate it from the `total_tokens left` counter, which undercounts context badly: Fork 3 judged itself at about 50k when it was at 232k. If you can't tell, assume you are over 170k.
-- **At 170k:** start no agent, for any reason, the agents this runbook owes included. Let the agents already running finish, and save each report to `raw/` the moment it arrives. A cut-off agent can only be resumed in the session that started it.
-- **From 170k to 200k:** only finish what is in hand: save reports, commit, push. Start no new pass: no verifying, no repair drafting, no new spec version.
-- **At 200k, or as soon as the running agents have reported, whichever comes first:** go to the save point below, then hand off or stop. Never work past 200k, except under the finish-it rule below, and never past 230k.
-- **The finish-it rule (the owner, 2026-10-29).** Before you stop at a limit (170k for an agent or a new pass, 200k for the save point), evaluate the task in hand: what is left of it, and what that costs in context, its save point included. If it can be finished within 30k past that limit, finish it instead of handing it off: a handoff makes the next session re-read and redo the same work, which wastes more. Write the evaluation as one line in `LATEST.md` (the task, the estimate, the reason). Starting an agent counts only its report and saving it; an agent that the next session could not resume must still report before the save point. If the estimate is unsure or over 30k, stop as before. Never past 230k.
+- **Measure it with `/context`** (or the owner's figure), before every agent start and at every milestone. Never estimate it from the `total_tokens left` counter, which undercounts context badly: Fork 3 judged itself at about 50k when it was at 232k, and fork2 at about 140k when it was at 208k. If you can't tell, assume you are over 120k.
+- **At 120k:** start no agent, for any reason, the agents this runbook owes included. Let the agents already running finish, and save each report to `raw/` the moment it arrives. A cut-off agent can only be resumed in the session that started it.
+- **From 120k to 150k:** only finish the task in hand: save reports, commit, push. Start no new pass: no verifying, no repair drafting, no new spec version.
+- **At 150k, or as soon as the task is done and the running agents have reported, whichever comes first:** go to the save point below, then hand off or stop. Never work past 150k, except under the finish-it rule below, and never past 170k.
+- **The finish-it rule (the owner, 2026-10-29; 20k since the limit came back to 150k).** At 150k, evaluate the session's one task: what is left of it, and what that costs in context, its save point included, measured with `/context`, not estimated. If it can be finished within 20k past 150k, finish it instead of handing it off: a handoff makes the next session re-read the same files. Write the evaluation as one line in `LATEST.md` (the task, the estimate, the reason). The rule never covers a new agent, a new pass or a second task. If the estimate is unsure or over 20k, stop as before. Never past 170k.
 
 **Save point (always):**
 1. Commit everything, work in progress included, to `claude/63-ultimate-spec-review`, and push.
