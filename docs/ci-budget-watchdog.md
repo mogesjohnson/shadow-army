@@ -23,6 +23,11 @@ billed = Σ over jobs of ceil(job minutes) × OS multiplier
   with `filter=all`. A job that a re-run carried forward from an earlier
   attempt (a new id, but the same runner and timings) counts once.
 
+- Runs are listed by creation date. GitHub returns at most 1,000 runs for
+  one such query, so a window that matches that many is split in half until
+  each part fits. If a single second holds 1,000 runs, the report stops with
+  an error rather than undercount.
+
 This is an estimate. GitHub's billing page is the source of truth.
 
 ## Behavior

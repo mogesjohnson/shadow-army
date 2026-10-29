@@ -159,6 +159,22 @@ describe("billed-minute estimate", () => {
     const { total } = await watch(fake);
     expect(total).toBe(1);
   });
+
+  it("counts a month with more runs than one listing returns", async () => {
+    // 2,500 one-minute runs spread over October; one created-filtered listing stops at 1,000.
+    const runs = [];
+    const jobs = {};
+    for (let i = 0; i < 2500; i++) {
+      const created = new Date(Date.UTC(2026, 9, 1) + i * 17 * 60000).toISOString().replace(/\.000Z$/, "Z");
+      runs.push(run(i + 1, { created }));
+      jobs[i + 1] = [job(100000 + i, { name: "build", start: created, end: created })];
+    }
+    const fake = fakeGitHub({ runs, jobs });
+    const { total } = await watch(fake);
+    expect(total).toBe(2500);
+    const listings = fake.requests.filter((r) => r.path === RUNS);
+    expect(listings.every((r) => Number(r.params.page) <= 10)).toBe(true);
+  });
 });
 
 describe("idle gate", () => {

@@ -42,6 +42,7 @@ const HIGH_AT = 80;
 const CRITICAL_AT = 95;
 const WATCHDOG_WORKFLOW = ".github/workflows/ci-budget-watchdog.yml";
 const IDLE_HOURS = 25;
+const RESULT_CAP = 1000; // runs GitHub lists for one created-filtered query
 
 export function osOf(labels) {
   const l = (labels || []).join(" ").toLowerCase();
@@ -128,6 +129,33 @@ async function callOrSkip(gh, path, statuses, options) {
   }
 }
 
+// A created-filtered run list returns at most RESULT_CAP runs however many
+// match, so a window that matches that many is split in half, on whole seconds
+// (the range is inclusive at both ends), until each part fits. One second with
+// RESULT_CAP runs can't be split: stop with an error rather than undercount.
+async function listRunsCreated(gh, path, from, to) {
+  const params = { created: `${isoSeconds(from)}..${isoSeconds(to)}`, per_page: "100" };
+  const first = await gh(path, { params: { ...params, page: "1" } });
+  if (first.total_count >= RESULT_CAP) {
+    const seconds = (to - from) / 1000;
+    if (seconds < 1) {
+      throw new Error(`${first.total_count} runs created at ${params.created}; GitHub lists only ${RESULT_CAP}`);
+    }
+    const mid = new Date(from.getTime() + Math.floor(seconds / 2) * 1000);
+    return [
+      ...(await listRunsCreated(gh, path, from, mid)),
+      ...(await listRunsCreated(gh, path, new Date(mid.getTime() + 1000), to)),
+    ];
+  }
+  const runs = [...first.workflow_runs];
+  let batch = first.workflow_runs;
+  for (let page = 2; batch.length === 100 && page <= RESULT_CAP / 100; page++) {
+    batch = (await gh(path, { params: { ...params, page: String(page) } })).workflow_runs;
+    runs.push(...batch);
+  }
+  return runs;
+}
+
 function monthWindow(ym) {
   const [y, m] = ym.split("-").map(Number);
   // Half-open [start, end): a past BILLING_MONTH must not count later months.
@@ -209,10 +237,9 @@ export async function runWatchdog({
   const { start, end } = monthWindow(billingMonth || now.toISOString().slice(0, 7)); // YYYY-MM
   // GitHub's range syntax is inclusive on both ends, so stop 1s before the next month.
   const last = new Date(end.getTime() - 1000);
-  const runs = await paginate(`/repos/${owner}/${repo}/actions/runs`, {
-    key: "workflow_runs",
-    params: { created: `${isoSeconds(start)}..${isoSeconds(last)}` },
-  });
+  // A run listed on two pages (new runs shift the pages while they are read) counts once.
+  const listed = await listRunsCreated(gh, `/repos/${owner}/${repo}/actions/runs`, start, last);
+  const runs = [...new Map(listed.map((r) => [r.id, r])).values()];
 
   let total = 0;
   const byWorkflow = new Map();
