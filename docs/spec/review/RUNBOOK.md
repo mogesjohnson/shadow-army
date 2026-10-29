@@ -33,7 +33,8 @@ Rules:
 - **Measure it with `/context`** (or the owner's figure), before every agent start and at every milestone. Never estimate it from the `total_tokens left` counter, which undercounts context badly: Fork 3 judged itself at about 50k when it was at 232k. If you can't tell, assume you are over 170k.
 - **At 170k:** start no agent, for any reason, the agents this runbook owes included. Let the agents already running finish, and save each report to `raw/` the moment it arrives. A cut-off agent can only be resumed in the session that started it.
 - **From 170k to 200k:** only finish what is in hand: save reports, commit, push. Start no new pass: no verifying, no repair drafting, no new spec version.
-- **At 200k, or as soon as the running agents have reported, whichever comes first:** go to the save point below, then hand off or stop. Never work past 200k.
+- **At 200k, or as soon as the running agents have reported, whichever comes first:** go to the save point below, then hand off or stop. Never work past 200k, except under the finish-it rule below, and never past 230k.
+- **The finish-it rule (the owner, 2026-10-29).** Before you stop at a limit (170k for an agent or a new pass, 200k for the save point), evaluate the task in hand: what is left of it, and what that costs in context, its save point included. If it can be finished within 30k past that limit, finish it instead of handing it off: a handoff makes the next session re-read and redo the same work, which wastes more. Write the evaluation as one line in `LATEST.md` (the task, the estimate, the reason). Starting an agent counts only its report and saving it; an agent that the next session could not resume must still report before the save point. If the estimate is unsure or over 30k, stop as before. Never past 230k.
 
 **Save point (always):**
 1. Commit everything, work in progress included, to `claude/63-ultimate-spec-review`, and push.
