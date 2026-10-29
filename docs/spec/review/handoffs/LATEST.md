@@ -18,6 +18,11 @@ v0.21 is **half applied**, in four batches. Each was applied with `tools/rep.mjs
   - R-M1-212, a technical choice: the macOS start stamp comes through the helper (PO-17) and the Windows stamp through the script, from a new PO-19 **processes** operation. On Windows, PO-7's watch holds a handle in a script run instead of reading the stamp every second. **So the start time adds no binary or dependency**, and no card is needed (the handoff's question at "Where the fixes touch each other").
   - R-M1-219: the lock also names the process that started the post office.
 - **Batch 4** (`c57fe08`): R-M1-221 (CH-4's mode flags), R-M1-222 (CH-2's stop rule), R-M1-235's text for every option of D-37 (HOST-2 119, M1-AC1), and the P3s R-M1-243 to 245.
+- **Batch 5** (`16f1181`, by fork1 after this handoff; trace 0 problems): fork3's probes ran (`6073a3a`; `raw/P-16.md`, `raw/P-17.md`).
+  - **D-37 is (b).** P-16 showed the proxy gets a loopback `$.http.fetch`, headers included, from the shell or from a project's `env`, and `NO_PROXY` stops it. HOST-2 119 now has the mod's proxy check before the first start, and M1-AC1 has its cases.
+  - **R-M1-236 is CONFIRMED P2.** P-17 showed Claude Code ends a mod's spawned process before `session.end`: `SIGTERM` then `SIGKILL` 500 ms later on POSIX, and `TerminateProcess` on Windows. PO-7 262 says so, 263 is kept, and M1-AC8 has the normal exit.
+  - P-17 also found that after a `SIGKILL` of Claude Code on POSIX the post office runs on, orphaned, while on Windows `taskkill /f` takes it along. V21-FC1 should check PO-1 and the lease against that.
+  - Fork1's estimate under the finish-it rule: about 167k after batch 5. The rest of v0.21 (about 25 rows, roughly 75k) is past 30k over the limit, so fork1 stopped.
 
 The ledger rows say `fixed in v0.21, batch N (drafts/v021/repairsN.txt)`. Technical choices not yet recorded in `decisions.md`: R-M1-212's start-time sources, R-M1-208's way of putting PO-8 in M1, and R-M1-214's 60 s and 30 s (the verifier's numbers). Put them there, or in V21-FC1's packet.
 
@@ -43,11 +48,11 @@ Line numbers in the raw reports are v0.20's. Batches 1 to 4 added lines, so find
 
 ## Agents owed
 
-None are running. V21-FC1 is owed once v0.21 is fully applied. Fork3 runs probes P-16 (for D-37) and P-17 (for R-M1-236). Their drafts for each outcome are in `raw/M1-R4-V4.md`, and they go into v0.21 if it's still open, or else v0.22.
+None are running. V21-FC1 is owed once v0.21 is fully applied. P-16 and P-17 are done and in batch 5. The rest of v0.21 starts at `repairs6.txt`.
 
 ## The owner's open questions
 
-- D-37 waits for P-16, and R-M1-236 for P-17 (both fork3's).
+- D-37 and R-M1-236 are settled (batch 5). Still left to the owner from P-17: Windows interactive `/exit`, ctrl+c, window close and `/reload-plugins` (steps in `raw/P-17.md`).
 - Unchanged: the haiku model mismatch; alpha Q4 is deferred until A6; D-35 comes up only if R-M1-221's reading is rejected.
 
 ## What the files don't say
