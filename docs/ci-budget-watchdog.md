@@ -31,8 +31,10 @@ This is an estimate. GitHub's billing page is the source of truth.
   per-OS breakdowns, top-5 burners, burn rate, month-end projection.
 - Thresholds: warning at 50%, high at 80%, critical at 95%.
 - Kill switch: the `cancel_queued` dispatch input (default off) cancels
-  **queued** runs when the budget is critical. `in_progress` runs are never
-  touched, and nothing is cancelled below the critical threshold.
+  **queued** runs when the budget is critical. Each candidate is re-read just
+  before its cancel request and left alone unless it is still queued; a run
+  that finished in between (HTTP 409) is skipped and the rest are still
+  handled. Nothing is cancelled below the critical threshold.
 
 ## Configuration
 
@@ -48,6 +50,10 @@ This is an estimate. GitHub's billing page is the source of truth.
 ## Limitations
 
 - Billing is estimated from job timings, not read from GitHub's billing API.
+- GitHub's cancel endpoint has no "only if still queued" condition, so a run
+  that starts in the one round trip between the re-read and the cancel
+  request can still be cancelled. The re-read narrows that window; it cannot
+  close it.
 - Model/API spend (Claude, Codex, Grok usage) is not tracked by this tool;
   that lives with each vendor's own dashboard.
 - The watchdog itself costs ~1 ubuntu minute per run (~30/month worst case,

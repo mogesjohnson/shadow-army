@@ -94,6 +94,18 @@ export function createClient({ token, fetch = globalThis.fetch }) {
   return { gh, paginate };
 }
 
+// Calls `gh`, but answers undefined for the listed HTTP statuses instead of
+// throwing, so one finished or deleted run does not abandon the rest.
+async function callOrSkip(gh, path, statuses, options) {
+  try {
+    const data = await gh(path, options);
+    return data === null ? {} : data;
+  } catch (err) {
+    if (statuses.includes(err.status)) return undefined;
+    throw err;
+  }
+}
+
 function monthWindow(ym) {
   const [y, m] = ym.split("-").map(Number);
   // Half-open [start, end): a past BILLING_MONTH must not count later months.
@@ -246,12 +258,27 @@ export async function runWatchdog({
     if (status !== "CRITICAL") {
       log(`cancel_queued requested but status is ${status} (< ${CRITICAL_AT}%); nothing cancelled.`);
     } else {
+      // `queued` was listed before every job request and the report, so a
+      // candidate may have started since. Re-read each one just before its POST
+      // and leave it alone unless it is still queued. GitHub's cancel has no
+      // "only if queued" condition, so the re-read narrows the race to one
+      // round trip; it cannot close it.
       for (const run of queued) {
-        await gh(`/repos/${owner}/${repo}/actions/runs/${run.id}/cancel`, { method: "POST" });
+        const current = await callOrSkip(gh, `/repos/${owner}/${repo}/actions/runs/${run.id}`, [404]);
+        if (!current || current.status !== "queued") {
+          log(`left run ${run.id} (${run.name}) alone: ${current ? current.status : "gone"}, not queued`);
+          continue;
+        }
+        // 409: the run completed between the re-read and the POST.
+        const ok = await callOrSkip(gh, `/repos/${owner}/${repo}/actions/runs/${run.id}/cancel`, [409], { method: "POST" });
+        if (ok === undefined) {
+          log(`left run ${run.id} (${run.name}) alone: completed before the cancel`);
+          continue;
+        }
         cancelled.push(run.id);
         log(`cancelled queued run ${run.id} (${run.name})`);
       }
-      log(`cancelled ${cancelled.length} queued run(s); in_progress runs untouched.`);
+      log(`cancelled ${cancelled.length} queued run(s); runs that had started were left alone.`);
     }
   }
 

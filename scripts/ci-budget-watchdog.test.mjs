@@ -121,3 +121,33 @@ describe("billed-minute estimate", () => {
     expect(status).toBe("OK");
   });
 });
+
+describe("cancel_queued", () => {
+  it("re-reads each queued run and never cancels one that started or finished meanwhile", async () => {
+    // Run 1 alone puts the month at 200% of a 10-minute budget: CRITICAL.
+    const runs = [
+      run(1, { created: "2026-10-02T00:00:00Z" }),
+      run(2, { created: "2026-10-05T00:00:00Z", status: "queued" }),
+      run(3, { created: "2026-10-04T00:00:00Z", status: "queued" }),
+      run(4, { created: "2026-10-03T00:00:00Z", status: "queued" }),
+    ];
+    const fake = fakeGitHub({
+      runs,
+      jobs: { 1: [job(11, { name: "build", start: "2026-10-02T00:01:00Z", end: "2026-10-02T00:21:00Z" })] },
+      onRequest: ({ method, path, runs }) => {
+        const byId = (id) => runs.find((r) => r.id === id);
+        // Run 2 starts while the month's jobs are still being listed.
+        if (path === `${RUNS}/1/jobs`) byId(2).status = "in_progress";
+        // Run 3 finishes between its re-read and its cancel POST.
+        if (method === "POST" && path === `${RUNS}/3/cancel`) byId(3).status = "completed";
+      },
+    });
+    const { status, cancelled, lines } = await watch(fake, { budget: 10, cancelQueued: true });
+
+    expect(status).toBe("CRITICAL");
+    expect(fake.requests.some((r) => r.method === "POST" && r.path === `${RUNS}/2/cancel`)).toBe(false);
+    expect(cancelled).toEqual([4]);
+    expect(lines).toContain("left run 2 (CI) alone: in_progress, not queued");
+    expect(lines).toContain("left run 3 (CI) alone: completed before the cancel");
+  });
+});
