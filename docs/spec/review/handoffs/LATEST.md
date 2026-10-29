@@ -23,7 +23,7 @@ Written by `fork1` (Fork 1 of this chain), at its save point once its context pa
 
 ## The owner's open questions
 
-As in the previous handoff: alpha Q3 and Q4, PR #85's proposal 5, the haiku model mismatch. D-35 isn't needed unless R-M1-221's CONFIRMED reading is rejected. R-F-166, R-F-168 and R-M1-235 may become cards.
+PR #85's proposal 5 and the haiku model mismatch. Alpha Q3 was answered A (found 2026-10-29); alpha Q4 is deferred, to be asked again when A6 comes up (`STATE.md`, "Waiting on the owner", has the owner's note and ADR-0004's summary). D-35 isn't needed unless R-M1-221's CONFIRMED reading is rejected. R-F-166, R-F-168 and R-M1-235 may become cards.
 
 ## What the files don't say
 
