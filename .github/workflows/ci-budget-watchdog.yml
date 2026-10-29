@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       cancel_queued:
-        description: 'Cancel queued runs if the budget is critical (in-progress runs are never touched)'
+        description: 'Cancel queued runs if the budget is critical (each is re-read first; runs that started are left alone)'
         type: boolean
         default: false
 

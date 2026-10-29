@@ -19,7 +19,8 @@
  *   BUDGET_MINUTES     (default 3000)
  *   BILLING_MONTH      (default: current UTC month, YYYY-MM)
  *   CANCEL_QUEUED      (default "false") when "true" and status is CRITICAL,
- *                      cancel queued runs (in_progress runs are never touched)
+ *                      cancel the runs still queued when re-read just before
+ *                      each cancel (runs that started are left alone)
  *
  * With --gate, prints only "stale=true" or "stale=false" for the workflow's
  * gate job: stale when no workflow other than this one ran in the last 25h.
