@@ -1,0 +1,3 @@
+[["- **PO-8** (M1, M2; I, F) **A turn ends once, and only when its work has stopped.** In M1 only its session services apply, for the checkout guard (WSP-11); the rest is M2's.","- **PO-8** (M2; I, F) **A turn ends once, and only when its work has stopped.** Its session services apply from M1, for the checkout guard (WSP-11); the rest is M2's."],
+["other than a session service as PO-8 defines it, which never keeps it open;","other than a session service, which never keeps it open (PO-8, →M2; M1 builds its session services for this guard);"],
+["still fails the turn (PO-8);","still fails the turn (PO-8, →M2; its session services are M1's);"]]
