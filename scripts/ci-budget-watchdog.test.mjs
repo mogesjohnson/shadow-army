@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { hasOtherRecentRuns, runWatchdog } from "./ci-budget-watchdog.mjs";
+import { gateSkips, hasOtherRecentRuns, runWatchdog } from "./ci-budget-watchdog.mjs";
 
 const OWNER = "o";
 const REPO = "r";
@@ -15,13 +15,15 @@ function respond(status, data) {
 // 1,000-result cap on created-filtered queries), job lists (filter=latest by
 // default, as documented), single runs and cancellation. `onRequest` runs before
 // each answer, so a test can change a run's state mid-enumeration.
-function fakeGitHub({ runs, jobs = {}, onRequest = () => {} }) {
+function fakeGitHub({ runs, jobs = {}, visibility = { private: true }, onRequest = () => {} }) {
   const requests = [];
   async function fetch(url, { method = "GET" } = {}) {
     const { pathname, searchParams } = new URL(url);
     const params = Object.fromEntries(searchParams);
     requests.push({ method, path: pathname, params });
     onRequest({ method, path: pathname, params, runs });
+
+    if (method === "GET" && pathname === `/repos/${OWNER}/${REPO}`) return respond(200, visibility);
 
     if (method === "GET" && pathname === RUNS) {
       let matching = runs;
@@ -194,6 +196,14 @@ describe("idle gate", () => {
 
   it("reports activity when any other workflow ran", async () => {
     expect(await gate([...watchdogRuns, run(3, { created: "2026-10-29T05:00:00Z" })])).toBe(true);
+  });
+
+  it("skips while the repository is public, however busy it is", async () => {
+    const busy = [...watchdogRuns, run(3, { created: "2026-10-29T05:00:00Z" })];
+    const skips = (visibility) =>
+      gateSkips({ token: "t", owner: OWNER, repo: REPO, now, fetch: fakeGitHub({ runs: busy, visibility }).fetch, log: () => {} });
+    expect(await skips({ private: false })).toBe(true);
+    expect(await skips({ private: true })).toBe(false);
   });
 
   it("is the check the workflow's gate job runs", () => {

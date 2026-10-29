@@ -27,6 +27,7 @@ jobs:
   gate:
     # No run of any other workflow in the last 25h means no burn: skip the
     # check. The watchdog's own runs (this one and yesterday's) don't count.
+    # A public repository's standard runners are free: skip then too.
     # workflow_dispatch always runs so the report can be forced.
     runs-on: ubuntu-latest
     timeout-minutes: 5

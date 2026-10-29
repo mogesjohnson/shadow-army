@@ -23,7 +23,8 @@
  *                      each cancel (runs that started are left alone)
  *
  * With --gate, prints only "stale=true" or "stale=false" for the workflow's
- * gate job: stale when no workflow other than this one ran in the last 25h.
+ * gate job: stale while the repository is public, or when no workflow other
+ * than this one ran in the last 25h.
  *
  * Exit 0 on a completed report. API/network errors exit 1 so the workflow
  * run shows red and gets noticed.
@@ -358,6 +359,19 @@ export async function hasOtherRecentRuns({ token, owner, repo, now = new Date(),
   return true; // 1,000 watchdog runs in a day is activity of its own
 }
 
+// The gate job's answer: skip the report while the repository is public
+// (standard GitHub-hosted runners are free there, so there is no private-repo
+// bill to watch), or when nothing else ran recently.
+export async function gateSkips({ token, owner, repo, now, fetch, log = console.error }) {
+  const { gh } = createClient({ token, fetch });
+  const info = await gh(`/repos/${owner}/${repo}`);
+  if (!info.private) {
+    log("repository is public: standard hosted runners are free, nothing to watch");
+    return true;
+  }
+  return !(await hasOtherRecentRuns({ token, owner, repo, now, fetch }));
+}
+
 function configFromEnv(env) {
   const [owner, repo] = (env.GITHUB_REPOSITORY || "").split("/");
   return {
@@ -381,7 +395,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // --gate prints the gate job's `stale=` output line instead of the report.
   const work =
     process.argv[2] === "--gate"
-      ? hasOtherRecentRuns(config).then((active) => console.log(`stale=${!active}`))
+      ? gateSkips(config).then((skip) => console.log(`stale=${skip}`))
       : runWatchdog(config);
   work.catch((err) => {
     console.error(err && err.message ? err.message : err);
