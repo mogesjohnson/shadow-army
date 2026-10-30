@@ -9,7 +9,7 @@ Written 2026-10-23 at the owner's request. **When the owner types "look at secon
 1. Retrieve the second-brain brief: `bash /c/Users/johns/Obsidian-codex-setup/brain.sh brief --cwd "$PWD" --query 'spec 2.0 review continue work' --json`.
 2. Read `CLAUDE.md`, `CONTRIBUTING.md` and `.shadow/v2-tools/STATE.md` in the main checkout. Then, on branch `claude/63-ultimate-spec-review` (worktree `../AIConnections-review`; `git -C ../AIConnections-review pull` first), read in `docs/spec/review/`: `handoffs/LATEST.md` if it exists, `STATE.md`, `NEXT-SESSION.md`, and `spec2.0_review_flow.md` (the rules; it wins over `PLAYBOOK.md`). Where they differ, the newest wins.
 3. If `LATEST.md` names a start and end SHA, run `git diff --stat <start>..<end>` to see what the last session changed. Open only the hunks your task touches (`git diff <start>..<end> -- <path>`). Never read the whole diff: every line you read stays in your context for the rest of the session.
-4. **Your fork number.** Run ListAgents. If your own session name is "Fork N", you are Fork N. If a handoff message reached you, it gives your number. Otherwise you are Fork 1.
+4. **Your role.** If the owner calls you the main session, or your session name is "main", you are the main session: follow section 4. Otherwise, find your fork number. Run ListAgents. If your own session name is "Fork N" (or "forkN"), you are Fork N. If a handoff or task message reached you, it gives your number. Otherwise you are Fork 1.
 5. Check CI on the open PRs (`gh pr checks 83`). The repo has been public since 2026-10-23, so CI runs free on all three systems.
 
 ## 2. Work
@@ -54,3 +54,21 @@ Rules:
 **Handoff (only if a fork is there).** Run ListAgents and look for a session named "Fork N+1".
 - **Found:** SendMessage it: "You are Fork N+1. Look at second brain and continue work. Handoff: docs/spec/review/handoffs/LATEST.md at <end SHA>." Then stop.
 - **Not found:** tell the owner "No fork." and stop. Don't send anything. The next chat, the same day or the next, starts again from section 1 when the owner says "look at second brain and continue work".
+
+## 4. The main session and its forks
+
+Added 2026-10-30 at the owner's request, so that every future main session knows its role. The owner sets this up by hand: in a fresh session renamed "main", the owner runs `/fork` two or three times. Each fork waits on an hour timer and is renamed "fork1", "fork2" and so on. Every fork starts at main's small starting context.
+
+**The main session coordinates and does not draft.** Its one task is to move the review forward through its forks:
+1. Do section 1, then split `LATEST.md`'s next steps into tasks of about 70k each that don't collide, one per waiting fork (ListAgents shows them as `bg`).
+2. SendMessage each fork its task. Give its fork number, the handoff (`LATEST.md` at its SHA), the rows and sources, the file names it writes (`drafts/<version>/repairsN.txt`, `pairsN.json`, and `ledgerN.json` for the ledger rows), and the rules: **draft only**; don't edit `v2.md` or `ledger.md`; don't commit; dry-run the pairs with `tools/rep.mjs` on a temporary copy; keep each OLD to one sentence; say which fork has which rows; when done, send main one line and stop.
+3. When a fork reports, commit its files at once, by explicit path.
+4. Apply the batches to `v2.md` and `ledger.md` one at a time with `tools/rep.mjs`, fix any OLD text an earlier batch changed, run both checkers (`trace-v2.mjs` on an LF copy), and commit and push.
+5. Run the agent work that follows: freeze the snapshot, then the fix check (one `spec-verifier`) or the next round's reviewers, in flow section 4's numbers. Any new agent waits until section 3's 120k limit is checked.
+6. Make the save point (section 3) for the whole range, then hand off as section 3 says.
+
+**Who starts agents.** A fork drafting repairs from fix text a verifier or reviewer already wrote starts no agents: flow rule 5 makes that the orchestrator's job, and a drafter agent is only for a big merge. Reviewers, verifiers, fix checks and probes are agent work. The main session runs them, or hands one to a fork as that fork's single task, with the packet and the flow's model and effort.
+
+**Why only main writes the shared files.** Every fork works in the same worktree (`../AIConnections-review`). Two sessions that write `v2.md` or `ledger.md`, or commit at once, overwrite each other's edits or collide on git's index lock. Draft files at separate paths never collide.
+
+The 120k and 150k limits apply to main as to any session. Main stays small because it reads only the forks' one-line reports and the checkers' output, never their drafts in full.
