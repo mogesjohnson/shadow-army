@@ -32,7 +32,7 @@ Rules:
 
 **This limit is a hard rule, set by the owner (2026-10-23). It is not a guideline.**
 
-- **Measure it with `/context`** (or the owner's figure), before every agent start and at every milestone. Never estimate it from the `total_tokens left` counter, which undercounts context badly: Fork 3 judged itself at about 50k when it was at 232k, and fork2 at about 140k when it was at 208k. If you can't tell, assume you are over 120k.
+- **Measure it with `/context`** (or the owner's figure, or the cockpit's line in `~/.claude/cockpit/current-context/<session id>.txt`; the id is in the background tasks' output paths), before every agent start and at every milestone. Never estimate it from the `total_tokens left` counter, which undercounts context badly: Fork 3 judged itself at about 50k when it was at 232k, and fork2 at about 140k when it was at 208k. If you can't tell, assume you are over 120k.
 - **At 120k:** start no agent, for any reason, the agents this runbook owes included. Let the agents already running finish, and save each report to `raw/` the moment it arrives. A cut-off agent can only be resumed in the session that started it.
 - **From 120k to 150k:** only finish the task in hand: save reports, commit, push. Start no new pass: no verifying, no repair drafting, no new spec version.
 - **At 150k, or as soon as the task is done and the running agents have reported, whichever comes first:** go to the save point below, then hand off or stop. Never work past 150k, except under the finish-it rule below, and never past 170k.
