@@ -1,0 +1,50 @@
+[
+ [
+  "plements lists VER-4, and M1-AC3 cites it (raw/F-R4-V1.md) |",
+  "plements lists VER-4, and M1-AC3 cites it (raw/F-R4-V1.md) Fix-checked: FIXED (V21-FC1): VER-4, WSP-8, M1's Implements and M1-AC3 agree, and WSP-8 catches the `p4ss` example; which `@` WSP-8's URL rule stops at is V21-FC1 N9 (P3) (`raw/V21-FC1.md`) |"
+ ],
+ [
+  " which also covers M1-R4-V1b's side point (raw/F-R4-V2.md) |",
+  " which also covers M1-R4-V1b's side point (raw/F-R4-V2.md) Fix-checked (V21-FC1): CONFIRMED P3, the residuals number 14 twice (D-34's and the filters); row 8 and the In short line mean the filters, to be renumbered 15 (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "technical choice, the finding's second option, for V21-FC1 |",
+  "technical choice, the finding's second option, for V21-FC1. Fix-checked (V21-FC1): the technical choice is SOUND; rows 12, 13, 15 and 16 are the only rows of 1 to 16 with no X (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "n not checked; M1-AC10 case; Appendix D row 6 cites WSP-10 |",
+  "n not checked; M1-AC10 case; Appendix D row 6 cites WSP-10. Fix-checked: FIXED (V21-FC1); the filter variant is R-F-171, and M1-AC10's transcript line after the fake Claude Code ends is V21-FC1 N11 (P3) (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "t`): HOST-2, PO-7, M1-AC8, the running-turn case in M3-AC1 |",
+  "t`): HOST-2, PO-7, M1-AC8, the running-turn case in M3-AC1. Fix-checked: FIXED (V21-FC1); M1-AC1 has no case for the leaseless `sa live` post office (V21-FC1 N12, P3) (`raw/V21-FC1.md`) |"
+ ],
+ [
+  " session service (PO-8's bullets move to M1), M1-AC11 case |",
+  " session service (PO-8's bullets move to M1), M1-AC11 case. Fix-checked (V21-FC1): the technical choice is SOUND; PO-8's header and **Session services** bullet mark M1's part, and Appendix B's rules hold (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "er OS, compared exactly; M1-AC1's clock and time-zone case |",
+  "er OS, compared exactly; M1-AC1's clock and time-zone case. Fix-checked (V21-FC1): the technical choice is SOUND; V21-FC1 N3 (PO-1's `started 14:02` example), N7 (PO-16's Windows sweep) and N8 (a Windows watch run's lifetime) are P3 (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "y; PO-19's script ends after 30 s; M1-AC1 and M1-AC4 cases |",
+  "y; PO-19's script ends after 30 s; M1-AC1 and M1-AC4 cases. Fix-checked (V21-FC1): NOT SOUND, P2: the numbers match their ACs, but the ready point is undefined, so PO-1's finishing can fall inside the 60 s (V21-FC1 N1, P2); the DACL's 30 s has no AC case (N2, P3) (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "4's mode flags, §5.1 C's fixture, M2-AC2 and M2-AC11 cases |",
+  "4's mode flags, §5.1 C's fixture, M2-AC2 and M2-AC11 cases. Fix-checked: FIXED (V21-FC1); CH-4's precedence citation should add grok-build's configuration guide (V21-FC1 N13, P3) (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "can't be resolved is dropped (beyond the fix check's text) |",
+  "can't be resolved is dropped (beyond the fix check's text) Fix-checked (V21-FC1): dropping an entry that can't be resolved is SOUND; the real-path rule should reach the lookup too, and M1-AC10 lacks the link, letter-case and missing-entry cases (V21-FC1 N10, P3) (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "ractive exits are left to the owner (steps in raw/P-17.md) |",
+  "ractive exits are left to the owner (steps in raw/P-17.md) Fix-checked (V21-FC1): P-17's POSIX orphan is ended by PO-7's watch in bounded time; V21-FC1 N4 (the restart's message), N5 (`EPIPE`) and N6 (PO-7's unobserved macOS, unload and `TerminateProcess` facts, and D-34's note) are P3 (`raw/V21-FC1.md`) |"
+ ],
+ [
+  "| to verify in V21-FC1 | open |",
+  "| DECISION P2 (V21-FC1): the M1 case is already stated by the filters residual (1859), so that part is REFUTED; from M2 an `n`, or a card left unanswered, is undone at the next start, and the held turn's guard (PO-1 228) then runs the soldier's own `filter.*` driver; options (a) keep the hold across restarts, (b) finish held items without the soldier's filters, (c) accept and state it (WSP-10 798 and the filters residual) (`raw/V21-FC1.md`) | open: the option to choose, for v0.22 |"
+ ]
+]
