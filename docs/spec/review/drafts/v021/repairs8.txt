@@ -1,0 +1,88 @@
+v0.21 batch 8 (fork3, session 17, 2026-10-30): R-M1-223 (P3, unverified; probes P-3 and P-15, raw/probes-claude.md and raw/probes-others.md) and D-34's Not tested: notes (P-5, P-6 and VER-10's Mac run, at the places raw/V18-FC1.md names).
+Orchestrator's choices (for V21-FC1 to check):
+- R-M1-223: P-3's answer goes in SET-2 (v0.20's 899), where soldiers start without personal plugins. The adapter names the plugins to turn off from `claude plugin list`, the list P-3 read. M6-AC17's last case, which asked whether the next edit runs after ExitPlanMode, now checks P-15's answer.
+- D-34: each note is a **Not tested:** sub-bullet, the form of the **Likely cause on Windows:** notes. The requirements stay as written. The release notes' line goes in PO-12's Supported bullet, and the residual is a new 14 after 13.
+- D-34 leaves P-8 out: it ran on CI with SIP off and counts as tested, but its result and limit are not yet in S7's first bullet.
+
+R-M1-223, P-3: SET-2, how a claude soldier leaves the owner's plugins out.
+<<< OLD
+Soldiers start without the owner's personal plugins and connectors, where the CLI can leave them out without touching a vendor tool.
+=== NEW
+Soldiers start without the owner's personal plugins and connectors, where the CLI can leave them out without touching a vendor tool. For claude, the `--settings` the adapter passes (CH-2) sets each plugin installed for the owner, as `claude plugin list` names them, to `false` in `enabledPlugins`. Leaving `CLAUDE_CODE_PLUGIN_DIRS` out of its environment is not enough, since the `env` of the owner's user settings can set it again, and `enabledPlugins` drops a plugin loaded that way too (probe P-3, claude 2.1.312). The owner's user-level hooks, skills and MCP servers, the claude.ai connectors and Claude Code's built-in plugins still loaded in P-3: `enabledPlugins` doesn't reach them.
+>>> END
+
+R-M1-223, P-15: CH-11, a plan approved in claude.
+<<< OLD
+From M2, approving it through the relay (CH-6) may switch the live session out of `plan`, as the vendor's documentation says approving a plan does in an interactive session; whether it does in a stream-json `-p` session is for a probe (R-M1-93).
+=== NEW
+From M2, approving it through the relay (CH-6) switches the live session out of `plan`, as the vendor's documentation says approving a plan does in an interactive session. In a stream-json `-p` session, ExitPlanMode comes as a `can_use_tool` request, and a plain allow leaves `plan` for `default`, not `acceptEdits`, so the next edit still asks (probe P-15, claude 2.1.312).
+>>> END
+
+R-M1-223, P-15: CH-11, what the probe found for each vendor.
+<<< OLD
+These are not documented: the control request that claude's CLI takes in stream-json for the first, and whether `grok agent stdio` lists modes and takes `session/set_mode` for the third, as ACP's session-modes page describes.
+=== NEW
+These are not documented: the control request that claude's CLI takes in stream-json for the first, and whether `grok agent stdio` lists modes and takes `session/set_mode` for the third, as ACP's session-modes page describes. Probe P-15 (one run each) found that claude 2.1.312 answers the control request `set_permission_mode` with the mode and shows it in `system/status` and the next `system/init`; that codex's `sandboxPolicy` holds for its turn, stays the thread's default, and keeps the cache; and that grok 1.0.70's `session/new` lists no modes, while its `session/set_mode` answers `{}` to any id, a made-up one included, and changes nothing. So the adapter sends grok 1.0.70 no `session/set_mode`, grok keeps the mode it opened in, as above, and its read-only turns rest on WSP-12. Each mode change made claude rebuild its prompt cache after the fixed prefix (SES-6).
+>>> END
+
+R-M1-223, P-15: M6-AC17's recorded case checks the probe's answer.
+<<< OLD
+and checks whether the next edit runs;
+=== NEW
+and checks that the session leaves `plan` for `default` and that the next edit still asks, as probe P-15 found (CH-11);
+>>> END
+
+D-34, P-6: PO-18's Signing.
+<<< OLD
+The signing and notary credentials are used only by the release workflow (PO-20).
+=== NEW
+The signing and notary credentials are used only by the release workflow (PO-20).
+  - **Not tested:** whether the signed and notarized helper, installed through npm, runs on a stock Mac with no Gatekeeper prompt or block (probe P-6). The owner has no Mac, and CI's macOS runners have SIP turned off and ran even an unsigned arm64 binary, so their runs (40711500801 and 40712313007) settle nothing that rests on Apple's own enforcement (D-34). They did show that npm puts no quarantine attribute on what it installs, and that `spctl --assess` rejects an ad-hoc signature. So this section assumes what Apple documents: a binary signed with a Developer ID, notarized, and with no quarantine attribute runs with no prompt.
+>>> END
+
+D-34, P-5 and P-6: S7's Mac bullet.
+<<< OLD
+and whether the signed helper, installed through npm, runs with no Gatekeeper prompt;
+=== NEW
+and whether the signed helper, installed through npm, runs with no Gatekeeper prompt;
+    - **Not tested:** neither question has been run (probes P-5 and P-6). The owner has no Mac, a privacy prompt needs a person at the screen, which a CI runner doesn't have, and CI's macOS runners have SIP turned off (D-34). Until a stock Mac runs them, M6 assumes that a CLI in the guardian's launchd job raises no prompt that one started from a terminal wouldn't, and that the helper runs as PO-18's Signing says. The release notes say both are untested (PO-12).
+>>> END
+
+D-34, VER-10's Mac run: VER-10.
+<<< OLD
+Each run is written up as VER-8 says.
+=== NEW
+Each run is written up as VER-8 says.
+  - **Not tested:** the macOS run. The owner has no Mac, and the run can't go on CI without the owner's vendor logins there (D-34). Until a Mac runs it, macOS rests on what CI runs on its macOS runners (PO-21), and M6-AC8's write-up and the release notes say the macOS run was not done (PO-12).
+>>> END
+
+D-34, VER-10's Mac run: M6-AC8.
+<<< OLD
+- **M6-AC8** Live: the owner's runs on Linux, macOS and Windows pass, and are written up on the PR with each system's version and terminal (VER-10, VER-8).
+=== NEW
+- **M6-AC8** Live: the owner's runs on Linux, macOS and Windows pass, and are written up on the PR with each system's version and terminal (VER-10, VER-8).
+  - **Not tested:** the macOS run, for the reason VER-10 gives. The write-up says it was not done, and why (D-34).
+>>> END
+
+D-34, P-5 and P-6: M6-AC11.
+<<< OLD
+The run is written up on the PR (PO-13, PO-18, VER-8).
+=== NEW
+The run is written up on the PR (PO-13, PO-18, VER-8).
+  - **Not tested:** this run needs a stock Mac, which the owner doesn't have, and CI's macOS runners, with SIP turned off, settle neither its Gatekeeper check nor its privacy-prompt check (probes P-5 and P-6, D-34). The PR and the release notes say it was not done (PO-12).
+>>> END
+
+D-34: PO-12, the release notes.
+<<< OLD
+Each release's notes list them.
+=== NEW
+Each release's notes list them. For macOS they also say that CI's runners have SIP turned off, and name each check not run on a stock Mac (D-34): the privacy prompts (P-5, S7), Gatekeeper and signing (P-6, PO-18), and the live run (VER-10, →M6).
+>>> END
+
+D-34: Appendix D, residual 14 after 13.
+<<< OLD
+Refs under another army's mark move uncarded in this army (WSP-4): a soldier here can move or delete another army's `shadow/<mark>/` branch while that army has no turn open, and no army cards it (accepted, D-30).
+=== NEW
+Refs under another army's mark move uncarded in this army (WSP-4): a soldier here can move or delete another army's `shadow/<mark>/` branch while that army has no turn open, and no army cards it (accepted, D-30).
+14. **What was not tested on a Mac** (D-34). The owner has no Mac, and CI's macOS runners have SIP turned off, so nothing that rests on Apple's own enforcement is tested. Not tested: whether the helper runs on a stock Mac with no Gatekeeper prompt or block (P-6, PO-18), whether a CLI in the guardian's launchd job raises a privacy prompt that one started from a terminal wouldn't (P-5, S7), and the live macOS run (VER-10, M6-AC8, M6-AC11). macOS stays in 2.0 (D-20) on CI's containment tests and Apple's documented rules, and the release notes say what was not tested (PO-12).
+>>> END
