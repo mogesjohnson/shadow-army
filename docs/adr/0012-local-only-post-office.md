@@ -21,7 +21,7 @@ A credential is never printed whole, and a refused connection is reported.
 - No part of the army is reachable from the network.
 - A soldier's credential lets it do nothing but `send` as itself: it cannot act as the Monarch or read another soldier's work.
 - A soldier that runs code as the owner can still read the Monarch's secret where the system doesn't shield memory, and then act as the Monarch (v2 spec PO-3, Appendix D residual 1; decision D-9, accepted by the owner on 2026-10-17).
-- Security tests are a standing part of CI (v2 spec SEC-1 to SEC-5).
+- Security tests are a standing part of CI (v2 spec SEC-1 to SEC-6).
 
 ## Review
 
