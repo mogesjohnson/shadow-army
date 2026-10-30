@@ -1,41 +1,32 @@
-# Handoff: session 22, the main session (session "main"), to the next session (2026-10-30)
+# Handoff: session 23, the main session (session "main"), to the next session (2026-10-30)
 
-Written by the main session at its save point, at 67k by the cockpit's context line. The owner's N1 decision is recorded, V24-FC1 is done and v0.25 is applied. The next session's one task is fix check V25-FC1. The previous handoff is `git show 74edc93:docs/spec/review/handoffs/LATEST.md`.
+Written by the main session at its save point, at about 118k by the cockpit's context line. V25-FC1 is done, v0.26 is applied, and **V26-FC1 is done and clean** (no new CONFIRMED P0 to P2, flow rule 7). The next session's one task is v0.27 (V26-FC1's six P3 repairs); round 5 follows. The previous handoff is `git show 66563ce:docs/spec/review/handoffs/LATEST.md`.
 
 ## How this session worked
 
-As in sessions 20 and 21, with the three forks one after another, since each step needed the last one's text: fork1 drafted the owner's N1 decision; main applied it and froze `v2@d3cc343.md`; fork2 ran V24-FC1 on that snapshot (one Opus `spec-verifier`, high), with the decision text as its point 5; fork3 drafted all of V24-FC1's findings. Main sent fork3's N2 back once (see below). All three forks have done their one task and stopped.
+Three forks, one after another, since each step needed the last one's result: fork1 ran V25-FC1 on `v2@5e90643.md`; fork2 drafted all six of its findings; main applied them as v0.26 and froze `v2@a411314.md`; fork3 ran V26-FC1 on that snapshot. Each fix check was one Opus `spec-verifier` at high. All three forks have done their one task and stopped. Main read only their one-line reports and the checkers' output.
 
 ## The range
 
-- Start `74edc93`. End: the commit that last changed this file. `git diff 74edc93..HEAD --stat` shows it all.
-- Paths: `docs/spec/v2.md`; `ledger.md`; `decisions.md` (D-38 answered); `batches/V24-FC1.md` (the packet); `raw/V24-FC1.md`; `drafts/v025/` (`repairs1.txt`, `pairs1.json`, `pairs1-decisions.json`, `ledger1.json`, `rows1.txt` from fork1; `repairs3.txt`, `pairs3.json`, `ledger3.json`, `rows3.txt` from fork3).
-- Commits: `cb70c92` and `d3cc343` (the decision drafted and applied), `1d65067` (V24-FC1), then fork3's drafts and `5e90643` (v0.25 batch 3 applied).
+- Start `66563ce`. End: the commit that last changed this file. `git diff 66563ce..HEAD --stat` shows it all.
+- Paths: `docs/spec/v2.md`; `ledger.md`; `batches/V25-FC1.md` and `raw/V25-FC1.md`; `drafts/v026/` (`repairs2.txt`, `pairs2.json`, `ledger2.json`, `rows2.txt`); `batches/V26-FC1.md` and `raw/V26-FC1.md`.
+- Commits: `f47290b` (V25-FC1), `0822676` (fork2's drafts), `a411314` (v0.26 applied), `d0ca51b` (V26-FC1).
 
 ## What is finished
 
-- **The owner's N1 decision** (`d3cc343`): wherever a start's comparison holds harness git, the hold message names the file, says the change can't be told apart from the owner's own, and says how to release it (in M1, undo the edit); M1-AC10 tests the M1 line. The two M2 ideas (Accept this config; Inspect the issue against the project's goals, with its three safety rules) are open question Q10 in section 8, citing D-38 and R-M1-269. New row R-M1-278; D-38 marked answered; the Version row's 0.25 entry begins with it.
-- **V24-FC1** (fork2; `raw/V24-FC1.md`): FIXED 5, SOUND 5, FAITHFUL 3, CONFIRMED 5, REFUTED 2; nothing NOT FIXED, NOT SOUND or NOT FAITHFUL. fork3 notes the counts line disagrees with the table (4 SOUND rows, 1 REFUTED row covering five files); the ledger follows the table. New findings N1 to N10.
-- **v0.25 batch 3** (fork3, `5e90643`), 18 pairs, rows R-M1-279 to 288, 11 ledger verdicts:
-  - **N1, P1** (fork3 settled it from the spec text: nothing named harness git's git folder, so it found it by plain discovery through a snapshot's `.git` file, as WSP-12 840 assumes). WSP-10 795 now gives harness git `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` from what Shadow Army knows (the folder's own, or the log's `worktrees/<id>` entry), and 798's comparison also covers each snapshot's and worktree's `.git` file. M1-AC10 checks the environment with a recording git on `PATH`.
-  - **N2, P2, main's call:** fork3 first took the verifier's `--ignore-submodules=all`, which would stop the checkout guard seeing a soldier's change inside a submodule. Main sent it back. Now 798 compares each checked-out submodule's `.git` file and its `.git/modules/<name>/` `config`, `hooks/` and `info/` (snapshots included; the snapshot command trusts the submodules it checks out), 795 names the submodule's `.git` file as the one exception to the environment rule, and the guard's and claim audit's listings get `--ignore-submodules=none` so a `.gitmodules` `ignore=all` can't hide changes (fork3's addition beyond the fix text). `submodule.recurse=false` was dropped (status ignores it). M1-AC10's case holds harness git for a submodule's filter and its rewritten `.git` file, and still finds a write inside the submodule.
-  - N3 to N10 (P3): a removal cut short (its entry deleted at the next start), the `commondir` AC, M2-AC5's release text, the example line's timing, the M1 line shows no file and no diff (pointing at 799), PO-5's guard-closed record, M1-AC16's real sweep, residual 15's wording. fork3's choices are in `repairs3.txt`'s header.
-  - Both checkers give 0 problems: `trace-v2.mjs` on an LF copy against `v2@d3cc343.md`, and `check-appendix-c.mjs`. `git diff --check` is clean.
-- **Snapshot frozen:** `.shadow/v2-tools/review/snapshots/v2@5e90643.md` (in the main checkout's `.shadow`, LF).
+- **V25-FC1** (fork1): FIXED 9, SOUND 5, NOT SOUND 1, CONFIRMED 5, REFUTED 2. The NOT SOUND was main's submodule alternative for V24 N2. New N1 (P2): a submodule whose `.git` is a folder, a `commondir` in a submodule's git folder, and a gitlink missing from `.gitmodules` each let a submodule's own config run a filter during the guard's listing. N2 to N6 (P3): 792's `--ignore-submodules=none` reaches only the top-level command; 1105's submodule cases; 840 and 798 on a read-only turn's `.git` file; `refs/replace/` at 795; 1109's `commondir` case for the folder's own commands.
+- **v0.26** (fork2's drafts, applied by main at `a411314`): 8 spec pairs, rows R-M1-289 to 294, 11 ledger verdicts. fork2's choices are in `repairs2.txt`'s header: N5 moved to 792's `-c core.useReplaceRefs=false`, because git clears `GIT_NO_REPLACE_OBJECTS` inside submodules; N1's two paths became M1-AC10 1105 cases; no fix weakens the checkout guard. Both checkers give 0 problems: `trace-v2.mjs` on an LF copy against `v2@5e90643.md`, and `check-appendix-c.mjs docs/spec/v2.md docs/spec/v2.md C:/Users/johns/projects/the-future`. `git diff --check` is clean.
+- **V26-FC1** (fork3, on `v2@a411314.md`): its table has FIXED 6, SOUND 7, CONFIRMED 4, and nothing NOT FIXED, NOT SOUND or REFUTED. Its counts line says SOUND 6, CONFIRMED 7, a miscount; the 17 rows are right, so follow the table. V25 N1 is FIXED, main's submodule alternative is now SOUND, and both of fork2's choices are SOUND. New N1 to N6, all P3: N1 residual 15's cost of new submodules; N2 `=` in names against `-c` at 792; N3 `rev-parse` against 1109 and 795; N4 792's grammar; N5 1105's missing cases; N6 795's "compared" wording.
+- **Snapshot frozen:** `.shadow/v2-tools/review/snapshots/v2@a411314.md` (in the main checkout's `.shadow`, LF).
 
-## Next: the one task, V25-FC1
+## Next
 
-Run fix check V25-FC1 on `v2@5e90643.md`: one Opus `spec-verifier` at high, packet in the shape of `batches/V24-FC1.md` (pair-to-line map from `drafts/v025/pairs3.json`). It checks:
-
-1. **N1 (P1)**: the environment rule at 795 and the `.git` file comparison at 798. Does naming `GIT_DIR`/`GIT_COMMON_DIR` break anything harness git does in a snapshot or worktree (WSP-11 811's write check, 798's HEAD check, WSP-12 840)? Is there still a file that redirects config or objects (`objects/info/alternates`, `config.worktree` with `extensions.worktreeConfig`, `info/grafts`, `shallow`)?
-2. **N2 (P2)**: main's alternative. Is the submodule comparison complete (nested submodules, a submodule added or removed by the soldier, `.gitmodules` changes, a submodule's `commondir`)? Does the guard still see every change inside a submodule with `--ignore-submodules=none`, and does running git in a compared submodule stay safe?
-3. N3 to N10, and fork1's decision text (FAITHFUL in V24-FC1; check only that batch 3 didn't break it).
-4. Whether any repair broke a neighbour.
-
-Then save the report to `raw/V25-FC1.md`, and repair what it confirms as v0.26. After a clean fix check, run round 5 for F and M1 (`drafts/r3/PROMPTS.md`'s lenses, two reviewers per unit).
+1. **The one task: v0.27, V26-FC1's six P3 repairs.** One fork drafts them all (WSP-10 792 and 795, M1-AC10 1105 and 1109, residual 15; rows from R-M1-295; ledger verdicts for V26-FC1's items), in `drafts/v027/`. Main applies, runs both checkers and freezes the snapshot.
+2. **Then round 5 for F and M1** (`drafts/r3/PROMPTS.md`'s lenses, two reviewers per unit, flow section 4's models and efforts) on the v0.27 snapshot, as its own session. Verify only P0 to P2, repair, and count the round. **Round 5 is the last round the flow allows** (flow line 122: a unit still failing after five gets a design note to the owner). Round 5's four reviewers can run two at a time, F's pair and M1's pair.
 
 ## Left open
 
-- Main decided N2 itself (a technical call that keeps the checkout guard whole). The owner may overrule it.
+- Main's N2 call from session 22 is now SOUND (V26-FC1); the owner may still overrule it.
 - The owner's other questions are unchanged: P-17's Windows cases, the haiku model mismatch, alpha Q4 deferred until A6, the `Co-Authored-By: Ziggy` line on PR #81, and the cockpit mod's "+" choice.
+- The owner asked for progress figures. Main's estimate: the spec review is about 75% done by work (0 of the 2 clean rounds each milestone needs), the road to first alpha about 40 to 50% (0 of its 13 Part A and B items merged; PR #75 is a draft built against spec v0.5).
 - Cheaper process (Sonnet drafting forks, owner calls settled before forks start): still not adopted.
