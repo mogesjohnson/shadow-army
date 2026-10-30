@@ -23,6 +23,18 @@ As in session 20: the owner ran `/fork` three times and renamed the forks fork1 
   - Both checkers give 0 problems: `trace-v2.mjs` on an LF copy, against `v2@e4cbdb5.md`, and `check-appendix-c.mjs` with `../the-future`. `git diff --check` is clean.
 - **Snapshot frozen:** `.shadow/v2-tools/review/snapshots/v2@cf09e77.md` (LF, 1863 lines).
 
+## First: record the owner's N1 decision (2026-10-30), before V24-FC1
+
+The owner decided N1 (D-38's carried comparison): **keep the main fix**, and added two things. Draft them as small pairs, apply them in the same version as V24-FC1's own repairs or just before it, and give the fix check the new text:
+
+1. **The hold message has three parts.** Wherever a start's comparison holds harness git (WSP-10's card from M2 and the M1 transcript line; M1-AC10 tests the M1 line), it must (a) name the file that changed, (b) say the change can't be told apart from the owner's own, and (c) say how to release the hold. In M1 the release is undoing the edit. The owner, 2026-10-30: "documentation is what most important so thing can get tied back."
+2. **Two M2 ideas, recorded as ideas only (not drafted as requirements):**
+   - **Accept this config:** on the M2 hold card, the owner confirms the change is theirs; Shadow Army takes the current config as its new trusted state and harness git goes on.
+   - **Inspect the issue against the project's goals** (the owner's name for it): an Inspect step on the same card. It shows the diff of the changed file (from N2's copy beside the log) and says plainly what program a filter or similar setting would run and on which files. The Monarch then reads the change with `rules.md`, `agent.md` and the task that was running when the session ended, and says whether anything there explains it or it looks out of place, and gives a plain recommendation (accept or undo). Its three safety rules: it advises and never releases (only the owner accepts, since a soldier that planted a filter can also plant text aimed at the inspector); it reads the file as text and never runs git; it runs as the Monarch, read-only.
+   Record both where the spec keeps M2 ideas, citing D-38 and R-M1-269, with no rules or wording beyond the above.
+
+Then add a ledger row for the decision, and mark D-38's open question answered.
+
 ## Next: the one task, V24-FC1
 
 Run fix check V24-FC1 on `v2@cf09e77.md`: one Opus `spec-verifier` at high, with a tight packet in the shape of `batches/V23-FC1.md` (a pair-to-line map from `drafts/v024/pairs2.json` and `pairs3.json`). It checks:
@@ -36,6 +48,6 @@ Then save the report to `raw/V24-FC1.md`, set its verdicts, and repair what it c
 
 ## Left open
 
-- **The owner's call on N1 (D-38's carried comparison)**: asked again on 2026-10-30. Main recommended keeping the main fix (fail closed: hold harness git, say why, and in M1 release by undoing the edit; an "accept this config" step is an idea for M2, not drafted). The owner hasn't answered. v0.24 builds on the main fix. If the owner picks the alternative instead (fix nothing, state the gap in residual 15), revert v0.23's N1 pairs and v0.24's N1, N2, N5 and N9 pairs, and write residual 15's sentence.
+- **The owner's call on N1 is answered** (2026-10-30, after the save point): keep the main fix. See "First" above.
 - The owner's other questions are unchanged: P-17's Windows cases, the haiku model mismatch, alpha Q4 deferred until A6, the `Co-Authored-By: Ziggy` line on PR #81, and the cockpit mod's "+" choice.
 - The owner asked whether the process could be cheaper. Main suggested running drafting forks on Sonnet (`/model sonnet` right after `/fork`, before the first wait) and settling owner calls before forks start. Neither is adopted yet.
