@@ -1,0 +1,168 @@
+v0.14 repairs: fix check V13-FC1's findings (raw/V13-FC1.md), against v0.13 (v2@ecf1e80.md). Written by the orchestrator, session 7, 2026-10-21.
+
+N1 (R-M1-156, P2; R-M1-108 NOT FIXED in v0.13): the guard leaves out every other working tree's metadata, as WSP-10 does.
+<<< OLD
+and each worktree's metadata, as WSP-10 defines it, less another army's (WSP-10);
+=== NEW
+and each worktree's metadata, as WSP-10 defines it, less what WSP-10 leaves out: another army's, and that of any other working tree of the repository (WSP-10);
+>>> END
+
+<<< OLD
+so another soldier's snapshot made or removed during the turn is no change, and neither is another army's snapshot or worktree, which WSP-10 leaves out.
+=== NEW
+so another soldier's snapshot made or removed during the turn is no change, and neither is another army's snapshot or worktree, or any other working tree of the repository, whose metadata WSP-10 leaves out.
+>>> END
+
+<<< OLD
+  - an edit made between agy's turns raises nothing;
+=== NEW
+  - an edit made between agy's turns raises nothing;
+  - during an agy turn, `git worktree add` makes a linked working tree outside the folder, and `git worktree remove` removes it. The turn passes with no card, harness git is never held, and Claude's transcript gets one line for each (WSP-10);
+>>> END
+
+N2 (R-F-126, P2): a pending or failed revert outlives the post office however it ends.
+<<< OLD
+The revert is tried again before any message goes in to that soldier, also after a fresh start (SES-5), which doesn't drop it, and `/apply` stays refused until it succeeds.
+=== NEW
+The revert is tried again before any message goes in to that soldier, also after a fresh start (SES-5), which doesn't drop it, and `/apply` stays refused until it succeeds. A revert still pending or failed is recorded in the soldier's log (PO-5), so it outlives the post office however that ends, a shutdown (PO-7) or a mod reload included: before a later post office uses that worktree again, it finds the record, checks the start state's hash, and tries the revert again, with the soldier held and `/apply` refused until it succeeds, or held as the next bullet says where the hash fails.
+>>> END
+
+<<< OLD
+It is tried again before the next message and after `/fresh`, and `/apply` refuses that soldier's work until it succeeds;
+=== NEW
+It is tried again before the next message, after `/fresh`, and after a mod reload starts a new post office, and `/apply` refuses that soldier's work until it succeeds;
+>>> END
+
+R-F-120 (P2, technical, option b, from 2.0 WS-3): what counts as a write in a snapshot.
+<<< OLD
+  - A file it writes in its snapshot, or a commit that moves the snapshot's HEAD, is a write there. Its writes are found once each turn is over,
+=== NEW
+  - A file it writes in its snapshot that git doesn't ignore, by the ignore rules the snapshot had when its turn began, a write to the snapshot's own copy of a path that ARM-6 (→M2) hashes, even where git ignores it, or a commit that moves the snapshot's HEAD, is a write there. Other output that git ignores, such as build output, caches and installed packages, is discarded with the rest and not reported (from 2.0 WS-3). Its writes are found once each turn is over,
+>>> END
+
+<<< OLD
+    - In each snapshot the last one left (WSP-11; ARM-6, →M2), every write, a HEAD
+=== NEW
+    - In each snapshot the last one left (WSP-11; ARM-6, →M2), every write as WSP-11 defines it, a HEAD
+>>> END
+
+<<< OLD
+  - a file it writes there, and a commit it makes there, are reported as a read-violation once the turn is over, and are gone before its next turn;
+=== NEW
+  - a file it writes there, and a commit it makes there, are reported as a read-violation once the turn is over, and are gone before its next turn;
+  - a file it writes in `dist/`, which the snapshot's `.gitignore` ignores, is gone before its next turn and not reported; a `.claude/settings.local.json` it writes there is reported, though git ignores it;
+>>> END
+
+R-F-117's contradiction (P2; the choice itself is D-24): the owner's edits between turns stay, except as WSP-12 says for a turn the CLI starts by itself.
+<<< OLD
+    - everything the turn didn't change stays as it was: the soldier's earlier work, committed or not, the owner's edits made between turns, and ignored output;
+=== NEW
+    - everything the turn didn't change stays as it was: the soldier's earlier work, committed or not, the owner's edits made between turns, except as the start state of a turn the CLI starts by itself says above, and ignored output;
+>>> END
+
+<<< OLD
+so the owner's own edits between turns stay exempt.
+=== NEW
+so the owner's own edits between turns stay exempt, except in a builder's worktree, as WSP-12 (→M6) says for a read-only turn the CLI starts by itself.
+>>> END
+
+R-F-114 (P3, CONFIRMED by V13-FC1): where claude saves a "don't ask again" rule, on each system.
+<<< OLD
+    - On Linux and macOS, claude keeps `.claude/settings.local.json` for a linked worktree at the main checkout's root, not in the worktree (CH-2). A write there, such as the rule that an approval's "don't ask again" saves, is outside the worktree:
+=== NEW
+    - On Linux and macOS, except in the other cases claude's settings documentation names, claude keeps `.claude/settings.local.json` for a linked worktree at the main checkout's root, not in the worktree (CH-2); on Windows it keeps it in the worktree, where the revert takes it back. A write at the main checkout's root, such as the rule that an approval's "don't ask again" saves, is outside the worktree:
+>>> END
+
+<<< OLD
+    - on Linux and macOS, a rule that the owner's "don't ask again" saves during a read-only turn goes to the main checkout's `.claude/settings.local.json`, outside the worktree, and stays (WSP-12, CH-2).
+=== NEW
+    - a rule that the owner saves with an approval's "don't ask again" during a read-only turn is the owner's own choice, and goes where claude puts it: on Linux and macOS, outside the cases claude's settings documentation names, to the main checkout's `.claude/settings.local.json`, where it stays; on Windows, to the worktree's, where the revert takes it back and reports it as the turn's read-violation (WSP-12, CH-2).
+>>> END
+
+N3 (R-F-127, P3): a working tree nested in a soldier's worktree is audited.
+<<< OLD
+    - Every path in the worktree that git tracks or lists as untracked.
+=== NEW
+    - Every path in the worktree that git tracks or lists as untracked, with everything under a working tree nested in it. ARM-6's and WSP-11's exception for a working tree nested in the folder covers the folder only.
+>>> END
+
+N4 (R-M1-157, P3): the `.mcp.json` a claude session connects is the one in its snapshot or worktree.
+<<< OLD
+A file is untrusted when no hash accepted for it there matches, as when the repository is new to Shadow Army or the file is new or changed, or when a file that was trusted in this folder before is gone.
+=== NEW
+A file is untrusted when no hash accepted for it there matches, as when the repository is new to Shadow Army or the file is new or changed, or when a file that was trusted in this folder before is gone. A claude session connects the `.mcp.json` of the snapshot or worktree it opens in, which can differ from the folder's, so that copy is hashed too, when the session opens, and is untrusted in the same way; the card lists it with the soldier's name.
+>>> END
+
+<<< OLD
+  - a folder whose `.mcp.json` is new, and then one whose accepted `.mcp.json` changed by one byte, shows the card with that file and each server it declares, and no claude session opens until the answer;
+=== NEW
+  - a folder whose `.mcp.json` is new, and then one whose accepted `.mcp.json` changed by one byte, shows the card with that file and each server it declares, and no claude session opens until the answer. A committed `.mcp.json` that declares a server the folder's accepted, uncommitted copy doesn't shows the card for the soldier's snapshot, with that server, before its session opens;
+>>> END
+
+N5 (R-F-128, P3): §5.1 X names `.mcp.json`.
+<<< OLD
+  - A folder's new or changed `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` or `agent.md` starts no soldier until the owner trusts it (ARM-7).
+=== NEW
+  - A folder's new or changed `shadow.config.json`, `orchestratorDelegate.md`, `rules.md`, `agent.md` or `.mcp.json` starts no soldier until the owner trusts it (ARM-7).
+>>> END
+
+N6 (R-M1-158, P3): wording D-11 left behind.
+<<< OLD
+It stops it when the owner's Claude Code process ends; `/clear`, `/resume` and `/branch` keep it running, with its soldiers' sessions (PO-7).
+=== NEW
+It stops it when the owner's Claude Code process ends, or at a `session.end` that ends the army, such as `/logout`'s; `/clear`, `/resume` and `/branch` keep it running, with its soldiers' sessions (PO-7).
+>>> END
+
+<<< OLD
+If Shadow Army was just updated, start a new Claude session; otherwise reinstall it.
+=== NEW
+If Shadow Army was just updated, start Claude Code again; otherwise reinstall it.
+>>> END
+
+<<< OLD
+not started in this Claude session, or the army has stopped
+=== NEW
+not started yet by this army, or the army has stopped
+>>> END
+
+N7 (R-F-129, P3): a fresh start retries a pending revert.
+<<< OLD
+  - The soldier's work stays on its branch, and nothing is reverted.
+=== NEW
+  - The soldier's work stays on its branch, and nothing is reverted, except a read-only turn's revert still pending, which is tried again (WSP-12, →M6).
+>>> END
+
+N8 (R-F-130, P3): ARM-8's example names a soldier that can't write.
+<<< OLD
+as in `Kaisel has no branch · it runs in a snapshot`.
+=== NEW
+as in `Tusk has no branch · it runs in a snapshot`.
+>>> END
+
+N9 (R-F-131, P3; R-F-125 re-repaired): the glossary's Autonomy entry.
+<<< OLD
+with `auto` or `full`, a read-only task also runs in a throwaway snapshot (ARM-8), or, for a builder, is reverted in its worktree (WSP-12).
+=== NEW
+with `auto` or `full`, a soldier that can't write also runs in a throwaway snapshot (ARM-8); at every level, a read-only turn in a worktree is reverted (WSP-12).
+>>> END
+
+N10 (R-M1-159, P3, vendor fact checked 2026-10-21 at code.claude.com/docs/en/permission-modes, "Model"; R-M1-147 re-repaired): auto mode's models.
+<<< OLD
+on the Anthropic API and Claude Platform on AWS for Opus and Sonnet 4.6 or later, and on Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry and the Claude apps gateway for Sonnet 5 or later and Opus 4.7 or later,
+=== NEW
+on the Anthropic API and Claude Platform on AWS for Opus and Sonnet 4.6 or later, Haiku 5.5 and the Fable models, and on Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry and signed-in Claude apps gateway sessions for Sonnet 5 or later, Opus 4.7 or later, Haiku 5.5 (with claude 2.1.293 or later) and the Fable models,
+>>> END
+
+R-F-110 (P3, re-repaired): the glossary's Snapshot entry cites the base's own requirement.
+<<< OLD
+- **Snapshot:** a throwaway copy of HEAD (WSP-11), or of a soldier's base (ARM-6), whose writes are discarded and reported.
+=== NEW
+- **Snapshot:** a throwaway copy of HEAD (WSP-11), or of a soldier's base (WSP-6) for agy (ARM-6) and a soldier that can't write (ARM-8), whose writes are discarded and reported.
+>>> END
+
+The header's version line for v0.14.
+<<< OLD
+| **Version** | 0.13, 2026-10-20:
+=== NEW
+| **Version** | 0.14, 2026-10-21: the repairs for fix check V13-FC1 (the guard leaves out every other working tree's metadata; a pending revert outlives the post office; a snapshot's ignored output is not a write). 0.13, 2026-10-20:
+>>> END

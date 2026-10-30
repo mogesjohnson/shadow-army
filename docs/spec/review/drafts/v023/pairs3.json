@@ -1,0 +1,34 @@
+[
+ [
+  "If a watch run ends before that report, the post office starts it again, at most once a second, and its log says so (PO-7).",
+  "A watch run that can't open that process, or that reports a creation time other than the one the lock holds for it (PO-1), means that process has ended (PO-7). If a watch run ends before that report, the post office starts it again, at most once a second, and its log says so (PO-7)."
+ ],
+ [
+  "and may run PO-17's tool operations or, on Windows, PO-19's process operation.",
+  "and may run PO-17's tool operations or, on Windows, PO-19's process operation and, for a harness git command's entry (WSP-10), `taskkill /t /f`, found by its absolute path in the Windows folder."
+ ],
+ [
+  "A process is never ended for its session or process-group id alone, because that id may now belong to an unrelated process.",
+  "A process is never ended for its session or process-group id alone, because that id may now belong to an unrelated process; a harness git command's process group (WSP-10) is ended only while git's own pid and start time still match."
+ ],
+ [
+  "The recorded job is removed if launchd still has it, and every member of the recorded coalition is ended (PO-10).",
+  "The recorded job is removed if launchd still has it, and every member of the recorded coalition is ended (PO-10). A harness git command's entry (WSP-10), which has no job or coalition, is ended through its process group, as on Linux."
+ ],
+ [
+  "What PO-1 states escapes it.",
+  "What PO-1 states escapes it. A harness git command's entry (WSP-10), which runs in no job, is ended with `taskkill /t /f` while git's own pid and creation time still match."
+ ],
+ [
+  "So PO-16's macOS backstop works.",
+  "The probe's job was a LaunchAgent with `KeepAlive`, loaded in `gui/501`, not one made with `launchctl submit` (PO-18), and it removed itself with `launchctl bootout`, not with the `launchctl remove` that PO-17 allows. So a `KeepAlive` job's restart, coalition and self-removal behave as PO-16's macOS backstop needs; whether a job made with `launchctl submit` and removed with `launchctl remove` does the same is untested, and M1-AC16 tests it on CI's macOS runners."
+ ],
+ [
+  "When the mod reloads, as after a save under `--plugin-dir`, `/reload-plugins` or a lost hooks worker, that post office ends, with the module or through the shutdown its lease starts within 30 seconds (PO-7), and its turns are cut short (PO-8, →M2).",
+  "When the mod reloads, as after a save under `--plugin-dir` or a lost hooks worker, that post office ends, with the module or through the shutdown its lease starts within 30 seconds (PO-7), and its turns are cut short (PO-8, →M2). `/reload-plugins` with the mod unchanged doesn't reload the module, though it prints `Reloaded: 1 plugin…`, so the post office runs on (probe P-17); one that does reload the module ends it as above."
+ ],
+ [
+  "| **Version** | 0.20, 2026-10-27: Smart App Control in PO-19 and PO-14's messages,",
+  "| **Version** | 0.23, 2026-10-30: fix check V22-FC1's repairs (among them: a change the last post office never checked, as when a normal exit cuts a turn short, held at the next start (WSP-10), the records that keep a harness git hold logged and flushed (PO-5), a filter set at start the owner's unless the last post office held harness git for it, a Windows watch run that can't open the process it watches meaning that process has ended, harness git commands ended by both sweeps on every system, S7's P-8 note limited to the job it tested, and `/reload-plugins` with the mod unchanged leaving the post office running). 0.22, 2026-10-30: the owner's answer to D-38 (a harness git hold outlives a restart: the post office's log keeps the trusted state, and from M2 the card shows again) and fix check V21-FC1's repairs (among them: PO-7's ready point, a lock whose starting process has ended, the one-shot sweep reading Windows creation times, a Windows watch run that ends with the post office, a URL's password matched to the last `@`, CH-1's real-path rule for every lookup, and S7's P-8 result from CI). 0.21, 2026-10-30: the owner's answers to D-34 (a check that can't be run gets a **Not tested:** note at its section), D-36 (a contract fixture needs a clean checkout, `redact()` and the owner's whole read, from M1) and D-37 (HOST-2's proxy check before the first start, from probe P-16), and the repairs for round 4 of the frame and of M1 and for fix check V18-FC1 (among them: `sa live`'s own post office, a held turn's guard and snapshot outliving the post office, the lock's start-time sources, grok's permission mode on its command line, the host ending the post office outright at a normal exit (probe P-17), claude's own sideload refusal, and CH-1's `PATH` compared by real path). 0.20, 2026-10-27: Smart App Control in PO-19 and PO-14's messages,"
+ ]
+]

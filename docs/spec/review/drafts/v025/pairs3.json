@@ -1,0 +1,74 @@
+[
+ [
+  "runs a git found by its absolute path on `PATH` alone, as CH-1 starts each CLI, never one in the folder, a worktree or a snapshot;",
+  "runs a git found by its absolute path on `PATH` alone, as CH-1 starts each CLI, never one in the folder, a worktree or a snapshot, with `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` in its environment naming the git folder, working tree and common folder Shadow Army knows for it: the folder's own, as the post office found them when it started, or, in one of this army's snapshots or worktrees, its own `worktrees/<id>` entry and folder as the log gives them, with the folder's common folder; so no `.git` file and no `commondir` file decides which config or objects harness git reads, except inside a checked-out submodule, where git follows the submodule's own `.git` file, which is compared (below);"
+ ],
+ [
+  "turns off the file system monitor (`core.fsmonitor`), the pager, signing, external diffs and text conversion, as 2.0 GIT-1 lists, with `--no-optional-locks`;",
+  "turns off the file system monitor (`core.fsmonitor`), the pager, signing, external diffs and text conversion, as 2.0 GIT-1 lists, with `--no-optional-locks`, and gives each guard and audit command that lists changes `--ignore-submodules=none`, so no setting, `.gitmodules` included, hides a change inside a checked-out submodule;"
+ ],
+ [
+  "the shared `hooks/` and `info/`, and each worktree's metadata are compared with the state Shadow Army last trusted",
+  "the shared `hooks/` and `info/`, for each submodule checked out in the folder or in one of this army's snapshots or worktrees, at any depth, its `.git` file and the `config`, `hooks/` and `info/` of the git folder that file names (`modules/<name>/`), which git reads when it runs inside that submodule, as `git status` does, and each worktree's metadata are compared with the state Shadow Army last trusted"
+ ],
+ [
+  "the trusted state gains the metadata of the one it made, or loses that of the one it removed, and nothing else:",
+  "the trusted state gains the metadata of the one it made, with the files above of each submodule checked out in it, or loses those of the one it removed, and nothing else:"
+ ],
+ [
+  "In that comparison, the `gitdir` and `commondir` of each of this army's snapshots and worktrees",
+  "In that comparison, the `gitdir`, `commondir` and `.git` file of each of this army's snapshots and worktrees"
+ ],
+ [
+  "a `commondir` that names the repository's own common folder, and a `gitdir` that is missing or names the `.git` file of that snapshot or worktree at the path the log gives.",
+  "a `commondir` that names the repository's own common folder, a `gitdir` that is missing or names the `.git` file of that snapshot or worktree at the path the log gives, and a `.git` file that names that snapshot's or worktree's own `worktrees/<id>` entry."
+ ],
+ [
+  "Any other content, or a `commondir` that is gone, is a change, since git reads the config of whatever folder `commondir` names, or of the entry itself when there is none;",
+  "Any other content, or a `commondir` that is gone, is a change, since git that isn't given its common folder, as harness git always is (above), reads the config of whatever folder `commondir` names, or of the entry itself when there is none; the one exception is an entry that the log names as being removed and whose folder is gone, as a removal cut short leaves it: the start deletes that entry before it compares, runs nothing from it and logs the deletion, and the trusted state loses its metadata;"
+ ],
+ [
+  "A worktree's metadata is its `gitdir`, `commondir` and `config.worktree`.",
+  "A worktree's metadata is its `gitdir`, `commondir` and `config.worktree`, and the `.git` file in its folder; the folder's own `.git` file, where it is a file, and any `commondir` in the folder's own git folder are compared too, since git that isn't given them takes its git folder and common folder from those files."
+ ],
+ [
+  "`Shadow Army: harness git held · .git/config changed since the last post office ended · can't be told from your own edit · undo it to go on`",
+  "`Shadow Army: harness git held · .git/config differs from what the last post office trusted · can't be told from your own edit · undo it to go on`"
+ ],
+ [
+  "is never diffed from: the card, or in M1 the transcript line, names the file, says its last trusted copy is missing or changed, and shows the file as it is now.",
+  "is never diffed from: the card names the file, says its last trusted copy is missing or changed, and shows the file as it is now; in M1 the transcript line shows no file and no diff (below), so the copy plays no part there."
+ ],
+ [
+  "So is each turn, when its message goes in and when it is over, with where its guard's baseline is kept (WSP-11)",
+  "So is each turn, when its message goes in, when it is over and when its guard has closed, with where its guard's baseline is kept (WSP-11)"
+ ],
+ [
+  "the next use's post office holds harness git, its transcript line names the snapshot's `commondir` as the file that changed, and the filter never runs (WSP-10);",
+  "the next use's post office holds harness git, its transcript line names the snapshot's `commondir` as the file that changed, says the change can't be told from the owner's and says that undoing it lets harness git go on, and the filter never runs; so it is when the soldier instead deletes that `commondir` and writes such a config into its snapshot's own `worktrees/<id>` entry, and when it instead rewrites its snapshot's `.git` file to name a git folder of its own inside its snapshot whose config defines such a filter, where the line names the snapshot's `.git` file; and with a git on `PATH` that records its environment and then runs the real git, each harness git command run in a snapshot gets `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` naming that snapshot's own `worktrees/<id>` entry, its folder and the repository's common folder (WSP-10);"
+ ],
+ [
+  "holds harness git before anything it names runs, and the post office's log names the change;",
+  "holds harness git before anything it names runs, and the post office's log names the change; a filter defined in a checked-out submodule's own config under `.git/modules/` and named by that submodule's `info/attributes`, with a file in the submodule touched, holds harness git before that filter runs, and the post office's log names that config; so does that submodule's `.git` file rewritten to name a git folder of the soldier's own; and the guard finds the file touched in the submodule;"
+ ],
+ [
+  "where y lets harness git go on and the held turn's guard then closes before any channel opens,",
+  "where the card says beside its keys that y lets harness git go on and that undoing the change does too, y lets harness git go on, and the held turn's guard then closes before any channel opens,"
+ ],
+ [
+  "in a second case, with the fake mod alive, the mod's one-shot sweep ends that git and every process it started at once,",
+  "in a second case, with the fake mod alive and running the real sweep process of PO-16, not a stand-in, the mod's one-shot sweep ends that git and every process it started at once,"
+ ],
+ [
+  "unless this army's own last log makes that start compare with the state it last trusted (WSP-10).",
+  "unless this army's logs make that start compare with the state it last trusted (WSP-10)."
+ ],
+ [
+  "like any other, unless this army's last log makes that start compare with the state it last trusted (WSP-10): then",
+  "like any other, unless this army's logs make that start compare with the state it last trusted (WSP-10): then"
+ ],
+ [
+  "and two of the owner's ideas for that M2 card recorded as open question Q10. 0.24, 2026-10-30:",
+  "and two of the owner's ideas for that M2 card recorded as open question Q10; and fix check V24-FC1's repairs (among them: harness git told its git folder, working tree and common folder, so no `.git` or `commondir` file a soldier rewrites redirects it, with those files compared (WSP-10), a checked-out submodule's `.git` file, config, `hooks/` and `info/` compared as the repository's own, with no setting hiding a change inside it from the guard, an entry left by a removal cut short deleted at the next start instead of holding harness git, the M1 line keeping no file text, a turn's guard logged when it closes (PO-5), and the tests of the `commondir` cases, the M2 card's release and the one-shot sweep made exact). 0.24, 2026-10-30:"
+ ]
+]

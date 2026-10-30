@@ -1,0 +1,190 @@
+[
+ {
+  "case": "p-exit",
+  "childAliveAfter4s": false,
+  "claudePid": 31680,
+  "exit": {
+   "code": 0,
+   "sig": null,
+   "msAfterStart": 3138
+  },
+  "childPid": 34704,
+  "childPpid": 31680,
+  "sessionEnd": {
+   "reason": "other",
+   "msBeforeClaudeExit": 372
+  },
+  "sessionStarts": 1,
+  "childEvents": [
+   {
+    "ev": "stdin-end",
+    "msVsClaudeExit": -1348,
+    "msVsSessionEnd": -976
+   }
+  ],
+  "lastHb": {
+   "msVsClaudeExit": -585,
+   "msVsSessionEnd": -213
+  },
+  "hbPpidChanged": [
+   31680
+  ]
+ },
+ {
+  "case": "stream-close",
+  "childAliveAfter4s": false,
+  "claudePid": 36604,
+  "exit": {
+   "code": 0,
+   "sig": null,
+   "msAfterStart": 6679
+  },
+  "childPid": 2704,
+  "childPpid": 36604,
+  "sessionEnd": {
+   "reason": "other",
+   "msBeforeClaudeExit": 322
+  },
+  "sessionStarts": 1,
+  "childEvents": [
+   {
+    "ev": "stdin-end",
+    "msVsClaudeExit": -4813,
+    "msVsSessionEnd": -4491
+   }
+  ],
+  "lastHb": {
+   "msVsClaudeExit": -464,
+   "msVsSessionEnd": -142
+  },
+  "hbPpidChanged": [
+   36604
+  ]
+ },
+ {
+  "case": "stream-save",
+  "childAliveAfter4s": false,
+  "claudePid": 3208,
+  "exit": {
+   "code": 0,
+   "sig": null,
+   "msAfterStart": 14599
+  },
+  "childPid": 4748,
+  "childPpid": 3208,
+  "sessionEnd": {
+   "reason": "other",
+   "msBeforeClaudeExit": 277
+  },
+  "sessionStarts": 1,
+  "childEvents": [
+   {
+    "ev": "stdin-end",
+    "msVsClaudeExit": -12547,
+    "msVsSessionEnd": -12270
+   },
+   {
+    "ev": "stdin-end",
+    "msVsClaudeExit": -7707,
+    "msVsSessionEnd": -7430
+   }
+  ],
+  "lastHb": {
+   "msVsClaudeExit": -506,
+   "msVsSessionEnd": -229
+  },
+  "hbPpidChanged": [
+   3208
+  ]
+ },
+ {
+  "case": "stream-reload-plugins",
+  "childAliveAfter4s": false,
+  "claudePid": 9588,
+  "exit": {
+   "code": 0,
+   "sig": null,
+   "msAfterStart": 14537
+  },
+  "childPid": 34596,
+  "childPpid": 9588,
+  "sessionEnd": {
+   "reason": "other",
+   "msBeforeClaudeExit": 315
+  },
+  "sessionStarts": 1,
+  "childEvents": [
+   {
+    "ev": "stdin-end",
+    "msVsClaudeExit": -12659,
+    "msVsSessionEnd": -12344
+   }
+  ],
+  "lastHb": {
+   "msVsClaudeExit": -519,
+   "msVsSessionEnd": -204
+  },
+  "hbPpidChanged": [
+   9588
+  ]
+ },
+ {
+  "case": "taskkill-soft",
+  "taskkill": "ERROR: The process with PID 6716 could not be terminated.\r\nReason: This process can only be terminated forcefully (with /F option).",
+  "forcedAfter": true,
+  "childAliveAfter4s": false,
+  "claudePid": 6716,
+  "exit": {
+   "code": 1,
+   "sig": null,
+   "msAfterStart": 10285
+  },
+  "childPid": 31100,
+  "childPpid": 6716,
+  "sessionEnd": null,
+  "sessionStarts": 1,
+  "childEvents": [
+   {
+    "ev": "stdin-end",
+    "msVsClaudeExit": -8542,
+    "msVsSessionEnd": null
+   }
+  ],
+  "lastHb": {
+   "msVsClaudeExit": -271,
+   "msVsSessionEnd": null
+  },
+  "hbPpidChanged": [
+   6716
+  ]
+ },
+ {
+  "case": "taskkill-force",
+  "taskkill": "SUCCESS: The process with PID 27400 has been terminated.",
+  "childAliveAfter4s": false,
+  "claudePid": 27400,
+  "exit": {
+   "code": 1,
+   "sig": null,
+   "msAfterStart": 6210
+  },
+  "childPid": 32612,
+  "childPpid": 27400,
+  "sessionEnd": null,
+  "sessionStarts": 1,
+  "childEvents": [
+   {
+    "ev": "stdin-end",
+    "msVsClaudeExit": -4235,
+    "msVsSessionEnd": null
+   }
+  ],
+  "lastHb": {
+   "msVsClaudeExit": -114,
+   "msVsSessionEnd": null
+  },
+  "hbPpidChanged": [
+   27400
+  ]
+ }
+]

@@ -1,0 +1,3 @@
+- **CH-7** (M1; R, U) **The harness stays whole.**
+  - No adapter replaces a system prompt or removes a tool, and none passes, on its own, a flag that disables a safeguard: such a flag, like claude's `bypassPermissions` for `full`, goes only where the owner's autonomy level chose it (ADR-0010).
+  - Autonomy chooses only each vendor's documented flags (from 2.0 SAFE-10). Each adapter passes its CLI's permission mode at every autonomy level, on every start and resume, so the mode never comes from a settings file or the CLI's own default: claude's in CH-2, and codex's, grok's and agy's with their channels (CH-3 to CH-5, →M2).

@@ -1,0 +1,21 @@
+Cards D-32 and D-33, from F-R3-V2 (raw/F-r3-verify-V2.md). Written by the orchestrator (Fork 2), 2026-10-23.
+
+<<< OLD
+## Values set in the fix pass
+=== NEW
+## D-32 When the trust card's dialog shows again after "Not now" (R-F-148)
+
+- **Kind:** big: it changes when the owner is asked (PLAYBOOK section 14). Verified by F-R3-V2 (`raw/F-r3-verify-V2.md`), whose other half (the card in HOST-14's list) is repaired in v0.16.
+- **Question:** ARM-7 says "the next use shows the card again" after `Not now`. From M3 Claude's `send` is a use (HOST-2), so every brief Claude sends reopens the modal dialog over the owner's typing.
+- **Options:** A only the owner's own uses (`/army`, `/send`, r, or the list's row) show the dialog again; Claude's `send` returns `queued · waits · trust card` and shows none; B every use shows it again, Claude's sends included (as written).
+- **Card** (2026-10-23, in chat): recommended **A**, because the owner already chose "Not now" and the card stays in the one list, and B interrupts the owner each time Claude sends a brief.
+
+## D-33 The autonomy a fresh repository's soldiers start at (R-F-150)
+
+- **Kind:** big: security posture, what runs without the owner's approval (PLAYBOOK section 14). Verified by F-R3-V2 (`raw/F-r3-verify-V2.md`).
+- **Question:** a folder with no policy files of its own uses the copies shipped in the package, which need no trust card (ARM-7), and the spec never names their autonomy levels. v1's shipped `shadow.config.json` sets codex, grok and agy to `full` and both claude soldiers to `auto`, so a new repository could start soldiers at `full` with nothing shown.
+- **Options:** A the shipped copy sets every soldier to `supervised`, and ARM-7 says so; B keep its levels, name them in ARM-7, and the first start of a soldier above `supervised` from the shipped copy in a folder shows one notice row with its name, `cli`, `model` and autonomy; C as B, with `/army` also listing each soldier's autonomy and where it came from (shipped or the folder's). Whichever is chosen, ARM-7 names the shipped levels.
+- **Card** (2026-10-23, in chat): recommended **A**, because a new repository then never runs a soldier above `supervised` until the owner raises it through the trust card, which ARM-7 already requires for the folder's own files, and it costs one config edit.
+
+## Values set in the fix pass
+>>> END

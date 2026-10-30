@@ -1,0 +1,144 @@
+== D-3 run 20261014-013646: 20 runs per mechanism, close 0.6s after the CLI is ready (d is mid-loop), (d) spawns a daemon every 5000 us
+kernel 6.6.87.2-microsoft-standard-WSL2; systemd 255 (255.4-1ubuntu8.17); cgroup fs cgroup2fs; XDG_RUNTIME_DIR=/run/user/1000/
+systemctl --user is-system-running: running
+loginctl linger: State=active Linger=no 
+baseline before experiments: d3hb processes: 0, processes in total: 29
+-- m1: running 20 times
+-- m2a: running 20 times
+-- m2b: running 20 times
+-- m3: running 20 times
+-- m4: running 20 times
+-- m5: running 20 times
+
+== RESULT: did the kind survive the close? (runs = runs in which at least one writer of that kind was still alive)
+1  kill -- -PGID only
+      a: ended (0/20 runs)
+      b: ended (0/20 runs)
+      c: SURVIVED (20/20 runs)
+      d: SURVIVED (20/20 runs; 2264 of 2264 daemons alive)
+2a subreaper, close request (CLI alive)
+      a: ended (0/20 runs)
+      b: ended (0/20 runs)
+      c: ended (0/20 runs)
+      d: ended (0/20 runs; 0 of 2265 daemons alive)
+2b subreaper, CLI killed first
+      a: ended (0/20 runs)
+      b: ended (0/20 runs)
+      c: ended (0/20 runs)
+      d: ended (0/20 runs; 0 of 2291 daemons alive)
+3  systemd --user scope + kill
+      a: ended (0/20 runs)
+      b: ended (0/20 runs)
+      c: ended (0/20 runs)
+      d: ended (0/20 runs; 0 of 2277 daemons alive)
+4  bash polls /proc every 50 ms
+      a: ended (0/20 runs)
+      b: ended (0/20 runs)
+      c: SURVIVED (20/20 runs)
+      d: SURVIVED (20/20 runs; 2423 of 2423 daemons alive)
+5  (extra) env-tag sweep via /proc
+      a: ended (0/20 runs)
+      b: ended (0/20 runs)
+      c: ended (0/20 runs)
+      d: ended (0/20 runs; 0 of 2423 daemons alive)
+
+
+== how the mechanisms behaved (min / avg / max over runs)
+m2a supervisor: sweep passes min 2 / avg 6.3 / max 63; processes found in pass 1: min 114 / avg 118.0 / max 127; of those direct children of the supervisor: min 111 / avg 115.0 / max 124
+m2b supervisor: sweep passes min 2 / avg 2.3 / max 3; processes found in pass 1: min 114 / avg 118.2 / max 130; of those direct children of the supervisor: min 114 / avg 118.2 / max 130
+m4 poller: scans per run min 13 / avg 13.1 / max 14; scan time (us) min 6577 / avg 6957.5 / max 7500; longest start-to-start gap (us) min 50266 / avg 50547.2 / max 51735; descendants recorded min 4 / avg 4.0 / max 5
+m5 env sweep: passes min 2 / avg 2.1 / max 3
+
+== binary facts (also in results/binfacts-20261014-013646.txt)
+== this machine
+uname:   Linux 6.6.87.2-microsoft-standard-WSL2 x86_64
+glibc:   ldd (Ubuntu GLIBC 2.39-0ubuntu8.9) 2.39
+gcc:     gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+compile time on first use (option A): dynamic 121 ms, -static 115 ms
+
+== d3sup-dynamic  (gcc -O2 d3sup.c)
+size:        17672 bytes (14472 stripped)
+ldd:
+    	linux-vdso.so.1 (0x00007ffef89c2000)
+    	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000075bec2e00000)
+    	/lib64/ld-linux-x86-64.so.2 (0x000075bec312c000)
+objdump -T | grep GLIBC_:
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) sigprocmask
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.3.4) __snprintf_chk
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) free
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.34) __libc_start_main
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) __errno_location
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) _exit
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) qsort
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.17) clock_gettime
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) getpid
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) opendir
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.4)  __stack_chk_fail
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) nanosleep
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) strrchr
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) sigtimedwait
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) close
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) closedir
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) read
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) strcmp
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) signal
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) sigemptyset
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) strtol
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) prctl
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) kill
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) readdir
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) malloc
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.7)  __isoc99_sscanf
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) realloc
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.3.4) __printf_chk
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) waitpid
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) open
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) perror
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) execvp
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) fwrite
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.3.4) __fprintf_chk
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) sigaddset
+    0000000000000000      DF *UND*	0000000000000000 (GLIBC_2.2.5) fork
+    0000000000000000  w   DF *UND*	0000000000000000 (GLIBC_2.2.5) __cxa_finalize
+    0000000000004020 g    DO .bss	0000000000000008 (GLIBC_2.2.5) stderr
+highest GLIBC_x.y needed: GLIBC_2.34
+program interpreter:      Requesting program interpreter: /lib64/ld-linux-x86-64.so.2
+ELF type / kernel ABI:    DYN / OS: Linux, ABI: 3.2.0
+runs (check):             {"subreaper":true,"pid":33373} exit=0
+runs with empty env:      {"subreaper":true,"pid":33375} exit=0
+runs (run -- /bin/true):  d3sup: cli pid 33379 d3sup: closed by cli-exit: none left passes=1 killed=0 first_pass_descendants=0 direct_children=0  exit=0
+
+== d3sup-static  (gcc -O2 -static d3sup.c)
+size:        969016 bytes (882696 stripped)
+ldd:
+    	not a dynamic executable
+objdump -T | grep GLIBC_:
+highest GLIBC_x.y needed: 
+program interpreter:      none
+ELF type / kernel ABI:    EXEC / OS: Linux, ABI: 3.2.0
+runs (check):             {"subreaper":true,"pid":33415} exit=0
+runs with empty env:      {"subreaper":true,"pid":33417} exit=0
+runs (run -- /bin/true):  d3sup: cli pid 33421 d3sup: closed by cli-exit: none left passes=1 killed=0 first_pass_descendants=0 direct_children=0  exit=0
+
+== how the glibc floor moves (dynamic builds on this machine)
+int main(){return 0;}            -> GLIBC_2.34   (floor of any dynamic binary built here)
+d3sup.c as shipped               -> GLIBC_2.34
+d3sup.c with -D_GNU_SOURCE       -> GLIBC_2.38   (__isoc23_sscanf __isoc23_strtol )
+
+== run in an empty root (unprivileged user namespace + chroot, no sudo): does the binary need anything installed?
+d3sup-static in empty root: exit=0  {"subreaper":true,"pid":33455}
+d3sup-dynamic in empty root: exit=127  /usr/sbin/chroot: failed to run command ‘/d3sup-dynamic’: No such file or directory
+
+== what a first-use compile (option A) needs on this machine
+cc1 -> /usr/libexec/gcc/x86_64-linux-gnu/13/cc1
+collect2 -> /usr/libexec/gcc/x86_64-linux-gnu/13/collect2
+as -> /usr/bin/as, ld -> /usr/bin/ld
+    binutils-x86-64-linux-gnu            11549 KiB
+    cpp-13-x86-64-linux-gnu              30807 KiB
+    gcc-13-x86-64-linux-gnu              61333 KiB
+    libc6-dev                            13112 KiB
+    libgcc-13-dev                        16082 KiB
+    linux-libc-dev                        7592 KiB
+    TOTAL installed                     140475 KiB (137 MiB)
+
+saved: /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/results/summary-20261014-013646.txt /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/results/detail-20261014-013646.txt /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/results/binfacts-20261014-013646.txt

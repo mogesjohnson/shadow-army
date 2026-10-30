@@ -1,0 +1,7 @@
+The header's version line for v0.12.
+
+<<< OLD
+| **Version** | 0.11, 2026-10-20:
+=== NEW
+| **Version** | 0.12, 2026-10-20: repairs for what the verifiers of the drafters' findings (ANS-V1, ANS-V2) and fix check ANS-FC1 found in v0.11: auto memory kept off through `--settings`, the Windows C# shipped as a prebuilt DLL, signing and the live Mac run moved to M6, the trust record kept per repository, and Appendix D brought in line with the requirements it cites. 0.11, 2026-10-20:
+>>> END

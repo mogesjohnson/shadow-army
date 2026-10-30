@@ -1,0 +1,70 @@
+[
+ [
+  "it replaces its own process's DACL (`SetSecurityInfo`) with one that grants no one `PROCESS_VM_READ`, `PROCESS_VM_WRITE`, `PROCESS_VM_OPERATION`, `PROCESS_CREATE_THREAD`, `PROCESS_CREATE_PROCESS`, `PROCESS_DUP_HANDLE`, `WRITE_DAC` or `WRITE_OWNER`, and that holds an OWNER RIGHTS (`S-1-3-4`) entry, which takes away the owner's implicit right to change the DACL back.",
+  "it replaces its own process's DACL (`SetSecurityInfo`) with one that grants the owner's user and SYSTEM `PROCESS_QUERY_LIMITED_INFORMATION`, `SYNCHRONIZE` and `PROCESS_TERMINATE` and nothing else, so it grants no one `PROCESS_VM_READ`, `PROCESS_VM_WRITE`, `PROCESS_VM_OPERATION`, `PROCESS_CREATE_THREAD`, `PROCESS_CREATE_PROCESS`, `PROCESS_DUP_HANDLE`, `WRITE_DAC` or `WRITE_OWNER`, and that holds an OWNER RIGHTS (`S-1-3-4`) entry, which takes away the owner's implicit right to change the DACL back. So another process of the owner's user can still read its start time, wait for it to end and end it (PO-1, PO-7, PO-16)."
+ ],
+ [
+  "The same operation gives each of the post office's threads a DACL that grants no one `THREAD_SET_CONTEXT`, `THREAD_GET_CONTEXT`, `THREAD_SUSPEND_RESUME`, `WRITE_DAC` or `WRITE_OWNER`, with the same OWNER RIGHTS entry, and sets the default DACL of its token to it, so a thread it starts later gets it too.",
+  "The same operation gives each of the post office's threads a DACL that grants the owner's user and SYSTEM `THREAD_QUERY_LIMITED_INFORMATION` and `SYNCHRONIZE` and nothing else, so it grants no one `THREAD_SET_CONTEXT`, `THREAD_GET_CONTEXT`, `THREAD_SUSPEND_RESUME`, `WRITE_DAC` or `WRITE_OWNER`, with the same OWNER RIGHTS entry. It leaves its token's default DACL as it is. Windows gives that DACL to every object the process and its children create without a DACL of their own, files, pipes and processes included, and an access bit means something different on each type of object: `0x0002` is `THREAD_SUSPEND_RESUME` on a thread but `FILE_WRITE_DATA` on a file. So a thread started after the operation, as Windows' thread pool starts them at any time, has Windows' default thread DACL."
+ ],
+ [
+  "On Windows it can also read it from the post office where its DACL couldn't be set,",
+  "On Windows it can also read it from the post office where its DACL couldn't be set, or through a thread the post office started after the DACL operation,"
+ ],
+ [
+  "the script replaces the post office's DACL, its threads' and its token's default DACL as PO-3 says, then exits. As a guardian, it gives its own process the same DACL before it creates the job (PO-9).",
+  "the script replaces the post office's DACL and its threads' DACLs as PO-3 says, leaves its token's default DACL as it is, then exits. As a guardian, it gives its own process the same DACL before it creates the job (PO-9).\n  - **The folders.** Run with its folders operation, before the post office writes anything under `.shadow/` or `~/.shadow-army/`, the script runs PO-5's Windows checks on each folder PO-5 names. It reads the folder's owner and whether it is a reparse point of any kind, creates a missing folder with PO-5's owner and ACL, narrows one that grants more, reports each result as one line of JSON, then exits. It is the only way the post office reads or sets an owner or an ACL on Windows; it runs no `icacls` or `takeown`."
+ ],
+ [
+  "or one of its threads for `THREAD_SET_CONTEXT`, `THREAD_GET_CONTEXT` or `THREAD_SUSPEND_RESUME`, without enabling `SeDebugPrivilege`;",
+  "or one of the threads it had when its DACL was set for `THREAD_SET_CONTEXT`, `THREAD_GET_CONTEXT` or `THREAD_SUSPEND_RESUME`, without enabling `SeDebugPrivilege`;"
+ ],
+ [
+  "fails to start (PO-3, SEC-2, VER-2).",
+  "fails to start (PO-3, SEC-2, VER-2). Meanwhile, on Windows with the DACL set, a second process of the owner's user reads its start time (`PROCESS_QUERY_LIMITED_INFORMATION`), a second start's lock check finds it alive and is refused (PO-1), and a file and a pipe the post office creates after the DACL is set open for writing (PO-3)."
+ ],
+ [
+  "  - The script does on Windows what PO-9 and PO-10 say. When its connection to the post office closes without a close command, it ends the job.",
+  "  - The script does on Windows what PO-9 and PO-10 say. As a guardian, right after its language-mode check, it reads one line of JSON on its standard input: the CLI's program by its absolute path, its command line escaped as CH-1 says, its environment, its working directory and a one-time nonce of 32 random bytes. The post office writes nothing more there until the guardian reports that the CLI has started. The command never goes on the script's own command line, so PowerShell parses none of it. The script then connects back to the post office over the loopback address (PO-2) and presents the nonce, as PO-18's guardian does. The post office accepts one connection per nonce and refuses any other, and the nonce is then spent. That connection is the guardian's connection to the post office (PO-10). Its reports go there, one line of JSON each, never on the CLI's standard streams, and so does the post office's close command. The script gives the CLI its own standard input, output and error as the CLI's handles, so they pass byte for byte with no framing (PO-9). When that connection closes without a close command, it ends the job."
+ ],
+ [
+  "That includes the port a macOS guardian connects back to (PO-18).",
+  "That includes the port a macOS or Windows guardian connects back to (PO-18, PO-19)."
+ ],
+ [
+  "  - the Monarch's secret is in no argument, environment, input or nonce file of the helper or of a guardian, and on macOS the nonce file is gone once the guardian has connected.",
+  "  - the Monarch's secret is in no argument, environment, input or nonce file of the helper or of a guardian, and on macOS the nonce file is gone once the guardian has connected;\n  - on Windows, a second process of the owner's user that connects to the post office before the guardian does, with no nonce, a wrong one or a spent one, is refused and is never sent a close command or the CLI's command, and the guardian's connection with the nonce still works. The script's command line holds none of the CLI's arguments (PO-19)."
+ ],
+ [
+  "On Windows it creates the two folders with inheritance off and an ACL that grants only the owner's user, SYSTEM and Administrators.",
+  "On Windows it creates the two folders through the script's folders operation (PO-19), with the owner's user as their owner, inheritance off, and an ACL that grants only the owner's user, SYSTEM and Administrators, each entry inherited by the files and folders made in them. So a folder made while Claude Code runs elevated is still owned by the owner's user, not by Administrators."
+ ],
+ [
+  "It checks each new file's folders again just before it creates the file,",
+  "It checks each new file's folders again just before it creates the file, on Windows through Node.js's `fs.lstat`, which shows a symbolic link or a junction but no other reparse point,"
+ ],
+ [
+  "as in `Shadow Army: the army's folder .shadow/v2 is a link, not a folder of yours · nothing started`.",
+  "as in `Shadow Army: the army's folder .shadow/v2 is a link, not a folder of yours · nothing started`. A folder owned by Administrators, as one an elevated program made is, fails the check, and the line names its owner. On Windows, where the script can't run (PO-14, steps 1 to 3), the checks can't pass: nothing is written there, and PO-14's message goes to Claude's transcript alone."
+ ],
+ [
+  "with inheritance off; a folder that existed with more is narrowed, and the log says so (PO-5).",
+  "with inheritance off and its entries inherited by the files made there; a folder that existed with more is narrowed, and the log says so (PO-5). On Windows, folders made by a post office run elevated are owned by the owner's user, and a later start that isn't elevated passes the check; a `.shadow/v2` owned by Administrators, and one that is a reparse point other than a junction (faked), each start no soldier; and with the script refused (faked), nothing is written under `.shadow/v2/` and Claude's transcript gives PO-14's message (PO-5, PO-19)."
+ ],
+ [
+  "Then the mod has every tree that the post office's entries name ended at once, through the same code as the sweep below. It starts no post office for that (HOST-2).",
+  "Then the mod has every tree that the post office's entries name ended at once, by running the package's sweep as a one-shot Node.js process (found as HOST-2 says). That process takes no lock, opens no port, reads no secret, checks each file's checksum as PO-13 says, ends only trees whose post office is no longer running (judged as the sweep below judges it), and may run PO-17's tool operations. It starts no post office for that (HOST-2)."
+ ],
+ [
+  "As a tool the post office runs: read a process's coalition,",
+  "As a tool the post office runs, or the sweep process of PO-16 runs: read a process's coalition,"
+ ],
+ [
+  "On Windows, the writer has already ended with its job;",
+  "On Windows, the writer has already ended with its job. In this case the fake mod runs the real sweep process of PO-16, not a stand-in;"
+ ],
+ [
+  "one file per soldier session, named by the soldier and the session id, and one per start of the post office, named by its start time.",
+  "one file per soldier session, named `<soldier>-<log id>.jsonl`, and one per start of the post office, named `po-<UTC start time as YYYYMMDDTHHMMSS.mmmZ>-<pid>.jsonl`. The log id is a UUID the post office makes before it starts the CLI. The CLI's own session id, when it reports one, goes on the log's first line after it, and the log keeps its name. Where a CLI takes an id on its command line, as claude's `--session-id` does, the adapter passes the log id."
+ ]
+]

@@ -1,0 +1,163 @@
+v0.13 repairs, the post office and the mod (M1's round 2, D-11). Written by the orchestrator against v0.12 (v2@2493a82.md).
+
+D-11 (A, "do as claude has"): /clear, /resume and /branch keep the army; it lasts as long as the owner's Claude Code process and its mod.
+<<< OLD
+It stops it when the session ends. There is at most one post office per folder (PO-1).
+=== NEW
+It stops it when the owner's Claude Code process ends; `/clear`, `/resume` and `/branch` keep it running, with its soldiers' sessions (PO-7). There is at most one post office per folder (PO-1).
+>>> END
+
+<<< OLD
+- **PO-7** (M1; U, I, F) **Shutdown.** When the Claude session ends, the post office closes every soldier session through that CLI's own exit, and leaves the worktrees and branches in place.
+  - **What starts it.** Three things start the same shutdown: the mod's release at `session.end`, the lease's end, and the watch.
+=== NEW
+- **PO-7** (M1; U, I, F) **Shutdown.** When the owner's Claude Code process ends, the post office closes every soldier session through that CLI's own exit, and leaves the worktrees and branches in place.
+  - **What it outlives.** `/clear`, `/resume` and `/branch` end Claude's conversation, but the process and its mod go on, as Claude Code's own background work does. So they don't end the army: the soldiers keep their sessions, and a summary for a brief sent before them arrives in the conversation Claude Code is in then (MSG-5, →M3). Claude Code's `session.end` says which happened in its `reason`: `clear` for `/clear`, and `resume` for `/resume` and `/branch`, a `/resume` that moves the conversation to a background session included. Any other reason (`prompt_input_exit`, `logout` or `other`) ends the army, `/logout` included.
+  - **What starts it.** Three things start the same shutdown: the mod's release at a `session.end` that ends the army, the lease's end, and the watch.
+>>> END
+
+<<< OLD
+    - **Renewing.** The mod gives the post office Claude's session id (`$.session.id()`) with the secret at start (PO-3); without one, the post office refuses to start. Every 10 seconds, by its own timer (`$.clock.every`), the mod sends a renewal: a command that presents the secret and carries that session id.
+=== NEW
+    - **Renewing.** The mod gives the post office Claude's session id (`$.session.id()`) with the secret at start (PO-3); without one, the post office refuses to start. That id stays the army's for its life, after `/clear`, `/resume` or `/branch` gives Claude's conversation another. Every 10 seconds, by its own timer (`$.clock.every`), the mod sends a renewal: a command that presents the secret and carries the army's id.
+>>> END
+
+<<< OLD
+    - **At `session.end`** the mod stops renewing before anything else, then sends a release that names the Claude session.
+=== NEW
+    - **At a `session.end` whose reason is `clear` or `resume`** the mod keeps renewing with the army's id, and nothing else changes. **At any other `session.end`** the mod stops renewing before anything else, then sends a release that names the army's id.
+>>> END
+
+<<< OLD
+The reason is one of `the session ended`, `no renewal from the mod for 30 s` and `the process that started it ended`.
+=== NEW
+The reason is one of `Claude Code ended`, `the owner logged out`, `no renewal from the mod for 30 s` and `the process that started it ended`.
+>>> END
+
+<<< OLD
+and the message whose summary waited for it ends as interrupted, with the reason `the session ended before the owner answered`.
+=== NEW
+and the message whose summary waited for it ends as interrupted, with the reason `the army stopped before the owner answered`.
+>>> END
+
+R-M1-133: where refusals are reported, and a burst's last count.
+<<< OLD
+  - Every command from the mod presents it. A wrong or missing secret is refused. The first refusal is reported in full; after that, at most one report a minute, with the count since the last one.
+=== NEW
+  - Every command from the mod presents it. A wrong or missing secret is refused, and reported in the post office's log (PO-5): the first refusal in full, then at most one report a minute, with the count since the last one. Refusals not yet reported are reported when their minute ends, on the monotonic clock.
+>>> END
+
+R-M1-141 (a): PROCESS_CREATE_PROCESS, the threads and the token's default DACL.
+<<< OLD
+`PROCESS_CREATE_THREAD`, `PROCESS_DUP_HANDLE`, `WRITE_DAC` or `WRITE_OWNER`, and that holds an OWNER RIGHTS (`S-1-3-4`) entry, which takes away the owner's implicit right to change the DACL back. A handle opened before the change keeps its rights, as Claude Code's handle to the process it started does. Where the DACL can't be set, the log says `memory protection: none` with the reason, and the post office goes on.
+=== NEW
+`PROCESS_CREATE_THREAD`, `PROCESS_CREATE_PROCESS`, `PROCESS_DUP_HANDLE`, `WRITE_DAC` or `WRITE_OWNER`, and that holds an OWNER RIGHTS (`S-1-3-4`) entry, which takes away the owner's implicit right to change the DACL back. Without `PROCESS_CREATE_PROCESS`, no process can start a child with the post office as its parent. The same operation gives each of the post office's threads a DACL that grants no one `THREAD_SET_CONTEXT`, `THREAD_GET_CONTEXT`, `THREAD_SUSPEND_RESUME`, `WRITE_DAC` or `WRITE_OWNER`, with the same OWNER RIGHTS entry, and sets the default DACL of its token to it, so a thread it starts later gets it too. A handle opened before the change keeps its rights, as Claude Code's handle to the process it started does. Where the DACL can't be set, the log says `memory protection: none` with the reason, and the post office goes on. A thread whose DACL can't be set is named in the log line, as in `memory protection: process DACL · 1 thread open`.
+>>> END
+
+R-M1-142: another plugin in the owner's session sees the secret.
+<<< OLD
+With the secret it can act as the Monarch: command and stop soldiers, read the event stream and, from M2, answer approval requests (CH-6, →M2). Shadow Army runs on a machine with no protection too; its log says which one it has.
+=== NEW
+With the secret it can act as the Monarch: command and stop soldiers, read the event stream and, from M2, answer approval requests (CH-6, →M2). Shadow Army runs on a machine with no protection too; its log says which one it has. Another plugin in the owner's Claude Code session runs as the owner inside the Monarch's host: a `process.spawn` hook sees the secret in the post office's input, and every event on its output, and can change them. Shadow Army can't hand the secret over in a way such a hook doesn't see.
+>>> END
+
+R-F-99, R-F-100: the army's files stay out of git, and are the owner's alone.
+<<< OLD
+- **PO-5** (M1; U, F) **Logs.** The post office keeps an append-only log for itself and one for each soldier's session, under `.shadow/v2/logs/`. Logs are JSON Lines: one file per soldier session, named by the soldier and the session id, and one per start of the post office, named by its start time. Every write passes through `redact()` (WSP-8).
+=== NEW
+- **PO-5** (M1; U, X, F) **Logs.** The post office keeps an append-only log for itself and one for each soldier's session, under `.shadow/v2/logs/`. Logs are JSON Lines: one file per soldier session, named by the soldier and the session id, and one per start of the post office, named by its start time. Every write passes through `redact()` (WSP-8).
+  - **Out of git.** Before it writes anything under `.shadow/v2/`, the post office makes sure that `.shadow/v2/.gitignore` holds `*`, so git ignores the army's files there, as v1 does for `.shadow/`.
+  - **The owner's alone.** On Linux and macOS, the post office creates `.shadow/v2/` and `~/.shadow-army/` readable only by the owner's user (0700), whatever the umask, so nothing under them is open to another user, and writes its own files there 0600. On Windows it creates the two folders with inheritance off and an ACL that grants only the owner's user, SYSTEM and Administrators. Where either folder already exists with more, the post office narrows it at start, and its log says so.
+>>> END
+
+R-M1-140 (b): a process with a parent outside the tree, on Windows.
+<<< OLD
+or a vendor's own background service, such as Claude Code's background sessions. That is a stated residual risk,
+=== NEW
+or a vendor's own background service, such as Claude Code's background sessions; and, on Windows, a process created with a parent outside the tree (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`), which takes that parent's job, not the soldier's. That is a stated residual risk,
+>>> END
+
+<<< OLD
+It creates the CLI inside a Job Object, assigned as the process is created (`PROC_THREAD_ATTRIBUTE_JOB_LIST`). Every process the CLI creates joins the job too.
+=== NEW
+It creates the CLI inside a Job Object, assigned as the process is created (`PROC_THREAD_ATTRIBUTE_JOB_LIST`). Every process the CLI creates joins the job too, except one created with a parent outside the job, as PO-1 states. Before it creates the job, the guardian gives its own process the DACL that PO-3 gives the post office (PO-19), so no process in the job can copy its handle to the job and keep the job alive after it, or start a child with the guardian as its parent.
+>>> END
+
+<<< OLD
+    - **Windows.** The job's last handle closed with the guardian, so the system has ended every process in the job. Nothing escapes, and the channel restarts as after any crash (PO-1).
+=== NEW
+    - **Windows.** The job's last handle closed with the guardian, so the system has ended every process in the job. Nothing in the job escapes, except as PO-1 states, and the channel restarts as after any crash (PO-1).
+>>> END
+
+<<< OLD
+    - **Windows.** Nothing is left: the job ended when its last handle closed.
+=== NEW
+    - **Windows.** Nothing in the job is left: the job ended when its last handle closed. What PO-1 states escapes it.
+>>> END
+
+<<< OLD
+  - **The DACL.** Run with its DACL operation, before the post office reads the Monarch's secret, the script replaces the post office's DACL as PO-3 says, then exits.
+=== NEW
+  - **The DACL.** Run with its DACL operation, before the post office reads the Monarch's secret, the script replaces the post office's DACL, its threads' and its token's default DACL as PO-3 says, then exits. As a guardian, it gives its own process the same DACL before it creates the job (PO-9).
+>>> END
+
+R-M1-120: a tree entry that can't be written.
+<<< OLD
+A reader skips a line that doesn't parse, as for logs (PO-5). The CLI doesn't start until its entry is written. The entry holds:
+=== NEW
+A reader skips a line that doesn't parse, as for logs (PO-5). The CLI doesn't start until its entry is written. If the entry can't be written, the CLI doesn't start, the containment has failed (PO-15), and the soldier's log and one line in Claude's transcript say why. A listing line that can't be added is reported as PO-5 says for a log write that fails. The entry holds:
+>>> END
+
+R-M1-121, R-M1-137: a run refused for its checksum; PO-13's live check.
+<<< OLD
+- **PO-13** (M1; I, R) **Packaging and installing.**
+=== NEW
+- **PO-13** (M1; I, R, L) **Packaging and installing.**
+>>> END
+
+<<< OLD
+A file that has changed is refused, for example after Shadow Army was updated under a running post office.
+=== NEW
+A file that has changed is refused, for example after Shadow Army was updated under a running post office. A run refused for its checksum is a failed containment (PO-15), at a session's start or during it, and the reconnect's check gives PO-14's message.
+>>> END
+
+R-M1-129: a check that runs past 10 seconds.
+<<< OLD
+  - **The check.** The post office checks containment on the machine as it is then, within 10 seconds.
+=== NEW
+  - **The check.** The post office checks containment on the machine as it is then, within 10 seconds. A check that hasn't passed 10 seconds after it began, on the monotonic clock, has failed: anything it started is killed, and its message names the step still running.
+>>> END
+
+R-M1-144: AppLocker's hash rules use the files' Authenticode hash.
+<<< OLD
+An administrator can allow the script and its DLL by their hashes, listed in SHA256SUMS. No soldier can start.`
+=== NEW
+An administrator can allow the installed script, and its DLL where DLLs are enforced, with a hash rule made from the installed files. No soldier can start.`
+>>> END
+
+<<< OLD
+An administrator decides whether soldiers run on that machine, by allowing the script and the DLL by their hashes, which each release lists in `SHA256SUMS` (PO-20). The hashes change whenever the script or the DLL changes.
+=== NEW
+An administrator decides whether soldiers run on that machine, by allowing the installed script and its DLL with a hash rule made from the files themselves, as `New-AppLockerPolicy` makes one. AppLocker's file hash is a file's Authenticode hash, not the SHA-256 that `SHA256SUMS` lists (PO-20), which is for checking the files first. The hashes change whenever the script or the DLL changes.
+>>> END
+
+R-M1-124: the system-call trace is of the shipped build.
+<<< OLD
+  - on Linux, the tests trace the helper's own system calls in every containment test, and fail on any call outside an allowlist;
+=== NEW
+  - on Linux, the tests trace the shipped helper's own system calls in every containment test, and fail on any call outside an allowlist. VER-6's coverage job runs a copy instrumented for coverage, which writes its counts and never ships (PO-21), and is not traced;
+>>> END
+
+R-M1-141 (a): SEC-2 tries the threads and a child of the post office.
+<<< OLD
+proves that the post office's log names the memory protection it has, and that where it has one, a fake soldier can neither read its memory nor change its DACL.
+=== NEW
+proves that the post office's log names the memory protection it has, and that where it has one, a fake soldier can neither read its memory nor change its DACL, and on Windows can neither open its threads to read or change their context nor start a process with the post office as its parent.
+>>> END
+
+D-11: HOST-2's first use is per army, not per conversation.
+<<< OLD
+The mod starts the post office the first time the army is used in a session, and again
+=== NEW
+The mod starts the post office the first time the army is used, and again
+>>> END

@@ -1,0 +1,58 @@
+v0.22 batch 3 (fork3, 2026-10-30): fix check V21-FC1's N7 to N11 and N13 (R-M1-252 to 256 and 258), from raw/V21-FC1.md "## New findings", and LATEST.md's left-open P3 on probe P-8 (R-M1-259), from probes.md P-8. OLD texts are v0.21's (v2.md at eea9e11 equals v2@e2d59b9.md); each is one sentence or part of one.
+
+R-M1-252 (N7): PO-16's one-shot sweep may read Windows creation times through PO-19.
+<<< OLD
+and may run PO-17's tool operations.
+=== NEW
+and may run PO-17's tool operations or, on Windows, PO-19's process operation.
+>>> END
+
+R-M1-253 (N8): a Windows watch run ends with the post office, and its restarts are bounded.
+<<< OLD
+If a watch run ends before that report, the post office starts it again, and its log says so (PO-7).
+=== NEW
+A watch run also exits when its standard input closes, as when the post office ends. If a watch run ends before that report, the post office starts it again, at most once a second, and its log says so (PO-7).
+>>> END
+
+R-M1-254 (N9): WSP-8's URL password runs to the last `@` of the authority.
+<<< OLD
+the password in a URL's user part, between the `:` after the user name and the `@`, as in `postgres://u:[redacted]@host/db`;
+=== NEW
+the password in a URL's user part, from the `:` after the user name to the last `@` before the authority ends (the next `/`, `?`, `#`, whitespace, quote or end of line), so a password that holds an `@` or a `:` is matched whole, as in `postgres://u:[redacted]@host/db`;
+>>> END
+
+R-M1-255 (N10): CH-1's real-path rule covers every lookup, not only the CLI's `PATH`.
+<<< OLD
+Each entry, and each of those folders, is compared after it is resolved to its real path,
+=== NEW
+Each entry, both where a CLI, git or Node.js is looked up and in the CLI's `PATH`, and each of those folders, is compared after it is resolved to its real path,
+>>> END
+
+R-M1-255 (N10): M1-AC10's link, letter-case and missing-entry cases.
+<<< OLD
+The fake reports the `PATH` it got, which holds none of those entries, and the soldier's log names each one dropped.
+=== NEW
+The fake reports the `PATH` it got, which holds none of those entries, and the soldier's log names each one dropped. So are a `PATH` entry that is a symbolic link (on Windows a junction) to a folder in the soldier's snapshot holding `claude`, that folder named in another letter case on Windows and macOS, and an entry that doesn't exist: none is searched or passed on, and the log names each.
+>>> END
+
+R-M1-256 (N11): M1-AC10's shutdown line comes from a release; a killed Claude Code leaves it to the log.
+<<< OLD
+The fake Claude Code process then ends, and the shutdown's transcript line names the turn not checked.
+=== NEW
+The fake mod then releases the army as at `/logout`, and the shutdown's transcript line names the turn not checked; with the fake Claude Code process ended instead, the post office's log names it.
+>>> END
+
+R-M1-258 (N13): CH-4 cites grok-build's configuration guide for the precedence.
+<<< OLD
+(https://docs.x.ai/build/features/permissions)
+=== NEW
+(https://docs.x.ai/build/features/permissions; the precedence list, CLI flags above `~/.grok/config.toml`, is in grok-build's configuration guide, https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md)
+>>> END
+
+R-M1-259 (LATEST.md left open, P3): S7's first bullet gets P-8's CI result and its SIP-off limit. PO-16 414's "Spike S7 measures how soon" is left as it is: S7 has now measured it.
+<<< OLD
+on CI's macOS runners: whether launchd starts a killed guardian again, after what delay, and in the same coalition;
+=== NEW
+on CI's macOS runners: whether launchd starts a killed guardian again, after what delay, and in the same coalition;
+    - **Run on CI** (probe P-8, 2026-10-28): after `kill -9`, launchd started the guardian again 50 ms later when it had run 12 seconds, and 10 seconds later when it had run under 10 seconds (launchd's default `ThrottleInterval`), in the same resource and jetsam coalitions, and ended the killed guardian's child. A guardian started again that removed its own job with `launchctl bootout` ended itself and its child, and launchd didn't start it again in the next 20 seconds. So PO-16's macOS backstop works. **Not tested:** on a stock Mac; CI's macOS runners have SIP turned off (D-34), which shouldn't change what launchd does.
+>>> END

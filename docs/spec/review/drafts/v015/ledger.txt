@@ -1,0 +1,12 @@
+Ledger rows for v0.15.
+<<< OLD
+PO-8's "the owner's edits between turns", whichever is chosen |
+=== NEW
+PO-8's "the owner's edits between turns", whichever is chosen. Answered **B** (2026-10-23), applied in v0.15; to fix-check |
+>>> END
+
+<<< OLD
+| card D-25 (2026-10-21) |
+=== NEW
+| card D-25 (2026-10-21). Answered **A** (2026-10-23), applied in v0.15; to fix-check |
+>>> END

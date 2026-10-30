@@ -1,0 +1,90 @@
+[
+ [
+  "or `sa live`, the dev tool that opens, messages, stops and reconnects a claude soldier through the same post office.",
+  "or `sa live`, the dev tool that opens, messages, closes and reconnects a claude soldier through a post office of its own, started as PO-3 says with its own secret. That post office has no lease, its watch follows `sa live`'s process (PO-7), PO-1's lock refuses it while the mod's army runs in the folder, and the notices M1 sends to Claude's transcript, the trust card included (ARM-7), go to `sa live`'s terminal."
+ ],
+ [
+  "without one, the post office refuses to start. That id stays",
+  "without one, the post office refuses to start, except one `sa live` starts, which has no lease (HOST-2). That id stays"
+ ],
+ [
+  "first use, reuse, `/clear` and `/resume` during a soldier's turn, a mod reload, a normal exit, and Claude Code killed from outside. After `/clear` and `/resume` the post office, the soldiers' sessions and the running turn go on.",
+  "first use, reuse, `/clear` and `/resume`, a mod reload, a normal exit, and Claude Code killed from outside. After `/clear` and `/resume` the post office and its lock go on. In M1 only `sa live` opens a session (WSP-11), and its post office has no lease, so a running turn through `/clear` and `/resume` is M3-AC1's case."
+ ],
+ [
+  "An unknown name sends nothing (HOST-10, MSG-2, MSG-3, MSG-4).",
+  "An unknown name sends nothing (HOST-10, MSG-2, MSG-3, MSG-4). Live, on the real host, with a soldier's turn running from a `send`, `/clear` and then `/resume` leave the post office, the soldier's session and the running turn going on, and the run is written up on the PR (HOST-2, PO-7)."
+ ],
+ [
+  "    - then in Claude Code's own question dialog (the mod API's `$.ui.ask`), which asks `Trust this folder's Shadow Army files?` with two options, `Not now` first, then `Trust these files`.",
+  "    - then in Claude Code's own question dialog (the mod API's `$.ui.ask`), which asks `Trust this folder's Shadow Army files?` with two options, `Not now` first, then `Trust these files`;\n    - under `sa live` (HOST-2), which has no Claude Code session to show them in, the same rows are printed to its terminal and the same question is asked there, with `Not now` first. Only the typed answer `Trust these files` accepts. End of input, an empty line or any other answer accepts nothing and starts nothing."
+ ],
+ [
+  "Only an answer that is exactly `Trust these files` accepts. `Not now`, any other answer, text typed under Other included, a dismissed dialog, or a dialog that can't open accepts nothing and starts nothing.",
+  "Only an answer that is exactly `Trust these files` accepts, in the dialog or typed in the terminal. `Not now`, any other answer, text typed under Other included, a dismissed dialog, a dialog that can't open, or end of input in the terminal accepts nothing and starts nothing."
+ ],
+ [
+  "  - a `shadow.config.json` whose model name holds ESC and a bidirectional control shows each as a placeholder in the rows.",
+  "  - a `shadow.config.json` whose model name holds ESC and a bidirectional control shows each as a placeholder in the rows;\n  - the same repository opened by `sa live` prints the rows and the question in its terminal; a typed `Not now`, an empty line and end of input each start nothing, and `Trust these files` opens the session. In M1 only `sa live` opens a session (WSP-11), so the cases above that open one run through it, and the dialog's own cases run against the mod with the fake `$` (HOST-2)."
+ ],
+ [
+  "Once harness git goes on, that turn's guard and audit run before anything else (PO-8, →M2).",
+  "Once harness git goes on, that turn's guard and audit run before anything else (PO-8, →M2). Such a turn keeps its guard's baseline (WSP-11), and its snapshot stays until its writes are reported. The soldier's log records that the turn's guard and the snapshot's report are waiting on harness git, and records each again once it has run (PO-5). So they outlive the post office however it ends, a shutdown (PO-7) or a mod reload included. A post office that shuts down with one still waiting names each in its log and in one line in Claude's transcript, as in `Iron's turn at 14:02 not checked: harness git held · checked at the next start`. Before it opens any channel, a later post office finishes each one of this army's as PO-1 says."
+ ],
+ [
+  "  - **After a post office that didn't close its channels.** Before it opens any channel, a post office finishes what the last one left open, as the last one's logs (PO-5) and, from M3, its records (PO-6, →M3) show:",
+  "  - **After a post office that didn't close its channels.** Before it opens any channel, a post office finishes what earlier post offices left open, as this army's logs (PO-5) and, from M3, its records (PO-6, →M3) show. Each item it finishes for an earlier post office is logged as finished, so a post office that dies during this work leaves the rest to the next, and nothing is reported twice:"
+ ],
+ [
+  "A turn whose guard had already closed is not checked again (PO-8, →M2).",
+  "A turn whose guard had already closed is not checked again (PO-8, →M2). A turn whose baseline is missing or can't be read is not compared; the line says so, as in `Iron's turn at 14:02 not checked: baseline missing`."
+ ],
+ [
+  "Then the snapshot is removed, and so is any instructions or settings file the last one left beside its logs (CH-2).",
+  "Then the snapshot is removed, and so is any instructions or settings file the last one left beside its logs (CH-2). A snapshot its log names as started but not made is removed as WSP-10 removes a snapshot that timed out, and the log says so.\n  - **After any post office, a shutdown included.** However the last one ended, a shutdown (PO-7) included, a turn whose guard, or a snapshot whose report, its log records as waiting on harness git (WSP-10) is finished the same way, before any channel opens: the guard is closed against its baseline as the bullet above on turns still open says, and the snapshot's writes are reported and the snapshot removed as the bullet above on snapshots says. The line says why, as in `Iron's turn at 14:02 checked at this start: harness git was held`."
+ ],
+ [
+  "and is written whole. The start time",
+  "and is written whole. A lock that can't be written starts no post office, and the mod says why, as in `the army can't start: lock not written · disk full`. The start time"
+ ],
+ [
+  "written and flushed as it is made or removed (WSP-10).",
+  "written and flushed as it is made or removed (WSP-10); a snapshot's line is written before the command that makes it starts, and again once it is made."
+ ],
+ [
+  "found by its absolute path in the Windows folder. Time the post office did not run,",
+  "found by its absolute path in the Windows folder. Before each command starts, the post office adds an entry for it under `.shadow/v2/trees/`, with git's pid and start time, as PO-16 does for a CLI's tree, and removes it once the command has ended. The mod and the next post office's sweep (PO-16) end such a command, with its process group or, on Windows, its tree, before PO-1's finishing begins. Time the post office did not run,"
+ ],
+ [
+  "or while a process that joined the process tree during the turn hasn't exited;",
+  "or while a process that joined the process tree during the turn hasn't exited, other than a session service as PO-8 defines it, which never keeps it open;"
+ ],
+ [
+  "The baseline and the log line that opens the turn (PO-5) are written and flushed before the message goes in,",
+  "The baseline is written whole, under a temporary name and then renamed, before the log line that opens the turn (PO-5), and both are flushed before the message goes in,"
+ ],
+ [
+  "- **PO-8** (M2; I, F) **A turn ends once, and only when its work has stopped.**",
+  "- **PO-8** (M1, M2; I, F) **A turn ends once, and only when its work has stopped.** In M1 only its session services apply, for the checkout guard (WSP-11); the rest is M2's."
+ ],
+ [
+  "- PO-1, PO-2, PO-3, PO-5, PO-7, PO-9 to PO-21;",
+  "- PO-1, PO-2, PO-3, PO-5, PO-7, PO-9 to PO-21, and PO-8's session services alone, with claude's part of the table of the servers it declares;"
+ ],
+ [
+  "  - a `claude.cmd`, `claude.exe`, `claude`, `git.exe`,",
+  "  - a fake claude soldier at `auto` changes the shared config and edits a tracked checkout file by absolute path in one turn. Harness git is held, and Claude's transcript says so. The fake Claude Code process then ends, and the shutdown's transcript line names the turn not checked. Before it opens any channel, the next use's post office closes that turn's guard against its baseline, gives the checkout file in one transcript line, reports the snapshot's writes, and removes the snapshot. With the post office killed instead of shut down, the outcome is the same (PO-1);\n  - a `claude.cmd`, `claude.exe`, `claude`, `git.exe`,"
+ ],
+ [
+  "  - a snapshot that can't be made keeps the soldier from starting,",
+  "  - a fake claude starts a declared language server at its first edit of a matching file and keeps it running: the turn closes at its `result`, the next message goes in, and a checkout file written by a child the configuration doesn't declare still fails the turn (PO-8);\n  - a snapshot that can't be made keeps the soldier from starting,"
+ ],
+ [
+  "  - a process that has since taken a recorded pid, with another start time, is left running;",
+  "  - the post office is killed while a fake git makes a soldier's snapshot: the next post office's sweep ends that git, with every process it started, before PO-1's finishing begins, and the snapshot its log names as started but not made is removed (WSP-10);\n  - a process that has since taken a recorded pid, with another start time, is left running;"
+ ],
+ [
+  "| ARM-6 (I, X, F), WSP-11 (I, F), WSP-4 (I); M1-AC11, M2-AC5,",
+  "| ARM-6 (I, X, F), WSP-11 (I, F), WSP-10 (X, F), WSP-4 (I); M1-AC10, M1-AC11, M2-AC5,"
+ ]
+]

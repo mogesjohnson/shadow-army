@@ -1,0 +1,7 @@
+The header's version line for v0.11.
+
+<<< OLD
+| **Version** | 0.10, 2026-10-17:
+=== NEW
+| **Version** | 0.11, 2026-10-20: the owner's answers of 2026-10-17 to decisions D-3 (the containment helper ships prebuilt; Q8 closed), D-4 (Appendix D, a threat model), D-5 (caps on messages, queues, sends and reports), D-8 (the live checks' budget), D-9 (the Monarch's secret in memory), D-10 (a trust card for the folder's own files), D-16 (supervised claude keeps plan mode), D-17 (an army per working tree) and D-19 (auto memory off for claude soldiers). 0.10, 2026-10-17:
+>>> END

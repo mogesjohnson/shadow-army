@@ -1,0 +1,7 @@
+- **CH-1** (M1; U, C) **One interface.** Each CLI has one adapter, and all adapters share one interface.
+  - The interface: open a session in its snapshot or its worktree (WSP-11; WSP-1, →M6) with the standing instructions; send a message; interrupt the running turn; stream events; close.
+  - Events: text, thinking, tool call, tool result, approval request, usage, turn end, error.
+  - An error says which kind it is, read from the CLI's own fields: a rate limit (with its reset time where the CLI gives one), a context overflow, a login needed, or another error. Each keeps the CLI's message word for word.
+  - A refusal is not an error: the turn ends with the model's own words, marked as a refusal.
+  - A line the CLI writes that can't be parsed is recorded word for word, redacted (WSP-8), and shown as an error of the kind another error, and the session carries on; ten in a row count as a lost connection (PO-1) (from 2.0 SOLD-6). A line split across reads is joined first, and only one still incomplete when the stream ends is malformed.
+  - `cli` in `shadow.config.json` names one of the four adapters; any other value is refused at start. An adapter starts its CLI from an absolute path found on `PATH` alone, never in the folder, a worktree or a snapshot, and never through a relative `PATH` entry. On Windows the current folder is never searched.

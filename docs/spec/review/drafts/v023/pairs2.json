@@ -1,0 +1,62 @@
+[
+ [
+  "A post office whose last one's log ends with harness git held for a change trusts the state that log last trusted instead, so a change still there holds harness git again (below).",
+  "A post office whose last one's log ends with harness git held, for a change or after a timeout, or with a turn of this army's still open (PO-1), trusts the state that log last trusted instead, so a change still there holds harness git again (below) before PO-1 finishes any turn. Such a change can't be told from one the owner made after the last post office ended, so its card, or in M1 its transcript line, says so, as PO-1 says for a turn's changes. In that comparison, the `gitdir` and `commondir` of each of this army's snapshots and worktrees that the log names as started, made or being removed are trusted as they are, as PO-1 does for a turn's guard, until Shadow Army's own command removes that snapshot or worktree; a `config.worktree` there is compared like any other config."
+ ],
+ [
+  "The post office's log records the trusted state, as a hash of each of its files, when the post office starts and each time that state changes, at a y or after one of Shadow Army's own commands that makes or removes a snapshot or a worktree, and records each hold and what ended it (PO-5).",
+  "The post office's log records the trusted state, as a hash of each of its files, when the post office starts and each time that state changes, at a y or after one of Shadow Army's own commands that makes or removes a snapshot or a worktree or deletes the `worktrees/<id>` entry such a command left (above), and records each hold and what ended it (PO-5). Beside the log it keeps a copy of each of those files as last trusted, so a card shown again after a restart gives each file's diff from that state."
+ ],
+ [
+  "After Shadow Army's own command that makes or removes a snapshot or a worktree, the trusted state gains",
+  "After Shadow Army's own command that makes or removes a snapshot or a worktree, or its deletion of a `worktrees/<id>` entry such a command left, the trusted state gains"
+ ],
+ [
+  "a snapshot's line is written before the command that makes it starts, and again once it is made.",
+  "a snapshot's line is written before the command that makes it starts, and again once it is made. So are WSP-10's records, the trusted state with the copies kept beside the log and each hold of harness git and what ended it, each written and flushed before harness git runs again or goes on."
+ ],
+ [
+  "The line says why, as in `Iron's turn at 14:02 checked late: harness git was held`.",
+  "The line says why, as in `Iron's turn at 14:02 checked late: harness git was held`. Each item of the bullets above that needs harness git, such as a turn's guard or a snapshot's report and removal, waits in the same way while harness git is held, and no channel opens until every item is finished."
+ ],
+ [
+  "a filter set then is the owner's, and runs;",
+  "a filter set then is the owner's, and runs, unless that start holds harness git for it (below);"
+ ],
+ [
+  "holds harness git at the next check, so no harness git command that starts after that check runs it.",
+  "holds harness git at the next check, or at the next start where the post office ended first (WSP-10), so no harness git command that starts after that check runs it."
+ ],
+ [
+  "One set at start is the owner's, and runs (WSP-10).",
+  "One set at start is the owner's, and runs, unless that start holds harness git for it (WSP-10)."
+ ],
+ [
+  "a clean filter set in the config when the post office started is the owner's, and runs;",
+  "a clean filter set in the config when the post office started is the owner's, and runs, unless that start holds harness git for it (WSP-10);"
+ ],
+ [
+  "keeps harness git held and starts no soldier, and its log names the change.",
+  "keeps harness git held and starts no soldier, its log names the change, and Claude's transcript gets WSP-10's line that harness git is held and that undoing the change lets it go on."
+ ],
+ [
+  "With the post office killed instead of shut down, the outcome is the same (PO-1);",
+  "With the post office killed instead of shut down, the outcome is the same (PO-1). So it is when the fake mod releases the army while the soldier's turn still runs, before any harness git command has checked the config change: the next use's post office holds harness git before it finishes that turn, and its transcript line also says the change can't be told from the owner's (WSP-10);"
+ ],
+ [
+  "keeps harness git held and shows the card again, and with the change undone first, it holds nothing (WSP-10, PO-1).",
+  "keeps harness git held and shows the card again, where y lets harness git go on and the held turn's guard then closes before any channel opens, and with the change undone first, it holds nothing (WSP-10, PO-1)."
+ ],
+ [
+  "The check after the command finds the change if it is still there, and holds harness git.",
+  "The check after the command finds the change if it is still there, and holds harness git; if the post office ends first, the next start does (WSP-10)."
+ ],
+ [
+  "A filter a soldier added while a post office ran holds harness git, and a restart doesn't trust it:",
+  "A filter a soldier added while a post office ran holds harness git, and a restart doesn't trust it, also when that post office ended before checking it, as when a normal exit cuts a turn short (PO-7) or a timeout held harness git (WSP-10):"
+ ],
+ [
+  "lets that start trust the config as it then is.",
+  "lets that start trust the config as it then is. A start reads only this army's logs (PO-5), so a filter that another army's soldier added in the same repository is trusted at this army's start, unless this army's own last log makes that start compare with the state it last trusted (WSP-10)."
+ ]
+]

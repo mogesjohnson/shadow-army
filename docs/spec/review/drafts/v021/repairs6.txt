@@ -1,0 +1,271 @@
+v0.21 batch 6 (fork1, 2026-10-30): the F rows. R-F-157 and 158 from raw/F-R4-V1.md (session 15's version, `git show 0257350:docs/spec/review/raw/F-R4-V1.md`), R-F-166 (D-36 (a)) and 167 from raw/F-R4-V1.md, R-F-168 and 169 from raw/F-R4-V2.md, and the P3s R-F-159, 160, 162 to 164 from raw/F-r4-consistency.md (3) to (8) and R-F-170 from raw/F-r4-redteam.md (5).
+Not here: R-F-161 was already fixed in v0.18 (f48b957: M5-AC3 says "loaded from its release package (HOST-1)"); R-F-165 edits ADR-0012, not v2.md, so its pair is in pairs6-adr0012.json (apply with tools/rep.mjs to docs/adr/0012-local-only-post-office.md).
+
+R-F-157: HOST-11 names MSG-9's and MSG-10's lines as reaching Claude's conversation.
+<<< OLD
+  - Of these, the summary card and MSG-7's line also go into Claude's conversation (MSG-5, MSG-7); the other rows are for the owner only.
+=== NEW
+  - Of these, the summary card and MSG-7's line also go into Claude's conversation (MSG-5, MSG-7), and so do MSG-9's line for a stopped turn and MSG-10's line for Claude's brief cancelled or changed (MSG-9, MSG-10); the other rows are for the owner only.
+>>> END
+
+R-F-157: MSG-9's line.
+<<< OLD
+  - Claude's transcript gets one line, so Claude knows the turn was stopped.
+=== NEW
+  - Claude's conversation gets one line, so Claude knows the turn was stopped, and Claude's transcript shows it too (HOST-11).
+>>> END
+
+R-F-157: MSG-10's refused cancel.
+<<< OLD
+is refused with `already delivered`, and Claude gets no line.
+=== NEW
+is refused with `already delivered`, and Claude's conversation gets no line.
+>>> END
+
+R-F-157: MSG-10's line.
+<<< OLD
+  - When the message was Claude's brief, Claude's transcript gets one line saying it was cancelled or changed.
+=== NEW
+  - When the message was Claude's brief, Claude's conversation gets one line saying it was cancelled or changed, and Claude's transcript shows it too (HOST-11).
+>>> END
+
+R-F-157: M3-AC3, the soldier-to-soldier row stays the owner's.
+<<< OLD
+Both panes show it, Claude gets one line, and a soldier cannot assign work (PO-4, MSG-6, ARM-4).
+=== NEW
+Both panes show it, Claude's transcript gets one line, which doesn't go into Claude's conversation (HOST-11), and a soldier cannot assign work (PO-4, MSG-6, ARM-4).
+>>> END
+
+R-F-157: M3-AC4.
+<<< OLD
+- **M3-AC4** The owner's direct message adds one line to Claude's transcript (MSG-7).
+=== NEW
+- **M3-AC4** The owner's direct message adds one line to Claude's transcript and to Claude's conversation (MSG-7).
+>>> END
+
+R-F-157: M3-AC9 checks MSG-9's line.
+<<< OLD
+the message ends as interrupted, and the queue is held until g or a new message (MSG-9, MSG-4).
+=== NEW
+the message ends as interrupted, Claude's conversation gets one line, and the queue is held until g or a new message (MSG-9, MSG-4).
+>>> END
+
+R-F-157: M3-AC10's line for Claude's own briefs.
+<<< OLD
+changing replaces its text before delivery, and Claude gets one line for its own briefs.
+=== NEW
+changing replaces its text before delivery, and Claude's conversation gets one line for its own briefs.
+>>> END
+
+R-F-157: M3-AC10's refused cancel.
+<<< OLD
+the mod shows that only from the post office's event, and Claude gets no line (MSG-10, HOST-16).
+=== NEW
+the mod shows that only from the post office's event, and Claude's conversation gets no line (MSG-10, HOST-16).
+>>> END
+
+R-F-158 (P3): VER-6, another language's lines join the one count.
+<<< OLD
+Code in another language, such as a native helper or a PowerShell script, keeps the same bars through that language's own coverage tool, counted over the systems it runs on (VER-2).
+=== NEW
+Code in another language, such as a native helper or a PowerShell script, is measured by that language's own coverage tool, counted over the systems it runs on (VER-2), and its lines join the one count of the post office and the channels; no language has a bar of its own.
+>>> END
+
+R-F-166, D-36 (a): VER-4 moves into M1, with a clean checkout and the owner's whole read.
+<<< OLD
+- **VER-4** (M2; R) **Fixture provenance.**
+=== NEW
+- **VER-4** (M1, M2; R) **Fixture provenance.**
+>>> END
+
+R-F-166, D-36 (a): VER-4's shared text (raw/F-R4-V1.md).
+<<< OLD
+They are redacted before they are committed.
+=== NEW
+Each is recorded in a clean checkout of the commit under test, with no file in it, and no variable in the CLI's environment beyond the CLI's own login, that holds a secret. Each is redacted (WSP-8), and the owner then reads it whole before it is committed; the PR says so. This holds from M1's first claude fixture (M1-AC3).
+>>> END
+
+R-F-166: WSP-8's pointer to VER-4, now an M1 requirement.
+<<< OLD
+Fixtures are redacted before they are committed, and VER-4 (→M2) adds their provenance.
+=== NEW
+Fixtures are redacted before they are committed, and VER-4 adds their provenance and the owner's check.
+>>> END
+
+R-F-166: WSP-8 matches a URL's password (the ledger's "WSP-8 adds URL passwords"; raw/F-R4-V1.md's cheap extra for either option).
+<<< OLD
+a `Bearer` token and an `Authorization` header's value;
+=== NEW
+a `Bearer` token and an `Authorization` header's value; the password in a URL's user part, between the `:` after the user name and the `@`, as in `postgres://u:[redacted]@host/db`;
+>>> END
+
+R-F-166: M1 Implements.
+<<< OLD
+- VER-1, VER-2, VER-3, VER-5, VER-6, VER-7, VER-8, VER-9.
+=== NEW
+- VER-1, VER-2, VER-3, VER-4, VER-5, VER-6, VER-7, VER-8, VER-9.
+>>> END
+
+R-F-166: M1-AC3 cites VER-4, so M1's Implements has an AC for it (tools/trace-v2.mjs).
+<<< OLD
+- **M1-AC3** A contract test replays a recorded, redacted claude session.
+=== NEW
+- **M1-AC3** A contract test replays a claude session recorded, redacted and read whole by the owner as VER-4 says.
+>>> END
+
+R-F-167: SEC-6 covers every text the mod draws, repository text included.
+<<< OLD
+In text from a soldier, a CLI or a config file, each character of Unicode's control (Cc) and format (Cf) categories
+=== NEW
+In every text the mod draws or sends to Claude, whatever its source (a soldier's or a CLI's words, a config file, and the paths, diffs, branch and ref names and working-tree paths that harness git and the guard read from the repository), each character of Unicode's control (Cc) and format (Cf) categories
+>>> END
+
+R-F-167: M1-AC11 cites SEC-6.
+<<< OLD
+- **M1-AC11** A fake claude soldier at `auto` (WSP-11, PO-1, WSP-10):
+=== NEW
+- **M1-AC11** A fake claude soldier at `auto` (WSP-11, PO-1, WSP-10, SEC-6):
+>>> END
+
+R-F-167: M1-AC11's case. In M1 a failed turn's transcript line is WSP-11's "Claude's transcript gets one line"; the case checks the name wherever the mod draws it.
+<<< OLD
+  - an edit made between turns raises nothing;
+=== NEW
+  - a tracked checkout file whose name holds U+202E, and on Linux and macOS ESC too (Windows file names can't hold ESC), changed during a turn, fails that turn, and wherever the mod draws that name, as in the turn's transcript line, each shows as a placeholder;
+  - an edit made between turns raises nothing;
+>>> END
+
+R-F-167: M2-AC5 cites SEC-6.
+<<< OLD
+- **M2-AC5** Fault tests with a fake agy (ARM-6):
+=== NEW
+- **M2-AC5** Fault tests with a fake agy (ARM-6, SEC-6):
+>>> END
+
+R-F-167: M2-AC5's attribution-card case.
+<<< OLD
+  - an edit made between agy's turns raises nothing;
+=== NEW
+  - agy writes a checkout file whose name holds U+202E, and on Linux and macOS ESC too, with a line holding U+202E: the attribution card shows each, in the path and in the diff, as a placeholder;
+  - an edit made between agy's turns raises nothing;
+>>> END
+
+R-F-167: Appendix D row 4's boundary.
+<<< OLD
+| 4 | A soldier's words to the Monarch, other soldiers and the terminal |
+=== NEW
+| 4 | A soldier's words, and text read from the repository, to the Monarch, other soldiers and the terminal |
+>>> END
+
+R-F-167: Appendix D row 4's evidence.
+<<< OLD
+MSG-1 (R, I), MSG-6 (I), SEC-6 (U, X); M3-AC3, M3-AC7, M1-AC12, M5-AC6
+=== NEW
+MSG-1 (R, I), MSG-6 (I), SEC-6 (U, X); M3-AC3, M3-AC7, M1-AC11, M1-AC12, M2-AC5, M5-AC6
+>>> END
+
+R-F-168 (P3): Appendix D row 8 names a new residual 14.
+<<< OLD
+| WSP-10 (X, F); M1-AC10, M2-AC5 | prevented, except residual 7 |
+=== NEW
+| WSP-10 (X, F); M1-AC10, M2-AC5 | prevented for what changes after start, except residual 7; a filter in the config at start runs as the owner's (residual 14) |
+>>> END
+
+R-F-168: the In short line.
+<<< OLD
+It neither prevents nor detects what a CLI takes from the repository by itself (row 11), or what a soldier does elsewhere on the machine (row 17).
+=== NEW
+It neither prevents nor detects what a CLI takes from the repository by itself (row 11), a filter already in the config when the post office starts (residual 14), or what a soldier does elsewhere on the machine (row 17).
+>>> END
+
+R-F-168: residual 14. Its last sentence is checked against R-M1-206's fix (WSP-10's held turn, now in the spec): in M1 the hold lasts until the post office restarts, the restart trusts the config as it then is, and the held turn's guard is finished by the next post office (PO-1), so a filter the soldier added runs there too. That is also M1-R4-V1b's side point (raw/M1-R4-V1b.md); no other ledger row covers it.
+<<< OLD
+Refs under another army's mark move uncarded in this army (WSP-4): a soldier here can move or delete another army's `shadow/<mark>/` branch while that army has no turn open, and no army cards it (accepted, D-30).
+=== NEW
+Refs under another army's mark move uncarded in this army (WSP-4): a soldier here can move or delete another army's `shadow/<mark>/` branch while that army has no turn open, and no army cards it (accepted, D-30).
+14. **Filters in the config at start** (WSP-10). Harness git takes the `filter.*` drivers in the config git reads when the post office starts, the repository's own scopes included, as the owner's, and runs them wherever a `.gitattributes` names them, as when it makes a snapshot (WSP-10, M1-AC10). A repository opened with a hostile config runs its filters as the owner. So does a filter a soldier added that held harness git in M1, once the post office restarts: the transcript line named it, the restart trusts the config as it then is, and the held turn's guard, which the next post office finishes, runs it too (WSP-10, PO-1).
+>>> END
+
+R-F-169 (P3): Appendix D row 13 names residual 3.
+<<< OLD
+| PO-7 (U, I, F); M1-AC1, M1-AC8 | prevented |
+=== NEW
+| PO-7 (U, I, F); M1-AC1, M1-AC8 | prevented, except residual 3: work handed to a service outside the tree, and a tree whose guardian ended with the post office, run on (row 12) |
+>>> END
+
+R-F-159 (P3): Appendix D row 9 names only the programs it lists, and their requirements' evidence.
+<<< OLD
+| Every program Shadow Army starts runs from an absolute path: each CLI,
+=== NEW
+| Shadow Army starts these programs from absolute paths: each CLI,
+>>> END
+
+R-F-159: row 9's evidence.
+<<< OLD
+| CH-1 (U, C), WSP-10 (X), HOST-2 (I); M1-AC10 | prevented |
+=== NEW
+| CH-1 (U, C), WSP-10 (X), HOST-2 (I), PO-18 (R, I, L), PO-19 (I, F, R); M1-AC10 | prevented |
+>>> END
+
+R-F-159: row 11's ACs.
+<<< OLD
+| ARM-6 (I, X, F) | neither,
+=== NEW
+| ARM-6 (I, X, F); M2-AC5, M6-AC1 | neither,
+>>> END
+
+R-F-159: row 16's meter.
+<<< OLD
+MSG-6 (I), PO-6 (U, F); M3-AC14 |
+=== NEW
+MSG-6 (I), PO-6 (U, F), SES-2 (U, S); M3-AC14, M4-AC1 |
+>>> END
+
+R-F-170 (P3): Appendix D's intro says which rows have no security test. Technical choice: the finding's second option (state it), not adding X evidence to CH-2 and PO-7, which would add tests and change VER-7's trace.
+<<< OLD
+Each control is named by the requirement that makes it, with that requirement's evidence codes and the ACs that check it.
+=== NEW
+Each control is named by the requirement that makes it, with that requirement's evidence codes and the ACs that check it. Rows 12, 13, 15 and 16 have no security test (X, section 5.1): their controls are checked by the other kinds of evidence beside them.
+>>> END
+
+R-F-160 (P3): §2, a build turn before M6 is reported as a read-violation.
+<<< OLD
+- **Read-violation:** a write that a read-only turn made in its snapshot or worktree, which is discarded or reverted and reported (WSP-11, WSP-12).
+=== NEW
+- **Read-violation:** a write that a read-only turn made in its snapshot or worktree, which is discarded or reverted and reported (WSP-11, WSP-12). Until WSP-1 gives each soldier its worktree (M6), every turn runs in a snapshot, so a build turn's writes are discarded and reported as read-violations too (WSP-11).
+>>> END
+
+R-F-162 (P3): S6 also looks at Q7's question.
+<<< OLD
+how each CLI stops a running turn and keeps its session, agy's in particular.
+=== NEW
+how each CLI stops a running turn and keeps its session, agy's in particular, and whether it can add to a running turn, as codex's `turn/steer` does (Q7).
+>>> END
+
+R-F-163 (P3): G2.
+<<< OLD
+Each soldier is one long-lived session of its own CLI, in its own worktree, with the vendor's harness exactly as installed.
+=== NEW
+Each soldier is one long-lived session of its own CLI, in its own worktree or in a throwaway snapshot (WSP-11, ARM-6, ARM-8), with the vendor's harness exactly as installed.
+>>> END
+
+R-F-163: G7.
+<<< OLD
+Every requirement is verified, and the verification is traced in CI.
+=== NEW
+Every requirement is verified, and the verification is traced in CI, or for R and L evidence recorded on the PR (VER-7, VER-8).
+>>> END
+
+R-F-163: §2's brief is the Monarch's.
+<<< OLD
+- **Brief:** a message that assigns work.
+=== NEW
+- **Brief:** a message from the Monarch that assigns work (HOST-10).
+>>> END
+
+R-F-164 (P3): §0, the detail of an issue and of v1's design rules.
+<<< OLD
+For a v1 source it is v1.0.1's code on `legacy/v1`.
+=== NEW
+For a v1 source it is v1.0.1's code on `legacy/v1`. For an issue, such as #53 or v1 #28, it is the issue's accepted text on GitHub, and for v1's design rules and canvas, their text at `v1.0.1`.
+>>> END
