@@ -1,0 +1,34 @@
+[
+ [
+  "and may run PO-17's tool operations.",
+  "and may run PO-17's tool operations or, on Windows, PO-19's process operation."
+ ],
+ [
+  "If a watch run ends before that report, the post office starts it again, and its log says so (PO-7).",
+  "A watch run also exits when its standard input closes, as when the post office ends. If a watch run ends before that report, the post office starts it again, at most once a second, and its log says so (PO-7)."
+ ],
+ [
+  "the password in a URL's user part, between the `:` after the user name and the `@`, as in `postgres://u:[redacted]@host/db`;",
+  "the password in a URL's user part, from the `:` after the user name to the last `@` before the authority ends (the next `/`, `?`, `#`, whitespace, quote or end of line), so a password that holds an `@` or a `:` is matched whole, as in `postgres://u:[redacted]@host/db`;"
+ ],
+ [
+  "Each entry, and each of those folders, is compared after it is resolved to its real path,",
+  "Each entry, both where a CLI, git or Node.js is looked up and in the CLI's `PATH`, and each of those folders, is compared after it is resolved to its real path,"
+ ],
+ [
+  "The fake reports the `PATH` it got, which holds none of those entries, and the soldier's log names each one dropped.",
+  "The fake reports the `PATH` it got, which holds none of those entries, and the soldier's log names each one dropped. So are a `PATH` entry that is a symbolic link (on Windows a junction) to a folder in the soldier's snapshot holding `claude`, that folder named in another letter case on Windows and macOS, and an entry that doesn't exist: none is searched or passed on, and the log names each."
+ ],
+ [
+  "The fake Claude Code process then ends, and the shutdown's transcript line names the turn not checked.",
+  "The fake mod then releases the army as at `/logout`, and the shutdown's transcript line names the turn not checked; with the fake Claude Code process ended instead, the post office's log names it."
+ ],
+ [
+  "(https://docs.x.ai/build/features/permissions)",
+  "(https://docs.x.ai/build/features/permissions; the precedence list, CLI flags above `~/.grok/config.toml`, is in grok-build's configuration guide, https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md)"
+ ],
+ [
+  "on CI's macOS runners: whether launchd starts a killed guardian again, after what delay, and in the same coalition;",
+  "on CI's macOS runners: whether launchd starts a killed guardian again, after what delay, and in the same coalition;\n    - **Run on CI** (probe P-8, 2026-10-28): after `kill -9`, launchd started the guardian again 50 ms later when it had run 12 seconds, and 10 seconds later when it had run under 10 seconds (launchd's default `ThrottleInterval`), in the same resource and jetsam coalitions, and ended the killed guardian's child. A guardian started again that removed its own job with `launchctl bootout` ended itself and its child, and launchd didn't start it again in the next 20 seconds. So PO-16's macOS backstop works. **Not tested:** on a stock Mac; CI's macOS runners have SIP turned off (D-34), which shouldn't change what launchd does."
+ ]
+]
