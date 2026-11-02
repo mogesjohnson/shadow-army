@@ -51,6 +51,7 @@ Follow `.github/pull_request_template.md` exactly.
 
 - The working tree is shared with Codex, which checks out PR branches here. Run `git branch --show-current` and `git status` before starting work and before every commit.
 - Do not commit files you did not write (for example `.review-*.md`).
+- `.claude/` is only partly tracked. Never commit `.claude/settings.local.json` (one machine's permissions) or `.claude/worktrees/` (local checkouts; worktrees belong in `../AIConnections-worktrees/`); `.gitignore` ignores both. `.claude/agents/` holds the spec review's local agent types and is excluded through `.git/info/exclude`. The shared `.claude/settings.json` is committed (alpha plan A5).
 - `.shadow/` (the Shadow Vault) is working memory and is never committed.
 
 ## Design rules to preserve
