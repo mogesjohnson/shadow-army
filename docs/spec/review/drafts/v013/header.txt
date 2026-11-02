@@ -1,0 +1,7 @@
+The header's version line for v0.13.
+
+<<< OLD
+| **Version** | 0.12, 2026-10-20:
+=== NEW
+| **Version** | 0.13, 2026-10-20: the owner's answers to D-7 (only a message of the kind build makes a soldier write; a soldier that can't write runs in a snapshot under auto and full, ARM-8; a read-only turn's writes in a worktree are reverted, WSP-12; the mode set between turns at supervised, CH-11), D-11 (`/clear`, `/resume` and `/branch` keep the army), D-22 (the trust card covers `.mcp.json`) and D-23 (other working trees are not this army's checkout), and the repairs for round 2 of the frame and of M1. 0.12, 2026-10-20:
+>>> END

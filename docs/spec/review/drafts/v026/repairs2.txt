@@ -1,0 +1,73 @@
+v0.26 batch 2 (fork2, 2026-10-30): fix check V25-FC1's repairs, N1 to N6 (R-M1-289 to 294), from raw/V25-FC1.md's findings (N1 at 34, N2 46, N3 56, N4 66, N5 76, N6 86), the ledger verdicts for every item V25-FC1 checked, and the **Version** row's 0.26 entry. OLD texts are HEAD's (v2.md at f47290b, which equals v2@5e90643.md: v0.25 complete); each is one sentence or part of one.
+
+Files:
+- pairs2.json (v2.md, 8 pairs; labels below, in the order they apply).
+- ledger2.json (ledger.md, 11 pairs): V25-FC1's verdicts appended to R-M1-279 (item 1 FIXED, with 1a to 1e, and the Neighbours items 4 and 4a, since the worktree's `.git` file in 798's metadata came from R-M1-279's repair), R-M1-280 (item 2 NOT SOUND, with 2a to 2d), R-M1-281 to 288 (items 3.1 to 3.8, all FIXED), and R-M1-278 (item 4b: fork1's decision text intact).
+- rows2.txt (ledger.md, 6 rows for tools/insert-rows.mjs): R-M1-289 to 294, after R-M1-288. Apply rows2.txt before ledger2.json, or either order: none of ledger2's OLD texts occurs in the new rows.
+
+Dry run (temporary copies at f47290b): pairs2.json 8 replacements written; trace-v2.mjs on the copy, against HEAD: output identical to HEAD's own run (119 requirements, 81 ACs; its 10 "implements unknown" lines are HEAD's already). rows2.txt inserted 6 rows (R-M1-289 to 294 after R-M1-288), then ledger2.json 11 replacements written. Section 8 and Appendix C are untouched, so check-appendix-c.mjs was not rerun.
+
+Orchestrator's choices (for the next fix check):
+- N1 (P2) takes the fix text, with 798's NEW reworded so the list stays one list: "its `.git` file, where it is one, and the config (includes followed, and any `config.worktree`), `hooks/`, `info/` and any `commondir` of the git folder it uses, which is the one its `.git` file names (`modules/<name>/`) or its `.git` folder, and of the folder that `commondir` names". The fix text's "in its `.git` folder" could be read as comparing the whole folder (objects, refs, index), which harness git's own reads would keep changing; the reworded text compares only what decides what git runs, as 798 does for the repository's own git folder. "the folder that `commondir` names" is added so that a `commondir` trusted at the start (a submodule checked out as a linked worktree) doesn't leave the config git then reads uncompared. "each gitlink in the index there" became "each gitlink, in the index of the working tree or submodule it lies in", so a gitlink a soldier writes into a submodule's own index, at depth 2 or more, is found too.
+- N1, beyond the fix text: M1-AC10 1105 gains the finding's two paths as cases (a `commondir` written into a submodule's git folder, and a repository made with `git init` and added as a gitlink `.gitmodules` doesn't name, with its filter in its own `.git` folder's config), in N3's pair, since one OLD can hold only one NEW there. Without them a build that finds submodules through `.gitmodules` passes M1-AC10.
+- N1's cost, kept, not filed: "a submodule that the trusted state doesn't have being a change" also holds harness git when the owner runs `git submodule add` or `git submodule update --init` while a post office runs, in M1 until the owner undoes it, as an owner's own `.git/config` edit already does (R-M1-260's cost, residual 15). Trusting a new submodule's config would let a soldier's `git init` plus `git add` run its filter as the owner, so the guard stays whole.
+- N2 takes the fix text, and names the time the submodule names are read: "for each name that a `.gitmodules` there or in a submodule checked out at any depth (below) gives when the command runs". git reads those files when it runs inside each submodule, so a name read earlier would miss an `ignore` entry a soldier added during the turn. A gitlink that no `.gitmodules` names has no `submodule.<name>.ignore` that applies to it, and `-c diff.ignoreSubmodules=none` covers it.
+- N5 moves from an environment variable at 795 to a setting at 792: `-c core.useReplaceRefs=false` ("If set to false, behave as if the --no-replace-objects option was given on the command line", git-config, checked in git 2.52's manual) in place of `GIT_NO_REPLACE_OBJECTS=1`. git clears `GIT_NO_REPLACE_OBJECTS` for the git it runs inside a submodule (environment.c `local_repo_env` lists `NO_REPLACE_OBJECTS_ENVIRONMENT`; submodule.c keeps only `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` of that list, as V25-FC1 2a found), so with the fix text a `refs/replace/` ref inside a submodule's git folder could still hide a staged change there from the guard's listing. A `-c` setting reaches that git, as 792's other settings do. Nothing in the fix text weakens the checkout guard, so no guard rule is kept against it.
+- N3 takes the fix text and adds "before the post office starts" to the `ignore = all` and `diff.ignoreSubmodules=all` settings: set later, either is itself a change that holds harness git, and the case would test the hold instead of the guard's sight.
+- N4 and N6: the fix text as given.
+
+R-M1-293 (N5): replace refs are off for every harness git command, inside a submodule too.
+<<< OLD
+turns off the file system monitor (`core.fsmonitor`), the pager, signing, external diffs and text conversion, as 2.0 GIT-1 lists, with `--no-optional-locks`,
+=== NEW
+turns off the file system monitor (`core.fsmonitor`), the pager, signing, external diffs and text conversion, as 2.0 GIT-1 lists, and replace objects (`core.useReplaceRefs=false`, which, unlike `GIT_NO_REPLACE_OBJECTS`, git passes on to the git it runs inside a submodule), so no ref under `refs/replace/` changes which objects it reads, with `--no-optional-locks`,
+>>> END
+
+R-M1-290 (N2): no `ignore` setting hides a change in a submodule at any depth.
+<<< OLD
+and gives each guard and audit command that lists changes `--ignore-submodules=none`, so no setting, `.gitmodules` included, hides a change inside a checked-out submodule;
+=== NEW
+and gives each guard and audit command that lists changes `--ignore-submodules=none`, with `-c diff.ignoreSubmodules=none` and `-c submodule.<name>.ignore=none` for each name that a `.gitmodules` there or in a submodule checked out at any depth (below) gives when the command runs, settings that git passes on to the git it runs inside each submodule, where the option doesn't reach, so no setting, `.gitmodules` included, hides a change inside a checked-out submodule at any depth;
+>>> END
+
+R-M1-289 (N1): 795's exception names a submodule's `.git` folder and `commondir` too.
+<<< OLD
+except inside a checked-out submodule, where git follows the submodule's own `.git` file, which is compared (below);
+=== NEW
+except inside a checked-out submodule, where git follows the submodule's own `.git` file, or uses its `.git` folder, and any `commondir` in that git folder, each of which is compared (below);
+>>> END
+
+R-M1-289 (N1): 798 finds each submodule by its gitlink and compares its `.git` folder and any `commondir` too; a new one is a change.
+<<< OLD
+for each submodule checked out in the folder or in one of this army's snapshots or worktrees, at any depth, its `.git` file and the `config`, `hooks/` and `info/` of the git folder that file names (`modules/<name>/`), which git reads when it runs inside that submodule, as `git status` does,
+=== NEW
+for each submodule checked out in the folder or in one of this army's snapshots or worktrees, at any depth, which is each gitlink, in the index of the working tree or submodule it lies in, whose folder has a `.git` file or folder, whether or not `.gitmodules` names it, its `.git` file, where it is one, and the config (includes followed, and any `config.worktree`), `hooks/`, `info/` and any `commondir` of the git folder it uses, which is the one its `.git` file names (`modules/<name>/`) or its `.git` folder, and of the folder that `commondir` names, all of which git reads when it runs inside that submodule, as `git status` does, a submodule that the trusted state doesn't have being a change,
+>>> END
+
+R-M1-292 (N4): after a y for a worktree's replaced `.git` file, the revert's put-back is no change.
+<<< OLD
+A worktree folder or `.git` file the turn replaced is put back before any harness git runs there;
+=== NEW
+A worktree folder or `.git` file the turn replaced is put back before any harness git runs there, and where WSP-10 held harness git for that `.git` file and the owner answered y, the trusted state takes back the start state's `.git` file with it, so putting it back is no change;
+>>> END
+
+R-M1-291 and R-M1-289 (N3, N1): M1-AC10 tests N1's two paths, and the guard's sight into submodules apart from a hold.
+<<< OLD
+so does that submodule's `.git` file rewritten to name a git folder of the soldier's own; and the guard finds the file touched in the submodule;
+=== NEW
+so does that submodule's `.git` file rewritten to name a git folder of the soldier's own, a `commondir` written into that submodule's git folder naming a folder of the soldier's own whose config defines such a filter, and a repository the soldier makes in the folder with `git init` and adds with `git add` as a gitlink that `.gitmodules` doesn't name, with such a filter in its own `.git` folder's config and a file in it touched; and, with nothing else changed, the guard finds a file the soldier touches in that submodule, and one in a submodule nested in it, also with `ignore = all` set for both in `.gitmodules` and `diff.ignoreSubmodules=all` in the user's global git config before the post office starts;
+>>> END
+
+R-M1-294 (N6): M1-AC10 tests harness git's environment in the folder too.
+<<< OLD
+each harness git command run in a snapshot gets `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` naming that snapshot's own `worktrees/<id>` entry, its folder and the repository's common folder (WSP-10);
+=== NEW
+each harness git command run in a snapshot gets `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` naming that snapshot's own `worktrees/<id>` entry, its folder and the repository's common folder, and each one run in the folder gets them naming the folder's own git folder, the folder and its common folder, also with the folder a linked worktree (WSP-10);
+>>> END
+
+Version row 6: the 0.26 entry.
+<<< OLD
+| **Version** | 0.25, 2026-10-30:
+=== NEW
+| **Version** | 0.26, 2026-10-30: fix check V25-FC1's repairs (among them: each checked-out submodule found by its gitlink, whether or not `.gitmodules` names it, with a `.git` folder and any `commondir` compared too and a new submodule a change, no `ignore` setting hiding a change inside a submodule at any depth from the guard, and replace refs off for harness git, inside submodules too (WSP-10); a worktree's `.git` file that the owner trusted with y put back by the revert with no second hold (WSP-12); and M1-AC10 testing an unnamed gitlink, a submodule's `commondir`, the guard's sight into submodules apart from a hold, and harness git's environment in the folder too). 0.25, 2026-10-30:
+>>> END

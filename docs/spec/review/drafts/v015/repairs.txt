@@ -1,0 +1,65 @@
+v0.15: the owner's answers to D-24 (B) and D-25 (A), pasted in chat 2026-10-23, against v0.14 (v2@02d5f84.md). Written by the orchestrator, 2026-10-23.
+
+D24 (R-F-117, D-24 B): an edit the owner makes in a builder's worktree before a turn its CLI starts by itself goes on a y/n card before that turn's revert.
+<<< OLD
+    A turn the CLI starts by itself after its message's work is over (PO-8) has no message to wait for. It starts from the state that the post office saves, in the same way, once the message's own turn has been reverted. So an edit that the owner makes in that worktree after that point is reverted with that turn.
+=== NEW
+    A turn the CLI starts by itself after its message's work is over (PO-8) has no message to wait for. It starts from the state that the post office saves, in the same way, once the message's own turn has been reverted. An edit that the owner makes in that worktree after that point is the owner's to keep or revert (D-24):
+    - when the turn's first event comes, the post office saves the bytes and mode of each audited path that then differs from that start state, beside it and in the same way, with the copy's SHA-256 hash in the log line that records the event (PO-5);
+    - when the turn is over, and before its revert, those paths go to the owner on a card, each with its diff from the start state, as in `Iron took a turn by itself after a review · 2 files changed before it began · y keep as yours, n revert`. y keeps each as it was at the first event: the copy becomes part of the start state, and the revert brings the path back to it. n reverts them with the turn. y and n are the attribution card's keys (ARM-6), and the soldier's queue is held until the owner answers (MSG-3);
+    - a change made after the first event is the turn's, and is reverted like any other;
+    - with no such path, no card shows.
+
+    The card lists what changed before the post office read the turn's first event, so a write the turn made in that moment can be on it, and y keeps it (Appendix D, residual 11). A card still open when the post office ends leaves the revert pending, as below, and the next post office shows the card again before that revert runs.
+>>> END
+
+<<< OLD
+the owner's edits made between turns, except as the start state of a turn the CLI starts by itself says above, and ignored output;
+=== NEW
+the owner's edits made between turns, except those the owner answers n for on the card above, for a turn the CLI starts by itself, and ignored output;
+>>> END
+
+<<< OLD
+    - y and n answer the guard's attribution card (ARM-6);
+=== NEW
+    - y and n answer the guard's attribution card (ARM-6), and the card for an edit before a turn a CLI started by itself (WSP-12, →M6);
+>>> END
+
+<<< OLD
+approval requests, the guard's attribution cards (ARM-6), handoffs ready,
+=== NEW
+approval requests, the guard's attribution cards (ARM-6) and the cards for an edit before a turn a CLI started by itself (WSP-12, →M6), handoffs ready,
+>>> END
+
+<<< OLD
+  - the same holds for each kind of read-only message in M6-AC12, and for a turn the fake starts by itself after its message's work is over, which also reverts an edit that the owner made in the worktree after the first revert;
+=== NEW
+  - the same holds for each kind of read-only message in M6-AC12, and for a turn the fake starts by itself after its message's work is over;
+  - before such a self-started turn's first event, the owner changes `src/a.ts` and creates `scratch.md` in the worktree, and the turn then changes `src/a.ts` again. When the turn is over, a card lists both paths with their diffs, and the queue is held. On y, both are as they were at the first event, so the turn's later change to `src/a.ts` is reverted to the owner's. On n, both are as at the first revert. A self-started turn with no such edit shows no card. With the card open, the post office is killed: the next one shows the card again before the revert runs, and `/apply` is refused until it has;
+>>> END
+
+<<< OLD
+    - an edit the owner makes in that worktree after the revert is reverted too when the CLI then starts a turn by itself, which the D-7 card didn't state (this part for the owner to accept);
+=== NEW
+    - an edit the owner makes in that worktree after the revert, before the CLI then starts a turn by itself, goes on WSP-12's card, and the owner keeps or reverts it (D-24). A write the turn makes before the post office reads its first event shows on that card as if it were the owner's, and y keeps it;
+>>> END
+
+D25 (R-M1-160, D-25 A): a summary for a brief from before /clear wakes Claude as any summary does.
+<<< OLD
+as in `answered · a brief from before /clear`. It wakes nobody: it waits for Claude's next turn (MSG-8).
+=== NEW
+as in `answered · a brief from before /clear`. It wakes Claude as any summary does (MSG-8).
+>>> END
+
+<<< OLD
+A summary for a brief sent before a `/clear` arrives in the new conversation, marked as from before it, and starts no turn.
+=== NEW
+A summary for a brief sent before a `/clear` arrives in the new conversation, marked as from before it, and wakes Claude as any summary does.
+>>> END
+
+Header.
+<<< OLD
+| **Version** | 0.14, 2026-10-21: the repairs
+=== NEW
+| **Version** | 0.15, 2026-10-23: the owner's answers to D-24 (an edit the owner makes in a builder's worktree before a turn its CLI starts by itself goes on a y/n card) and D-25 (a summary for a brief sent before `/clear` wakes Claude). 0.14, 2026-10-21: the repairs
+>>> END

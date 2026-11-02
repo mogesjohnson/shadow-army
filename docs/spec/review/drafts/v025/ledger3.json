@@ -1,0 +1,46 @@
+[
+ [
+  "M1-AC10 case for a redirected `commondir` |",
+  "M1-AC10 case for a redirected `commondir`. Fix-checked (V24-FC1): FIXED: a start can test the rule, since the common folder is known and the log gives each snapshot's path and metadata (PO-5 257); it closes N1's path, a missing `commondir` closes the `worktrees/<id>/config` variant, and a missing `gitdir` is rightly trusted. Two other redirects are open: a snapshot's or the folder's `.git` file, and a `commondir` in the repository's own git folder, neither compared (V24-FC1 N1, P1: R-M1-279), and a submodule's own git folder under `.git/modules/` (N2, P2: R-M1-280); `objects/info/alternates`, `HEAD`, `config.worktree`, `worktrees/<id>/config` and the index REFUTED as redirects. The cost of a removal cut short is stated nowhere and can't be cleared by deleting the entry (N3, P3: R-M1-281), and M1-AC10 tests only a redirected `commondir`, not a missing one (N4, P3: R-M1-282) (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "its guard not yet closed (PO-1, PO-5) |",
+  "its guard not yet closed (PO-1, PO-5). Fix-checked (V24-FC1): FIXED: PO-5 writes and flushes the turn's opening line before its message goes in, but logs a turn only when it is over, which comes before its guard closes, so \"its guard not yet closed\" has no record of its own (V24-FC1 N8, P3: R-M1-286) (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "In short 1838 names the two ends that make a filter at start held |",
+  "In short 1838 names the two ends that make a filter at start held. Fix-checked (V24-FC1): SOUND: both state D-38's cost and agree with 798 and with V23 N9; residual 15 still says \"this army's last log\", the narrow reading V23 N2 removed from 798 (V24-FC1 N10, P3: R-M1-288) (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "a second case changes the config during a guard-timeout hold before a shutdown |",
+  "a second case changes the config during a guard-timeout hold before a shutdown. Fix-checked (V24-FC1): FIXED: the release case covers a hold for a change, the outright end a turn still open, and the timeout case a hold after a timeout, all three triggers in 798 (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "M2-AC5 checks the diff, the note and a changed copy |",
+  "M2-AC5 checks the diff, the note and a changed copy. Fix-checked (V24-FC1): FIXED: the hold still comes from the logged hashes, and M2-AC5 tests a changed copy; the M1 transcript line told to show the file as it is now contradicts 799's one line (V24-FC1 N7, P3: R-M1-285) (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "where its one-shot sweep ends git and its processes at once, on Windows with `taskkill /t /f` |",
+  "where its one-shot sweep ends git and its processes at once, on Windows with `taskkill /t /f`. Fix-checked (V24-FC1): SOUND, with a test gap: unlike 1153, the new case doesn't require the real sweep process, so a stand-in passes (V24-FC1 N9, P3: R-M1-287) (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "so the sweep ends it through its process group |",
+  "so the sweep ends it through its process group. Fix-checked (V24-FC1): SOUND: \"as on Linux\" brings in 412's rule that the group is ended only while git's pid and start time match; PO-17 424 binds only the helper; agrees with 796 and 414 (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "adds a **Not tested:** note for Windows and macOS (D-34) |",
+  "adds a **Not tested:** note for Windows and macOS (D-34). Fix-checked (V24-FC1): SOUND: limited to WSL 2 Ubuntu, with a **Not tested:** note citing D-34, as 263 and 1019 do (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "957 names those two ends, as 798 does |",
+  "957 names those two ends, as 798 does. Fix-checked (V24-FC1): FIXED: 957 names the same two ends as 798, held or a turn still open (`raw/V24-FC1.md`) |"
+ ],
+ [
+  "| the owner's decision, not verified (V24-FC1 checks it) |",
+  "| the owner's decision, fix-checked FAITHFUL (V24-FC1) |"
+ ],
+ [
+  "citing D-38 and R-M1-269 |",
+  "citing D-38 and R-M1-269. Fix-checked (V24-FC1): FAITHFUL: 798 and 799 carry the three parts (name, can't be told, how to release), with no conflict for a change made during a turn, since 799 limits the second to a start's comparison; beyond LATEST but harmless, 799 now names each file on every M1 hold. Gaps: M1-AC10's `commondir` case checks only the file's name (V24-FC1 N4, P3: R-M1-282), M2-AC5 doesn't check that the card says how to release (N5, P3: R-M1-283), and the example line's \"changed since the last post office ended\" gets a soldier's change's timing wrong (N6, P3: R-M1-284). Q10 FAITHFUL: ideas only, citing D-38 and R-M1-269 in LATEST's words, in a sound place, since Appendix C's checker counts exactly 118 ideas. The Version row's 0.25 entry and this row FAITHFUL (`raw/V24-FC1.md`) |"
+ ]
+]

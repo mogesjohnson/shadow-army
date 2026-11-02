@@ -1,0 +1,94 @@
+v0.19: the owner's answers to D-30 A, D-31 A (with R-F-140's b), D-32 A and D-33 A, given 2026-10-26 in chat. Written by the orchestrator (session 10, Fork 1), 2026-10-27.
+
+D-30 A: residuals 7, 8, 12 and residual 13's other-army refs accepted.
+<<< OLD
+**Residual risks.** Each is accepted by the owner's decision, or stated by the requirement named beside it. The ones marked (for the owner to accept) await that acceptance.
+=== NEW
+**Residual risks.** Each is accepted by the owner's decision, or stated by the requirement named beside it. The ones marked (accepted, D-30) were accepted by the owner on 2026-10-26.
+>>> END
+
+<<< OLD
+7. **A git config change while harness git runs** (WSP-10; for the owner to accept).
+=== NEW
+7. **A git config change while harness git runs** (WSP-10; accepted, D-30).
+>>> END
+
+<<< OLD
+8. **Repository files a CLI reads by itself** (row 11; for the owner to accept).
+=== NEW
+8. **Repository files a CLI reads by itself** (row 11; accepted, D-30).
+>>> END
+
+<<< OLD
+12. **The start state and the guard's baseline are files the soldier's user can write** (WSP-12; for the owner to accept).
+=== NEW
+12. **The start state and the guard's baseline are files the soldier's user can write** (WSP-12; accepted, D-30).
+>>> END
+
+<<< OLD
+Refs under another army's mark move uncarded in this army (WSP-4): a soldier here can move or delete another army's `shadow/<mark>/` branch while that army has no turn open, and no army cards it.
+=== NEW
+Refs under another army's mark move uncarded in this army (WSP-4): a soldier here can move or delete another army's `shadow/<mark>/` branch while that army has no turn open, and no army cards it (accepted, D-30).
+>>> END
+
+D-31 A: SES-1, soldiers start fresh in a new Claude Code process.
+<<< OLD
+`/clear`, `/resume` and `/branch` keep it open, since they keep the army (PO-7).
+=== NEW
+`/clear`, `/resume` and `/branch` keep it open, since they keep the army (PO-7). A new Claude Code process, a conversation resumed there included, starts every soldier fresh: no soldier resumes a session an earlier process opened, and its brief comes again from Claude (D-31).
+>>> END
+
+D-31 with R-F-140 (b): WSP-1 names an earlier process's worktree with unapplied commits, and /diff and /apply reach it.
+<<< OLD
+At start, the log, and one line in Claude's transcript, name each such worktree whose army's folder is gone. It stays, with its branch, for the owner.
+=== NEW
+At start, the log, and one line in Claude's transcript, name each such worktree whose army's folder is gone. It stays, with its branch, for the owner. A soldier's worktree from an earlier Claude Code process of this army stays too (PO-7). At start, the log, and one line in Claude's transcript, name each such worktree whose branch has commits not applied to the folder, with its soldier's name, as in `Kaisel · an earlier session's work not applied · /diff Kaisel@1 · /apply Kaisel@1`. `/diff` and `/apply` accept it as `<soldier>@<n>`, numbered from the newest (WSP-9).
+>>> END
+
+<<< OLD
+  - `/apply <soldier>` applies them to the folder as WSP-5 says, and `/apply undo` undoes the last apply.
+=== NEW
+  - `/apply <soldier>` applies them to the folder as WSP-5 says, and `/apply undo` undoes the last apply.
+  - Both also take `<soldier>@<n>`, an earlier process's worktree of that soldier with commits not applied, as WSP-1 names it.
+>>> END
+
+D-31: Appendix C, H38 moves from the v2.0 list to after 2.0.
+<<< OLD
+so the handoff summary always fits and the CLI never compacts first. | SES-3, SES-8 |
+| H38 | What happens when the owner resumes a Claude session in a new Claude Code process: the soldiers start fresh, as SES-1 reads today, or each resumes its last session by id (CH-9). A `/resume` within one process keeps the army (PO-7). | SES-1, CH-9 |
+=== NEW
+so the handoff summary always fits and the CLI never compacts first. | SES-3, SES-8 |
+>>> END
+
+<<< OLD
+H57 (hooks on post office events), H66 (scheduled briefs),
+=== NEW
+H57 (hooks on post office events), H66 (scheduled briefs), H38 (soldiers that resume their sessions in a new Claude Code process),
+>>> END
+
+<<< OLD
+| Partly. Could add (v2.0): see the list above. | `order/05/H38-
+=== NEW
+| Partly. Could add (after v2.0): each soldier resumes its last session in a new Claude Code process, on the owner's y. In 2.0 they start fresh, and an earlier worktree with unapplied commits is named (D-31). | `order/05/H38-
+>>> END
+
+D-32 A: ARM-7, only the owner's own uses show the dialog again.
+<<< OLD
+accepts nothing and starts nothing, and the next use shows the card again.
+=== NEW
+accepts nothing and starts nothing. After that, only the owner's own uses show the dialog again: `/army`, `/send`, r, or choosing the card's row in the decisions list (HOST-14, →M5). A `send` from Claude (HOST-2, →M3) shows none; it returns `queued · waits · trust card`, and the brief waits in the queue (D-32).
+>>> END
+
+D-33 A: ARM-7, the shipped copy sets every soldier to supervised.
+<<< OLD
+A shipped copy needs no trust.
+=== NEW
+A shipped copy needs no trust. The shipped `shadow.config.json` sets every soldier to `supervised`, so a folder without its own runs no soldier above `supervised` (D-33).
+>>> END
+
+The version line.
+<<< OLD
+| **Version** | 0.18, 2026-10-26:
+=== NEW
+| **Version** | 0.19, 2026-10-27: the owner's answers to D-30 (residuals 7, 8 and 12, and other armies' refs, accepted), D-31 (a new Claude Code process starts every soldier fresh, and an earlier worktree with unapplied commits is named and reachable by `/diff` and `/apply`), D-32 (after Not now, only the owner's own uses show the trust card's dialog) and D-33 (the shipped config sets every soldier to `supervised`). 0.18, 2026-10-26:
+>>> END

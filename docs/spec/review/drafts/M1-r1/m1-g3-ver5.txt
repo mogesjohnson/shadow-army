@@ -1,0 +1,1 @@
+- **VER-5** (M1; U) **Fake CLIs.** Fakes live in `test/fakes/` and are chosen through configuration: the test runner puts `test/fakes/` first on `PATH`, as an absolute path, so the product starts a fake exactly as it starts the real CLI (CH-1). No option or setting in the product names a fake, and `shadow.config.json` never names an executable.

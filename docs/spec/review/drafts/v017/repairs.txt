@@ -1,0 +1,235 @@
+v0.17 repairs: the owner's answers D-26 A, D-27 B (listed for a later version), D-28 A, D-29 A, and fix check V16-FC1's findings (R-M1-176's guard half, R-M1-171, N1 to N11 as R-M1-182 to R-M1-192). Written by the orchestrator (Fork 3), session 8, 2026-10-23.
+
+D-28 A (R-M1-170): HOST-1, the release package is also a directory marketplace.
+<<< OLD
+- **HOST-1** (M5; R) Shadow Army ships the mod as a plugin in this repository, loaded with `--plugin-dir` or installed from this repository. It MUST NOT depend on a marketplace plugin.
+=== NEW
+- **HOST-1** (M5; R) Shadow Army ships the mod as a plugin inside its release package (PO-13), which is also a directory marketplace: the package's `.claude-plugin/marketplace.json` lists the mod by the relative path `./plugin`. The owner loads it with `--plugin-dir <package>/plugin`, or adds the installed package as a marketplace. An administrator deploys it through managed settings' `extraKnownMarketplaces` and `enabledPlugins`, the one path that Claude Code's managed policy (`allowManagedModsOnly`, `disableSideloadFlags`) allows. The mod finds the post office, the helpers and the Windows script inside the same package, by paths relative to its own folder, never through `PATH` or another install, so the mod and the post office always come from the same release. A checkout of this repository loads the mod the same way once `npm run build` has run, for contributors only (PO-13). It MUST NOT depend on another plugin or marketplace.
+>>> END
+
+V16-FC1 N6 (R-M1-187): HOST-2, the host's oldest version is the one whose mod API was read.
+<<< OLD
+and Claude Code 2.1.286 or later as the host, the first version with mods on by default;
+=== NEW
+and Claude Code 2.1.294 or later as the host, the version whose mod API this spec was checked against (mods are on by default from 2.1.286);
+>>> END
+
+V16-FC1 N11 (R-M1-192): HOST-11 names the rows that go into Claude's conversation.
+<<< OLD
+  - one line for each soldier-to-soldier message and each message the owner typed directly.
+=== NEW
+  - one line for each soldier-to-soldier message and each message the owner typed directly.
+  - Of these, the summary card and MSG-7's line also go into Claude's conversation (MSG-5, MSG-7); the other rows are for the owner only.
+>>> END
+
+V16-FC1 N4 (R-M1-185): PO-5, the check comes before the narrowing, and runs again before each new file.
+<<< OLD
+Where either folder already exists with more, the post office narrows it at start, and its log says so.
+=== NEW
+Where either folder already exists with more, the post office narrows it at start, only after the checks below have passed and never through a link, and its log says so. On Linux and macOS, a `.shadow/` that another user can write fails the check.
+>>> END
+
+<<< OLD
+It creates each file it writes there new, and never follows a link to one
+=== NEW
+It checks each new file's folders again just before it creates the file, creates each file it writes there new, and never follows a link to one
+>>> END
+
+V16-FC1 N8 (R-M1-189): PO-8 places the guard's baseline.
+<<< OLD
+The next turn's guard starts from the checkout as it is when that turn's message goes in. That baseline is on disk before the message goes in, so a post office that dies mid-turn leaves it for the next one (PO-1).
+=== NEW
+The next turn's guard starts from the checkout as it is when that turn's message goes in. That baseline is kept beside the session's log under `.shadow/v2/logs/` (PO-5), never in a worktree, a snapshot or the system's temporary folder. It is on disk before the message goes in, so a post office that dies mid-turn leaves it for the next one (PO-1), and it is removed once the turn's guard has closed.
+>>> END
+
+V16-FC1 N3 (R-M1-184) with D-28 A: PO-13, every runtime dependency bundled, no `dependencies`.
+<<< OLD
+  - **Dependencies.** The release package fixes the exact version and integrity hash of every runtime dependency, in the `npm-shrinkwrap.json` it carries or by bundling them into the post office's code, so installing a release installs exactly the code CI tested. CI fails on a runtime dependency with a known advisory of moderate severity or above (`npm audit --omit=dev --audit-level=moderate`), or with a license outside the allowlist kept in the repository. Each release's notes list its runtime dependencies, with their versions and licenses.
+=== NEW
+  - **Dependencies.** The release package bundles every runtime dependency into the post office's and the mod's code, and declares no `dependencies`, `optionalDependencies` or `peerDependencies`. So any installer, npm or pnpm, from the registry, a mirror or a tarball, installs exactly the code CI tested. CI fails when a bundled dependency has a known advisory of moderate severity or above (`npm audit --audit-level=moderate` on the lockfile the bundle is built from), or a license outside the allowlist kept in the repository. Each release's notes list what is bundled, with versions and licenses.
+>>> END
+
+D-27 B: PO-14's message for a Group Policy that allows only signed scripts.
+<<< OLD
+with a hash rule made from the installed files. No soldier can start.`
+=== NEW
+with a hash rule made from the installed files. No soldier can start.`
+    - `Containment can't be set up on Windows 11 (x64): Group Policy sets PowerShell's execution policy to AllSigned, and this version of Shadow Army's script isn't signed. No soldier can start on this machine.`
+>>> END
+
+V16-FC1 N1 (R-M1-182): PO-18 runs launchctl by its absolute path.
+<<< OLD
+The post office has launchd start the session's guardian as a job of its own, with `launchctl submit` and a label unique to the session.
+=== NEW
+The post office has launchd start the session's guardian as a job of its own, with `/bin/launchctl submit` and a label unique to the session. Every `launchctl` command Shadow Army runs is run by that absolute path, never by name.
+>>> END
+
+D-27 B: PO-19, what Group Policy's AllSigned or Restricted does.
+<<< OLD
+A Group Policy execution policy still overrides `Bypass`.
+=== NEW
+A Group Policy execution policy (the MachinePolicy or UserPolicy scope) still overrides `Bypass`: at AllSigned or Restricted the unsigned script doesn't run, the check fails (PO-14), and no soldier starts on that machine. Signing the script and its DLL is a non-goal of v2.0 (section 1).
+>>> END
+
+V16-FC1 N3 (R-M1-184) and D-28 A: PO-21's install test.
+<<< OLD
+with `--ignore-scripts`, and with the network off once the package's dependencies are in npm's cache.
+=== NEW
+with `--ignore-scripts`, and with the network off.
+>>> END
+
+<<< OLD
+It installs once more from a local registry that also holds a newer patch release of a runtime dependency, and passes only if the pinned version is the one installed (PO-13).
+=== NEW
+It checks that the package declares no dependencies, then installs it once more with pnpm and once from a local registry, and passes only if neither adds a package but Shadow Army's own (PO-13). It loads the mod from the installed package with `--plugin-dir <package>/plugin` on a fake host, and checks that the package's `.claude-plugin/marketplace.json` lists it.
+>>> END
+
+V16-FC1 N1 (R-M1-182): CH-1, cmd.exe by its absolute path, and no program from the current folder.
+<<< OLD
+A `.cmd` or `.bat` CLI is started through `cmd.exe /d /s /c`, with every argument escaped for both
+=== NEW
+A `.cmd` or `.bat` CLI is started through `cmd.exe /d /s /c`. `cmd.exe` is found by its absolute path in the Windows folder, never by name, and gets `NoDefaultCurrentDirectoryInExePath=1` in its environment, so no program a shim runs by name, such as npm's `node`, is taken from the current folder. A command the CLI itself later runs through `cmd.exe` inherits the variable; `.\name` still runs a program there. Every argument is escaped for both
+>>> END
+
+D-26 A (R-M1-163): WSP-4 exempts a branch that comes with another working tree, and other armies' refs.
+<<< OLD
+Any other ref move, such as another branch, a tag, or one soldier's commit on another soldier's branch, is a change like any other and goes on the card.
+=== NEW
+Two more are exempt, and the post office's log names each move. One is a branch made or deleted together with a working tree whose metadata WSP-10 leaves out, when that tree's HEAD names it, as `claude --worktree fix-1` makes `worktree-fix-1` and its cleanup deletes it; WSP-10's transcript line for that working tree names the branch. The other is every ref under another army's mark (WSP-1). Any other ref move, such as another branch, a tag, or one soldier's commit on another soldier's branch, is a change like any other and goes on the card.
+>>> END
+
+V16-FC1 N5 (R-M1-186): WSP-10, what bounds a prompt, how the tree is ended, and a half-made snapshot.
+<<< OLD
+  - runs with `GIT_TERMINAL_PROMPT=0` in its environment and `-c credential.interactive=false`, so no credential prompt waits for an answer, and is ended, with every process it started, filters included, after 30 minutes on the monotonic clock when it makes or brings a snapshot or a worktree, and after 5 minutes for any other command. A snapshot that times out is one that can't be made (WSP-11), with the reason, as in `snapshot not made · git took longer than 30 min`. A guard or audit command that times out holds harness git, with that reason.
+=== NEW
+  - runs with `GIT_TERMINAL_PROMPT=0` in its environment and `-c credential.interactive=false`, so git itself asks for no credential. An askpass program or ssh's own prompt can still wait; the limit is what ends it. Each command is ended, with every process it started, filters included, after 30 minutes on the monotonic clock when it makes or brings a snapshot or a worktree, and after 5 minutes for any other command: on Linux and macOS through its own process group, and on Windows with `taskkill /t /f`, found by its absolute path in the Windows folder. Time the post office did not run, counted as PO-7 counts it, doesn't count toward a limit. A snapshot that times out is one that can't be made (WSP-11), with the reason, as in `snapshot not made · git took longer than 30 min`; what the command left, the folder and any worktree metadata it registered, is removed with `git worktree remove --force --force` and `git worktree prune`, run as harness git, and the log says so. A guard or audit command that times out is tried once more. If that times out too, harness git is held with that reason, and the hold joins the decisions list (HOST-14, →M5), where the owner can try again; in M1 the next use of the army tries again.
+>>> END
+
+D-29 A (R-M1-173): WSP-11, the owner's setting that moves the snapshots.
+<<< OLD
+It goes in Shadow Army's own folder in the user's home, `~/.shadow-army/snapshots/`: in a subfolder for each folder,
+=== NEW
+It goes in Shadow Army's own folder in the user's home, `~/.shadow-army/snapshots/`, or where the owner's setting below moves it: in a subfolder for each folder,
+>>> END
+
+<<< OLD
+So each folder's army has its own mark, and keeps it across restarts. A file in the subfolder holds the folder's path.
+=== NEW
+So each folder's army has its own mark, and keeps it across restarts. A file in the subfolder holds the folder's path.
+  - **Where snapshots go.** The owner's `SHADOW_ARMY_SNAPSHOTS` environment variable names another folder for the snapshots, as Claude Code's `CLAUDE_CONFIG_DIR` moves its own folder. It moves the snapshots alone, never `trust/` or anything else under `~/.shadow-army/`. Its value must be an absolute path outside the folder's directory tree and every working tree of the repository. The post office makes that folder and checks it as PO-5 does `~/.shadow-army/`; a value that fails starts no soldier, with the reason in one line in Claude's transcript. On Windows the default lies under `%USERPROFILE%`, which a roaming profile copies at logoff, so such a machine sets the variable to a folder under `%LOCALAPPDATA%` or on an approved volume. Like any variable, it can also be set by an `env` block in a Claude Code settings file that the owner's session loads (Appendix D, residual 8); the checks above bound where it can point. A post office takes the value it started with; snapshots that a log names in an earlier place are still found there (PO-1).
+>>> END
+
+R-M1-171 (V16-FC1): section 5.1 C records the start that managed settings refuse.
+<<< OLD
+  - for claude, a soldier session with the mod installed (HOST-2);
+=== NEW
+  - for claude, a soldier session with the mod installed (HOST-2);
+  - for claude, a start that managed settings refuse: `--permission-mode bypassPermissions` with the managed setting `permissions.disableBypassPermissionsMode` at `disable`, up to the CLI's exit (PO-1);
+>>> END
+
+V16-FC1 N7 (R-M1-188): M1-AC1 sees the mod's connections too.
+<<< OLD
+as Node.js's `net.client.socket` diagnostics channel reports them, is to the loopback address.
+=== NEW
+as Node.js's `net.client.socket` diagnostics channel reports them for the post office, and as the fake `$.http.fetch` records them for the mod, is to the loopback address.
+>>> END
+
+V16-FC1 N2 (R-M1-183) and R-M1-176's guard half: M1-AC10's timeout case.
+<<< OLD
+during a turn's guard, harness git is held with the reason. Every harness git command's environment holds `GIT_TERMINAL_PROMPT=0`;
+=== NEW
+during a turn's guard, the command is tried once more, and when that times out too, harness git is held with the reason until the next use of the army tries again. A one-hour step of the fake clock taken as sleep ends nothing. A snapshot command ended at its limit leaves no folder and no worktree metadata. Every harness git command's environment holds `GIT_TERMINAL_PROMPT=0`;
+>>> END
+
+V16-FC1 N1 (R-M1-182): M1-AC10, a shim that runs node by name.
+<<< OLD
+the post office starts the first by `PATHEXT`'s order, never `claude`.
+=== NEW
+the post office starts the first by `PATHEXT`'s order, never `claude`. A fake `claude.cmd` on `PATH` that runs `node` by name, as npm's shim does, with `node.bat`, `node.exe` and `cmd.exe` committed in the soldier's snapshot, runs none of them.
+>>> END
+
+V16-FC1 N10 (R-M1-191): M1-AC11 removes the working tree after the guard has closed.
+<<< OLD
+and the owner edits a file in it; then it is removed. The turn passes,
+=== NEW
+and the owner edits a file in it; after the turn's guard has closed, it is removed. The turn passes,
+>>> END
+
+V16-FC1 N3 (R-M1-184): M1-AC17's install case.
+<<< OLD
+Installed from a local registry that also holds a newer patch release of a runtime dependency, it has the version its `npm-shrinkwrap.json` or bundle pins (PO-13).
+=== NEW
+The package declares no dependencies, and installed with pnpm, and from a local registry, it adds no other package (PO-13).
+>>> END
+
+D-27 B: M1-AC18 adds Group Policy's AllSigned and Restricted.
+<<< OLD
+and the script under an AppLocker or App Control policy that doesn't allow it (spike S7).
+=== NEW
+the script under an AppLocker or App Control policy that doesn't allow it (spike S7), and the execution policy set to AllSigned, then to Restricted, at the MachinePolicy scope.
+>>> END
+
+V16-FC1 N9 (R-M1-190): M1-AC21 checks the advisory and license gate.
+<<< OLD
+  - CI's matrix covers every system and processor of PO-21, the weekly run exists, and VER-6's count includes the helper's C, the Windows script and the DLL's C#.
+=== NEW
+  - CI's matrix covers every system and processor of PO-21, the weekly run exists, and VER-6's count includes the helper's C, the Windows script and the DLL's C#;
+  - a planted bundled dependency with a known advisory, and one with a license off the allowlist, each fail the dry run, and the release notes list every bundled dependency with its version and license (PO-13).
+>>> END
+
+D-28 A: M1-AC22 loads the mod from the installed package.
+<<< OLD
+- **M1-AC22** Live: on a Linux machine with no C compiler, the owner installs the package tarball and starts a claude soldier, once with the network off.
+=== NEW
+- **M1-AC22** Live: on a Linux machine with no C compiler, the owner installs the package tarball, loads the mod from it with `--plugin-dir <package>/plugin`, and starts a claude soldier, once with the network off.
+>>> END
+
+D-26 A: M6-AC9 tests both exemptions.
+<<< OLD
+and this still holds once the linked worktree's army has exited and once that worktree has been removed (WSP-1, WSP-4, WSP-10).
+=== NEW
+and this still holds once the linked worktree's army has exited and once that worktree has been removed. A commit one army's builder makes on its own branch during the other army's turn raises no card there. During a soldier's turn, `claude --worktree fix-1` makes `.claude/worktrees/fix-1` with its branch `worktree-fix-1`, and its cleanup then deletes both: the turn passes with no card, and the transcript lines for that working tree name the branch (WSP-1, WSP-4, WSP-10).
+>>> END
+
+V16-FC1 N11 (R-M1-192): Appendix C H13.
+<<< OLD
+and a newer version connects with a warning.
+=== NEW
+and a newer version connects with a notice.
+>>> END
+
+D-29 A: Appendix D's assets row.
+<<< OLD
+| Copies of the owner's code | each session's snapshot in `~/.shadow-army/snapshots/` (WSP-11),
+=== NEW
+| Copies of the owner's code | each session's snapshot in `~/.shadow-army/snapshots/`, or where the owner's `SHADOW_ARMY_SNAPSHOTS` moves them (WSP-11),
+>>> END
+
+V16-FC1 N1 (R-M1-182): Appendix D row 9.
+<<< OLD
+| Each CLI, git and the post office's Node.js start from an absolute path found on `PATH` alone, and `cli` names one of the four adapters (CH-1, WSP-10, HOST-2).
+=== NEW
+| Every program Shadow Army starts runs from an absolute path: each CLI, git and the post office's Node.js found on `PATH` alone, and `cmd.exe`, `powershell.exe`, `taskkill` and `launchctl` in the system's own folder. On Windows a CLI's shim takes no program from the current folder. `cli` names one of the four adapters (CH-1, WSP-10, HOST-2, PO-18, PO-19).
+>>> END
+
+D-26 A: residual 13 names the branch.
+<<< OLD
+and adding or removing one holds no harness git (WSP-10).
+=== NEW
+and adding or removing one, with a branch made or deleted with it, holds no harness git (WSP-10) and puts nothing on the attribution card (WSP-4).
+>>> END
+
+D-27 B: section 1's non-goals, listed for a later version.
+<<< OLD
+- Cost figures beyond what each CLI reports.
+=== NEW
+- Cost figures beyond what each CLI reports.
+- Soldiers on a Windows machine whose Group Policy sets PowerShell's execution policy to AllSigned or Restricted. v2.0's script and DLL are not Authenticode-signed, so PO-14 refuses soldiers there with a message that says why (D-27). Signing them with a project certificate is listed for a later version.
+>>> END
+
+v0.17's header.
+<<< OLD
+| **Version** | 0.16, 2026-10-23:
+=== NEW
+| **Version** | 0.17, 2026-10-23: the owner's answers to D-26 (a branch that comes with another working tree, and other armies' refs, raise no card), D-27 (Windows machines whose Group Policy allows only signed scripts are a non-goal, signing listed for later), D-28 (the release package is also a directory marketplace, with every runtime dependency bundled) and D-29 (`SHADOW_ARMY_SNAPSHOTS` moves the snapshots), and fix check V16-FC1's repairs (among them: `cmd.exe` by its absolute path with no program from the current folder, `/bin/launchctl`, a guard command that times out tried again and its hold lifted, sleep not counted toward git's limits, the host's oldest version 2.1.294, and the baseline's place in PO-8). 0.16, 2026-10-23:
+>>> END

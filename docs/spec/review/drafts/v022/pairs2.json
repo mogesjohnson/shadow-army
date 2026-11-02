@@ -1,0 +1,106 @@
+[
+ [
+  "The mod waits at most 60 seconds, on its own timer, for the post office's port and ready report.",
+  "The mod waits at most 60 seconds, on its own timer, for the post office's port and ready report. The post office reports ready once its memory protection, the secret, PO-5's folder checks, its lock and its bind are done; PO-14's check, PO-16's sweep and PO-1's finishing come after the report and before any channel opens, so none of them counts toward the 60 seconds."
+ ],
+ [
+  "and the next use starts a new one (HOST-2, PO-7);",
+  "and the next use starts a new one, while one whose PO-1 finishing takes 5 minutes on the fake clock reports ready first and is not ended (HOST-2, PO-7);"
+ ],
+ [
+  "a Windows DACL that is set and one that can't be, and macOS each give their own `memory protection` line in the post office's log.",
+  "a Windows DACL that is set, one that can't be, and a DACL script that never exits, ended after 30 seconds on a fake monotonic clock while the post office goes on to report ready, and macOS each give their own `memory protection` line in the post office's log."
+ ],
+ [
+  "`the army is already running in this folder (pid 4120, started 14:02)`",
+  "`the army is already running in this folder (pid 4120)`"
+ ],
+ [
+  "or, when the process that started the lock's post office is the mod's own Claude Code process, as after a mod reload, `the army is still closing` (PO-7).",
+  "or, when the process that started the lock's post office is the mod's own Claude Code process, as after a mod reload, or is no longer running, as after Claude Code was killed on Linux or macOS while its post office's watch shuts it down, `the army is still closing` (PO-7)."
+ ],
+ [
+  "another process gets `the army is already running in this folder`.",
+  "another process gets `the army is already running in this folder`, and a lock whose starting process has ended while its post office still runs gets `the army is still closing`."
+ ],
+ [
+  "Past 16 MiB of events not yet written, it stops reading its soldiers' output until the mod has read them.",
+  "Past 16 MiB of events not yet written, it stops reading its soldiers' output until the mod has read them. A write that fails because nothing can read its output any more, as with `EPIPE` once Claude Code has been killed on Linux or macOS (probe P-17), never ends the post office: it stops writing events, logs that once, and runs on until the watch or the lease starts the shutdown."
+ ],
+ [
+  "when the process that started it ends, the post office starts the same shutdown within 2 seconds, without waiting for the lease.",
+  "when the process that started it ends, the post office starts the same shutdown within 2 seconds, without waiting for the lease, also when each write to its standard output then fails with `EPIPE` (Linux and macOS)."
+ ],
+ [
+  "on Linux and macOS with `SIGTERM` and then `SIGKILL` 500 ms later, and on Windows with `TerminateProcess` (probe P-17).",
+  "on Linux with `SIGTERM`, then `SIGKILL` about 500 ms later at an exit and sooner at an unload, and on Windows with no signal, as `TerminateProcess` ends a process (probe P-17, Claude Code 2.1.312 on WSL 2 Ubuntu and Windows 11)."
+ ],
+ [
+  "So at a normal exit the post office is ended outright, and the next start finishes what it left open (PO-1).",
+  "So at a normal exit the post office is ended outright, and the next start finishes what it left open (PO-1). A kill of Claude Code itself took the post office with it on Windows, but on Linux left it running, re-parented, with its output broken; its watch then shuts it down (below).\n  - **Not tested:** what Claude Code does to a mod's process on macOS at an exit, an unload and a kill. The owner has no Mac (D-34), so this section assumes macOS does as Linux does."
+ ],
+ [
+  "and the live macOS run (VER-10, M6-AC8, M6-AC11).",
+  "what Claude Code does to a mod's process at an exit, an unload and a kill (P-17, PO-7), and the live macOS run (VER-10, M6-AC8, M6-AC11)."
+ ],
+ [
+  "A normal exit ends the post office as PO-7's Containment says, and the next start finishes what it left open (PO-1).",
+  "A normal exit ends the post office as PO-7's Containment says, and the next start finishes what it left open (PO-1). On the POSIX system, Claude Code killed with `SIGKILL` leaves the post office running until its watch shuts it down, and its log gives `the process that started it ended`."
+ ],
+ [
+  "a post office started without a session id refuses to start.",
+  "a post office started without a session id refuses to start, except one started as `sa live` starts it, which runs with no lease, shuts down within 2 seconds of `sa live`'s process ending, and is refused by the lock while the mod's post office runs in the folder (HOST-2)."
+ ],
+ [
+  "14. **Filters in the config at start** (WSP-10).",
+  "15. **Filters in the config at start** (WSP-10)."
+ ],
+ [
+  "a filter in the config at start runs as the owner's (residual 14)",
+  "a filter in the config at start runs as the owner's (residual 15)"
+ ],
+ [
+  "a filter already in the config when the post office starts (residual 14)",
+  "a filter already in the config when the post office starts (residual 15)"
+ ],
+ [
+  "compared with the state Shadow Army last trusted: their state when the post office started, or as the owner last accepted it (2.0 GIT-3).",
+  "compared with the state Shadow Army last trusted: their state when the post office started, or as the owner last accepted it (2.0 GIT-3). A post office whose last one's log ends with harness git held for a change trusts the state that log last trusted instead, so a change still there holds harness git again (below). The post office's log records the trusted state, as a hash of each of its files, when the post office starts and each time that state changes, at a y or after one of Shadow Army's own commands that makes or removes a snapshot or a worktree, and records each hold and what ended it (PO-5)."
+ ],
+ [
+  "y trusts the state shown, and harness git goes on; n keeps it held.",
+  "y trusts the state shown, and harness git goes on; n keeps it held, across restarts too: a later post office that finds the change still there shows the card again, as it does for a card left unanswered."
+ ],
+ [
+  "In M1, before that card exists, the post office's log names the change, Claude's transcript gets one line saying harness git is held and why, and harness git stays held until the post office restarts.",
+  "In M1, before that card exists, the post office's log names the change, and Claude's transcript gets one line saying harness git is held, why, and that undoing the change lets it go on. Harness git stays held, across restarts too, until the change is gone: each later use of the army that needs harness git compares again, the next post office's start included, and goes on once nothing differs from the trusted state."
+ ],
+ [
+  "`Iron's turn at 14:02 not checked: harness git held · checked at the next start`",
+  "`Iron's turn at 14:02 not checked: harness git held · checked when harness git goes on`"
+ ],
+ [
+  "Before it opens any channel, a later post office finishes each one of this army's as PO-1 says.",
+  "Before it opens any channel, and once harness git goes on, a later post office finishes each one of this army's as PO-1 says; while the hold stands, each stays waiting."
+ ],
+ [
+  "Each attribution or handoff card left open is kept in the records as unanswered, with its paths and hashes from the log, as PO-7 says (ARM-6, →M2; SES-4, →M4; PO-6, →M3).",
+  "Each attribution or handoff card left open is kept in the records as unanswered, with its paths and hashes from the log, as PO-7 says (ARM-6, →M2; SES-4, →M4; PO-6, →M3). A card for a change that holds harness git, left open or answered n, shows again while the change is still there (WSP-10)."
+ ],
+ [
+  "its log records as waiting on harness git (WSP-10) is finished the same way, before any channel opens:",
+  "its log records as waiting on harness git (WSP-10) is finished the same way, before any channel opens and once harness git goes on, which it doesn't while the last one's hold stands (WSP-10):"
+ ],
+ [
+  "`Iron's turn at 14:02 checked at this start: harness git was held`",
+  "`Iron's turn at 14:02 checked late: harness git was held`"
+ ],
+ [
+  "So does a filter a soldier added that held harness git in M1, once the post office restarts: the transcript line named it, the restart trusts the config as it then is, and the held turn's guard, which the next post office finishes, runs it too (WSP-10, PO-1).",
+  "A filter a soldier added while a post office ran holds harness git, and a restart doesn't trust it: until the change is gone or, from M2, the owner answers y, harness git stays held and the held turn's guard waits (WSP-10, PO-1). What keeps that hold across a restart is the last post office's log, a file the soldier's user can write, as residual 12 says of the start state: a log rewritten or deleted before the next start lets that start trust the config as it then is. A filter added while no post office runs is in the config at start like any other."
+ ],
+ [
+  "y lets harness git go on, and n keeps it held (WSP-10).",
+  "y lets harness git go on, and n keeps it held (WSP-10). After n, and again with the card left unanswered, the post office shuts down; with the change still there, the next use's post office keeps harness git held and shows the card again, and with the change undone first, it holds nothing (WSP-10, PO-1)."
+ ]
+]

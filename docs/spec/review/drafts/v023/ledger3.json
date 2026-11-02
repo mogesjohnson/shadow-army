@@ -1,0 +1,18 @@
+[
+ [
+  "a Windows watch run restarted after its process ended is unhandled (V22-FC1 N6, P3)",
+  "a Windows watch run restarted after its process ended is unhandled (V22-FC1 N6, P3: R-M1-265)"
+ ],
+ [
+  "or opens a reused pid, is unhandled (V22-FC1 N6, P3)",
+  "or opens a reused pid, is unhandled (V22-FC1 N6, P3: R-M1-265)"
+ ],
+ [
+  "conflicts with PO-16 412 (V22-FC1 N7, P3)",
+  "conflicts with PO-16 412 (V22-FC1 N7, P3: R-M1-266)"
+ ],
+ [
+  "PO-17 allows only `launchctl remove` (V22-FC1 N8)",
+  "PO-17 allows only `launchctl remove` (V22-FC1 N8: R-M1-267)"
+ ]
+]

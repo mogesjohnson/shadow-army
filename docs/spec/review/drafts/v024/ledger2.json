@@ -1,0 +1,26 @@
+[
+ [
+  "The gaps are R-M1-260 to 264, fixed in v0.23, batch 2 (`drafts/v023/repairs2.txt`), N1 by its main fix |",
+  "The gaps are R-M1-260 to 264, fixed in v0.23, batch 2 (`drafts/v023/repairs2.txt`), N1 by its main fix. Fix-checked (V23-FC1): the carried start (R-M1-260) FIXED; its trust of this army's `commondir` NOT SOUND (V23-FC1 N1, P2); the cost the owner accepted, that an owner's own config edit after such an end holds harness git, in M1 until it is undone, is stated nowhere the owner reads (N3, P3); a trusted file's copy that is gone or changed is undefined (N5, P3) (`raw/V23-FC1.md`). The gaps are R-M1-269 to 273 and 277, fixed in v0.24 (`drafts/v024/`) |"
+ ],
+ [
+  "(an owner's own config edit after such an end holds harness git) goes to the owner |",
+  "(an owner's own config edit after such an end holds harness git) goes to the owner. Fix-checked (V23-FC1): FIXED: the rule at 798 covers a normal exit mid-turn, a kill or crash mid-turn and a timeout hold; a turn's opening line is flushed before its message goes in (257), so a cut-short log still shows the open turn; the order agrees with PO-1 228, PO-7 270 and PO-14. Its M1-AC10 case passes a build without the rule (V23-FC1 N4, P3: R-M1-272), the cost is stated nowhere the owner reads (N3, P3: R-M1-271), and section 5.1 957 still says every next start (N9, P3: R-M1-277) (`raw/V23-FC1.md`) |"
+ ],
+ [
+  "WSP-10 798 keeps a copy of each trusted file beside the log for the card's diff |",
+  "WSP-10 798 keeps a copy of each trusted file beside the log for the card's diff. Fix-checked (V23-FC1): SOUND, with a gap: the ordering at 257 is right; a copy that is gone or doesn't match its hash is undefined (V23-FC1 N5, P3: R-M1-273) (`raw/V23-FC1.md`) |"
+ ],
+ [
+  "and the entry's deletion updates and logs the trusted state |",
+  "and the entry's deletion updates and logs the trusted state. Fix-checked (V23-FC1): the trust of `gitdir` and `commondir` NOT SOUND, P2: `commondir` redirects the config git reads, so a soldier can hand harness git its own filter at the next start (V23-FC1 N1: R-M1-269); the `worktrees/<id>` deletion SOUND: logged and dropped from the trusted state (`raw/V23-FC1.md`) |"
+ ],
+ [
+  "each says the filter runs unless that start holds harness git for it |",
+  "each says the filter runs unless that start holds harness git for it. Fix-checked (V23-FC1): FIXED: 793, 957 and 1104 use the same words and agree with 798's wider rule (`raw/V23-FC1.md`) |"
+ ],
+ [
+  "M2-AC5's y case; M1-AC10's transcript line |",
+  "M2-AC5's y case; M1-AC10's transcript line. Fix-checked (V23-FC1): FIXED: the restart's line at 1109 matches 799 and 800, and the `y` case at 1206 matches PO-1 228; M1-AC10 checks the line that the change can't be told from the owner's only in its new case, and M2-AC5 not at all (V23-FC1 N4, N5, P3: R-M1-272, 273) (`raw/V23-FC1.md`) |"
+ ]
+]

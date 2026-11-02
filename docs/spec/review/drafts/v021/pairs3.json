@@ -1,0 +1,86 @@
+[
+ [
+  "A lock there holds the post office's pid, its process start time and its port, and is written whole.",
+  "A lock there holds the post office's pid, its process start time and its port, and the pid and start time of the process that started it (PO-7's watch), and is written whole."
+ ],
+ [
+  "The start time is the one the OS reports for that pid, read the same way when the lock is written and when it is checked.",
+  "The start time is the process's own creation stamp, compared exactly and never rendered in the local or wall clock: on Linux field 22 of `/proc/<pid>/stat` (clock ticks since boot); on macOS the process's start from `proc_pidinfo`, read through the helper (PO-17); on Windows the creation time from `GetProcessTimes` on a `PROCESS_QUERY_LIMITED_INFORMATION` handle, in 100 ns FILETIME units, read through the script (PO-19). Node.js has no API for the macOS or Windows stamp; the helper and the script that ship hold the code, so it adds no binary or dependency to the package (PO-13). It is read the same way when the lock is written and when it is checked, and wherever PO-7's watch, PO-11's listing and PO-16's sweep compare it."
+ ],
+ [
+  "or, when the mod's own last post office is still shutting down, `the army is still closing` (PO-7).",
+  "or, when the process that started the lock's post office is the mod's own Claude Code process, as after a mod reload, `the army is still closing` (PO-7)."
+ ],
+ [
+  "It tells that process apart from a later one that reuses its pid by its start time, as the lock does (PO-1). Once that process has ended,",
+  "It tells that process apart from a later one that reuses its pid by its start time, as the lock does (PO-1). On Windows it reads no stamp each second: the script's watch operation (PO-19) holds a handle to that process, so its pid can't be reused while the handle is open, and reports when it ends. Once that process has ended,"
+ ],
+ [
+  "It is the only way the post office reads or sets an owner or an ACL on Windows; it runs no `icacls` or `takeown`.",
+  "It is the only way the post office reads or sets an owner or an ACL on Windows; it runs no `icacls` or `takeown`.\n  - **Processes.** Run with its process operation, the script reads the creation time of each pid it is given, as PO-1 says, reports each as one line of JSON, then exits. Run with its watch operation, it opens the process that started the post office with `SYNCHRONIZE` and `PROCESS_QUERY_LIMITED_INFORMATION`, reports that process's creation time, waits on the handle, reports when the process ends, then exits. If a watch run ends before that report, the post office starts it again, and its log says so (PO-7)."
+ ],
+ [
+  "A new process with that pid but another start time counts as ended;",
+  "A new process with that pid but another start time counts as ended. Moving the wall clock an hour either way, and on Windows changing the time zone, leaves a living post office's lock live, its watch quiet and its soldiers' trees running: a second start is refused by the lock, and a sweep ends none of them;"
+ ],
+ [
+  "Renewals sent while the post office was suspended wait at its port, and are handled when it runs again. The post office logs each such step with its length.",
+  "Renewals sent while the post office was suspended wait at its port, and are handled when it runs again. The post office logs each such step with its length.\n    - **Every other bound.** Each time bound the post office measures on the monotonic clock leaves out time it did not run, counted as the checks count it (at most 5 seconds of any one step, logged): PO-1's wait for a CLI's start, PO-9's wait for the guardian's ready report, PO-10's 10 seconds, PO-14's check, the shutdown's waits for a stopped turn and a CLI's exit, and a stop's (MSG-9, →M3). A bound the guardian or the system keeps is not changed by this."
+ ],
+ [
+  "a sleep, a suspended or stalled post office, a stopped mod and a wall-clock change, on a fake clock (PO-7);",
+  "a sleep, a suspended or stalled post office, a stopped mod and a wall-clock change, on a fake clock (PO-7), and a step of an hour taken as sleep during PO-14's check, during a tree's kill and during a start's `initialize` wait, which fails no check, reports no containment failure and counts no crash (PO-7, PO-10, PO-14);"
+ ],
+ [
+  "  - on Linux and macOS, a real post office stopped with SIGSTOP",
+  "  - a step of an hour taken as sleep during PO-14's check, during a tree's kill and during a start's `initialize` wait fails no check, reports no containment failure and counts no crash (PO-7);\n  - on Linux and macOS, a real post office stopped with SIGSTOP"
+ ],
+ [
+  "Node.js's and git's by running each, found as above, with `--version`.",
+  "Node.js's and git's by running each, found as above, with `--version`. Each `--version` run, for Node.js, git and claude (CH-2), ends after 10 seconds on the monotonic clock, with every process it started. One that ends this way counts as missing, and the line says so, as in `claude --version gave no answer in 10 s`."
+ ],
+ [
+  "The gap starts at zero when the post office reports that it is ready, and goes back to zero with each renewal.",
+  "The gap starts at zero when the post office reports that it is ready, and goes back to zero with each renewal. The mod waits at most 60 seconds, on its own timer, for the post office's port and ready report. A post office that has not reported ready by then is ended by the mod with its process tree, and Claude's transcript gets one line naming the step it was in, as in `the army did not start: the post office was not ready in 60 s · memory-protection script`. The DACL script of PO-19 is ended after 30 seconds with its processes, which the log reports as `memory protection: none` with that reason, and the post office goes on."
+ ],
+ [
+  "  - a reloaded fake mod starts its own post office at the next use once the old one has exited, and Claude's transcript gets one line.",
+  "  - a reloaded fake mod starts its own post office at the next use once the old one has exited, and Claude's transcript gets one line;\n  - on a fake monotonic clock, a fake `node` or `git` whose `--version` never exits gives the missing line 10 seconds after it started and leaves no process behind, and a fake post office that never reports ready is ended with its process tree 60 seconds after its start, Claude's transcript names the step it was in, and the next use starts a new one (HOST-2, PO-7);\n  - two uses of the army at once, with no post office running, start one post office; both uses get its result, the mod's renewals present that post office's secret, and no `already running` line appears (HOST-2)."
+ ],
+ [
+  "  - a crash in the middle of a tool call does not send the message again,",
+  "  - each restart and the soldier left down by a fourth crash give their line in Claude's transcript, and the restart's line says the session is new and its earlier context is gone;\n  - a fake claude whose `--version` never exits is ended after 10 seconds with its processes, and the soldier doesn't start, with `claude --version gave no answer in 10 s` in its log and Claude's transcript;\n  - a crash in the middle of a tool call does not send the message again,"
+ ],
+ [
+  "    - Once every session is closed, the post office releases its lock (PO-1) and exits. It doesn't wait for the mod to read its last events; the logs keep them.",
+  "    - Once every session is closed, the post office releases its lock (PO-1) and exits. It writes what it can of its queued events for at most 2 seconds, then exits without waiting for the mod to read them; the logs keep them. Its exit code names the shutdown's reason: 0 `Claude Code ended`, 10 `the owner logged out`, 11 `no renewal from the mod for 30 s`, 12 `the process that started it ended`."
+ ],
+ [
+  "output that ends with no shutdown event gives the reason `the post office stopped unexpectedly`, with its exit code or signal.",
+  "output that ends with no shutdown event gives the reason its exit code names, and `the post office stopped unexpectedly`, with its exit code or signal, only for another code or a signal."
+ ],
+ [
+  "past 16 MiB of unwritten events it stops reading the fake's output, and reads it again once the events have been read;",
+  "past 16 MiB of unwritten events it stops reading the fake's output, and reads it again once the events have been read. With nothing reading its output and the lease then ended, the mod shows `no renewal from the mod for 30 s`, from the exit code;"
+ ],
+ [
+  "In M1 a restarted channel opens a fresh session, and the soldier's log says so; from M2 it resumes the previous one by id (CH-9, →M2).",
+  "In M1 a restarted channel opens a fresh session, and the soldier's log says so; from M2 it resumes the previous one by id (CH-9, →M2). Each restart, and a soldier left down by its fourth crash, gets one line in Claude's transcript, as in `Iron restarted after a crash (2 of 3) · new session, its earlier context is gone` and `Iron is down after 4 crashes in 10 min · reconnect it`. From M2 a resumed session's line says `session resumed`, not that its context is gone (CH-9, →M2)."
+ ],
+ [
+  "If the record can't be written, nothing is accepted, and the use says why.",
+  "If the record can't be written, nothing is accepted, and the use says why. Each acceptance reads the record again just before it writes it, adds its own hashes and its working tree's list, never removes another working tree's entries, and replaces the file in one rename of a file written beside it. A rename that finds the record changed since the read is retried from a new read, up to 5 times; if it still fails, nothing is accepted and the use says why."
+ ],
+ [
+  "  - a folder with none of the four files uses the shipped copies and shows no card;",
+  "  - two armies of one repository, in the main working tree and a linked one, each with the record read before the other's acceptance, accept different files at once and in turn: the record then holds both acceptances and both lists of last-trusted files, and neither working tree's session shows the card again. A file deleted in the second army's tree is still found as `gone`;\n  - a folder with none of the four files uses the shipped copies and shows no card;"
+ ],
+ [
+  "There is at most one post office per folder (PO-1).",
+  "There is at most one post office per folder (PO-1). A mod instance starts at most one post office at a time: a use that comes while one is starting waits for that start's result and shares it, and the mod keeps the handle and the secret of the post office that holds the lock, never those of a start that was refused."
+ ],
+ [
+  "its lock holds its pid, start time and port.",
+  "its lock holds its pid, start time and port, and the pid and start time of the process that started it. A reloaded fake mod whose Claude Code process started the live lock's post office gets `the army is still closing`; another process gets `the army is already running in this folder`."
+ ]
+]

@@ -1,0 +1,8 @@
+D-31 gains R-F-140 (F-R3-V1 asks to decide it together with R-F-156).
+
+<<< OLD
+- **Card** (2026-10-23, in chat): recommended **A** for 2.0, because it is the text as written, costs nothing, and a fresh soldier gets its brief again from the Monarch; C can come after 2.0 with H38.
+=== NEW
+- **R-F-140, decided with it** (F-R3-V1, `raw/F-r3-verify-V1.md`): WSP-1 makes a new worktree per soldier per process (→M6), and PO-7 leaves the old ones in place, but nothing names an earlier process's worktree with commits not applied, and `/diff` and `/apply` reach only the current one. Options: (a) a soldier's worktree and branch belong to its folder's army and the next process reuses them, with a new session, or its session resumed under B or C; (b) as written, a new one per process, and at start the log and one transcript line name each earlier worktree with commits not applied, and `/diff` and `/apply` accept it.
+- **Card** (2026-10-23, in chat): recommended **A** for 2.0, because it is the text as written, costs nothing, and a fresh soldier gets its brief again from the Monarch; C can come after 2.0 with H38. With A, R-F-140's **(b)**, so no unapplied work goes unnamed.
+>>> END

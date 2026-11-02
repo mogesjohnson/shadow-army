@@ -1,0 +1,26 @@
+== D-3 run 20261014-063535: 10 runs per mechanism, close 0.6s after the CLI is ready (d is mid-loop), (d) spawns a daemon every 500 us
+kernel 6.6.87.2-microsoft-standard-WSL2; systemd 255 (255.4-1ubuntu8.17); cgroup fs cgroup2fs; XDG_RUNTIME_DIR=/run/user/1000/
+systemctl --user is-system-running: running
+loginctl linger: State=active Linger=no 
+baseline before experiments: d3hb processes: 0, processes in total: 65
+-- m4: running 10 times
+-- m5: running 10 times
+
+== RESULT: did the kind survive the close? (runs = runs in which at least one writer of that kind was still alive)
+4  bash polls /proc every 50 ms
+      a: ended (0/10 runs)
+      b: ended (0/10 runs)
+      c: SURVIVED (10/10 runs)
+      d: SURVIVED (10/10 runs; 8693 of 8693 daemons alive)
+5  (extra) env-tag sweep via /proc
+      a: ended (0/10 runs)
+      b: ended (0/10 runs)
+      c: ended (0/10 runs)
+      d: ended (0/10 runs; 0 of 8268 daemons alive)
+
+
+== how the mechanisms behaved (min / avg / max over runs)
+m4 poller: scans per run min 12 / avg 12.2 / max 14; scan time (us) min 32066 / avg 34284.9 / max 44919; longest start-to-start gap (us) min 55942 / avg 62181.0 / max 76474; descendants recorded min 4 / avg 4.0 / max 4
+m5 env sweep: passes min 3 / avg 3.6 / max 9
+
+saved: /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/results/summary-20261014-063535.txt /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/results/detail-20261014-063535.txt

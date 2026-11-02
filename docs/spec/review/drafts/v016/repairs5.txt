@@ -1,0 +1,36 @@
+v0.16 repairs, part 5: F's round-3 confirmed findings, from F-R3-V1 to V3's fixes. Written by the orchestrator (Fork 2), session 8, 2026-10-23.
+
+R-F-152 (P3, was P2): HOST-15's digest names held queues and messages not delivered.
+<<< OLD
+waiting on you, handoff ready, cold with its reason or cache unknown (SES-6), down, log in needed or error;
+=== NEW
+waiting on you, handoff ready, queue held with its reason (HOST-14), cold with its reason or cache unknown (SES-6), down, log in needed or error, and each message not delivered (MSG-4);
+>>> END
+
+R-F-155 (P3, was P2): HOST-15's cost is marked as SES-7 marks it.
+<<< OLD
+the cost the CLIs reported in that time, where they report one (SES-7).
+=== NEW
+the cost the CLIs reported in that time, where they report one, marked as SES-7 marks it.
+>>> END
+
+R-F-155 (P3, was P2): SES-7 marks claude's estimate and the costs not reported.
+<<< OLD
+cost where the CLI reports one ("—" otherwise). A total row follows.
+=== NEW
+cost where the CLI reports one ("—" otherwise), with claude's marked `est.` (CH-2). A total row follows; its cost is the sum of the costs shown, marked `est.` when one is, and followed by `+ N not reported` while any soldier shows "—".
+>>> END
+
+R-F-154 (P3, was P2): the header lists what the canvas has no frame for.
+<<< OLD
+and puts "stopping" in the soldier states' order (VIS-2). The v2.1 design exploration
+=== NEW
+and puts "stopping" in the soldier states' order (VIS-2). The canvas also has no frame for what came after it: the trust card (ARM-7), the attribution card for every soldier (ARM-6), the card for an edit before a turn a CLI starts by itself (WSP-12), the read-only line on an approval card (CH-6), and held after a mode or a revert (CH-11, WSP-12). The v2.1 design exploration
+>>> END
+
+R-F-154 (P3, was P2): a snapshot may follow a requirement's own text.
+<<< OLD
+the canvas frame it follows, or the spec's table where the two differ (VIS-1)
+=== NEW
+the canvas frame it follows, or the spec's table, or the requirement's own text, where the two differ (VIS-1)
+>>> END

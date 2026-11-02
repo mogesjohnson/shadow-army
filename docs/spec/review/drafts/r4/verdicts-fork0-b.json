@@ -1,0 +1,4 @@
+[
+  { "id": "R-M1-235", "verdict": "DECISION P1 (M1-R4-V4)", "resolution": "card D-37 (the mod's transport past a proxy or an org fetch policy: (a) socketPath, (b) loopback TCP plus a proxy-variable check before start, (c) run probe P-16 first; recommended (c), then (b)); HOST-2 119 and M1-AC1 1049 text for every option in raw/M1-R4-V4.md; its http.fetch-hooks sub-claim is a DUPLICATE of R-M1-245" },
+  { "id": "R-M1-236", "verdict": "NEEDS-PROBE P2 (M1-R4-V4)", "resolution": "probe P-17 (how the host ends a mod's spawned child at exit and unload); PO-7 261 and 263 drafts for each outcome in raw/M1-R4-V4.md" }
+]

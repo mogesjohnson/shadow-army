@@ -1,0 +1,614 @@
+[m1 #1] before close: d3hb processes=122; daemon c pid=459 ppid=309 (Relay(310)      /init) sid=459 pgid=459 (cli pgid=453)
+    [m1 #1 table]     453     399     453     453 Ss   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m1-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m1 #1 table]     455     453     453     453 S    d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m1-1/a.hb
+    [m1 #1 table]     456     453     453     453 S    d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m1-1/b.hb
+    [m1 #1 table]     459     309     459     459 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb daemon /tmp/d3run.ivhtVz/m1-1/c.hb
+    [m1 #1 table]     460     453     453     453 S    d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+    [m1 #1 table]     462     309     462     462 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+    [m1 #1 table]     464     309     464     464 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+    [m1 #1 table]     466     309     466     466 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+    [m1 #1 table]     472     309     472     472 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+    [m1 #1 table]     474     309     474     474 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+    [m1 #1 table]     476     309     476     476 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+    [m1 #1 table]     478     309     478     478 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m1-1/d 2000 5000
+[m1 #1] fake CLI processes still alive after the close: 0
+[m1 #1] survivors by ps: d3hb=127, their ppids:  127 309 
+[m1 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 126 126 
+[m1 #2] fake CLI processes still alive after the close: 0
+[m1 #2] survivors by ps: d3hb=112, their ppids:  112 309 
+[m1 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 111 111 
+[m1 #3] fake CLI processes still alive after the close: 0
+[m1 #3] survivors by ps: d3hb=113, their ppids:  113 309 
+[m1 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 112 112 
+[m1 #4] fake CLI processes still alive after the close: 0
+[m1 #4] survivors by ps: d3hb=113, their ppids:  113 309 
+[m1 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 112 112 
+[m1 #5] fake CLI processes still alive after the close: 0
+[m1 #5] survivors by ps: d3hb=114, their ppids:  114 309 
+[m1 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 113 113 
+[m1 #6] fake CLI processes still alive after the close: 0
+[m1 #6] survivors by ps: d3hb=113, their ppids:  113 309 
+[m1 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 112 112 
+[m1 #7] fake CLI processes still alive after the close: 0
+[m1 #7] survivors by ps: d3hb=114, their ppids:  114 309 
+[m1 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 113 113 
+[m1 #8] fake CLI processes still alive after the close: 0
+[m1 #8] survivors by ps: d3hb=113, their ppids:  113 309 
+[m1 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 112 112 
+[m1 #9] fake CLI processes still alive after the close: 0
+[m1 #9] survivors by ps: d3hb=113, their ppids:  113 309 
+[m1 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 112 112 
+[m1 #10] fake CLI processes still alive after the close: 0
+[m1 #10] survivors by ps: d3hb=113, their ppids:  113 309 
+[m1 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 112 112 
+[m1 #11] fake CLI processes still alive after the close: 0
+[m1 #11] survivors by ps: d3hb=116, their ppids:  116 309 
+[m1 #11] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 115 115 
+[m1 #12] fake CLI processes still alive after the close: 0
+[m1 #12] survivors by ps: d3hb=115, their ppids:  115 309 
+[m1 #12] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 114 114 
+[m1 #13] fake CLI processes still alive after the close: 0
+[m1 #13] survivors by ps: d3hb=115, their ppids:  115 309 
+[m1 #13] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 114 114 
+[m1 #14] fake CLI processes still alive after the close: 0
+[m1 #14] survivors by ps: d3hb=116, their ppids:  116 309 
+[m1 #14] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 115 115 
+[m1 #15] fake CLI processes still alive after the close: 0
+[m1 #15] survivors by ps: d3hb=112, their ppids:  112 309 
+[m1 #15] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 111 111 
+[m1 #16] fake CLI processes still alive after the close: 0
+[m1 #16] survivors by ps: d3hb=114, their ppids:  114 309 
+[m1 #16] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 113 113 
+[m1 #17] fake CLI processes still alive after the close: 0
+[m1 #17] survivors by ps: d3hb=111, their ppids:  111 309 
+[m1 #17] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 110 110 
+[m1 #18] fake CLI processes still alive after the close: 0
+[m1 #18] survivors by ps: d3hb=112, their ppids:  112 309 
+[m1 #18] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 111 111 
+[m1 #19] fake CLI processes still alive after the close: 0
+[m1 #19] survivors by ps: d3hb=114, their ppids:  114 309 
+[m1 #19] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 113 113 
+[m1 #20] fake CLI processes still alive after the close: 0
+[m1 #20] survivors by ps: d3hb=114, their ppids:  114 309 
+[m1 #20] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 113 113 
+[m2a #1] before close: d3hb processes=119; daemon c pid=5717 ppid=5710 (d3sup           /tmp/d3run.ivhtVz/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m2a-1 /tmp/d3run.ivhtVz/bin/d3hb) sid=5717 pgid=5717 (cli pgid=n/a)
+    [m2a #1 table]    5710     399     310     310 S+   d3sup           /tmp/d3run.ivhtVz/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m2a-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m2a #1 table]    5712    5710     310     310 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m2a-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m2a #1 table]    5713    5712     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m2a-1/a.hb
+    [m2a #1 table]    5714    5712     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m2a-1/b.hb
+    [m2a #1 table]    5717    5710    5717    5717 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb daemon /tmp/d3run.ivhtVz/m2a-1/c.hb
+    [m2a #1 table]    5718    5712     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2a-1/d 2000 5000
+    [m2a #1 table]    5720    5710    5720    5720 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2a-1/d 2000 5000
+    [m2a #1 table]    5722    5710    5722    5722 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2a-1/d 2000 5000
+    [m2a #1 table]    5725    5710    5725    5725 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2a-1/d 2000 5000
+    [m2a #1 table]    5727    5710    5727    5727 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2a-1/d 2000 5000
+    [m2a #1 table]    5729    5710    5729    5729 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2a-1/d 2000 5000
+    [m2a #1 table]    5731    5710    5731    5731 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2a-1/d 2000 5000
+[m2a #1] fake CLI processes still alive after the close: 0
+[m2a #1] survivors by ps: d3hb=0, their ppids: 
+[m2a #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 124 0 
+[m2a #1] d3sup: closed by signal: none left passes=2 killed=129 first_pass_descendants=129 direct_children=126
+[m2a #2] fake CLI processes still alive after the close: 0
+[m2a #2] survivors by ps: d3hb=0, their ppids: 
+[m2a #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2a #2] d3sup: closed by signal: none left passes=4 killed=158 first_pass_descendants=119 direct_children=116
+[m2a #3] fake CLI processes still alive after the close: 0
+[m2a #3] survivors by ps: d3hb=0, their ppids: 
+[m2a #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #3] d3sup: closed by signal: none left passes=4 killed=148 first_pass_descendants=118 direct_children=115
+[m2a #4] fake CLI processes still alive after the close: 0
+[m2a #4] survivors by ps: d3hb=0, their ppids: 
+[m2a #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #4] d3sup: closed by signal: none left passes=3 killed=118 first_pass_descendants=117 direct_children=114
+[m2a #5] fake CLI processes still alive after the close: 0
+[m2a #5] survivors by ps: d3hb=0, their ppids: 
+[m2a #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #5] d3sup: closed by signal: none left passes=3 killed=119 first_pass_descendants=118 direct_children=115
+[m2a #6] fake CLI processes still alive after the close: 0
+[m2a #6] survivors by ps: d3hb=0, their ppids: 
+[m2a #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #6] d3sup: closed by signal: none left passes=3 killed=119 first_pass_descendants=118 direct_children=115
+[m2a #7] fake CLI processes still alive after the close: 0
+[m2a #7] survivors by ps: d3hb=0, their ppids: 
+[m2a #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2a #7] d3sup: closed by signal: none left passes=3 killed=121 first_pass_descendants=119 direct_children=116
+[m2a #8] fake CLI processes still alive after the close: 0
+[m2a #8] survivors by ps: d3hb=0, their ppids: 
+[m2a #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m2a #8] d3sup: closed by signal: none left passes=2 killed=117 first_pass_descendants=117 direct_children=114
+[m2a #9] fake CLI processes still alive after the close: 0
+[m2a #9] survivors by ps: d3hb=0, their ppids: 
+[m2a #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #9] d3sup: closed by signal: none left passes=3 killed=188 first_pass_descendants=118 direct_children=115
+[m2a #10] fake CLI processes still alive after the close: 0
+[m2a #10] survivors by ps: d3hb=0, their ppids: 
+[m2a #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #10] d3sup: closed by signal: none left passes=3 killed=127 first_pass_descendants=118 direct_children=115
+[m2a #11] fake CLI processes still alive after the close: 0
+[m2a #11] survivors by ps: d3hb=0, their ppids: 
+[m2a #11] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #11] d3sup: closed by signal: none left passes=3 killed=119 first_pass_descendants=118 direct_children=115
+[m2a #12] fake CLI processes still alive after the close: 0
+[m2a #12] survivors by ps: d3hb=0, their ppids: 
+[m2a #12] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #12] d3sup: closed by signal: none left passes=2 killed=118 first_pass_descendants=118 direct_children=115
+[m2a #13] fake CLI processes still alive after the close: 0
+[m2a #13] survivors by ps: d3hb=0, their ppids: 
+[m2a #13] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #13] d3sup: closed by signal: none left passes=3 killed=123 first_pass_descendants=118 direct_children=115
+[m2a #14] fake CLI processes still alive after the close: 0
+[m2a #14] survivors by ps: d3hb=0, their ppids: 
+[m2a #14] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m2a #14] d3sup: closed by signal: none left passes=3 killed=117 first_pass_descendants=116 direct_children=113
+[m2a #15] fake CLI processes still alive after the close: 0
+[m2a #15] survivors by ps: d3hb=0, their ppids: 
+[m2a #15] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #15] d3sup: closed by signal: none left passes=3 killed=119 first_pass_descendants=118 direct_children=115
+[m2a #16] fake CLI processes still alive after the close: 0
+[m2a #16] survivors by ps: d3hb=0, their ppids: 
+[m2a #16] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #16] d3sup: closed by signal: none left passes=3 killed=130 first_pass_descendants=118 direct_children=115
+[m2a #17] fake CLI processes still alive after the close: 0
+[m2a #17] survivors by ps: d3hb=0, their ppids: 
+[m2a #17] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #17] d3sup: closed by signal: none left passes=2 killed=118 first_pass_descendants=118 direct_children=115
+[m2a #18] fake CLI processes still alive after the close: 0
+[m2a #18] survivors by ps: d3hb=0, their ppids: 
+[m2a #18] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #18] d3sup: closed by signal: none left passes=3 killed=119 first_pass_descendants=118 direct_children=115
+[m2a #19] fake CLI processes still alive after the close: 0
+[m2a #19] survivors by ps: d3hb=0, their ppids: 
+[m2a #19] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #19] d3sup: closed by signal: none left passes=3 killed=118 first_pass_descendants=117 direct_children=114
+[m2a #20] fake CLI processes still alive after the close: 0
+[m2a #20] survivors by ps: d3hb=0, their ppids: 
+[m2a #20] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2a #20] d3sup: closed by signal: none left passes=3 killed=150 first_pass_descendants=118 direct_children=115
+[m2b #1] before close: d3hb processes=115; daemon c pid=10961 ppid=10954 (d3sup           /tmp/d3run.ivhtVz/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m2b-1 /tmp/d3run.ivhtVz/bin/d3hb) sid=10961 pgid=10961 (cli pgid=n/a)
+    [m2b #1 table]   10954     399     310     310 S+   d3sup           /tmp/d3run.ivhtVz/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m2b-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m2b #1 table]   10956   10954     310     310 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m2b-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m2b #1 table]   10957   10956     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m2b-1/a.hb
+    [m2b #1 table]   10958   10956     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m2b-1/b.hb
+    [m2b #1 table]   10961   10954   10961   10961 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb daemon /tmp/d3run.ivhtVz/m2b-1/c.hb
+    [m2b #1 table]   10962   10956     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2b-1/d 2000 5000
+    [m2b #1 table]   10964   10954   10964   10964 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2b-1/d 2000 5000
+    [m2b #1 table]   10966   10954   10966   10966 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2b-1/d 2000 5000
+    [m2b #1 table]   10968   10954   10968   10968 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2b-1/d 2000 5000
+    [m2b #1 table]   10971   10954   10971   10971 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2b-1/d 2000 5000
+    [m2b #1 table]   10973   10954   10973   10973 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2b-1/d 2000 5000
+    [m2b #1 table]   10975   10954   10975   10975 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m2b-1/d 2000 5000
+[m2b #1] fake CLI processes still alive after the close: 0
+[m2b #1] survivors by ps: d3hb=0, their ppids: 
+[m2b #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 119 0 
+[m2b #1] d3sup: closed by cli-exit: none left passes=2 killed=123 first_pass_descendants=123 direct_children=123
+[m2b #2] fake CLI processes still alive after the close: 0
+[m2b #2] survivors by ps: d3hb=0, their ppids: 
+[m2b #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m2b #2] d3sup: closed by cli-exit: none left passes=2 killed=116 first_pass_descendants=116 direct_children=116
+[m2b #3] fake CLI processes still alive after the close: 0
+[m2b #3] survivors by ps: d3hb=0, their ppids: 
+[m2b #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2b #3] d3sup: closed by cli-exit: none left passes=2 killed=117 first_pass_descendants=117 direct_children=117
+[m2b #4] fake CLI processes still alive after the close: 0
+[m2b #4] survivors by ps: d3hb=0, their ppids: 
+[m2b #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2b #4] d3sup: closed by cli-exit: none left passes=2 killed=117 first_pass_descendants=117 direct_children=117
+[m2b #5] fake CLI processes still alive after the close: 0
+[m2b #5] survivors by ps: d3hb=0, their ppids: 
+[m2b #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2b #5] d3sup: closed by cli-exit: none left passes=3 killed=120 first_pass_descendants=118 direct_children=118
+[m2b #6] fake CLI processes still alive after the close: 0
+[m2b #6] survivors by ps: d3hb=0, their ppids: 
+[m2b #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 111 0 
+[m2b #6] d3sup: closed by cli-exit: none left passes=2 killed=115 first_pass_descendants=115 direct_children=115
+[m2b #7] fake CLI processes still alive after the close: 0
+[m2b #7] survivors by ps: d3hb=0, their ppids: 
+[m2b #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2b #7] d3sup: closed by cli-exit: none left passes=2 killed=118 first_pass_descendants=118 direct_children=118
+[m2b #8] fake CLI processes still alive after the close: 0
+[m2b #8] survivors by ps: d3hb=0, their ppids: 
+[m2b #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2b #8] d3sup: closed by cli-exit: none left passes=3 killed=117 first_pass_descendants=116 direct_children=116
+[m2b #9] fake CLI processes still alive after the close: 0
+[m2b #9] survivors by ps: d3hb=0, their ppids: 
+[m2b #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 118 0 
+[m2b #9] d3sup: closed by cli-exit: none left passes=3 killed=122 first_pass_descendants=121 direct_children=121
+[m2b #10] fake CLI processes still alive after the close: 0
+[m2b #10] survivors by ps: d3hb=0, their ppids: 
+[m2b #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2b #10] d3sup: closed by cli-exit: none left passes=3 killed=118 first_pass_descendants=117 direct_children=117
+[m2b #11] fake CLI processes still alive after the close: 0
+[m2b #11] survivors by ps: d3hb=0, their ppids: 
+[m2b #11] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2b #11] d3sup: closed by cli-exit: none left passes=2 killed=117 first_pass_descendants=117 direct_children=117
+[m2b #12] fake CLI processes still alive after the close: 0
+[m2b #12] survivors by ps: d3hb=0, their ppids: 
+[m2b #12] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 115 0 
+[m2b #12] d3sup: closed by cli-exit: none left passes=2 killed=119 first_pass_descendants=119 direct_children=119
+[m2b #13] fake CLI processes still alive after the close: 0
+[m2b #13] survivors by ps: d3hb=0, their ppids: 
+[m2b #13] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2b #13] d3sup: closed by cli-exit: none left passes=2 killed=118 first_pass_descendants=118 direct_children=118
+[m2b #14] fake CLI processes still alive after the close: 0
+[m2b #14] survivors by ps: d3hb=0, their ppids: 
+[m2b #14] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 115 0 
+[m2b #14] d3sup: closed by cli-exit: none left passes=2 killed=119 first_pass_descendants=119 direct_children=119
+[m2b #15] fake CLI processes still alive after the close: 0
+[m2b #15] survivors by ps: d3hb=0, their ppids: 
+[m2b #15] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2b #15] d3sup: closed by cli-exit: none left passes=2 killed=117 first_pass_descendants=117 direct_children=117
+[m2b #16] fake CLI processes still alive after the close: 0
+[m2b #16] survivors by ps: d3hb=0, their ppids: 
+[m2b #16] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2b #16] d3sup: closed by cli-exit: none left passes=2 killed=118 first_pass_descendants=118 direct_children=118
+[m2b #17] fake CLI processes still alive after the close: 0
+[m2b #17] survivors by ps: d3hb=0, their ppids: 
+[m2b #17] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2b #17] d3sup: closed by cli-exit: none left passes=2 killed=117 first_pass_descendants=117 direct_children=117
+[m2b #18] fake CLI processes still alive after the close: 0
+[m2b #18] survivors by ps: d3hb=0, their ppids: 
+[m2b #18] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2b #18] d3sup: closed by cli-exit: none left passes=3 killed=136 first_pass_descendants=118 direct_children=118
+[m2b #19] fake CLI processes still alive after the close: 0
+[m2b #19] survivors by ps: d3hb=0, their ppids: 
+[m2b #19] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m2b #19] d3sup: closed by cli-exit: none left passes=2 killed=118 first_pass_descendants=118 direct_children=118
+[m2b #20] fake CLI processes still alive after the close: 0
+[m2b #20] survivors by ps: d3hb=0, their ppids: 
+[m2b #20] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m2b #20] d3sup: closed by cli-exit: none left passes=3 killed=128 first_pass_descendants=117 direct_children=117
+[m3 #1] before close: d3hb processes=114; daemon c pid=16244 ppid=309 (Relay(310)      /init) sid=16244 pgid=16244 (cli pgid=n/a)
+[m3 #1] cgroup of daemon c: 0::/user.slice/user-1000.slice/user@1000.service/app.slice/d3run-399-1.scope; scope ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/d3run-399-1.scope ActiveState=active
+[m3 #1] d3hb processes whose /proc/<pid>/cgroup is the scope: 121 of 121 (all of them have a different parent than the CLI: orphans are adopted by the WSL relay)
+    [m3 #1 table]   16236     399     310     310 S+   bash            /usr/bin/bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m3-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m3 #1 table]   16240   16236     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m3-1/a.hb
+    [m3 #1 table]   16241   16236     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m3-1/b.hb
+    [m3 #1 table]   16244     309   16244   16244 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb daemon /tmp/d3run.ivhtVz/m3-1/c.hb
+    [m3 #1 table]   16245   16236     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+    [m3 #1 table]   16247     309   16247   16247 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+    [m3 #1 table]   16250     309   16250   16250 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+    [m3 #1 table]   16252     309   16252   16252 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+    [m3 #1 table]   16254     309   16254   16254 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+    [m3 #1 table]   16256     309   16256   16256 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+    [m3 #1 table]   16258     309   16258   16258 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+    [m3 #1 table]   16260     309   16260   16260 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m3-1/d 2000 5000
+[m3 #1] close stderr: 
+[m3 #1] fake CLI processes still alive after the close: 0
+[m3 #1] survivors by ps: d3hb=0, their ppids: 
+[m3 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 142 0 
+[m3 #2] close stderr: 
+[m3 #2] fake CLI processes still alive after the close: 0
+[m3 #2] survivors by ps: d3hb=0, their ppids: 
+[m3 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m3 #3] close stderr: 
+[m3 #3] fake CLI processes still alive after the close: 0
+[m3 #3] survivors by ps: d3hb=0, their ppids: 
+[m3 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m3 #4] close stderr: 
+[m3 #4] fake CLI processes still alive after the close: 0
+[m3 #4] survivors by ps: d3hb=0, their ppids: 
+[m3 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m3 #5] close stderr: 
+[m3 #5] fake CLI processes still alive after the close: 0
+[m3 #5] survivors by ps: d3hb=0, their ppids: 
+[m3 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m3 #6] close stderr: 
+[m3 #6] fake CLI processes still alive after the close: 0
+[m3 #6] survivors by ps: d3hb=0, their ppids: 
+[m3 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m3 #7] close stderr: 
+[m3 #7] fake CLI processes still alive after the close: 0
+[m3 #7] survivors by ps: d3hb=0, their ppids: 
+[m3 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 118 0 
+[m3 #8] close stderr: 
+[m3 #8] fake CLI processes still alive after the close: 0
+[m3 #8] survivors by ps: d3hb=0, their ppids: 
+[m3 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m3 #9] close stderr: 
+[m3 #9] fake CLI processes still alive after the close: 0
+[m3 #9] survivors by ps: d3hb=0, their ppids: 
+[m3 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m3 #10] close stderr: 
+[m3 #10] fake CLI processes still alive after the close: 0
+[m3 #10] survivors by ps: d3hb=0, their ppids: 
+[m3 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m3 #11] close stderr: 
+[m3 #11] fake CLI processes still alive after the close: 0
+[m3 #11] survivors by ps: d3hb=0, their ppids: 
+[m3 #11] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 106 0 
+[m3 #12] close stderr: 
+[m3 #12] fake CLI processes still alive after the close: 0
+[m3 #12] survivors by ps: d3hb=0, their ppids: 
+[m3 #12] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m3 #13] close stderr: 
+[m3 #13] fake CLI processes still alive after the close: 0
+[m3 #13] survivors by ps: d3hb=0, their ppids: 
+[m3 #13] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 115 0 
+[m3 #14] close stderr: 
+[m3 #14] fake CLI processes still alive after the close: 0
+[m3 #14] survivors by ps: d3hb=0, their ppids: 
+[m3 #14] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m3 #15] close stderr: 
+[m3 #15] fake CLI processes still alive after the close: 0
+[m3 #15] survivors by ps: d3hb=0, their ppids: 
+[m3 #15] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m3 #16] close stderr: 
+[m3 #16] fake CLI processes still alive after the close: 0
+[m3 #16] survivors by ps: d3hb=0, their ppids: 
+[m3 #16] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m3 #17] close stderr: 
+[m3 #17] fake CLI processes still alive after the close: 0
+[m3 #17] survivors by ps: d3hb=0, their ppids: 
+[m3 #17] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m3 #18] close stderr: 
+[m3 #18] fake CLI processes still alive after the close: 0
+[m3 #18] survivors by ps: d3hb=0, their ppids: 
+[m3 #18] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m3 #19] close stderr: 
+[m3 #19] fake CLI processes still alive after the close: 0
+[m3 #19] survivors by ps: d3hb=0, their ppids: 
+[m3 #19] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m3 #20] close stderr: 
+[m3 #20] fake CLI processes still alive after the close: 0
+[m3 #20] survivors by ps: d3hb=0, their ppids: 
+[m3 #20] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m4 #1] before close: d3hb processes=117; daemon c pid=21721 ppid=309 (Relay(310)      /init) sid=21721 pgid=21721 (cli pgid=n/a)
+    [m4 #1 table]   21711     399     310     310 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh /tmp/d3run.ivhtVz/m4-1 /tmp/d3run.ivhtVz/bin/d3hb poll
+    [m4 #1 table]   21715   21711     310     310 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m4-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m4 #1 table]   21717   21715     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m4-1/a.hb
+    [m4 #1 table]   21718   21715     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m4-1/b.hb
+    [m4 #1 table]   21721     309   21721   21721 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb daemon /tmp/d3run.ivhtVz/m4-1/c.hb
+    [m4 #1 table]   21722   21715     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m4-1/d 2000 5000
+    [m4 #1 table]   21724     309   21724   21724 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m4-1/d 2000 5000
+    [m4 #1 table]   21726     309   21726   21726 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m4-1/d 2000 5000
+    [m4 #1 table]   21729     309   21729   21729 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m4-1/d 2000 5000
+    [m4 #1 table]   21731     309   21731   21731 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m4-1/d 2000 5000
+    [m4 #1 table]   21733     309   21733   21733 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m4-1/d 2000 5000
+    [m4 #1 table]   21735     309   21735   21735 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m4-1/d 2000 5000
+[m4 #1] fake CLI processes still alive after the close: 0
+[m4 #1] survivors by ps: d3hb=150, their ppids:  150 309 
+[m4 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 149 149 
+[m4 #1] poll scans=16 avg_scan_us=7944 max_start_to_start_us=50414 recorded=4 killed=4 
+[m4 #2] fake CLI processes still alive after the close: 0
+[m4 #2] survivors by ps: d3hb=124, their ppids:  124 309 
+[m4 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 123 123 
+[m4 #2] poll scans=13 avg_scan_us=6821 max_start_to_start_us=50257 recorded=4 killed=4 
+[m4 #3] fake CLI processes still alive after the close: 0
+[m4 #3] survivors by ps: d3hb=121, their ppids:  121 309 
+[m4 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 120 120 
+[m4 #3] poll scans=13 avg_scan_us=6496 max_start_to_start_us=50435 recorded=4 killed=4 
+[m4 #4] fake CLI processes still alive after the close: 0
+[m4 #4] survivors by ps: d3hb=122, their ppids:  122 309 
+[m4 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 121 121 
+[m4 #4] poll scans=13 avg_scan_us=6698 max_start_to_start_us=50353 recorded=4 killed=4 
+[m4 #5] fake CLI processes still alive after the close: 0
+[m4 #5] survivors by ps: d3hb=122, their ppids:  122 309 
+[m4 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 121 121 
+[m4 #5] poll scans=13 avg_scan_us=6443 max_start_to_start_us=50435 recorded=4 killed=4 
+[m4 #6] fake CLI processes still alive after the close: 0
+[m4 #6] survivors by ps: d3hb=122, their ppids:  122 309 
+[m4 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 121 121 
+[m4 #6] poll scans=13 avg_scan_us=6537 max_start_to_start_us=50441 recorded=4 killed=4 
+[m4 #7] fake CLI processes still alive after the close: 0
+[m4 #7] survivors by ps: d3hb=122, their ppids:  122 309 
+[m4 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 121 121 
+[m4 #7] poll scans=13 avg_scan_us=6703 max_start_to_start_us=50389 recorded=4 killed=4 
+[m4 #8] fake CLI processes still alive after the close: 0
+[m4 #8] survivors by ps: d3hb=122, their ppids:  122 309 
+[m4 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 121 121 
+[m4 #8] poll scans=13 avg_scan_us=6639 max_start_to_start_us=50456 recorded=4 killed=4 
+[m4 #9] fake CLI processes still alive after the close: 0
+[m4 #9] survivors by ps: d3hb=119, their ppids:  119 309 
+[m4 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 118 118 
+[m4 #9] poll scans=13 avg_scan_us=10050 max_start_to_start_us=50339 recorded=4 killed=4 
+[m4 #10] fake CLI processes still alive after the close: 0
+[m4 #10] survivors by ps: d3hb=124, their ppids:  124 309 
+[m4 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 123 123 
+[m4 #10] poll scans=13 avg_scan_us=6710 max_start_to_start_us=50357 recorded=4 killed=4 
+[m4 #11] fake CLI processes still alive after the close: 0
+[m4 #11] survivors by ps: d3hb=123, their ppids:  123 309 
+[m4 #11] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 122 122 
+[m4 #11] poll scans=13 avg_scan_us=6988 max_start_to_start_us=50366 recorded=4 killed=4 
+[m4 #12] fake CLI processes still alive after the close: 0
+[m4 #12] survivors by ps: d3hb=123, their ppids:  123 309 
+[m4 #12] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 122 122 
+[m4 #12] poll scans=13 avg_scan_us=6858 max_start_to_start_us=50413 recorded=4 killed=4 
+[m4 #13] fake CLI processes still alive after the close: 0
+[m4 #13] survivors by ps: d3hb=121, their ppids:  121 309 
+[m4 #13] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 120 120 
+[m4 #13] poll scans=13 avg_scan_us=7447 max_start_to_start_us=50530 recorded=4 killed=4 
+[m4 #14] fake CLI processes still alive after the close: 0
+[m4 #14] survivors by ps: d3hb=121, their ppids:  121 309 
+[m4 #14] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 120 120 
+[m4 #14] poll scans=13 avg_scan_us=7007 max_start_to_start_us=50408 recorded=4 killed=4 
+[m4 #15] fake CLI processes still alive after the close: 0
+[m4 #15] survivors by ps: d3hb=123, their ppids:  123 309 
+[m4 #15] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 122 122 
+[m4 #15] poll scans=13 avg_scan_us=7230 max_start_to_start_us=50378 recorded=4 killed=4 
+[m4 #16] fake CLI processes still alive after the close: 0
+[m4 #16] survivors by ps: d3hb=121, their ppids:  121 309 
+[m4 #16] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 120 120 
+[m4 #16] poll scans=13 avg_scan_us=7570 max_start_to_start_us=50422 recorded=4 killed=4 
+[m4 #17] fake CLI processes still alive after the close: 0
+[m4 #17] survivors by ps: d3hb=122, their ppids:  122 309 
+[m4 #17] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 121 121 
+[m4 #17] poll scans=13 avg_scan_us=7624 max_start_to_start_us=50389 recorded=4 killed=4 
+[m4 #18] fake CLI processes still alive after the close: 0
+[m4 #18] survivors by ps: d3hb=122, their ppids:  122 309 
+[m4 #18] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 121 121 
+[m4 #18] poll scans=13 avg_scan_us=7324 max_start_to_start_us=50398 recorded=4 killed=4 
+[m4 #19] fake CLI processes still alive after the close: 0
+[m4 #19] survivors by ps: d3hb=121, their ppids:  121 309 
+[m4 #19] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 120 120 
+[m4 #19] poll scans=13 avg_scan_us=7168 max_start_to_start_us=50444 recorded=4 killed=4 
+[m4 #20] fake CLI processes still alive after the close: 0
+[m4 #20] survivors by ps: d3hb=121, their ppids:  121 309 
+[m4 #20] RESULT a 1 0 RESULT b 1 0 RESULT c 1 1 RESULT d 120 120 
+[m4 #20] poll scans=13 avg_scan_us=6533 max_start_to_start_us=50400 recorded=4 killed=4 
+[m5 #1] before close: d3hb processes=130; daemon c pid=27406 ppid=309 (Relay(310)      /init) sid=27406 pgid=27406 (cli pgid=n/a)
+    [m5 #1 table]   27396     399     310     310 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh /tmp/d3run.ivhtVz/m5-1 /tmp/d3run.ivhtVz/bin/d3hb envtag
+    [m5 #1 table]   27400   27396     310     310 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m5-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m5 #1 table]   27402   27400     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m5-1/a.hb
+    [m5 #1 table]   27403   27400     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m5-1/b.hb
+    [m5 #1 table]   27406     309   27406   27406 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb daemon /tmp/d3run.ivhtVz/m5-1/c.hb
+    [m5 #1 table]   27407   27400     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m5-1/d 2000 5000
+    [m5 #1 table]   27409     309   27409   27409 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m5-1/d 2000 5000
+    [m5 #1 table]   27412     309   27412   27412 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m5-1/d 2000 5000
+    [m5 #1 table]   27414     309   27414   27414 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m5-1/d 2000 5000
+    [m5 #1 table]   27416     309   27416   27416 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m5-1/d 2000 5000
+    [m5 #1 table]   27418     309   27418   27418 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m5-1/d 2000 5000
+    [m5 #1 table]   27420     309   27420   27420 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m5-1/d 2000 5000
+[m5 #1] fake CLI processes still alive after the close: 0
+[m5 #1] survivors by ps: d3hb=0, their ppids: 
+[m5 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 138 0 
+[m5 #1] envtag passes=3 
+[m5 #2] fake CLI processes still alive after the close: 0
+[m5 #2] survivors by ps: d3hb=0, their ppids: 
+[m5 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 121 0 
+[m5 #2] envtag passes=3 
+[m5 #3] fake CLI processes still alive after the close: 0
+[m5 #3] survivors by ps: d3hb=0, their ppids: 
+[m5 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 121 0 
+[m5 #3] envtag passes=2 
+[m5 #4] fake CLI processes still alive after the close: 0
+[m5 #4] survivors by ps: d3hb=0, their ppids: 
+[m5 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 126 0 
+[m5 #4] envtag passes=3 
+[m5 #5] fake CLI processes still alive after the close: 0
+[m5 #5] survivors by ps: d3hb=0, their ppids: 
+[m5 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 121 0 
+[m5 #5] envtag passes=3 
+[m5 #6] fake CLI processes still alive after the close: 0
+[m5 #6] survivors by ps: d3hb=0, their ppids: 
+[m5 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 119 0 
+[m5 #6] envtag passes=2 
+[m5 #7] fake CLI processes still alive after the close: 0
+[m5 #7] survivors by ps: d3hb=0, their ppids: 
+[m5 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 121 0 
+[m5 #7] envtag passes=3 
+[m5 #8] fake CLI processes still alive after the close: 0
+[m5 #8] survivors by ps: d3hb=0, their ppids: 
+[m5 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 119 0 
+[m5 #8] envtag passes=2 
+[m5 #9] fake CLI processes still alive after the close: 0
+[m5 #9] survivors by ps: d3hb=0, their ppids: 
+[m5 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 119 0 
+[m5 #9] envtag passes=2 
+[m5 #10] fake CLI processes still alive after the close: 0
+[m5 #10] survivors by ps: d3hb=0, their ppids: 
+[m5 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 121 0 
+[m5 #10] envtag passes=2 
+[m5 #11] fake CLI processes still alive after the close: 0
+[m5 #11] survivors by ps: d3hb=0, their ppids: 
+[m5 #11] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 123 0 
+[m5 #11] envtag passes=3 
+[m5 #12] fake CLI processes still alive after the close: 0
+[m5 #12] survivors by ps: d3hb=0, their ppids: 
+[m5 #12] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 118 0 
+[m5 #12] envtag passes=2 
+[m5 #13] fake CLI processes still alive after the close: 0
+[m5 #13] survivors by ps: d3hb=0, their ppids: 
+[m5 #13] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 122 0 
+[m5 #13] envtag passes=3 
+[m5 #14] fake CLI processes still alive after the close: 0
+[m5 #14] survivors by ps: d3hb=0, their ppids: 
+[m5 #14] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 131 0 
+[m5 #14] envtag passes=3 
+[m5 #15] fake CLI processes still alive after the close: 0
+[m5 #15] survivors by ps: d3hb=0, their ppids: 
+[m5 #15] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 127 0 
+[m5 #15] envtag passes=3 
+[m5 #16] fake CLI processes still alive after the close: 0
+[m5 #16] survivors by ps: d3hb=0, their ppids: 
+[m5 #16] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 119 0 
+[m5 #16] envtag passes=2 
+[m5 #17] fake CLI processes still alive after the close: 0
+[m5 #17] survivors by ps: d3hb=0, their ppids: 
+[m5 #17] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 120 0 
+[m5 #17] envtag passes=2 
+[m5 #18] fake CLI processes still alive after the close: 0
+[m5 #18] survivors by ps: d3hb=0, their ppids: 
+[m5 #18] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 120 0 
+[m5 #18] envtag passes=2 
+[m5 #19] fake CLI processes still alive after the close: 0
+[m5 #19] survivors by ps: d3hb=0, their ppids: 
+[m5 #19] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 122 0 
+[m5 #19] envtag passes=3 
+[m5 #20] fake CLI processes still alive after the close: 0
+[m5 #20] survivors by ps: d3hb=0, their ppids: 
+[m5 #20] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 120 0 
+[m5 #20] envtag passes=2 
+[m6 #1] before close: d3hb processes=121; daemon c pid=33235 ppid=33229 (bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m6-1 /tmp/d3run.ivhtVz/bin/d3hb) sid=33235 pgid=33235 (cli pgid=n/a)
+[m6 #1] daemon c inside the namespace: NSpid:	33235	6 (host pid first, pid inside the namespace last)
+    [m6 #1 table]   33227     399     310     310 S+   unshare         unshare --user --map-root-user --pid --fork --kill-child --mount-proc bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m6-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m6 #1 table]   33229   33227     310     310 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.ivhtVz/m6-1 /tmp/d3run.ivhtVz/bin/d3hb
+    [m6 #1 table]   33231   33229     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m6-1/a.hb
+    [m6 #1 table]   33232   33229     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb beat /tmp/d3run.ivhtVz/m6-1/b.hb
+    [m6 #1 table]   33235   33229   33235   33235 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb daemon /tmp/d3run.ivhtVz/m6-1/c.hb
+    [m6 #1 table]   33236   33229     310     310 S+   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m6-1/d 2000 5000
+    [m6 #1 table]   33238   33229   33238   33238 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m6-1/d 2000 5000
+    [m6 #1 table]   33240   33229   33240   33240 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m6-1/d 2000 5000
+    [m6 #1 table]   33242   33229   33242   33242 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m6-1/d 2000 5000
+    [m6 #1 table]   33245   33229   33245   33245 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m6-1/d 2000 5000
+    [m6 #1 table]   33247   33229   33247   33247 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m6-1/d 2000 5000
+    [m6 #1 table]   33249   33229   33249   33249 Ss   d3hb            /tmp/d3run.ivhtVz/bin/d3hb loop /tmp/d3run.ivhtVz/m6-1/d 2000 5000
+[m6 #1] fake CLI processes still alive after the close: 0
+[m6 #1] survivors by ps: d3hb=0, their ppids: 
+[m6 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 125 0 
+[m6 #2] fake CLI processes still alive after the close: 0
+[m6 #2] survivors by ps: d3hb=0, their ppids: 
+[m6 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 116 0 
+[m6 #3] fake CLI processes still alive after the close: 0
+[m6 #3] survivors by ps: d3hb=0, their ppids: 
+[m6 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m6 #4] fake CLI processes still alive after the close: 0
+[m6 #4] survivors by ps: d3hb=0, their ppids: 
+[m6 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 135 0 
+[m6 #5] fake CLI processes still alive after the close: 0
+[m6 #5] survivors by ps: d3hb=0, their ppids: 
+[m6 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m6 #6] fake CLI processes still alive after the close: 0
+[m6 #6] survivors by ps: d3hb=0, their ppids: 
+[m6 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m6 #7] fake CLI processes still alive after the close: 0
+[m6 #7] survivors by ps: d3hb=0, their ppids: 
+[m6 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 110 0 
+[m6 #8] fake CLI processes still alive after the close: 0
+[m6 #8] survivors by ps: d3hb=0, their ppids: 
+[m6 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 136 0 
+[m6 #9] fake CLI processes still alive after the close: 0
+[m6 #9] survivors by ps: d3hb=0, their ppids: 
+[m6 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m6 #10] fake CLI processes still alive after the close: 0
+[m6 #10] survivors by ps: d3hb=0, their ppids: 
+[m6 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m6 #11] fake CLI processes still alive after the close: 0
+[m6 #11] survivors by ps: d3hb=0, their ppids: 
+[m6 #11] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m6 #12] fake CLI processes still alive after the close: 0
+[m6 #12] survivors by ps: d3hb=0, their ppids: 
+[m6 #12] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 133 0 
+[m6 #13] fake CLI processes still alive after the close: 0
+[m6 #13] survivors by ps: d3hb=0, their ppids: 
+[m6 #13] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 113 0 
+[m6 #14] fake CLI processes still alive after the close: 0
+[m6 #14] survivors by ps: d3hb=0, their ppids: 
+[m6 #14] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 115 0 
+[m6 #15] fake CLI processes still alive after the close: 0
+[m6 #15] survivors by ps: d3hb=0, their ppids: 
+[m6 #15] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 125 0 
+[m6 #16] fake CLI processes still alive after the close: 0
+[m6 #16] survivors by ps: d3hb=0, their ppids: 
+[m6 #16] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m6 #17] fake CLI processes still alive after the close: 0
+[m6 #17] survivors by ps: d3hb=0, their ppids: 
+[m6 #17] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 119 0 
+[m6 #18] fake CLI processes still alive after the close: 0
+[m6 #18] survivors by ps: d3hb=0, their ppids: 
+[m6 #18] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 114 0 
+[m6 #19] fake CLI processes still alive after the close: 0
+[m6 #19] survivors by ps: d3hb=0, their ppids: 
+[m6 #19] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 112 0 
+[m6 #20] fake CLI processes still alive after the close: 0
+[m6 #20] survivors by ps: d3hb=0, their ppids: 
+[m6 #20] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 111 0 

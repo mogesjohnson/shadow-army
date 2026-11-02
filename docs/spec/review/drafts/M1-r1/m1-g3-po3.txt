@@ -1,0 +1,6 @@
+- **PO-3** (M1; X) **The Monarch's credential.**
+  - The mod makes a secret of 32 random bytes each time it starts the post office, and passes it on the post office's standard input.
+  - The secret MUST NOT be written to disk, a command line, an environment variable, or anywhere a soldier can read. Soldiers run as the same user, so a file only the owner can read is not enough.
+  - Every command from the mod presents it. A wrong or missing secret is refused. The first refusal is reported in full; after that, at most one report a minute, with the count since the last one.
+  - The event stream, with every soldier's turns, reaches the mod only on the post office's standard output.
+  - The secret is never printed whole; at most its last four characters are shown.

@@ -1,0 +1,186 @@
+D-2 lease timing: discrete-event simulation (fake clock, integer microseconds, seeded)
+seed 20261014; 1000 phases per stall/death case, 20 eight-hour runs, 12 sleep phases per sleep case
+Timing A: renew 10 s, expire 30 s.  Timing B: renew 5 s, expire 20 s.  Delivery delay of each renewal: uniform 1-50 ms.
+K1 naive/sleep counted (= Codex lease.ts)   K2 monotonic/sleep not counted   K3 suspend-aware (1 s tick, gap > 3 ticks moves the deadline)
+Variants: K1L lenient renew | K3S K3 + strict renew | K3N K3 on a clock that stops in sleep | K0 control, wall-clock lease
+
+# SUMMARY (false expiry = the lease lapsed although Claude Code was alive and would have renewed)
+| scenario                                                                         | A K1               | A K2               | A K3               | B K1               | B K2               | B K3               |
+|----------------------------------------------------------------------------------|--------------------|--------------------|--------------------|--------------------|--------------------|--------------------|
+| 1. 8 h normal running: false expiries (of 20 runs)                               | 0/20               | 0/20               | 0/20               | 0/20               | 0/20               | 0/20               |
+| 2. sleep 1 min / 10 min / 8 h, both orders, delay 0/1/3 s: lapses                | 216/216            | 0/216              | 0/216              | 216/216            | 0/216              | 0/216              |
+| 3. Claude Code stalls 5 s: false expiries (of 1000)                              | 0/1000             | 0/1000             | 0/1000             | 0/1000             | 0/1000             | 0/1000             |
+| 3. Claude Code stalls 15 s: false expiries (of 1000)                             | 0/1000             | 0/1000             | 0/1000             | 1/1000             | 1/1000             | 0/1000             |
+| 3. Claude Code stalls 25 s: false expiries (of 1000)                             | 501/1000           | 501/1000           | 448/1000           | 1000/1000          | 1000/1000          | 1000/1000          |
+| 3. Claude Code stalls 35 s: false expiries (of 1000)                             | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          |
+| 3. Claude Code stalls 60 s: false expiries (of 1000)                             | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          |
+| 4. post office stalls 5 s: false expiries (of 1000)                              | 0/1000             | 0/1000             | 0/1000             | 0/1000             | 0/1000             | 0/1000             |
+| 4. post office stalls 15 s: false expiries (of 1000)                             | 0/1000             | 0/1000             | 0/1000             | 0/1000             | 0/1000             | 0/1000             |
+| 4. post office stalls 25 s: false expiries (of 1000)                             | 498/1000           | 498/1000           | 0/1000             | 1000/1000          | 1000/1000          | 0/1000             |
+| 4. post office stalls 35 s: false expiries (of 1000)                             | 1000/1000          | 1000/1000          | 0/1000             | 1000/1000          | 1000/1000          | 0/1000             |
+| 5. cleanup after Claude Code dies, min / mean / max (s)                          | 20.0 / 25.0 / 30.0 | 20.0 / 25.0 / 30.0 | 20.3 / 25.5 / 31.0 | 15.0 / 17.5 / 20.0 | 15.0 / 17.5 / 20.0 | 15.1 / 18.0 / 20.9 |
+| 6. wall clock +/-1 h: false expiries; cleanup change; wall reads                 | 0; 0; 0            | 0; 0; 0            | 0; 0; 0            | 0; 0; 0            | 0; 0; 0            | 0; 0; 0            |
+| 7. ctrl+z 2 min, post office keeps running: lapses (of 1000)                     | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          | 1000/1000          |
+| 7b. ctrl+z 2 min, post office stopped too (same process group): lapses (of 2000) | 2000/2000          | 2000/2000          | 0/2000             | 2000/2000          | 2000/2000          | 0/2000             |
+| renewals per hour                                                                | 360                | 360                | 360                | 720                | 720                | 720                |
+
+## S1. Eight hours of normal running
+| timing | model | runs | false expiries | renewals/run | renewals/hour | longest silence between renewals | margin to ttl |
+|--------|-------|------|----------------|--------------|---------------|----------------------------------|---------------|
+| A      | K1    | 20   | 0              | 2879         | 360           | 10.05 s                          | 19.95 s       |
+| A      | K2    | 20   | 0              | 2879         | 360           | 10.05 s                          | 19.95 s       |
+| A      | K3    | 20   | 0              | 2879         | 360           | 10.05 s                          | 19.95 s       |
+| B      | K1    | 20   | 0              | 5759         | 720           | 5.05 s                           | 14.95 s       |
+| B      | K2    | 20   | 0              | 5759         | 720           | 5.05 s                           | 14.95 s       |
+| B      | K3    | 20   | 0              | 5759         | 720           | 5.05 s                           | 14.95 s       |
+
+## S2. The computer sleeps with both processes frozen, then wakes (cell = lapses / runs; every run had a live Claude Code)
+order = which process's overdue timers run first after the wake; delay = extra delay of the mod's first renewal after the wake.
+| sleep  | order     | delay | A K1  | A K2 | A K3 | B K1  | B K2 | B K3 |
+|--------|-----------|-------|-------|------|------|-------|------|------|
+| 1 min  | po-first  | 0 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 1 min  | po-first  | 1 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 1 min  | po-first  | 3 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 1 min  | mod-first | 0 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 1 min  | mod-first | 1 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 1 min  | mod-first | 3 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 10 min | po-first  | 0 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 10 min | po-first  | 1 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 10 min | po-first  | 3 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 10 min | mod-first | 0 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 10 min | mod-first | 1 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 10 min | mod-first | 3 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 8 h    | po-first  | 0 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 8 h    | po-first  | 1 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 8 h    | po-first  | 3 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 8 h    | mod-first | 0 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 8 h    | mod-first | 1 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+| 8 h    | mod-first | 3 s   | 12/12 | 0/12 | 0/12 | 12/12 | 0/12 | 0/12 |
+
+S2 variants (which design choice rescues or breaks a model):
+| order     | delay (all 3 sleeps) | A K1L | A K3S | A K3N | B K1L | B K3S | B K3N |
+|-----------|----------------------|-------|-------|-------|-------|-------|-------|
+| po-first  | 0 s                  | 36/36 | 0/36  | 0/36  | 36/36 | 0/36  | 0/36  |
+| po-first  | 1 s                  | 36/36 | 0/36  | 0/36  | 36/36 | 0/36  | 0/36  |
+| po-first  | 3 s                  | 36/36 | 0/36  | 0/36  | 36/36 | 0/36  | 0/36  |
+| mod-first | 0 s                  | 0/36  | 36/36 | 0/36  | 0/36  | 36/36 | 0/36  |
+| mod-first | 1 s                  | 36/36 | 0/36  | 0/36  | 36/36 | 0/36  | 0/36  |
+| mod-first | 3 s                  | 36/36 | 0/36  | 0/36  | 36/36 | 0/36  | 0/36  |
+
+## S3. Claude Code's event loop stalls (no renewals) while the post office runs (cell = false expiries / trials)
+No sleep and the post office runs normally, so K1, K2 and K3 see the same thing; K3 can lag K1 by under a tick.
+| stall | A K1      | A K2      | A K3      | B K1      | B K2      | B K3      |
+|-------|-----------|-----------|-----------|-----------|-----------|-----------|
+| 5 s   | 0/1000    | 0/1000    | 0/1000    | 0/1000    | 0/1000    | 0/1000    |
+| 15 s  | 0/1000    | 0/1000    | 0/1000    | 1/1000    | 1/1000    | 0/1000    |
+| 25 s  | 501/1000  | 501/1000  | 448/1000  | 1000/1000 | 1000/1000 | 1000/1000 |
+| 35 s  | 1000/1000 | 1000/1000 | 1000/1000 | 1000/1000 | 1000/1000 | 1000/1000 |
+| 60 s  | 1000/1000 | 1000/1000 | 1000/1000 | 1000/1000 | 1000/1000 | 1000/1000 |
+
+## S4. The post office's event loop stalls while Claude Code runs (cell = false expiries / trials)
+| stall | on resume    | A K1      | A K2      | A K3   | B K1      | B K2      | B K3   |
+|-------|--------------|-----------|-----------|--------|-----------|-----------|--------|
+| 5 s   | timers-first | 0/1000    | 0/1000    | 0/1000 | 0/1000    | 0/1000    | 0/1000 |
+| 5 s   | io-first     | 0/1000    | 0/1000    | 0/1000 | 0/1000    | 0/1000    | 0/1000 |
+| 15 s  | timers-first | 0/1000    | 0/1000    | 0/1000 | 0/1000    | 0/1000    | 0/1000 |
+| 15 s  | io-first     | 0/1000    | 0/1000    | 0/1000 | 0/1000    | 0/1000    | 0/1000 |
+| 25 s  | timers-first | 498/1000  | 498/1000  | 0/1000 | 1000/1000 | 1000/1000 | 0/1000 |
+| 25 s  | io-first     | 498/1000  | 498/1000  | 0/1000 | 1000/1000 | 1000/1000 | 0/1000 |
+| 35 s  | timers-first | 1000/1000 | 1000/1000 | 0/1000 | 1000/1000 | 1000/1000 | 0/1000 |
+| 35 s  | io-first     | 1000/1000 | 1000/1000 | 0/1000 | 1000/1000 | 1000/1000 | 0/1000 |
+
+S4 variants:
+| stall | on resume    | A K1L     | A K3S     | B K1L     | B K3S     |
+|-------|--------------|-----------|-----------|-----------|-----------|
+| 5 s   | timers-first | 0/1000    | 0/1000    | 0/1000    | 0/1000    |
+| 5 s   | io-first     | 0/1000    | 0/1000    | 0/1000    | 0/1000    |
+| 15 s  | timers-first | 0/1000    | 0/1000    | 0/1000    | 0/1000    |
+| 15 s  | io-first     | 0/1000    | 0/1000    | 0/1000    | 0/1000    |
+| 25 s  | timers-first | 498/1000  | 0/1000    | 1000/1000 | 0/1000    |
+| 25 s  | io-first     | 0/1000    | 498/1000  | 0/1000    | 1000/1000 |
+| 35 s  | timers-first | 1000/1000 | 0/1000    | 1000/1000 | 0/1000    |
+| 35 s  | io-first     | 0/1000    | 1000/1000 | 0/1000    | 1000/1000 |
+
+## S5. Claude Code dies; the parent watch failed, so the lease is the only signal (cleanup latency over 1000 random death times)
+| timing | model | min     | mean    | max     | never cleaned |
+|--------|-------|---------|---------|---------|---------------|
+| A      | K1    | 20.03 s | 25.02 s | 30.02 s | 0             |
+| A      | K2    | 20.03 s | 25.02 s | 30.02 s | 0             |
+| A      | K3    | 20.27 s | 25.52 s | 30.97 s | 0             |
+| B      | K1    | 15.03 s | 17.53 s | 20.03 s | 0             |
+| B      | K2    | 15.03 s | 17.53 s | 20.03 s | 0             |
+| B      | K3    | 15.13 s | 18.03 s | 20.92 s | 0             |
+
+## S6. The wall clock jumps by one hour
+(a) Claude Code stays alive for 2 h and the clock steps once. (b) Claude Code dies and the clock steps 1 s earlier; cleanup latency with and without the step.
+| timing | model | step | false expiry (a) | cleanup without step (b) | cleanup with step (b) | wall-clock reads |
+|--------|-------|------|------------------|--------------------------|-----------------------|------------------|
+| A      | K1    | +1 h | no               | 27.04 s                  | 27.04 s               | 0                |
+| A      | K1    | -1 h | no               | 27.04 s                  | 27.04 s               | 0                |
+| A      | K2    | +1 h | no               | 27.04 s                  | 27.04 s               | 0                |
+| A      | K2    | -1 h | no               | 27.04 s                  | 27.04 s               | 0                |
+| A      | K3    | +1 h | no               | 27.30 s                  | 27.30 s               | 0                |
+| A      | K3    | -1 h | no               | 27.30 s                  | 27.30 s               | 0                |
+| A      | K0    | +1 h | YES              | 27.04 s                  | 27.04 s               | 634              |
+| A      | K0    | -1 h | no               | 27.04 s                  | 1.01 h                | 1441             |
+| B      | K1    | +1 h | no               | 17.03 s                  | 17.03 s               | 0                |
+| B      | K1    | -1 h | no               | 17.03 s                  | 17.03 s               | 0                |
+| B      | K2    | +1 h | no               | 17.03 s                  | 17.03 s               | 0                |
+| B      | K2    | -1 h | no               | 17.03 s                  | 17.03 s               | 0                |
+| B      | K3    | +1 h | no               | 17.96 s                  | 17.96 s               | 0                |
+| B      | K3    | -1 h | no               | 17.96 s                  | 17.96 s               | 0                |
+| B      | K0    | +1 h | YES              | 17.03 s                  | 17.03 s               | 1612             |
+| B      | K0    | -1 h | no               | 17.03 s                  | 1.00 h                | 2881             |
+
+K1, K2 and K3 read only the monotonic clock (performance.now() in lease.ts); K0 is the control that proves the test would notice.
+
+## S7. Claude Code is stopped with ctrl+z for 2 minutes
+(a) the post office keeps running (it is in its own process group)
+| timing | model | lapses / trials | ctrl+z to lapse: min | mean    | max     |
+|--------|-------|-----------------|----------------------|---------|---------|
+| A      | K1    | 1000/1000       | 20.03 s              | 25.03 s | 30.04 s |
+| A      | K2    | 1000/1000       | 20.03 s              | 25.03 s | 30.04 s |
+| A      | K3    | 1000/1000       | 20.24 s              | 25.52 s | 30.96 s |
+| B      | K1    | 1000/1000       | 15.01 s              | 17.53 s | 20.03 s |
+| B      | K2    | 1000/1000       | 15.01 s              | 17.53 s | 20.03 s |
+| B      | K3    | 1000/1000       | 15.02 s              | 18.02 s | 20.93 s |
+
+(b) the post office shares the terminal's process group, so it is stopped as well and both resume together (cell = lapses / trials)
+| resume    | A K1      | A K2      | A K3   | A K1L     | A K3S     | B K1      | B K2      | B K3   | B K1L     | B K3S     |
+|-----------|-----------|-----------|--------|-----------|-----------|-----------|-----------|--------|-----------|-----------|
+| po-first  | 1000/1000 | 1000/1000 | 0/1000 | 1000/1000 | 0/1000    | 1000/1000 | 1000/1000 | 0/1000 | 1000/1000 | 0/1000    |
+| mod-first | 1000/1000 | 1000/1000 | 0/1000 | 0/1000    | 1000/1000 | 1000/1000 | 1000/1000 | 0/1000 | 0/1000    | 1000/1000 |
+
+## X1. Tolerance thresholds found by bisection (600 random phases each; "first" = shortest event that ever lapses, "always" = shortest that always lapses)
+| event                                                   | A first | A always | B first | B always |
+|---------------------------------------------------------|---------|----------|---------|----------|
+| Claude Code stall (K1, K2, K3 alike)                    | 20.00 s | 29.99 s  | 15.00 s | 20.01 s  |
+| post-office stall, K1/K2                                | 19.97 s | 29.98 s  | 15.00 s | 19.99 s  |
+| post-office stall, K3 (tested to 10 min)                | never   | never    | never   | never    |
+| computer sleep, K1, po-first                            | 19.92 s | 29.87 s  | 14.90 s | 19.88 s  |
+| computer sleep, K2 (tested to 8 h)                      | never   | never    | never   | never    |
+| computer sleep, K3 (tested to 8 h)                      | never   | never    | never   | never    |
+| K3: Claude Code cannot run for this long after the wake | 29.85 s | 29.90 s  | 19.85 s | 19.90 s  |
+| K2: Claude Code cannot run for this long after the wake | 20.02 s | 29.99 s  | 14.99 s | 20.00 s  |
+
+Lost renewals (the mod's HTTP request fails and is not retried): K1, lapses / trials after k consecutive losses
+| k lost in a row | A         | B         |
+|-----------------|-----------|-----------|
+| 0               | 0/1000    | 0/1000    |
+| 1               | 0/1000    | 0/1000    |
+| 2               | 512/1000  | 0/1000    |
+| 3               | 1000/1000 | 518/1000  |
+| 4               | 1000/1000 | 1000/1000 |
+| 5               | 1000/1000 | 1000/1000 |
+
+## Self-checks (engine against closed-form predictions)
+ok   C1 the same seed gives the same run: 2 runs, 0 mismatches
+ok   C2 naive lease (K1, K2) lapses exactly when two renewals reach it >= ttl apart: 3840 runs, 0 mismatches; stalls, lost renewals, deaths
+ok   C3 tick lease (K3) lapses at the first tick >= last renewal + ttl: 1400 runs, 0 mismatches; 0 exact ties skipped
+ok   C4a naive lease and a stalled post office: closed form, both resume orders: 2080 runs, 0 mismatches
+ok   C4b K3 never lapses over a post-office stall of 5..35 s: 2080 runs, 0 mismatches
+ok   C5 K1 (strict) and a computer sleep: closed form, both orders, delays 0/1/3 s: 3960 runs, 0 mismatches
+ok   C6a K3 never lapses over a computer sleep of 4 s .. 8 h: 1200 runs, 0 mismatches
+ok   C6b K3 on a clock that stops in sleep (K3N) matches K2: 1200 runs, 0 mismatches
+ok   C7 wall-clock control reacts to +/-1 h; K1, K2, K3 never read the wall clock: 8 runs, 0 mismatches
+

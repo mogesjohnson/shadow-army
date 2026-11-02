@@ -1,0 +1,72 @@
+v0.27 batch 1 (fork1, 2026-10-30): fix check V26-FC1's repairs, N1 to N6 (R-M1-295 to 300), from raw/V26-FC1.md's findings (N1 at 29, N2 39, N3 49, N4 61, N5 71, N6 82) and table rows 1d, 2.1, 2.2, 2.5, 3.2a, 4a and 4b (lines 15-26), the ledger verdicts for every item V26-FC1 checked, and the **Version** row's 0.27 entry. OLD texts are HEAD's (v2.md at b484a8d, which equals v2@a411314.md: v0.26 complete); each is one sentence or part of one.
+
+Files:
+- pairs1.json (v2.md, 8 pairs, made from the blocks below with tools/pairs.mjs; labels below, in the order they apply).
+- ledger1.json (ledger.md, 7 pairs): V26-FC1's verdicts appended to R-M1-289 (items 1, 1a to 1d, 3.2, 3.2a, 4b, and the Neighbours item 4c), R-M1-290 (2.1), R-M1-291 (2.2), R-M1-292 (2.3), R-M1-293 (2.4, 3.1, 4a), R-M1-294 (2.5), and R-M1-280 (item 1e: main's submodule alternative, NOT SOUND in V25-FC1, now SOUND, as "Checked again").
+- rows1.txt (ledger.md, 6 rows for tools/insert-rows.mjs): R-M1-295 to 300, after R-M1-294. Apply rows1.txt before ledger1.json, or either order: none of ledger1's OLD texts occurs in the new rows.
+
+Dry run (temporary copies at b484a8d): pairs1.json 8 replacements written; trace-v2.mjs on an LF copy of the result, against HEAD: output identical to HEAD's own run (119 requirements, 81 ACs, 0 problems). rows1.txt inserted 6 rows (R-M1-295 to 300 after R-M1-294), then ledger1.json 7 replacements written. N5's pair splits 1105 into two bullets, so every v2.md line after 1105 moves down one (1109 becomes 1110, residual 15's 1864 becomes 1865). Section 8 and Appendix C are untouched, so check-appendix-c.mjs was not rerun.
+
+Orchestrator's choices (for the next fix check):
+- N1, N2 and N4: the fix text as given.
+- N3 takes the fix text, with 795's "the one harness git command run in the folder without them" made "the only harness git run in the folder without them". 751 and 802 give two values as `git rev-parse` prints them (`--git-common-dir`, `--show-toplevel`), and a build may get them in one call or two; "the one command" would fail a build that makes two. 1109's "the start's own `git rev-parse` that finds them" already reads either way.
+- N5 takes the fix text, made into a bullet of its own as given, with three changes. The existing unnamed gitlink is said in order ("a repository that, when the post office started, was already a gitlink that `.gitmodules` doesn't name"). The nested case "one it writes into" the gitlink's config, so the two writes are two cases. And the sight case has two nested submodules, "one of them under a name that holds `=`": without it nothing tests N2's `--config-env`, and a build that passes `-c` for every name passes M1-AC10. The plain-named one keeps 792's `-c` tested.
+- N6 takes the fix text, with "git reads there" made "git reads there and in the folder any `commondir` names", so 795 names the same set as 798 ("and of the folder that `commondir` names"). Without it 795 reads narrower than 798, the mismatch N6 itself fixes in the other direction.
+- No fix weakens the checkout guard: N1 states the cost of a hold that stays whole (fork2's v0.26 choice, now SOUND), N2 and N5 make the guard's sight wider or tested, N3 exempts only the start's discovery, which already ran without the variables (V25-FC1 1a), and N4 and N6 are wording.
+
+R-M1-298 (N4): the replace-refs clause sits inside the parenthesis, so `--no-optional-locks` reads as one more setting.
+<<< OLD
+git passes on to the git it runs inside a submodule), so no ref under `refs/replace/` changes which objects it reads, with `--no-optional-locks`,
+=== NEW
+git passes on to the git it runs inside a submodule, so that no ref under `refs/replace/` changes which objects either reads), with `--no-optional-locks`,
+>>> END
+
+R-M1-296 (N2): a submodule name that holds `=` goes through `--config-env`, which `-c` would split.
+<<< OLD
+`-c submodule.<name>.ignore=none` for each name that
+=== NEW
+`-c submodule.<name>.ignore=none` (for a name that holds `=`, where `-c` would split it, `--config-env=submodule.<name>.ignore=<variable>` with that variable set to `none`) for each name that
+>>> END
+
+R-M1-297 (N3): the start's `git rev-parse` is the only harness git run in the folder without the three variables.
+<<< OLD
+the folder's own, as the post office found them when it started,
+=== NEW
+the folder's own, as the post office's `git rev-parse` found them when it started, the only harness git run in the folder without them,
+>>> END
+
+R-M1-300 (N6): 795 names what 798 compares of a submodule's git folder, not the whole folder.
+<<< OLD
+where git follows the submodule's own `.git` file, or uses its `.git` folder, and any `commondir` in that git folder, each of which is compared (below);
+=== NEW
+where git follows the submodule's own `.git` file, or uses its `.git` folder, and any `commondir` in that git folder; that `.git` file, and the config, `hooks/`, `info/` and `commondir` git reads there and in the folder any `commondir` names, are compared (below);
+>>> END
+
+R-M1-299 (N5, N2): M1-AC10 tests a nested submodule's config, an existing unnamed gitlink's config, and the guard's sight with each `ignore` entry where its `.gitmodules` puts it, a name with `=` included.
+<<< OLD
+; and, with nothing else changed, the guard finds a file the soldier touches in that submodule, and one in a submodule nested in it, also with `ignore = all` set for both in `.gitmodules` and `diff.ignoreSubmodules=all` in the user's global git config before the post office starts;
+=== NEW
+; so does such a filter that the soldier writes into the config of a submodule nested in that checked-out submodule, and one it writes into the `.git` folder's config of a repository that, when the post office started, was already a gitlink that `.gitmodules` doesn't name, with a file in each touched;
+  - with nothing else changed, the guard finds a file the soldier touches in the checked-out submodule above, and one in each of two submodules nested in it, also with `ignore = all` set for each in the `.gitmodules` that names it, the nested ones' in their parent submodule's, one of them under a name that holds `=`, and `diff.ignoreSubmodules=all` in the user's global git config, all before the post office starts;
+>>> END
+
+R-M1-297 (N3): M1-AC10's environment case leaves out the start's own `git rev-parse`.
+<<< OLD
+and each one run in the folder gets them naming the folder's own git folder, the folder and its common folder, also with the folder a linked worktree (WSP-10);
+=== NEW
+and each one run in the folder, but the start's own `git rev-parse` that finds them, gets them naming the folder's own git folder, the folder and its common folder, also with the folder a linked worktree (WSP-10);
+>>> END
+
+R-M1-295 (N1): residual 15 says a submodule checked out while a post office runs holds harness git.
+<<< OLD
+and makes the edit again while no post office runs.
+=== NEW
+and makes the edit again while no post office runs. A submodule checked out while a post office runs, by the owner's own `git submodule add` or `git submodule update --init` or by a soldier's in its snapshot, is one the trusted state doesn't have, and holds harness git as a soldier's change would, since its config can't be told from one a soldier wrote (WSP-10); in M1 the owner checks out submodules in the folder while no post office runs.
+>>> END
+
+Version row 6: the 0.27 entry.
+<<< OLD
+| **Version** | 0.26, 2026-10-30:
+=== NEW
+| **Version** | 0.27, 2026-10-30: fix check V26-FC1's repairs (among them: a submodule's `ignore` setting overridden also under a name that holds `=`, the replace-refs clause read apart from `--no-optional-locks`, the start's `git rev-parse` named as the only harness git run in the folder without its environment, and a submodule's compared files named as 798 names them (WSP-10); M1-AC10 testing a nested submodule's config, an existing unnamed gitlink's config, the guard's sight with each `ignore` entry in the `.gitmodules` that names it, and the environment case without the start's `git rev-parse`; and residual 15 saying that a submodule checked out while a post office runs holds harness git). 0.26, 2026-10-30:
+>>> END

@@ -1,0 +1,23 @@
+v0.16 repairs, part 2: round 3's confirmed M1 findings, against v0.15 plus part 1. Written by the orchestrator, session 8, 2026-10-23.
+
+R-M1-161 (P1, M1-R3-V1's fix): the post office never writes through a link or into a folder another user owns, and refuses a `.shadow/v2/` that git tracks files in.
+<<< OLD
+Where either folder already exists with more, the post office narrows it at start, and its log says so.
+  - A log holds each message,
+=== NEW
+Where either folder already exists with more, the post office narrows it at start, and its log says so.
+  - **Its own folders.** Before it writes anything, the post office checks `.shadow/`, `.shadow/v2/`, `~/.shadow-army/` and each folder it makes under them (`logs/`, `trees/`, `reports/`, `snapshots/`, `trust/`): each must be a plain folder, not a symbolic link or, on Windows, a junction or another reparse point, and must be owned by the owner's user. It creates each file it writes there new, and never follows a link to one (`O_NOFOLLOW` and `O_EXCL` on Linux and macOS; on Windows, no reparse point). It also checks that git tracks nothing under `.shadow/v2/`. If any check fails, no soldier starts and nothing is written there, and the mod says why in one line in Claude's transcript, as in `Shadow Army: the army's folder .shadow/v2 is a link, not a folder of yours · nothing started`.
+  - A log holds each message,
+>>> END
+
+<<< OLD
+a folder that existed with more is narrowed, and the log says so (PO-5).
+=== NEW
+a folder that existed with more is narrowed, and the log says so (PO-5). With `.shadow` and then `.shadow/v2` each a committed symbolic link (a junction on Windows) to a folder outside the checkout, with a `.shadow/v2` owned by another user (faked), and with a tracked file under `.shadow/v2/logs/`, no soldier starts, Claude's transcript gives the reason, and nothing is written at the link's target or in the tracked file (PO-5).
+>>> END
+
+<<< OLD
+and the army's files are the owner's alone (PO-5). |
+=== NEW
+and the army's files are the owner's alone, in folders that are never a link or another user's (PO-5). |
+>>> END

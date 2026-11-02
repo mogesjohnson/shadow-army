@@ -1,0 +1,21 @@
+v0.13 fixup, applied last: residual 13 (D-23) after D-7's residual 12, and the residual list kept tight. Written by the orchestrator.
+
+<<< OLD
+LEG-1, read the folder's files with no card.
+
+11. **What a read-only turn leaves
+=== NEW
+LEG-1, read the folder's files with no card.
+11. **What a read-only turn leaves
+>>> END
+
+<<< OLD
+ A turn that rewrites both could get its own copy restored as the builder's work.
+
+**Writes outside the snapshot
+=== NEW
+ A turn that rewrites both could get its own copy restored as the builder's work.
+13. **Working trees nested in the folder** (D-23). Another working tree of the repository inside the folder, such as one `claude --worktree` makes under `.claude/worktrees/`, is not this army's checkout, so this army's guard sees nothing written there (WSP-11, ARM-6), and adding or removing one holds no harness git (WSP-10). A soldier that runs git can add one and write in it unseen; only the transcript line that names each working tree added or removed shows it. The nested tree's own army, whenever one runs there, guards it during that army's turns.
+
+**Writes outside the snapshot
+>>> END

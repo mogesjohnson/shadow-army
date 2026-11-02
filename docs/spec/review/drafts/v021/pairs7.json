@@ -1,0 +1,110 @@
+[
+ [
+  "Before it starts a claude soldier, the post office reads that setting from the managed settings Claude Code reads.",
+  "The post office doesn't read managed settings itself: Claude Code takes some of them over the network, from the admin console. When claude exits before its first event with its `disableSideloadFlags` refusal of `--mcp-config`, known by its message as section 5.1 C's fixtures record it, that start is not a crash and not PO-1's refused start: the post office starts the soldier again at once as below, and starts its later claude sessions that way until the post office restarts."
+ ],
+ [
+  "Where it is set, the soldier takes `send` only over its stream-json input (Q9);",
+  "Started that way, the soldier takes `send` only over its stream-json input (Q9);"
+ ],
+ [
+  "as in `Kaisel can't start at full: your organization's managed settings refuse it · lower its autonomy`.",
+  "as in `Kaisel can't start at full: your organization's managed settings refuse it · lower its autonomy`. A refusal of `--mcp-config` under `disableSideloadFlags` is handled as PO-4 says, never with this line."
+ ],
+ [
+  "and also when a fake that never answers is ended (PO-4, SEC-5).",
+  "and also when a fake that never answers is ended (PO-4, SEC-5). A fake claude that exits with the recorded `disableSideloadFlags` refusal of `--mcp-config` is started again without it, and without `send` unless it takes `send` over its stream-json input; it isn't restarted as a crash, and its log and row say why (PO-4)."
+ ],
+ [
+  "writable by no other user, and each one that is neither the owner's home nor inside it must hold no `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` or `AGENTS.md`, since soldiers' CLIs load those from every folder above their working directory.",
+  "writable by no other user, and each one that is neither the owner's home nor inside it must hold no `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`, `AGENTS.md` or `.claude/AGENTS.md`, since soldiers' CLIs load those from every folder above their working directory. On Windows, writable by no other user means that no user or group but the owner, SYSTEM and Administrators holds `FILE_ADD_FILE`, `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC` or `WRITE_OWNER` on the folder; the right to create a subfolder alone, which every Windows drive's root grants its users, passes, since the checkout's own drive grants it too."
+ ],
+ [
+  "a folder that another user can write (faked), and a folder whose parent outside the owner's home holds a `CLAUDE.md` each start no soldier, with one transcript line giving the reason (WSP-11);",
+  "a folder that another user can write (faked), a folder whose parent another user can write (faked), and a folder whose parent outside the owner's home holds a `CLAUDE.md`, and in another case a `.claude/AGENTS.md`, each start no soldier, with one transcript line giving the reason. On Windows, a folder under `%LOCALAPPDATA%` starts one, though its drive's root lets users create subfolders (WSP-11);"
+ ],
+ [
+  "and its brief comes again from Claude (D-31).",
+  "and its brief comes again from Claude (D-31). Claude's `send` says so: the first brief to each soldier in a process returns `fresh session · no earlier briefs`, plus its earlier worktree's name where WSP-1 names one (→M6), as in `fresh session · no earlier briefs · Kaisel@1 not applied` (HOST-10)."
+ ],
+ [
+  "with the brief's id and its state: delivered, or queued and what it waits for.",
+  "with the brief's id and its state: delivered, or queued and what it waits for, and SES-1's `fresh session` note on a soldier's first brief in this process (→M4)."
+ ],
+ [
+  "and Claude's transcript gets one line naming the soldiers still on the older ones (SES-5, SI-4).",
+  "and Claude's transcript gets one line naming the soldiers still on the older ones (SES-5, SI-4). After a new Claude Code process resumes a conversation, a fake Claude's first `send` to each soldier returns `fresh session · no earlier briefs`, and its second `send` to that soldier returns no such note; from M6, a soldier whose earlier worktree WSP-1 names gets `Kaisel@1 not applied` in that note too (SES-1, HOST-10, WSP-1)."
+ ],
+ [
+  "these pass on CI's Windows runners, which don't have Smart App Control on; on a Windows 11 PC with it on, they fail at the script's first step, and the cause is most likely Smart App Control (PO-19).",
+  "these pass on CI's x64 runners, which run Windows Server and have no Smart App Control; on a Windows 11 PC or runner with it on, they fail at the script's language-mode check or its DLL's load (spike S7 says which), and the cause is most likely Smart App Control (PO-19)."
+ ],
+ [
+  "the script fails as it does under the AppLocker or App Control policy below; no runner turns Smart App Control on, so spike S7 tests it (PO-19).",
+  "the check fails at the script's language mode or its DLL's load, as spike S7 finds; S7 records each runner's value, and the unit case below tests the message (PO-19)."
+ ],
+ [
+  " **Likely cause on Windows:** a Windows 11 PC where no soldier starts, with no AppLocker or App Control policy, most likely has Smart App Control on (PO-19).",
+  ""
+ ],
+ [
+  "with a ConstrainedLanguage refusal or a DLL that failed to load, most likely meets Smart App Control;",
+  "with a ConstrainedLanguage refusal or a DLL that failed to load, on a PC with no AppLocker or App Control policy, most likely meets Smart App Control;"
+ ],
+ [
+  "and that still won't run or load most likely meets Smart App Control,",
+  "and that still won't run or load, on a PC with no AppLocker or App Control policy, most likely meets Smart App Control,"
+ ],
+ [
+  "turn it off in Windows Security, under App & browser control.",
+  "turn it off in Windows Security, under App & browser control. On older builds of Windows 11, it can't be turned on again without resetting Windows."
+ ],
+ [
+  "The remedy on that PC is turning Smart App Control off, since signing is a non-goal of v2.0 (section 1).",
+  "The remedy on that PC is turning Smart App Control off, since signing is a non-goal of v2.0 (section 1). On Windows 11 builds before the April 2026 update (KB5083769), that can't be undone without resetting Windows, so PO-14's message says so; S7 records the build it tested."
+ ],
+ [
+  "After that, only the owner's own uses show the dialog again: `/army`, `/send`, r, or choosing the card's row in the decisions list (HOST-14, →M5).",
+  "After that, only the owner's own uses show the dialog again: `/army`, `sa live`'s open in M1, `/send`, r, or choosing the card's row in the decisions list (HOST-14, →M5)."
+ ],
+ [
+  "A `send` from Claude (PO-4, →M3) shows none;",
+  "A `send` from Claude (HOST-10, →M3), or from a soldier (PO-4, →M3), shows none;"
+ ],
+ [
+  "and the next use shows the card again.",
+  "and the next `/army` or `sa live` shows the card again; from M3, a fake Claude's `send` in between returns `queued · waits · trust card` and opens no dialog (→M3)."
+ ],
+ [
+  "the post office's log records each such pair when both appear,",
+  "this army's logs, an earlier post office's included, record each such pair when both appear,"
+ ],
+ [
+  "and puts nothing on the attribution card (WSP-4).",
+  "and puts nothing on the attribution card (WSP-4), except a branch deleted with a working tree whose making no log of this army records, such as one made before its first post office started: that goes on the card, since it can't be told from M6-AC9's `hotfix`."
+ ],
+ [
+  "name each such worktree whose branch has commits not applied to the folder, with its soldier's name,",
+  "name each such worktree whose branch has commits not applied to the folder, or that holds changes not committed, with its soldier's name,"
+ ],
+ [
+  "and the card's applied fact follows (WSP-9, WSP-5).",
+  "and the card's applied fact follows (WSP-9, WSP-5). A soldier's worktree from an earlier process, with one commit not applied and one file not committed, is named at start in one transcript line, as WSP-1 shows it; `/diff Kaisel@1` shows the commit and `/apply Kaisel@1` applies it (WSP-1, WSP-9)."
+ ],
+ [
+  "in the snapshots folder it uses and in the default `~/.shadow-army/snapshots/`.",
+  "in the snapshots folder it uses, in the default `~/.shadow-army/snapshots/`, and in any other folder where `git worktree list` shows a snapshot of this repository in a subfolder that carries an army's mark and holds its path file."
+ ],
+ [
+  "so a folder without its own runs no soldier above `supervised` (D-33).",
+  "so a folder without its own runs no soldier above `supervised` (D-33). v1's own commands, kept until LEG-1 (→M6), read the same shipped copy, so they too run every soldier at `supervised` in a folder without its own."
+ ],
+ [
+  "the shipped copy applies with its own autonomy levels.",
+  "the shipped copy applies at `supervised`."
+ ],
+ [
+  "every entry in the folder, a worktree or a snapshot, and the soldier's log names each entry dropped.",
+  "every entry in the folder, a worktree or a snapshot, and the soldier's log names each entry dropped. Each entry, and each of those folders, is compared after it is resolved to its real path, with links, junctions and 8.3 short names followed, and on Windows and macOS regardless of case; an entry that can't be resolved is dropped too."
+ ]
+]

@@ -1,0 +1,131 @@
+v0.20: Smart App Control in the spec, at the owner's request (2026-10-27, in chat, with probe-sac B: "update this in the spec, and set reminders all along the current spec till the end. so its always fresh. mark it right before places were the error is mostliky going to happen so the model will know that the error was that!!"). Ledger R-M1-220.
+The marker is defined once in §0; each note is informative and adds no ID. Places by v0.19 line: 6 (version), 34 (§0), 55 (non-goal), 236, 316, 357, 366, 372 to 376, 447, 450, 471, 994, 1033, 1108, 1128, 1790 (residual row 12), 1803 (residual 3).
+Correction to session 11's handoff: GitHub's Windows arm64 runner runs Windows 11, not Windows Server, so the text doesn't claim that no runner has Smart App Control; S7 records each runner's value.
+
+<<< OLD
+| **Version** | 0.19, 2026-10-27:
+=== NEW
+| **Version** | 0.20, 2026-10-27: Smart App Control in PO-19 and PO-14's messages, and §0's **Likely cause on Windows** notes before each place its failure shows (the owner's request). 0.19, 2026-10-27:
+>>> END
+
+<<< OLD
+Like Appendix C, it is informative.
+=== NEW
+Like Appendix C, it is informative.
+- **Likely-cause notes.** A line that starts **Likely cause on Windows:** sits just before a place where a failure is likely to show, and names the cause to check first, so whoever debugs that failure, a person or a model, starts there. The notes are informative: they add no requirement and no ID, and the text around them governs. Today they name one cause, Smart App Control (PO-19). A new note keeps this form, and when a spike settles a cause (M0), its notes change in the same version.
+>>> END
+
+<<< OLD
+Signing them with a project certificate is listed for a later version.
+=== NEW
+Signing them with a project certificate is listed for a later version. Windows 11's Smart App Control blocks unsigned files that Microsoft doesn't know, with no exception for one app, so soldiers most likely don't run on a PC with it on either; spike S7 confirms it (PO-19).
+>>> END
+
+<<< OLD
+    - **Windows.** Through the script of PO-19
+=== NEW
+    - **Likely cause on Windows:** this is the script's first run, so Smart App Control shows here first: `memory protection: none` with a reason that names ConstrainedLanguage mode or a DLL that failed to load, on a PC with no AppLocker or App Control policy (PO-19).
+    - **Windows.** Through the script of PO-19
+>>> END
+
+<<< OLD
+  - **Windows.** The guardian is Shadow Army's PowerShell script
+=== NEW
+  - **Likely cause on Windows:** a guardian that exits before it creates the job, with a ConstrainedLanguage refusal or a DLL that failed to load, most likely meets Smart App Control; the check (PO-14) normally fails first, with its message (PO-19).
+  - **Windows.** The guardian is Shadow Army's PowerShell script
+>>> END
+
+<<< OLD
+  - The release package is the npm package tarball
+=== NEW
+  - **Likely cause on Windows:** a script or DLL that the package holds, whose checksums match, and that still won't run or load most likely meets Smart App Control, which blocks unsigned files Microsoft doesn't know (PO-19). Reinstalling doesn't help.
+  - The release package is the npm package tarball
+>>> END
+
+<<< OLD
+    1. there is a helper for this system and processor (PO-12)
+=== NEW
+    - **Likely cause on Windows:** when step 1 finds the script and its DLL but can't run them, or step 3 finds ConstrainedLanguage mode on a PC with no AppLocker or App Control policy, check Smart App Control first (PO-19).
+    1. there is a helper for this system and processor (PO-12)
+>>> END
+
+<<< OLD
+with a hash rule made from the installed files. No soldier can start.`
+=== NEW
+with a hash rule made from the installed files. No soldier can start.`
+    - `Containment can't be set up on Windows 11 (x64): Smart App Control is on, and it blocks Shadow Army's unsigned script or its DLL. Smart App Control allows no exception for one app; to run soldiers on this PC, turn it off in Windows Security, under App & browser control. No soldier can start.`
+>>> END
+
+<<< OLD
+or have an administrator allow the script.
+=== NEW
+have an administrator allow the script, or turn Smart App Control off.
+>>> END
+
+<<< OLD
+  - The script loads the DLL with `Add-Type -Path`
+=== NEW
+  - **Likely cause on Windows:** `Add-Type -Path` failing with a load error that names an Application Control policy (Win32 error 4551, `ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION`, seen from .NET as `0x800711C7`), on a PC with no AppLocker or App Control policy, most likely meets Smart App Control (below).
+  - The script loads the DLL with `Add-Type -Path`
+>>> END
+
+<<< OLD
+  - It needs Windows 10 or 11, or Windows Server 2016 or later.
+=== NEW
+  - **Smart App Control.** Windows 11's Smart App Control runs on App Control's engine. When it is on, it blocks code that is unsigned and that Microsoft's cloud doesn't know, DLLs and some scripts included; it has no exception for one app and takes no hash rule. The script and its DLL are unsigned and new with each release, so Smart App Control either makes PowerShell run the script in ConstrainedLanguage mode or blocks the DLL; spike S7 says which. Either way the check fails (PO-14), and no soldier starts on that PC. Its state is the `VerifiedAndReputablePolicyState` value under `HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy`: 0 off, 1 on, 2 evaluation. In evaluation it blocks nothing, but it can turn itself on later, so a PC where soldiers ran can refuse them afterwards. When the script refuses, or the DLL fails to load, the script reads that value, and at 1 PO-14's message names Smart App Control. The remedy on that PC is turning Smart App Control off, since signing is a non-goal of v2.0 (section 1). GitHub's Windows x64 runners run Windows Server, which has none; S7 records the value on each Windows runner. The owner's PC has it off (2026-10-27), so nothing there tests it. S7's result replaces this paragraph's unknown.
+  - It needs Windows 10 or 11, or Windows Server 2016 or later.
+>>> END
+
+<<< OLD
+    - Windows x64 and arm64.
+=== NEW
+    - Windows x64 and arm64.
+      - **Likely cause on Windows:** the x64 runners run Windows Server, which has no Smart App Control, so a Windows 11 PC can fail where CI passed; check Smart App Control first (PO-19).
+>>> END
+
+<<< OLD
+  Code that a child process runs lives in a file of its own
+=== NEW
+  **Likely cause on Windows:** an instrumented copy of the DLL that won't load on a developer's Windows 11 PC, while CI's runs pass, most likely meets Smart App Control: the copy is unsigned and new to Microsoft (PO-19).
+
+  Code that a child process runs lives in a file of its own
+>>> END
+
+<<< OLD
+whether Smart App Control puts the script into ConstrainedLanguage mode, or blocks the DLL;
+=== NEW
+on a Windows 11 PC or virtual machine with Smart App Control turned on, whether it puts the script into ConstrainedLanguage mode or blocks the DLL, and what PO-14's message then says (the result replaces PO-19's unknown, and the likely-cause notes change in the same version); the `VerifiedAndReputablePolicyState` value on each Windows runner;
+>>> END
+
+<<< OLD
+with a fake CLI (PO-9, PO-10, PO-11, PO-18, PO-19, PO-1):
+=== NEW
+with a fake CLI (PO-9, PO-10, PO-11, PO-18, PO-19, PO-1):
+  - **Likely cause on Windows:** these pass on CI's Windows runners, which don't have Smart App Control on; on a Windows 11 PC with it on, they fail at the script's first step, and the cause is most likely Smart App Control (PO-19).
+>>> END
+
+<<< OLD
+- **M1-AC18** No containment, no soldier (PO-14, PO-19, PO-13, PO-15):
+=== NEW
+- **M1-AC18** No containment, no soldier (PO-14, PO-19, PO-13, PO-15):
+  - **Likely cause on Windows:** on a Windows 11 PC with Smart App Control on, the script fails as it does under the AppLocker or App Control policy below; no runner turns Smart App Control on, so spike S7 tests it (PO-19).
+>>> END
+
+<<< OLD
+  - a test build whose check hangs at a step fails 10 seconds after the check began: what it started is killed, and its message names that step;
+=== NEW
+  - a test build whose check hangs at a step fails 10 seconds after the check began: what it started is killed, and its message names that step;
+  - in a unit test, with Smart App Control's value faked as 1, a refusal of the script and a DLL that fails to load each give PO-14's message for Smart App Control; faked as 0 or 2, the message doesn't name it;
+>>> END
+
+<<< OLD
+and a Job Object on Windows (PO-9 to PO-19).
+=== NEW
+and a Job Object on Windows (PO-9 to PO-19). **Likely cause on Windows:** a Windows 11 PC where no soldier starts, with no AppLocker or App Control policy, most likely has Smart App Control on (PO-19).
+>>> END
+
+<<< OLD
+but ConstrainedLanguage mode blocks loading it too (PO-19).
+=== NEW
+but ConstrainedLanguage mode blocks loading it too (PO-19). Under Smart App Control, no soldier starts until the owner turns it off: it takes no hash rule, and the script and DLL aren't signed (PO-19, D-27).
+>>> END

@@ -1,0 +1,12 @@
+[
+ ["A refusal of `--mcp-config` under `disableSideloadFlags` is handled as PO-4 says, never with this line.",
+  "A refusal of `--mcp-config` under `disableSideloadFlags` is handled as PO-4 (→M3) says, never with this line."],
+ ["and SES-1's `fresh session` note on a soldier's first brief in this process (→M4).",
+  "and the `fresh session` note of SES-1 (→M4) on a soldier's first brief in this process."],
+ ["plus its earlier worktree's name where WSP-1 names one (→M6),",
+  "plus its earlier worktree's name where WSP-1 (→M6) names one,"],
+ ["from M6, a soldier whose earlier worktree WSP-1 names gets",
+  "from M6, a soldier whose earlier worktree WSP-1 (→M6) names gets"],
+ ["in that note too (SES-1, HOST-10, WSP-1).",
+  "in that note too (SES-1, HOST-10; WSP-1, →M6)."]
+]
