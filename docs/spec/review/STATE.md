@@ -112,7 +112,7 @@ Last updated: 2026-10-21, end of session 7. The spec is v0.14 (`02d5f84`): fix c
 - **Saving a report:** a background agent's transcript is `~/.claude/projects/C--Users-johns-projects-AIConnections/<session>/subagents/agent-<id>.jsonl` (the tasks folder's `.output` files stay empty). Copy it to `<scratch>/tasks/<id>.output`, then run `tools/extract.mjs <id> raw/<name>.md "<header>"` with `TASKS_DIR=<scratch>/tasks`.
 - **Shell habits on the owner's machine:** Git Bash collapses `\\` in a command, even inside a quoted heredoc, and a heredoc of long table rows can fail to parse. Write scripts and ledger rows with the Write tool, then append or insert them with a small node script. Edit the spec through OLD/NEW blocks (`tools/pairs.mjs`, then `tools/rep.mjs`, which refuses any old text that doesn't occur exactly once).
 - **`main`** is `72eba4d`, with spec v0.6 (#76 merged 2026-10-27, with #79, #82 and #71, on the owner's word).
-- **M1 (#75)** is Codex's draft, paused at `04ab953` until the spec's M1 text converges. Read it for reality checks only; on the owner's machine it is `../AIConnections-m1`.
+- **M1 (#75)** is Codex's draft, paused at `04ab953` until the spec's M1 text converges. Read it for reality checks only; on the owner's machine it is `../AIConnections-worktrees/m1`.
 
 | Unit | State |
 |---|---|

@@ -7,14 +7,14 @@ Written 2026-10-23 at the owner's request. **When the owner types "look at secon
 ## 1. Start
 
 1. Retrieve the second-brain brief: `bash /c/Users/johns/Obsidian-codex-setup/brain.sh brief --cwd "$PWD" --query 'spec 2.0 review continue work' --json`.
-2. Read `CLAUDE.md`, `CONTRIBUTING.md` and `.shadow/v2-tools/STATE.md` in the main checkout. Then, on branch `claude/63-ultimate-spec-review` (worktree `../AIConnections-review`; `git -C ../AIConnections-review pull` first), read in `docs/spec/review/`: `handoffs/LATEST.md` if it exists, `STATE.md`, `NEXT-SESSION.md`, and `spec2.0_review_flow.md` (the rules; it wins over `PLAYBOOK.md`). Where they differ, the newest wins.
+2. Read `CLAUDE.md`, `CONTRIBUTING.md` and `.shadow/v2-tools/STATE.md` in the main checkout. Then, on branch `claude/63-ultimate-spec-review` (worktree `../AIConnections-worktrees/review`; `git -C ../AIConnections-worktrees/review pull` first), read in `docs/spec/review/`: `handoffs/LATEST.md` if it exists, `STATE.md`, `NEXT-SESSION.md`, and `spec2.0_review_flow.md` (the rules; it wins over `PLAYBOOK.md`). Where they differ, the newest wins.
 3. If `LATEST.md` names a start and end SHA, run `git diff --stat <start>..<end>` to see what the last session changed. Open only the hunks your task touches (`git diff <start>..<end> -- <path>`). Never read the whole diff: every line you read stays in your context for the rest of the session.
 4. **Your role.** If the owner calls you the main session, or your session name is "main", you are the main session: follow section 4. Otherwise, find your fork number. Run ListAgents. If your own session name is "Fork N" (or "forkN"), you are Fork N. If a handoff or task message reached you, it gives your number. Otherwise you are Fork 1.
 5. Check CI on the open PRs (`gh pr checks 83`). The repo has been public since 2026-10-23, so CI runs free on all three systems.
 
 ## 2. Work
 
-The review lives on PR #83 (it replaced #77 on 2026-10-27), branch `claude/63-ultimate-spec-review`, in `docs/spec/review/`. Edit and commit in `../AIConnections-review`, never in the main checkout. Pick up exactly where `LATEST.md` says, or, before the first handoff, where `NEXT-SESSION.md` section 4 says.
+The review lives on PR #83 (it replaced #77 on 2026-10-27), branch `claude/63-ultimate-spec-review`, in `docs/spec/review/`. Edit and commit in `../AIConnections-worktrees/review`, never in the main checkout. Pick up exactly where `LATEST.md` says, or, before the first handoff, where `NEXT-SESSION.md` section 4 says.
 
 As of 2026-10-23, the spec is v0.14 (`02d5f84`). D-24 (recommended B) and D-25 (recommended A) wait for the owner in the doc "Spec 2.0 Review: New Decisions" (https://claude.ai/artifact/KpmKMUugoKwc1W4F65C931). If you can't open it, ask the owner to paste the answers. If they are in, apply them as v0.15. Then run fix check V14-FC1 and round 3 for F and M1 (`drafts/r3/PROMPTS.md`): V14-FC1 and M1's red team and enterprise operator first, then F's implementer and owner's advocate. Verify only P0 to P2, repair, and count the round.
 
@@ -70,6 +70,6 @@ Added 2026-10-30 at the owner's request, so that every future main session knows
 
 **Who starts agents.** A fork drafting repairs from fix text a verifier or reviewer already wrote starts no agents: flow rule 5 makes that the orchestrator's job, and a drafter agent is only for a big merge. Reviewers, verifiers, fix checks and probes are agent work. The main session runs them, or hands one to a fork as that fork's single task, with the packet and the flow's model and effort.
 
-**Why only main writes the shared files.** Every fork works in the same worktree (`../AIConnections-review`). Two sessions that write `v2.md` or `ledger.md`, or commit at once, overwrite each other's edits or collide on git's index lock. Draft files at separate paths never collide.
+**Why only main writes the shared files.** Every fork works in the same worktree (`../AIConnections-worktrees/review`). Two sessions that write `v2.md` or `ledger.md`, or commit at once, overwrite each other's edits or collide on git's index lock. Draft files at separate paths never collide.
 
 The 120k and 150k limits apply to main as to any session. Main stays small because it reads only the forks' one-line reports and the checkers' output, never their drafts in full.

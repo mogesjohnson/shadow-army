@@ -7,7 +7,7 @@ Written 2026-10-14 at the end of session 7ac7daad; rewritten at the end of sessi
 On the owner's Windows machine, start Claude Code in `C:\Users\johns\projects\AIConnections`, the main checkout, so that the two agent types load. On a cloud machine, do section 3's setup first.
 
 ```
-Continue the Shadow Army spec 2.0 review (issue #63). The review lives on PR #77 ("#63 Ultimate Spec Review"), branch claude/63-ultimate-spec-review, in docs/spec/review/. On the owner's Windows machine it is checked out in the worktree ../AIConnections-review: edit and commit there, never in the main checkout. Elsewhere: git fetch origin && git checkout claude/63-ultimate-spec-review.
+Continue the Shadow Army spec 2.0 review (issue #63). The review lives on PR #77 ("#63 Ultimate Spec Review"), branch claude/63-ultimate-spec-review, in docs/spec/review/. On the owner's Windows machine it is checked out in the worktree ../AIConnections-worktrees/review: edit and commit there, never in the main checkout. Elsewhere: git fetch origin && git checkout claude/63-ultimate-spec-review.
 
 Read, in this order: CLAUDE.md, CONTRIBUTING.md, docs/spec/review/NEXT-SESSION.md (all of it), docs/spec/review/STATE.md, docs/spec/review/spec2.0_review_flow.md (the rules; it wins over PLAYBOOK.md), then the ledger and decisions.md as you need them.
 
@@ -26,14 +26,14 @@ Answer me straight to the point. I answer only big questions, as short decision 
 - **Open cards:** D-24 (R-F-117: an owner's edit in a soldier's worktree, made after a read-only turn's revert, is reverted when the CLI then starts a turn by itself; A accept, **B a y/n card (recommended)**, C refresh while idle) and D-25 (R-M1-160: after `/clear`, a reply to an older brief **A wakes the Monarch, as Claude Code does (recommended)**, or B waits for the owner's next message, v0.14's text). Both in the new doc, and recorded in `decisions.md`.
 - **The new decisions doc** "Spec 2.0 Review: New Decisions" (https://claude.ai/artifact/KpmKMUugoKwc1W4F65C931) belongs to the owner's current account. The old doc (rev 48) doesn't open from it.
 - **Probes** P-1 to P-15 wait for the owner's go. Spike S7 runs in M1 on CI's runners; its Mac questions are M6 (R-M1-151).
-- **M1 (#75)** is Codex's draft, paused at `04ab953` until the spec's M1 text converges. Read it, never write to it. On the owner's machine it is in `../AIConnections-m1`.
+- **M1 (#75)** is Codex's draft, paused at `04ab953` until the spec's M1 text converges. Read it, never write to it. On the owner's machine it is in `../AIConnections-worktrees/m1`.
 
 ## 3. Setup
 
 **On the owner's Windows machine:**
 - **Effort:** if the owner's answers to D-24 and D-25 are in, this session writes v0.15, so start it with `claude --effort xhigh` or run `/effort xhigh`; otherwise `high` is enough (flow section 4, rule 6). Don't use `CLAUDE_CODE_EFFORT_LEVEL`, which overrides every agent's effort.
-- The worktree `../AIConnections-review` already has the branch, and `.claude/agents/` in the main checkout already holds `spec-reviewer` and `spec-verifier` (both `effort: high`, as in `docs/spec/review/agents/`).
-- Check that the worktree is clean and up to date: `git -C ../AIConnections-review status`, then `git -C ../AIConnections-review pull`.
+- The worktree `../AIConnections-worktrees/review` already has the branch, and `.claude/agents/` in the main checkout already holds `spec-reviewer` and `spec-verifier` (both `effort: high`, as in `docs/spec/review/agents/`).
+- Check that the worktree is clean and up to date: `git -C ../AIConnections-worktrees/review status`, then `git -C ../AIConnections-worktrees/review pull`.
 - The snapshots are in `.shadow/v2-tools/review/snapshots/`, v0.14's included (`v2@02d5f84.md`). Make a new one with `git show <sha>:docs/spec/v2.md > .shadow/v2-tools/review/snapshots/v2@<sha>.md`, from Git Bash.
 - Claude Code's mod typings are in `.shadow/v2-tools/review/evidence/mod-api-2.1.294/`; the v2 canvas's pages are in `.shadow/v2-tools/canvas/`.
 
