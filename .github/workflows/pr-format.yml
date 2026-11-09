@@ -1,8 +1,8 @@
 name: PR format
 
+# Manual-only: this check needs pull_request context, so keep it off unless you redesign inputs.
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 # A newer edit or push to the same PR cancels the check it replaces (#78).
 concurrency:

@@ -1,36 +1,9 @@
 name: CI
 
-# Minutes budget (#78): macOS minutes bill at 10x and Windows at 2x on this private repo.
-# - Draft PRs get ubuntu only (same steps, same "test (ubuntu-latest)" check name).
-# - The full ubuntu + macos + windows matrix runs when a PR is ready for review (opened, pushed,
-#   reopened or marked ready while not a draft), on pushes to main, daily if main changed, and by hand.
-# - push is limited to main so a PR branch is never built twice (push + pull_request).
+# Manual-only while Actions minutes are tight (#78).
+# No pull_request, push, or schedule triggers. Run from the Actions tab when you want a check.
+# macOS minutes bill at 10x and Windows at 2x on this private repo.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    # Prose-only files. Not "**/*.md": rules.md, agent.md and orchestratorDelegate.md ship in the
-    # package and are read by the tests.
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
-      - "CONTRIBUTING.md"
-      - "CLAUDE.md"
-      - "LICENSE"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
-  push:
-    branches: [main]
-    paths-ignore:
-      - "docs/**"
-      - "README.md"
-      - "CONTRIBUTING.md"
-      - "CLAUDE.md"
-      - "LICENSE"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
-  schedule:
-    # Once a day, off-peak (07:23 UTC); skipped by the gate job when main has not changed in 24h.
-    - cron: "23 7 * * *"
   workflow_dispatch:
 
 # A newer push to the same PR or branch cancels the run it replaces.
