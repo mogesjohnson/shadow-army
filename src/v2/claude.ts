@@ -267,3 +267,140 @@ export class ClaudeChannel implements NativeChannel {
     const knownFailure = turn.error !== undefined || terminalError !== undefined && terminalError.kind !== "other";
     const failure = failed || nativeInterrupted && knownFailure;
     const completed = !failed && !nativeInterrupted && (frame.subtype === "success" || frame.terminal_reason === "completed" || frame.stop_reason === "end_turn");
+    // A known API failure preceding stop keeps its type. The generic execution result
+    // following a requested interrupt is the stop acknowledgement, not a new error kind.
+    const interrupted = !completed && !knownFailure && (nativeInterrupted || turn.stopped && frame.subtype === "error_during_execution");
+    const cumulative = number(frame.total_cost_usd);
+    const previous = this.cumulativeCost;
+    const nativeUsage = object(frame.usage);
+    const zeroExecutionResult = frame.subtype === "error_during_execution" && nativeUsage && ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].every((key) => number(nativeUsage[key]) === 0);
+    const recoverUsage = interrupted || nativeInterrupted || zeroExecutionResult;
+    const unusableCost = recoverUsage && (cumulative === undefined || cumulative === 0 || cumulative < (previous ?? 0));
+    const costGap = this.missingCostBoundary;
+    if (unusableCost) this.missingCostBoundary = true;
+    else if (cumulative !== undefined) { this.cumulativeCost = cumulative; this.missingCostBoundary = false; }
+    const terminal = { ...nativeUsage, ...(frame.modelUsage === undefined ? {} : { modelUsage: frame.modelUsage }), ...(cumulative === undefined ? {} : { total_cost_usd: cumulative }) };
+    const costUsage = cumulative === undefined || unusableCost ? undefined : {
+      costUsd: cumulative === undefined || costGap ? undefined : cumulative >= (previous ?? 0) ? cumulative - (previous ?? 0) : undefined,
+      costSource: "native_cli_estimate" as const,
+    };
+    let usage: TurnUsage | undefined;
+    if (recoverUsage) {
+      const observed = this.eventUsage(turn, terminal);
+      // The native dollar estimate is distinct from the interrupted result's unusable
+      // token counters. Retain it only when its cumulative boundary is actually usable.
+      if (observed || costUsage) usage = { ...observed, ...costUsage, raw: observed?.raw ?? { source: "assistant_and_stream", terminal } };
+    } else if (nativeUsage || cumulative !== undefined) usage = {
+      inputTokens: number(nativeUsage?.input_tokens), cachedInputTokens: number(nativeUsage?.cache_read_input_tokens), outputTokens: number(nativeUsage?.output_tokens), ...costUsage, raw: terminal,
+    };
+    if (usage) this.emit("usage", { scope: "turn", ...usage });
+    const error = failure && !interrupted ? terminalError ?? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
+    // Some error results expose only the generic terminal code; keep an earlier typed API error.
+    const nativeError = error?.kind === "other" && turn.error ? { ...turn.error, message: turn.error.kind === "other" ? error.message || turn.error.message : turn.error.message } : error;
+    const result: TurnResult = { status: interrupted ? "interrupted" : failure ? "failed" : "completed", text, refusal: !failure && (turn.refusal || frame.stop_reason === "refusal"), sessionId: this.sessionId, contextTokens: turn.contextTokens, usage, ...(nativeError ? { error: nativeError } : {}) };
+    // A root-exit notification can outrun stdout on a separate transport. Drain native output
+    // while containment closes, then decide whether this turn had already completed.
+    if (this.closed) { if (this.drainTerminal) this.closingResult = result; }
+    else this.finish(result);
+  }
+
+  private finish(result: TurnResult): void {
+    const turn = this.current;
+    if (!turn) return;
+    this.current = undefined;
+    clearTimeout(this.stopTimer);
+    this.stopTimer = undefined;
+    this.approvals.clear();
+    this.emit("turn_end", result);
+    turn.resolve(result);
+  }
+
+  send(text: string): Promise<TurnResult> {
+    if (this.current) return Promise.reject(new Error("Claude already has a running turn"));
+    if (this.closed) return Promise.resolve({ status: "interrupted", text: "", refusal: false, sessionId: this.sessionId, error: this.reason });
+    return new Promise((resolve) => {
+      const id = randomUUID();
+      this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false, usageSteps: new Map() };
+      void this.ready.then(async () => {
+        if (!this.current || this.current.id !== id || this.closed) return;
+        await this.write({ type: "user", uuid: id, session_id: this.sessionId ?? "", message: { role: "user", content: text }, parent_tool_use_id: null });
+      }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
+    });
+  }
+
+  private async write(frame: Frame): Promise<void> {
+    if (this.closed) throw new Error(this.reason.message);
+    const child = await this.process;
+    await new Promise<void>((resolve, reject) => child.stdin.write(`${JSON.stringify(frame)}\n`, (error) => error ? reject(error) : resolve()));
+  }
+
+  private control(request: Frame): Promise<Frame> {
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.controls.delete(id); reject(new Error(`Claude ${request.subtype} control request timed out`)); }, 30_000);
+      timer.unref();
+      this.controls.set(id, { resolve, reject, timer });
+      void this.write({ type: "control_request", request_id: id, request }).catch((error: unknown) => {
+        clearTimeout(timer); this.controls.delete(id); reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  async interrupt(): Promise<void> {
+    await this.ready;
+    const turn = this.current;
+    if (!turn || this.closed || turn.stopped) return;
+    turn.stopped = true;
+    // The native interrupt cancels its requests; dropping local ids prevents stale owner answers.
+    this.approvals.clear();
+    this.stopTimer = setTimeout(() => { void this.failTransport("Claude did not end the turn within 30 seconds of stop"); }, this.options.interruptTimeoutMs ?? 30_000);
+    this.stopTimer.unref();
+    await this.write({ type: "control_request", request_id: randomUUID(), request: { subtype: "interrupt" } });
+  }
+
+  async respondApproval(requestId: string, response: unknown): Promise<void> {
+    if (!this.current || this.current.stopped || !this.approvals.has(requestId) || this.closed) throw new Error("Claude approval request is no longer open");
+    const answer = object(response);
+    if (!answer || answer.behavior !== "allow" && answer.behavior !== "deny") throw new Error("Claude approval response must use its native allow or deny behavior");
+    this.approvals.delete(requestId);
+    await this.write({ type: "control_response", response: { subtype: "success", request_id: requestId, response: answer } });
+  }
+
+  private async failTransport(message: string, drainTerminal = false): Promise<void> {
+    if (this.closed) return;
+    this.reason = { kind: "transport", message };
+    this.drainTerminal = drainTerminal;
+    this.emit("error", this.reason);
+    await this.close();
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    clearTimeout(this.stopTimer);
+    this.approvals.clear();
+    for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error(this.reason.message)); }
+    this.controls.clear();
+    this.closePromise = (async () => {
+      const child = await this.process.catch(() => undefined);
+      let containmentStopped = true;
+      try {
+        if (child) { child.stdin.end(); await child.close(); }
+      } catch (error) {
+        containmentStopped = false;
+        this.reason = { kind: "transport", message: `Claude process containment failed: ${error instanceof Error ? error.message : String(error)}` };
+        this.emit("error", this.reason);
+      }
+      this.acceptFrames = false;
+      if (this.instructionDirectory) {
+        try { await rm(this.instructionDirectory, { recursive: true, force: true }); }
+        catch (error) { this.emit("error", { kind: "other", message: `Claude instruction-file cleanup failed: ${error instanceof Error ? error.message : String(error)}` }); }
+      }
+      // A failed containment check must unblock callers without claiming cleanup succeeded.
+      // The post office keeps such a channel down and never automatically resumes its queue.
+      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: this.reason });
+      this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped });
+    })();
+    return this.closePromise;
+  }
+}
