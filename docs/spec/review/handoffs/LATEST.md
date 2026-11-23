@@ -1,43 +1,46 @@
-# Handoff: orchestrator 5 (`aba81e8b`) to orchestrator 6 (2026-11-23)
+# Handoff: orchestrator 6 (`c6d2c417`) to orchestrator 7 (2026-11-23)
 
 **State.**
-- **The live run can start.** `claude/63-m1a-integrate` (`22da257`, built by w17) is #94 with #96, #97 and #99 merged in (merge commits, no conflicts). On Windows, tsc, build and `npm test` pass (497 tests). It is a run branch with no PR. orch-5 told the owner on #94. The owner runs M1-AC29 from it.
-- **Linux failures, being fixed:**
+- **M1a's run branch is green on Windows and Linux.** `claude/63-m1a-integrate` is at `2b78df6`: #94 with #96, #97, #99, #101, #102, #103 and #104 merged in (merge commits). Windows: tsc, build, `npm test` pass (497 passed, 4 skipped). Linux (WSL, git 2.43): 463 passed, 38 skipped, 0 failed. w19 commented on #94. The owner's live run (M1-AC29) can use this head.
+- **Linux fix PRs, all drafts:**
 
-| PR | Head | Worker | Fix | Base | Size |
-|---|---|---|---|---|---|
-| #100 | `88f38bc` | w16 | git 2.43's `git apply --intent-to-add` also stages modified and deleted files: `src/workspace/apply.ts` now runs a plain apply, then `git add -N -f`. The links test writes a relative gitdir on git before 2.48. All 6 failures on `main` pass on Linux. | `main` | 23 lines, 2 files |
-| #101 | `a73e593` | w16 | The same apply fix on #94: 3 of `src/v2/apply.test.ts`'s 4 failures pass. | #94 | 23 lines, 2 files |
+| PR | Head | Base | What |
+|---|---|---|---|
+| #100 | `88f38bc` | `main` | git 2.43 apply fix (w16) |
+| #101 | `a73e593` | #94 | the same fix on the slice (w16) |
+| #102 | `f86ae1b` | #94 | `src/v2/windowsOnly.testutil.ts` (`it.runIf(win32)`, reason D-39) and 4 guarded tests (w18) |
+| #103 | `99d0517` | #96 | 16 channel tests guarded; contains #102 (w18) |
+| #104 | `f4ac137` | #99 | 10 post office tests guarded; contains #102 (w18) |
 
-- **Running: `w18-linux-channel`** (Sonnet, medium; brief `.shadow/v2-tools/tasks/w18-linux-channel.md`). It handles the 26 v2 tests that fail on Linux, plus `src/v2/slice.test.ts` and apply.test's "cancelled turn" test, which orch-5 added by message. The failure list is in `.shadow/v2-tools/tasks/w17-integrate-report.md`. Likely cause: session containment is Windows-only, so each native turn on Linux ends `interrupted` ("channel … is down"). **orch-5's decision:** M1a is Windows-only (D-39). Tests that fail only for that reason run on Windows only, through one shared guard that gives the reason. Any other cause gets fixed. No POSIX containment until M1b.
-  - Its files: the v2 test files above, one testutil and `test/fakes/**`. Source files only for a non-containment bug.
-  - Branches: `claude/63-m1a-linux-*`, with up to three stacked draft PRs (on #94, #96 and #99).
-  - It was told to report to orch-5. orch-5 has redirected it to `orch-6`.
-- Codex has reviewed none of #89 to #101.
-- Closed tabs: orch-4, w16, w17. Open: w18.
+- Every guarded test starts a native session; on POSIX `spawnManagedProcess` throws "Session process containment is Windows only". orch-6 checked each diff.
+- **#103 needs the owner's yes:** 7 files, over V6's 6, because #102's 5 files ride in until #102 merges (own change 2 files, 50 lines in all). Asked in chat; no answer yet. When it comes, add `Size exception: <reason>, "<the owner's words>", <date>` to #103's body.
+- **Running: `w20-m1b-plan`** (Opus, medium, read-only; brief `.shadow/v2-tools/tasks/w20-m1b-plan.md`). It splits M1b into ~70k worker tasks with files, order and a base-branch recommendation, into `.shadow/v2-tools/tasks/w20-m1b-plan-report.md`. It reports to orch-6 or, after the handoff, to `orch-7`.
+- Codex has reviewed none of #89 to #104.
+- Closed tabs: orch-5, w18, w19. Open: w20.
+- RUNBOOK 0.1 now says `git pull --rebase=merges` before a push. w19's plain `--rebase` flattened its merge commits; it was repaired with an empty-diff merge (`2b78df6`), no force-push.
 
 ## Next
 
-1. **Take w18's report.** Check each PR with `git show --stat`, V6 and its body, then close its tab. Check that only containment-caused tests are guarded: each skip needs the reason.
-2. **Re-run Linux on the integrate branch:** merge #101 and w18's PRs into `claude/63-m1a-integrate`, the same way w17 did, and run `npx vitest run` in a WSL clone. The target is 0 failures, with skips only for the stated reason. A small worker task: no source edits.
-3. **Codex** reviews #95, #89 to #94 and #96 to #101 when the owner runs it. Merge only with Codex's approval at the head (V13, V14). #100 and #98 are based on `main`.
+1. **Take w20's report.** Check that parallel tasks share no file, then write briefs and launch up to three M1b workers (5-hour figure under 80%). Record the base-branch choice in `suggested.md` if it is a big change.
+2. **Codex** reviews #95, #89 to #94 and #96 to #104 when the owner runs it. Merge only with Codex's approval at the head (V13, V14). #100 and #98 are based on `main`.
+3. The owner's #103 size exception (above).
 
 ## Build notes for M1b
 
 - W12-4: WSP-11 should cover ignored files outside `.shadow/`.
 - The mod has no close: claims are fixed when the session opens.
-- #97's mod finds the log root by walking up to the nearest `.git`. `open` should return the log path instead, so the mod does not guess.
+- #97's mod finds the log root by walking up to the nearest `.git`. `open` should return the log path instead.
 - #99's session heartbeat needs a test.
-- POSIX session containment, so the v2 native tests run on Linux (new, orch-5).
+- POSIX session containment, so the guarded v2 tests run on Linux (then remove their `windowsOnly`).
 
 ## For the owner
 
-- The live run, from `claude/63-m1a-integrate`.
+- #103's size exception. The live run, from `claude/63-m1a-integrate` at `2b78df6`.
 - Older: P-17's Windows cases; alpha Q4, deferred; the `Co-Authored-By: Ziggy` line on #81; the cockpit's "+" choice; build notes R-F-177, R-F-183, R-F-184.
 
 ## Notes
 
-- WSL: Ubuntu 24.04, git 2.43.0, with no global git identity or `init.defaultBranch`, and Node in `~/.local/node/bin`. Each worker uses its own clone at `~/ci/<name>`. `ci:local` always uses the shared `~/ci/shadow-army`, so never run two of those at once.
-- Worktrees left in place: `w16-linux-git`, `w16-linux-git-v2` and `w17-integrate`, plus those from orch-4's list. Removing them needs the owner's yes.
+- WSL: Ubuntu 24.04, git 2.43.0, Node in `~/.local/node/bin`. Each worker uses its own clone at `~/ci/<name>`; never two `ci:local` runs at once.
+- Worktrees left in place: `w16-linux-git`, `w16-linux-git-v2`, `w17-integrate`, `w18-*`, `w19-integrate-linux`, plus orch-4's list. Removing them needs the owner's yes.
 - Records are committed from `../AIConnections-worktrees/orchestrator-1-spec-review`, detached at the review branch, with `git push origin HEAD:claude/63-ultimate-spec-review`.
-- Previous handoff: `git show b0021fc:docs/spec/review/handoffs/LATEST.md`.
+- Previous handoff: `git show 0b6d799:docs/spec/review/handoffs/LATEST.md`.

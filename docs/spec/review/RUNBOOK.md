@@ -22,7 +22,7 @@ This section replaces sections 1 to 4 where they differ. The owner's words, tidi
 3. **Measure your context** from your line in `~/.claude/cockpit/current-context/<session id>.txt`. Never estimate it. The orchestrator stops at 175k, a worker at 150k.
 4. **Git.**
    - Run `git fetch origin` first and start from the current `origin/<base>`.
-   - Before every push, run `git pull --rebase origin <branch>`. It replays only your own unpushed commits.
+   - Before every push, run `git pull --rebase=merges origin <branch>`. It replays only your own unpushed commits and keeps merge commits (a plain `--rebase` flattened w19's merges, 2026-11-23).
    - Never force-push, never use `--no-verify`, never run `git add -A`.
    - CLAUDE.md's commit and PR rules apply: V6 sizes, `#63` subjects, the trailer.
 
