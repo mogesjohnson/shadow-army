@@ -51,7 +51,7 @@ async function post($: EngineInterface, runtime: Runtime, command: Record<string
     if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `post office command failed (${response.status})`);
     return body.result;
   } catch (error) {
-    throw new Error(safeText(error, runtime.credential));
+    throw new Error(safeText(error instanceof Error ? error.message : error, runtime.credential));
   }
 }
 
@@ -243,7 +243,7 @@ export const register: Register = (on) => {
   });
   on("command.run", { command: "send" }, async ($, e) => {
     try { return { text: await send($, e.args) }; }
-    catch (error) { return { text: show(`Shadow Army: ${safeText(error, active?.credential)}`) }; }
+    catch (error) { return { text: show(`Shadow Army: ${safeText(error instanceof Error ? error.message : error, active?.credential)}`) }; }
   }).catch((_$, _e, next) => ({ text: show(`Shadow Army: ${safeText(next.error.message)}`) }));
   on("session.end", async ($, e, next) => {
     const runtime = active;
