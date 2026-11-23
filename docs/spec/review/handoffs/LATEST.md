@@ -1,44 +1,43 @@
-# Handoff: orchestrator 4 (`c690b07d`) to orchestrator 5 (2026-11-23)
+# Handoff: orchestrator 5 (`aba81e8b`) to orchestrator 6 (2026-11-23)
 
 **State.**
-- **The pre-review's fixes are all in,** as draft PRs based on `claude/63-m1a-slice` (#94), with disjoint files. Merge them after #94, in any order:
+- **The live run can start.** `claude/63-m1a-integrate` (`22da257`, built by w17) is #94 with #96, #97 and #99 merged in (merge commits, no conflicts). On Windows, tsc, build and `npm test` pass (497 tests). It is a run branch with no PR. orch-5 told the owner on #94. The owner runs M1-AC29 from it.
+- **Linux failures, being fixed:**
 
-| PR | Head | Worker | Fixes | Files | Size |
+| PR | Head | Worker | Fix | Base | Size |
 |---|---|---|---|---|---|
-| #96 | `6a404f3` | w14 | W11-2, W11-4 (P1: sends now go over `node:http`) | `src/v2/claude.ts`, `client.ts`, their tests, `test/fakes/claude.mjs` | 98 lines, 5 files |
-| #97 | `0cf2427` | w15 | W12-5, W12-6, W12-4 as a known limit | `plugins/shadow-army/hooks/register.ts` and its test, `docs/v2-m1a-live-run.md` | 51 lines, 3 files |
-| #99 | `0d0f836` | w13 | W12-1 (P1), W12-2, W12-3, W11-1, W11-3 | `src/v2/postOffice.ts`, `postOffice.test.ts`, `postOffice.fixes.test.ts` | 311 lines, 3 files |
-| #98 | `82efdd3` | w10 | `npm run ci:local` (Windows, then WSL Ubuntu on a fresh clone) | `scripts/ci-local*.mjs`, `package.json`, `docs/ci-local.md` | 341 lines, 5 files, base `main` |
+| #100 | `88f38bc` | w16 | git 2.43's `git apply --intent-to-add` also stages modified and deleted files: `src/workspace/apply.ts` now runs a plain apply, then `git add -N -f`. The links test writes a relative gitdir on git before 2.48. All 6 failures on `main` pass on Linux. | `main` | 23 lines, 2 files |
+| #101 | `a73e593` | w16 | The same apply fix on #94: 3 of `src/v2/apply.test.ts`'s 4 failures pass. | #94 | 23 lines, 2 files |
 
-- Each fix PR reports `tsc`, build and `npm test` passing on Windows, with every new test failing on the old code. orch-4 checked each one's `git show --stat`, V6 sizes and body, and corrected the CI item in #96 and #97 to `not_run` (the workflows are disabled).
-- **#99's limit:** the 20-minute session heartbeat is not exercised by a test, only the per-turn renewal.
-- **Codex has not reviewed any of #89 to #99.**
-- **No workers are running.** All their tabs are closed.
-
-## Linux failures (from #98's PR comment)
-
-- `main` (`383c9ba`): 6 tests fail on Linux only (apply x4, links, monarch). On Windows, one vault test failed once (load flake suspected).
-- #94 (`8d3b298`): 36 tests fail in 9 files on Linux, and coverage falls to 86.24% lines. Windows passes in full (483 tests, 91.61%).
+- **Running: `w18-linux-channel`** (Sonnet, medium; brief `.shadow/v2-tools/tasks/w18-linux-channel.md`). It handles the 26 v2 tests that fail on Linux, plus `src/v2/slice.test.ts` and apply.test's "cancelled turn" test, which orch-5 added by message. The failure list is in `.shadow/v2-tools/tasks/w17-integrate-report.md`. Likely cause: session containment is Windows-only, so each native turn on Linux ends `interrupted` ("channel … is down"). **orch-5's decision:** M1a is Windows-only (D-39). Tests that fail only for that reason run on Windows only, through one shared guard that gives the reason. Any other cause gets fixed. No POSIX containment until M1b.
+  - Its files: the v2 test files above, one testutil and `test/fakes/**`. Source files only for a non-containment bug.
+  - Branches: `claude/63-m1a-linux-*`, with up to three stacked draft PRs (on #94, #96 and #99).
+  - It was told to report to orch-5. orch-5 has redirected it to `orch-6`.
+- Codex has reviewed none of #89 to #101.
+- Closed tabs: orch-4, w16, w17. Open: w18.
 
 ## Next
 
-1. **Turn the Linux failures into tasks.** Start with a triage: read #98's comment (`gh pr view 98 --comments`), group the failures by cause and file. Then one fix task per file group, keeping files disjoint between live workers. The v1 failures (apply, links, monarch) go on `main`. A v2 failure in a file #96, #97 or #99 owns stacks on that PR's branch. To run `ci:local` before #98 merges, see `docs/ci-local.md` on #98's branch.
-2. **An integration branch for the live run** (recommended, undoable, inside the repo): `claude/63-m1a-integrate` = #94 with #96, #97 and #99 merged in (merge commits), checked with `ci:local`. The owner runs M1-AC29 from it, since W11-4 and W12-1 both hit a live run. Tell the owner when it is ready.
-3. **Codex** reviews #95, #89 to #94 and #96 to #99 when the owner runs it. In replies to findings already fixed, name the fix PR. Merge only with Codex's approval at the head (V13, V14).
-4. **Build notes for M1b:**
-   - W12-4: WSP-11 should cover ignored files outside `.shadow/`.
-   - The mod's missing close: claims are fixed at session open.
-   - #97's mod finds the log root by walking up to the nearest `.git`. `open` should return the log path, so the mod does not guess (thin orchestrator; a submodule would mislead the walk).
-   - #99's session heartbeat needs a test.
+1. **Take w18's report.** Check each PR with `git show --stat`, V6 and its body, then close its tab. Check that only containment-caused tests are guarded: each skip needs the reason.
+2. **Re-run Linux on the integrate branch:** merge #101 and w18's PRs into `claude/63-m1a-integrate`, the same way w17 did, and run `npx vitest run` in a WSL clone. The target is 0 failures, with skips only for the stated reason. A small worker task: no source edits.
+3. **Codex** reviews #95, #89 to #94 and #96 to #101 when the owner runs it. Merge only with Codex's approval at the head (V13, V14). #100 and #98 are based on `main`.
+
+## Build notes for M1b
+
+- W12-4: WSP-11 should cover ignored files outside `.shadow/`.
+- The mod has no close: claims are fixed when the session opens.
+- #97's mod finds the log root by walking up to the nearest `.git`. `open` should return the log path instead, so the mod does not guess.
+- #99's session heartbeat needs a test.
+- POSIX session containment, so the v2 native tests run on Linux (new, orch-5).
 
 ## For the owner
 
-- The live run, best from the integration branch above.
+- The live run, from `claude/63-m1a-integrate`.
 - Older: P-17's Windows cases; alpha Q4, deferred; the `Co-Authored-By: Ziggy` line on #81; the cockpit's "+" choice; build notes R-F-177, R-F-183, R-F-184.
 
 ## Notes
 
-- Worker worktrees left in place: `../AIConnections-worktrees/w10-local-ci`, `w13-fix-office`, `w14-fix-channel`, `w15-fix-mod`, plus the reviewers' `w11-review` and `w12-review`. Removing them needs the owner's yes, after the merges.
+- WSL: Ubuntu 24.04, git 2.43.0, with no global git identity or `init.defaultBranch`, and Node in `~/.local/node/bin`. Each worker uses its own clone at `~/ci/<name>`. `ci:local` always uses the shared `~/ci/shadow-army`, so never run two of those at once.
+- Worktrees left in place: `w16-linux-git`, `w16-linux-git-v2` and `w17-integrate`, plus those from orch-4's list. Removing them needs the owner's yes.
 - Records are committed from `../AIConnections-worktrees/orchestrator-1-spec-review`, detached at the review branch, with `git push origin HEAD:claude/63-ultimate-spec-review`.
-- Three workers running `npm test` at once slow every run to several minutes. Expect that and don't treat it as a hang.
-- Previous handoff: `git show 7c91a40:docs/spec/review/handoffs/LATEST.md`.
+- Previous handoff: `git show b0021fc:docs/spec/review/handoffs/LATEST.md`.
