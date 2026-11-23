@@ -86,6 +86,12 @@ describe("the /send command (M1-AC23)", () => {
     expect(commands.find((c) => c.action === "send")).toEqual({ action: "send", soldier: "claude-sonnet", text: "write the parser", claims: ["src/a.ts", "docs/**"] });
   });
 
+  it("opens the soldier with the command's claims, so the post office makes it a write session", async () => {
+    const { send, commands } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("Tank --claim src/a.ts --claim docs/** write the parser");
+    expect(commands.find((c) => c.action === "open")).toEqual({ action: "open", soldier: "claude-sonnet", claims: ["src/a.ts", "docs/**"] });
+  });
+
   it("sends nothing, and says why, with no claim, no brief, an unknown soldier or one that cannot build", async () => {
     const { send, spawns, commands } = await mod();
     expect(await send("")).toMatch(/^Usage: \/send/);

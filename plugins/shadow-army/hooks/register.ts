@@ -231,7 +231,7 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (!soldier) return "Nothing sent: unknown soldier.";
   if (!soldier.supported || !soldier.roles.includes("build")) return show(`Nothing sent: ${soldier.name} is not a claude soldier with the build role.`);
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
-  const opened = await post($, runtime, { action: "open", soldier: soldier.key }) as { session?: string };
+  const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
   return card(soldier, delivery, `${runtime.cwd}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
