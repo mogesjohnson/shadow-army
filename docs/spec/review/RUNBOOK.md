@@ -10,7 +10,7 @@ This section replaces sections 1 to 4 where they differ. The owner's words, tidi
 
 - The next session is the orchestrator. It opens new terminal tabs with the trace-computer skill.
 - Each tab's session does one task and reports back, and the orchestrator closes its tab.
-- At 300k the orchestrator writes a handoff and starts the next orchestrator, which it tells that workers stop at 150k.
+- At 175k (the owner, 2026-11-23; it was 300k) the orchestrator writes a handoff and starts the next orchestrator, which it tells that workers stop at 150k.
 - One session works on a file or set of files at a time; different files may change in parallel. Merges must go well, pulling current first.
 - The orchestrator makes the decisions, and the owner goes with its suggestions. Big changes and architecture questions go in `suggested.md`.
 - Every session says hi to the API every 50 minutes. This is mandatory.
@@ -19,7 +19,7 @@ This section replaces sections 1 to 4 where they differ. The owner's words, tidi
 
 1. **The hi timer (mandatory).** First, start `sleep 3000` with the Bash tool, `run_in_background: true`. Each time it ends, reply `hi` (nothing more when idle) and start it again at once, working or idle, until your tab closes. It keeps the 1-hour prompt cache warm (the cockpit mod's `FORKING.md`).
 2. **Name your task** in the cockpit's task file, as its prompt hook asks.
-3. **Measure your context** from your line in `~/.claude/cockpit/current-context/<session id>.txt`. Never estimate it. The orchestrator stops at 300k, a worker at 150k.
+3. **Measure your context** from your line in `~/.claude/cockpit/current-context/<session id>.txt`. Never estimate it. The orchestrator stops at 175k, a worker at 150k.
 4. **Git.**
    - Run `git fetch origin` first and start from the current `origin/<base>`.
    - Before every push, run `git pull --rebase origin <branch>`. It replays only your own unpushed commits.
@@ -98,12 +98,12 @@ Workers are named `w<n>-<task>`.
 
 **Merge** with merge commits only (V13), after retargeting the PRs stacked on the branch (V14). Merge only with Codex's approval at the exact head. Workers on the shared review branch run one at a time.
 
-**At 300k:**
+**At 175k:**
 1. Make section 3's save point. Its `LATEST.md` also names the running workers, their tasks and their files.
 2. Launch `orch-<n+1>` the same way with this line, then stop:
 
    ```
-   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 300k. First start your hi timer, then close the tab of orch-<n> once the cockpit marks it parked."
+   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 175k. First start your hi timer and the 5-minute watch, then close the tab of orch-<n> once the cockpit marks it parked."
    ```
 
 ### 0.3 A worker

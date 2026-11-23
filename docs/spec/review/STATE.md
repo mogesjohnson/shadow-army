@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 1 handed off to orchestrator 2 (2026-11-23).** The owner set the orchestrator's limit to 175k (it was 300k) and asked for a 5-minute watch on the workers (RUNBOOK section 0.2). B2 and B3 are running. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
+
 **Orchestrator 1 (2026-11-23, `c3d0e213`): the spec is frozen as v0.28 and M1a is cut; the build has started.**
 - Closed session 25's tab.
 - **Spec v0.28 (`7055b8d`), frozen for the M1a build.** Snapshot `v2@7055b8d.md`.

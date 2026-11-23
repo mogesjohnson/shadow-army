@@ -1,68 +1,56 @@
-# Handoff: session 25 (`44bad808`) to orchestrator 1 (2026-11-23)
+# Handoff: orchestrator 1 (`c3d0e213`) to orchestrator 2 (2026-11-23)
 
 **State.**
-- **The owner changed the rules.** D-39 and flow section 0 make the work prototype first. RUNBOOK section 0 sets out how sessions work.
-- **You are orchestrator 1 (`orch-1`).** You hand off at 300k; workers stop at 150k. Every session says hi every 50 minutes.
-- **The spec is v0.27 (`1d99e92`), unchanged.** Round 5 for F ran: 2 P1, 8 P2 and 5 P3, all unverified. Round 5 for M1 did not run, and now it won't.
-- **Previous handoff:** `git show c673348:docs/spec/review/handoffs/LATEST.md`.
+- **The spec is frozen as v0.28** (`7055b8d`; snapshot `.shadow/v2-tools/review/snapshots/v2@7055b8d.md`). F and M1 have no open P0 or P1.
+- **M1a is the slice** (v2.md section 6, under M1):
+  - requirements HOST-2, PO-1, PO-2, PO-3, PO-7, CH-1, CH-2, SI-2, SEC-6, WSP-11, VER-1 and VER-8, plus HOST-11 and WSP-2 pulled forward;
+  - ACs M1-AC23 to M1-AC29, each naming its test;
+  - the command `/send <soldier> --claim <path> <brief>`.
+- **B1 is done:** #75's transport, cut to M1a, on `claude/63-m1a-transport` (`2ab8925`, 19 commits within V6, no PR yet, `suggested.md` S-3). Locally on Windows: 457 tests pass, 91.51% line coverage.
+- **CI is off.** The CI, PR format and mac probes workflows are all disabled by hand on GitHub, so local runs are the only evidence. Turning them on is the owner's call.
+- **Previous handoff:** `git show 5d1b013:docs/spec/review/handoffs/LATEST.md`.
+
+**Limits (the owner, 2026-11-23).**
+- You hand off at **175k**; workers stop at 150k.
+- Workers launch at medium effort.
+- Watch the workers every 5 minutes with `.shadow/v2-tools/tools/check_workers.py <your id prefix>` (RUNBOOK section 0.2).
 
 **First:**
-1. Close session 25's tab, titled "T3code vs Shadow Army", once the cockpit marks session `44bad808` parked. Use TRACE: `invoke` its `Close Tab` button (RUNBOOK section 0.2).
-2. Start your hi timer.
+1. Start your hi timer and the 5-minute watch timer.
+2. Close orch-1's tab once the cockpit marks `c3d0e213` parked.
+
+## Running workers
+
+Both run Sonnet at medium. Their briefs are in `.shadow/v2-tools/tasks/`, and they report to `orch-2` (told by message and in their briefs).
+
+| Worker | Session | Task | Files | Branch |
+|---|---|---|---|---|
+| `w6-mod-send` | `a735f860` | B2: `/send` and the summary row (M1-AC23, M1-AC25) | `plugins/shadow-army/**`, `src/v2/modRelay.ts`, new tests | `claude/63-m1a-mod`, draft PR on B1's branch |
+| `w7-write-path` | `322d14a7` | B3: claims, claim audit and guard (M1-AC24, M1-AC26, M1-AC27) | `src/v2/postOffice.ts` and its test, `channel.ts`, new tests | `claude/63-m1a-write`, draft PR on B1's branch |
+
+Both were started at 90% of the 5-hour figure, on the owner's word. If the limit stops one, its hi timer resumes it after the reset.
 
 ## Next
 
-One worker per task. T1 to T3 all change `docs/spec/v2.md` and `ledger.md`, so they run one after another. T4 changes neither, so it may run beside them.
-
-- **T1. F's round 5** (Opus, high).
-  1. Give round 5's findings rows from R-F-173. They come from `raw/F-R5-implementer.md` and `raw/F-R5-enterprise.md`.
-  2. Verify the two P1s with one `spec-verifier` each (Opus, high), with packets in `batches/`.
-     - The implementer's P1 is at Appendix D rows 8 and 9, WSP-10 and CH-1.
-     - The enterprise operator's P1 is at PO-5, WSP-10, PO-1 and §1's non-goals.
-  3. Fix each confirmed P1. Both checkers must give 0 problems.
-  4. Mark the 8 P2s and the P3s `build note`.
-  5. Commit and push on `claude/63-ultimate-spec-review`.
-
-  Files: `v2.md`, `ledger.md`, `batches/F-R5-*` and `raw/F-R5-V*`.
-- **T2. Close M1** (Sonnet, medium).
-  1. List every M1 row in `ledger.md` that is a confirmed P0 or P1 not yet fixed, and every open DECISION or NEEDS-PROBE. R-M1-236 / P-17 is one of them.
-  2. Fix those that have paste-ready text.
-  3. Send the rest to the orchestrator as one list.
-
-  Files: `v2.md`, `ledger.md`.
-- **T3. Freeze and cut** (Opus, high).
-  1. Make spec v0.28: update the Version row and split M1 into M1a, the slice below, and M1b, the rest.
-  2. Run the trace checker (0 problems).
-  3. Make the snapshot `v2@<sha>.md`.
-
-  Files: `v2.md`, `ledger.md`'s summary and `STATE.md`.
-- **T4. Read #75** (Sonnet, medium; read-only, so it may run beside T1 to T3).
-  - Read Codex's draft at `../AIConnections-worktrees/m1` (`04ab953`).
-  - List which of its files the slice can reuse, what fails CI, and the smallest change that makes CI green.
-
-  It writes only `.shadow/v2-tools/tasks/T4-report.md`.
-- **T5 and on. Build the slice.**
-  - The orchestrator splits the work by files after T3 and T4. Parallel workers each get their own branch, with PRs stacked where one needs another.
-  - `suggested.md` S-2 says who builds it: Claude workers, on a new branch from `main`.
-
-## The slice (M1a): the prototype the owner can watch
-
-1. One command in Claude Code sends a brief to one claude soldier. The post office holds that soldier live in its own worktree (CH-2).
-2. The soldier's summary comes back as a row in the transcript (HOST-11).
-3. After the turn, the claim audit and the checkout guard run (WSP-2, WSP-11; v1's `src/workspace/` code).
-4. The change is applied to the owner's folder, uncommitted.
-
-The slice is Windows only; macOS and Linux say "Not tested" (D-34). Left out: the pane, the strip, the codex, grok and agy channels, the meter, the handoff, and any lease detail beyond what stops the post office outliving the session. T3 picks the exact requirement and AC IDs.
+1. **Check B2's and B3's reports.** Run `git show --stat` on each, check the PR bodies against CLAUDE.md, and check the local test and coverage figures. Then close their tabs.
+2. **B4: apply** (M1-AC28). Stack it on B3's branch: a new `src/v2/apply.ts` and its test wrap v1's `workspace/apply.ts`, plus one call site in `postOffice.ts`. The change lands in the owner's folder uncommitted. Write the brief in the shape of `w7-write-path.md`.
+3. **M1-AC29, the live run,** needs the owner: a real claude soldier in one of the owner's own repositories, on Windows. Write the steps for the owner once B2 to B4 are in.
+4. **Codex reviews the code PRs** when the owner runs Codex. Merge only with Codex's approval at the head, with merge commits (V13, V14).
 
 ## For the owner
 
-None of these blocks the work.
-
-- `suggested.md`: S-1 (a T3 Code trial; it waits for the owner because it installs software) and S-2.
-- Older open questions:
+- **S-3:** how B1 reaches review. The recommendation is one PR under a V6 size exception, in the owner's words.
+- **CI:** the workflows are disabled.
+- **S-1:** the T3 Code trial; it installs software.
+- **Older open questions:**
   - P-17's Windows cases;
   - alpha Q4, deferred;
   - the `Co-Authored-By: Ziggy` line on #81;
   - the cockpit's "+" choice.
-- **PR #83** is about 35k lines. Merging it needs a V6 size exception in the owner's words and Codex's approval, so it stays open as the record.
-- **Code PRs wait for Codex's review**, which runs when the owner runs Codex.
+- **Choices left to the builder:** build notes R-F-177, R-F-183 and R-F-184.
+
+## Notes
+
+- Run the spec checkers on the committed LF text: on the CRLF working copy, `trace-v2.mjs` reports false problems.
+- Lead each launch prompt with the task. Near-identical prompts started together trip the cockpit's duplicate stop, as happened to w7's first launch.
+- orch-1 committed its records from `../AIConnections-worktrees/orchestrator-1-spec-review`, detached at the review branch, with `git push origin HEAD:claude/63-ultimate-spec-review`. You can reuse that worktree.
