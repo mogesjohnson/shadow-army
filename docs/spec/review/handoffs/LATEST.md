@@ -1,33 +1,68 @@
-# Handoff: session 24, the main session (session "main"), to the next session (2026-10-30)
+# Handoff: session 25 (`44bad808`) to orchestrator 1 (2026-11-23)
 
-Written by the main session at its save point, at about 122k by the cockpit's context line. **v0.27 is applied** (V26-FC1's six P3 repairs) and **round 5 for F has run**: two reviewers, **not clean** (2 P1 and 8 P2 to verify). Round 5 for M1 has not run. The previous handoff is `git show b484a8d:docs/spec/review/handoffs/LATEST.md`.
+**State.**
+- **The owner changed the rules.** D-39 and flow section 0 make the work prototype first. RUNBOOK section 0 sets out how sessions work.
+- **You are orchestrator 1 (`orch-1`).** You hand off at 300k; workers stop at 150k. Every session says hi every 50 minutes.
+- **The spec is v0.27 (`1d99e92`), unchanged.** Round 5 for F ran: 2 P1, 8 P2 and 5 P3, all unverified. Round 5 for M1 did not run, and now it won't.
+- **Previous handoff:** `git show c673348:docs/spec/review/handoffs/LATEST.md`.
 
-## How this session worked
-
-Three forks, one after another. fork1 drafted v0.27 in `drafts/v027/`, and main applied it and froze `v2@1d99e92.md`. fork2 wrote round 5's F packet (`drafts/r5/PROMPTS-F.md`), but reached 121k before starting the agents (RUNBOOK section 3), so it stopped. fork3 ran F's two reviewers from that packet. Main read only the forks' one-line reports and the checkers' output. **Lesson:** writing a round's packet cost fork2 about 50k (72k to 121k), so a fork that writes a packet can't also run its agents. Give the packet and the run to separate forks, as this session did by accident.
-
-## The range
-
-- Start `b484a8d`. End: the commit that last changed this file. `git diff b484a8d..HEAD --stat` shows it all.
-- Paths: `docs/spec/v2.md`; `ledger.md`; `drafts/v027/` (`repairs1.txt`, `pairs1.json`, `rows1.txt`, `ledger1.json`); `drafts/r5/PROMPTS-F.md`; `raw/F-R5-implementer.md`, `raw/F-R5-enterprise.md`.
-- Commits: `dc17bd4` (fork1's drafts), `1d99e92` (v0.27 applied), `4406264` (F's round 5 packet), `4b0c2c9` (F's round 5 reports).
-
-## What is finished
-
-- **v0.27** (fork1's drafts, applied by main at `1d99e92`): 8 spec pairs (WSP-10 792 and 795, M1-AC10 1105 and 1109, residual 15, the **Version** row), rows R-M1-295 to 300, and 7 ledger verdicts (V26-FC1's on R-M1-289 to 294, and item 1e on R-M1-280). fork1's choices are in `repairs1.txt`'s header. N5 split 1105 into two bullets, so v0.27's lines after 1105 are one later than v0.26's. Both checkers give 0 problems: `trace-v2.mjs` on an LF copy against `v2@a411314.md` (119 requirements, 81 ACs), and `check-appendix-c.mjs`. `git diff --check` is clean.
-- **Snapshot frozen:** `.shadow/v2-tools/review/snapshots/v2@1d99e92.md` (1,867 lines, LF, in the main checkout's `.shadow`).
-- **Round 5 for F** on `v2@1d99e92.md`. Lenses: implementer and enterprise operator. F has never had the enterprise operator; the implementer last ran in round 3, and the red team in round 4. Both ran as `spec-reviewer`, Opus, high. New rows start at R-F-173.
-  - `raw/F-R5-implementer.md`: P0 0, P1 1, P2 4, P3 2. The P1 is at Appendix D rows 8 and 9 (1831-1832), WSP-10 795-796 and CH-1 499. The P2s are at VER-7 1015 with Appendix B rule 7 at 1471, VER-7 1015, VER-2 1004 with VER-6 1008-1010 and M1-AC7 1099, and §5.1's budget at 990.
-  - `raw/F-R5-enterprise.md`: P0 0, P1 1, P2 4, P3 3. The P1 is at PO-5, WSP-10, PO-1 and §1's non-goals. The P2s are at PO-5 Disk with residual 15 (257-259, 1865), HOST-2's proxy check (119, 114), §1 with PO-12 to PO-14, PO-19 and HOST-1, and §1 with §5.1 (919-999).
+**First:**
+1. Close session 25's tab, titled "T3code vs Shadow Army", once the cockpit marks session `44bad808` parked. It was not started with `; exit`, so close the tab itself (ctrl+shift+w).
+2. Start your hi timer.
 
 ## Next
 
-1. **Verify F's round 5 P0 to P2** (2 P1, 8 P2) with `spec-verifier` agents, by flow section 4 (rules 4 and 6: a P1's second verifier only if the first confirms it). Two or three agents at a time. Packets go in `batches/`, and reports in `raw/`. Then draft and apply the repairs (P3s as proposed), and count the round. If F fails round 5, flow line 122 calls for a design note to the owner.
-2. **Round 5 for M1**: write `drafts/r5/PROMPTS-M1.md` from `drafts/r4/PROMPTS.md`'s M1 prompt on `v2@1d99e92.md`. M1 had red team and enterprise operator in round 3, and chaos engineer and implementer in round 4, so pick the next two by flow line 109. Then run the pair. **Use one fork to write the packet and another to run the agents.**
-3. Items 1 and 2 touch different files, so two forks can do them at once, but not with more than three agents running in total.
+One worker per task. T1 to T3 all change `docs/spec/v2.md` and `ledger.md`, so they run one after another. T4 changes neither, so it may run beside them.
 
-## Left open
+- **T1. F's round 5** (Opus, high).
+  1. Give round 5's findings rows from R-F-173. They come from `raw/F-R5-implementer.md` and `raw/F-R5-enterprise.md`.
+  2. Verify the two P1s with one `spec-verifier` each (Opus, high), with packets in `batches/`.
+     - The implementer's P1 is at Appendix D rows 8 and 9, WSP-10 and CH-1.
+     - The enterprise operator's P1 is at PO-5, WSP-10, PO-1 and §1's non-goals.
+  3. Fix each confirmed P1. Both checkers must give 0 problems.
+  4. Mark the 8 P2s and the P3s `build note`.
+  5. Commit and push on `claude/63-ultimate-spec-review`.
 
-- The owner's other questions are unchanged: P-17's Windows cases, the haiku model mismatch, alpha Q4 deferred until A6, the `Co-Authored-By: Ziggy` line on PR #81, and the cockpit mod's "+" choice. Main's N2 call from session 22 is SOUND by V26-FC1; the owner may still overrule it.
-- Progress figures: the spec review is about 75 to 80% done by work. Neither milestone has a clean round yet, and round 5 is the last the flow allows, so F's and M1's results decide whether the owner gets design notes.
-- The cheaper process (Sonnet drafting forks, owner calls settled before forks start) is still not adopted.
+  Files: `v2.md`, `ledger.md`, `batches/F-R5-*` and `raw/F-R5-V*`.
+- **T2. Close M1** (Sonnet, medium).
+  1. List every M1 row in `ledger.md` that is a confirmed P0 or P1 not yet fixed, and every open DECISION or NEEDS-PROBE. R-M1-236 / P-17 is one of them.
+  2. Fix those that have paste-ready text.
+  3. Send the rest to the orchestrator as one list.
+
+  Files: `v2.md`, `ledger.md`.
+- **T3. Freeze and cut** (Opus, high).
+  1. Make spec v0.28: update the Version row and split M1 into M1a, the slice below, and M1b, the rest.
+  2. Run the trace checker (0 problems).
+  3. Make the snapshot `v2@<sha>.md`.
+
+  Files: `v2.md`, `ledger.md`'s summary and `STATE.md`.
+- **T4. Read #75** (Sonnet, medium; read-only, so it may run beside T1 to T3).
+  - Read Codex's draft at `../AIConnections-worktrees/m1` (`04ab953`).
+  - List which of its files the slice can reuse, what fails CI, and the smallest change that makes CI green.
+
+  It writes only `.shadow/v2-tools/tasks/T4-report.md`.
+- **T5 and on. Build the slice.**
+  - The orchestrator splits the work by files after T3 and T4. Parallel workers each get their own branch, with PRs stacked where one needs another.
+  - `suggested.md` S-2 says who builds it: Claude workers, on a new branch from `main`.
+
+## The slice (M1a): the prototype the owner can watch
+
+1. One command in Claude Code sends a brief to one claude soldier. The post office holds that soldier live in its own worktree (CH-2).
+2. The soldier's summary comes back as a row in the transcript (HOST-11).
+3. After the turn, the claim audit and the checkout guard run (WSP-2, WSP-11; v1's `src/workspace/` code).
+4. The change is applied to the owner's folder, uncommitted.
+
+The slice is Windows only; macOS and Linux say "Not tested" (D-34). Left out: the pane, the strip, the codex, grok and agy channels, the meter, the handoff, and any lease detail beyond what stops the post office outliving the session. T3 picks the exact requirement and AC IDs.
+
+## For the owner
+
+None of these blocks the work.
+
+- `suggested.md`: S-1 (a T3 Code trial; it waits for the owner because it installs software) and S-2.
+- Older open questions:
+  - P-17's Windows cases;
+  - alpha Q4, deferred;
+  - the `Co-Authored-By: Ziggy` line on #81;
+  - the cockpit's "+" choice.
+- **PR #83** is about 35k lines. Merging it needs a V6 size exception in the owner's words and Codex's approval, so it stays open as the record.
+- **Code PRs wait for Codex's review**, which runs when the owner runs Codex.
