@@ -197,7 +197,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
 
 interface Soldier { key: string; name: string; roles: string[]; supported: boolean }
 /** The turn result the post office returns. The claim audit and the apply (B3, B4) put their outcome in `write`. */
-type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write">;
+type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write" | "refusal">;
 
 /** SEC-6: each Cc or Cf character except newline and tab shows as a placeholder such as \u{1b}. */
 function show(text: unknown): string {
@@ -216,13 +216,27 @@ function parseSend(args: string): { name?: string; claims: string[]; brief: stri
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
 export function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
   const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || delivery.error?.message || "no summary";
+  // M1-AC25: when the turn did not complete or the claim audit left no `write`, the error says why (a thrown audit leaves no other trace).
+  const why = delivery.status !== "completed" || !delivery.write ? delivery.error?.message : undefined;
+  const error = why && why !== summary ? `\nError: ${why}` : "";
   const apply = delivery.write?.apply;
   const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`
-    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || "no change was applied"}`;
+    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || why || "no change was applied"}`;
   const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];
   const reverted = outside.length ? `
 Reverted, outside its claims: ${outside.join(", ")}` : "";
-  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}\n${summary}\nLog: ${log}\n${files}${reverted}`), credential);
+  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}${delivery.refusal ? " (refused)" : ""}\n${summary}${error}\nLog: ${log}\n${files}${reverted}`), credential);
+}
+
+/** The post office writes its logs under the repository root, which can sit above Claude's cwd: the nearest folder up that holds `.git`. */
+async function repoRoot($: EngineInterface, cwd: string): Promise<string> {
+  let dir = cwd.replace(/[\\/]+$/, "");
+  for (;;) {
+    if (await $.fs.exists(`${dir}/.git`)) return dir;
+    const up = dir.replace(/[\\/][^\\/]*$/, "");
+    if (!up || up === dir) return cwd;
+    dir = up;
+  }
 }
 
 async function send($: EngineInterface, args: string): Promise<string> {
@@ -238,7 +252,8 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
   const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
-  return card(soldier, delivery, `${runtime.cwd}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
+  const root = await repoRoot($, runtime.cwd);
+  return card(soldier, delivery, `${root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
 
 export const register: Register = (on) => {

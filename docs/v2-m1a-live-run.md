@@ -99,6 +99,7 @@ Paste these, in this order:
 - **Changing claims needs a new session.** A soldier's claims are fixed when its session opens. A later `/send` with different claims is refused with the post office's reason, shown on the card, for example `claude-sonnet holds claims notes/**; close its session before sending other claims`. The mod has no close command yet. To change claims, exit Claude Code and start it again, then send. The earlier work stays on the soldier's branch.
 - **A second turn that edits a file an earlier turn already applied is refused.** The card says `Not applied:` with the clash reason and the file. Your folder is unchanged and the work stays on the soldier's branch (`shadow/...`). Ask for a new file instead, as brief two does.
 - **Your own edits.** If you changed a file in your folder that the soldier also changed, it is not applied and the card says so.
+- **Ignored files in your folder are not guarded (W12-4).** If a soldier writes a git-ignored file there by absolute path, such as `.env` or something under `node_modules/` or `dist/`, neither the claim audit nor the checkout guard sees it, because the guard's `git status` runs without `--ignored`. Keep nothing you care about in ignored files during the live run; M1b's guard should cover them.
 - **One command, one soldier.** `/send` takes one claude soldier with the build role. There is no pane, no cancel command and no merge or commit of the result.
 
 ## Not tested
