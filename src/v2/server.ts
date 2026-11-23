@@ -36,6 +36,13 @@ async function folderLock(root: string): Promise<() => Promise<void>> {
   return async () => { if (await readFile(path, "utf8").catch(() => "") === record) await unlink(path); };
 }
 
+/** `/send --claim` arrives as `claims`: a list of non-empty path patterns, or nothing. */
+function turnOptions(claims: unknown): { claims?: string[] } {
+  if (claims === undefined) return {};
+  if (!Array.isArray(claims) || claims.some((c) => typeof c !== "string" || !c.trim())) throw new Error("claims must be a list of non-empty path patterns");
+  return claims.length ? { claims: claims as string[] } : {};
+}
+
 export async function startOfficeServer(options: ServerOptions): Promise<OfficeServer> {
   const host = options.host ?? "127.0.0.1";
   if (host !== "127.0.0.1" && host !== "::1") throw new Error(`post office refuses non-loopback address ${host}`);
@@ -83,10 +90,10 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
               office.leaseEnded(lease.session, "released");
               value = { ok: true }; break;
             case "army": value = office.army(); break;
-            case "open": value = await office.open(key); break;
+            case "open": value = await office.open(key, turnOptions(command.claims)); break;
             case "send":
               if (typeof command.text !== "string") throw new Error("send requires text");
-              value = await office.send(key, command.text); break;
+              value = await office.send(key, command.text, turnOptions(command.claims)); break;
             case "interrupt": await office.interrupt(key); value = { ok: true }; break;
             case "approval":
               if (typeof command.requestId !== "string") throw new Error("approval requires requestId");

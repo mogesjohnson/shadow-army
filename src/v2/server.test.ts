@@ -1,6 +1,7 @@
 import { connect, type Socket } from "node:net";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { makeRoster } from "../core/roster.testutil.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { startOfficeServer, type OfficeServer } from "./server.js";
@@ -59,6 +60,23 @@ describe("M1 authenticated loopback command server", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
   }, 20_000);
+
+  it("passes a command's claims to open and send, so a claims turn is applied to the owner's folder", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const builders = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true } });
+    const server = await startOfficeServer({ cwd: repo.dir, credential, roster: builders, channelFactory: (options) => ({
+      async send() { await mkdir(dirname(join(options.cwd, "src/a.ts")), { recursive: true }); await writeFile(join(options.cwd, "src/a.ts"), "from the soldier\n"); return { status: "completed", text: "done", refusal: false }; },
+      async interrupt() {}, async respondApproval() {}, async close() {},
+    }) }); servers.push(server);
+    const opened = await (await command(server, { action: "open", soldier: "tank", claims: ["src/a.ts"] })).json() as { result: { branch?: string } };
+    expect(opened.result.branch).toMatch(/^shadow\//);
+    const sent = await (await command(server, { action: "send", soldier: "tank", text: "edit", claims: ["src/a.ts"] })).json() as { result: { write: { inScope: string[]; apply: { applied: boolean } } } };
+    expect(sent.result.write.inScope).toEqual(["src/a.ts"]);
+    expect(sent.result.write.apply.applied).toBe(true);
+    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("from the soldier\n");
+    expect((await command(server, { action: "send", soldier: "tank", text: "edit", claims: "src/a.ts" })).status).toBe(400);
+    expect((await command(server, { action: "send", soldier: "tank", text: "edit", claims: [""] })).status).toBe(400);
+  }, 30_000);
 
   it("enforces a folder singleton and releases its non-secret lock on shutdown", async () => {
     const { repo, server } = await setup();
