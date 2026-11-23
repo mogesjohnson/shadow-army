@@ -12,6 +12,7 @@ import { startOfficeServer, type OfficeServer } from "./server.js";
 import type { OfficeEvent } from "./postOffice.js";
 import { card } from "../../plugins/shadow-army/hooks/register.js";
 import { credential } from "./fixture-main.testutil.js";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 
 const fake = fileURLToPath(new URL("../../test/fakes/claude.mjs", import.meta.url));
 const servers: OfficeServer[] = [];
@@ -44,7 +45,7 @@ function fakeWithWrites() {
 }
 
 describe("M1a slice, end to end with the fake claude (no real model)", () => {
-  it("sends a brief with claims over the authenticated command route, applies the claimed change uncommitted, reverts and names a write outside the claims, and refuses a clash", async () => {
+  windowsOnly("sends a brief with claims over the authenticated command route, applies the claimed change uncommitted, reverts and names a write outside the claims, and refuses a clash", async () => {
     const repo = makeRepo(); cleanups.push(() => repo.cleanup());
     const { wrapper, plan } = fakeWithWrites();
     const events: OfficeEvent[] = [];
