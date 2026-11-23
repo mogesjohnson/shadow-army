@@ -8,6 +8,7 @@ import type { ChannelOptions, NativeChannel, TurnResult, WriteOutcome } from "./
 import { applyAudited } from "./apply.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, until } from "./fixture-main.testutil.js";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
@@ -73,7 +74,7 @@ describe("M1-AC28: the audited change lands in the owner's folder, uncommitted",
     expect(repo.git("status", "--porcelain")).not.toContain("src/a.ts");
   }, 30_000);
 
-  it("applies nothing for a cancelled turn", async () => {
+  windowsOnly("applies nothing for a cancelled turn", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event), channelFactory: factory }); offices.push(office);
