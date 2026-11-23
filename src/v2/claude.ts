@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
+import { redact } from "./logs.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 type Frame = Record<string, unknown>;
@@ -11,6 +12,9 @@ const object = (value: unknown): Frame | undefined => value !== null && typeof v
 const number = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 const string = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+/** CH-1: one unparseable line is an error and the session carries on; this many in a row is a lost connection. */
+export const MAX_BAD_LINES_IN_A_ROW = 10;
+const BAD_LINE_EXCERPT = 200;
 
 interface PendingTurn {
   id: string;
@@ -74,6 +78,7 @@ export class ClaudeChannel implements NativeChannel {
   private closed = false;
   private acceptFrames = true;
   private drainTerminal = false;
+  private badLines = 0;
   private closingResult?: TurnResult;
   private reason: NativeError = { kind: "transport", message: "Claude channel closed" };
   private stopTimer?: NodeJS.Timeout;
@@ -138,7 +143,16 @@ export class ClaudeChannel implements NativeChannel {
   private parseLine(line: string): void {
     let frame: Frame | undefined;
     try { frame = object(JSON.parse(line)); } catch { /* A malformed protocol cannot safely delimit the active turn. */ }
-    if (!frame || typeof frame.type !== "string") { void this.failTransport("Claude emitted malformed JSON frame"); return; }
+    if (!frame || typeof frame.type !== "string") {
+      this.badLines++;
+      const excerpt = line.length > BAD_LINE_EXCERPT ? `${line.slice(0, BAD_LINE_EXCERPT)}...` : line;
+      const message = `Claude emitted an unparseable line: ${String(redact(excerpt))}`;
+      this.emit("raw", { type: "unparseable_line", text: String(redact(excerpt)) });
+      if (this.badLines >= MAX_BAD_LINES_IN_A_ROW) void this.failTransport(`Claude connection lost: ${MAX_BAD_LINES_IN_A_ROW} unparseable lines in a row`);
+      else this.emit("error", { kind: "other", message } satisfies NativeError);
+      return;
+    }
+    this.badLines = 0;
     this.emit("raw", frame);
     if (typeof frame.session_id === "string") this.sessionId = frame.session_id;
     const response = object(frame.response);
