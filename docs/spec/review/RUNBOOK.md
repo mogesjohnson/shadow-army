@@ -56,10 +56,13 @@ Workers are named `w<n>-<task>`.
 1. Open the tab from the PowerShell tool:
 
    ```
-   wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n <name> --model <opus|sonnet> --effort <level> "You are worker <name>. Read C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md and do that one task, under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."
+   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n <name> --model <opus|sonnet> --effort <level> "You are worker <name>. Read C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md and do that one task, under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."
    ```
 
-   Put no `;` in the prompt, because `wt` reads it as a command separator. The tab closes by itself when Claude Code ends.
+   - **Clear the `CLAUDE*` variables first,** as the line does. A tab opened from inside a session inherits them: that session's id, its messaging socket, and a child-session marker that turns off transcript saving (found 2026-11-23). The owner's settings set `CLAUDE_CODE_PLUGIN_DIRS` again.
+   - **Put no `;` in the prompt.** `wt` reads it as a command separator.
+   - The tab closes by itself when Claude Code ends.
+   - Check that the new tab's status bar does not say "Transcript saving is off".
 2. Check it with TRACE (read the trace-computer-use skill and its references first):
    1. Run `trace_computer_list_windows` with `processName: "WindowsTerminal"`, and open a session on that window.
    2. Observe the tab bar with `rootElementId: "TabView"`, `accessibilityDepth: 3`, `interactiveOnly: true` and `screenshot: "none"`.
@@ -85,7 +88,7 @@ Workers are named `w<n>-<task>`.
 2. Launch `orch-<n+1>` the same way with this line, then stop:
 
    ```
-   wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 300k. First start your hi timer, then close the tab of orch-<n> once the cockpit marks it parked."
+   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 300k. First start your hi timer, then close the tab of orch-<n> once the cockpit marks it parked."
    ```
 
 ### 0.3 A worker
