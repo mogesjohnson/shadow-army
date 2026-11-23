@@ -12,12 +12,12 @@ Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update
   - M1b is the rest of M1, unchanged.
 - Done: `w3-close-m1`, T2 (`4b78126`). M1 has no open P0 or P1. R-M1-1, 2 and 57 are recorded as answered (D-9, D-10, D-16); R-M1-93, 98, 152, 155, 218 and 236 are build notes.
 - Done: `w5-freeze-cut`, T3 (`7055b8d`).
-- Workers running, with briefs in `.shadow/v2-tools/tasks/`:
-  - `w4-port-transport`, B1 (Sonnet, high): #75's transport cut to M1a, on `claude/63-m1a-transport` from `main`, no PR yet (`suggested.md` S-3).
+- Done: `w4-port-transport`, B1 (`2ab8925`, 19 commits, no PR yet). #75's transport is cut to M1a on `claude/63-m1a-transport`. Locally: 457 tests pass, 91.51% line coverage on Windows. **CI is off:** all three workflows are disabled on GitHub (`suggested.md` S-3).
+- Briefs in `.shadow/v2-tools/tasks/`. No worker is running.
 - Done: `w1-f-round5`, T1 (`09c1de5`, `c8d8921`, `bc8acfc`). F's round 5 is rows R-F-173 to R-F-187. R-F-173 was CONFIRMED P1 and is fixed: harness git gets CH-1's cleaned `PATH`. R-F-180 is a duplicate of R-M1-179, now P2. The other P2s and P3s are build notes; R-F-177, R-F-183 and R-F-184 hold choices for the builder. Both checkers 0. **F has no open P0 or P1.**
 - Done: `w2-read-75`, T4. Its report `.shadow/v2-tools/tasks/T4-report.md` splits the build into B1 to B6. S-3 waits for the owner.
 - The second brain's stale notes are archived and its handoff rule is in RUNBOOK 0.2 (the owner's check-in). Workers launch at medium effort from now on (the owner's choice).
-- **Next:** after B1 pushes: B2 (the mod: `/send` and the summary row) and B3 (the write path: claims, claim audit, guard) in parallel, each stacked on `claude/63-m1a-transport`; then B4 (apply). No new worker while the 5-hour figure is 80% or more (it was 86% at 12:00, resetting at 15:00).
+- **Next:** B2 (`w6-mod-send`: `/send` and the summary row) and B3 (`w7-write-path`: claims, claim audit, guard) in parallel, briefs written, each stacked on `claude/63-m1a-transport`; then B4 (apply). They start once the 5-hour figure falls below 80% (88% at 12:13, resetting at 15:00).
 
 **Session 25 (2026-11-23, `44bad808`): new rules, and orchestrator 1 is next.**
 - **Prototype first.** The owner chose D-39 (flow section 0): one review round per milestone, only confirmed P0 and P1 block, P2s become build notes, and a milestone is done when it runs.

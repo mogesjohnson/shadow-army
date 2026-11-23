@@ -17,7 +17,9 @@ The owner pre-approved the orchestrator's recommendations on 2026-11-23. Each en
   - The Linux and macOS containment helper (`native/process-supervisor.c`) is left out of M1a.
   - #75's roster edits (T4's B6) stay out of the slice.
 - **Risk:** if S-1's T3 Code trial passes, B1 and the mod (B2) become throwaway; B3 and B4 (claims, audit, guard, apply) do not. B1 is still the shortest way to a prototype the owner can watch.
-- **Status:** B1 going ahead; packaging waits for the owner.
+- **B1's result:** 19 commits on `claude/63-m1a-transport` (head `2ab8925`), each within V6, 3,309 lines in 30 files. Locally on Windows: `tsc` passes, 457 tests pass and 4 skip, and line coverage is 91.51% with the threshold kept at 85. `processTree.ts` is now Windows-only, so it is excluded from coverage on Linux and macOS only; orch-1 accepted that.
+- **CI is off:** the CI, PR format and mac probes workflows are all `disabled_manually` on GitHub, so CI and the PR-format check can't run, even by hand. Local runs are the only evidence until the owner turns them back on. Turning them on is the owner's call.
+- **Status:** B1 is done; packaging waits for the owner. B2 and B3 go ahead as draft PRs stacked on B1's branch, each within V6.
 
 ## S-2 Who builds the M1 slice (2026-11-23, session 25)
 
