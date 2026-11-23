@@ -180,3 +180,95 @@ describe("M1 office integration with synthetic native processes", () => {
       await expect(office.send("scout", "do not duplicate unknown children")).rejects.toThrow("reconnect explicitly");
       await expect(office.open("scout")).rejects.toThrow("not confirmed stopped");
       await expect(office.closeSession("scout")).rejects.toThrow("not confirmed stopped");
+      expect(channels).toHaveLength(1);
+      expect(sent).toEqual([]);
+      // Failed close preserves the down session and cannot turn a subsequent open into a new launch.
+      await expect(office.open("scout")).rejects.toThrow("not confirmed stopped");
+      await expect(office.close()).rejects.toBeInstanceOf(AggregateError);
+      expect(channels).toHaveLength(1);
+    } finally { await office.close().catch(() => {}); }
+  }, 30_000);
+
+  it.each(["explicit session close", "office shutdown", "guard failure"])("preserves uncertain containment during %s and never duplicates the native session", async (boundary) => {
+    const repo = makeRepo(); repos.push(repo);
+    const channels: ChannelOptions[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return {
+        async send() { await writeFile(join(options.cwd, "partial.txt"), "retained partial\n"); return { status: "completed", text: "edit completed", refusal: false }; },
+        async interrupt() {}, async respondApproval() {},
+        async close() { options.onEvent({ type: "closed", data: { containmentStopped: false } }); },
+      };
+    } });
+    try {
+      const opened = await office.open("scout");
+      if (boundary === "office shutdown") {
+        await expect(office.close()).rejects.toBeInstanceOf(AggregateError);
+      } else {
+        if (boundary === "explicit session close") await expect(office.closeSession("scout")).rejects.toThrow("not confirmed stopped");
+        else {
+          expect((await office.send("scout", "edit")).status).toBe("failed");
+          expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("retained partial\n");
+        }
+        expect(office.army()).toEqual([expect.objectContaining({ state: "down", restarts: 0 })]);
+        await expect(office.open("scout")).rejects.toThrow("not confirmed stopped");
+        await expect(office.send("scout", "retry")).rejects.toThrow("reconnect explicitly");
+        await expect(office.closeSession("scout")).rejects.toThrow("not confirmed stopped");
+        await expect(office.open("scout")).rejects.toThrow("not confirmed stopped");
+        await expect(office.close()).rejects.toBeInstanceOf(AggregateError);
+      }
+      expect(channels).toHaveLength(1);
+    } finally { await office.close().catch(() => {}); }
+  }, 30_000);
+
+  it("closes a session whose snapshot is still being prepared", async () => {
+    const { office } = await setup();
+    const opening = office.open("scout");
+    const closing = office.closeSession("scout");
+    await Promise.allSettled([opening, closing]);
+    expect(office.army()).toEqual([expect.objectContaining({ state: "closed" })]);
+  }, 30_000);
+
+  it("closes the office while snapshot preparation is pending without starting a child", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options) => { starts++; return factory(options); } }); offices.push(office);
+    const opening = office.open("scout");
+    const outcome = opening.then(() => "opened", () => "closed");
+    await office.close();
+    expect(await outcome).toBe("closed"); expect(starts).toBe(0);
+    await expect(office.open("scout")).rejects.toThrow("closed");
+  }, 30_000);
+
+  it.each(["model", "system instructions"])("preserves a native reported cache hit after changing only %s in a fresh session", async (changed) => {
+    const repo = makeRepo(); repos.push(repo);
+    const custom = makeRoster({ scout: { cli: "claude", model: "first-model", roles: ["review"], write: false } });
+    custom.rules.all = "FIRST SYSTEM INSTRUCTION";
+    const settings: ChannelOptions[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: custom, channelFactory: (options) => {
+      settings.push(options);
+      expect(JSON.stringify(options)).not.toContain(credential);
+      expect(JSON.stringify(process.env)).not.toContain(credential);
+      return factory(options);
+    } }); offices.push(office);
+    const first = await office.send("scout", "inspect");
+    await office.closeSession("scout");
+    if (changed === "model") custom.soldiers.get("scout")!.model = "second-model";
+    else custom.rules.all = "SECOND SYSTEM INSTRUCTION";
+    const second = await office.send("scout", "inspect");
+    expect(settings[0]!.model).toBe("first-model"); expect(settings[1]!.model).toBe(changed === "model" ? "second-model" : "first-model");
+    expect(settings[0]!.instructions).toContain("FIRST SYSTEM INSTRUCTION");
+    expect(settings[1]!.instructions).toContain(changed === "system instructions" ? "SECOND SYSTEM INSTRUCTION" : "FIRST SYSTEM INSTRUCTION");
+    expect(JSON.parse(first.text).pid).not.toBe(JSON.parse(second.text).pid);
+    expect(JSON.parse(second.text).history).toEqual(["inspect"]);
+    // Cache accounting belongs to the provider and is preserved even across changed settings.
+    expect(second.usage?.raw.cache_read_input_tokens).toBe(40);
+  }, 30_000);
+
+  it("rejects non-Claude soldiers before routing or cross-model tool/error translation can occur", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: makeRoster({ other: { cli: "codex", model: "fake", roles: ["review"] } }), channelFactory: (options) => { starts++; return factory(options); } }); offices.push(office);
+    await expect(office.open("other")).rejects.toThrow("not implemented in M1"); expect(starts).toBe(0);
+  });
+});
