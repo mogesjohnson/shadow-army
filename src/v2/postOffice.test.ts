@@ -309,8 +309,9 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(first.write?.applicable).toBe(true);
     expect(second.write?.branch).toBe(opened.branch);
     expect(started).toHaveLength(1);
-    // Nothing reaches the owner's folder: applying is B4's.
-    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("a\n");
+    // The first turn's audited change reaches the owner's folder uncommitted (B4, M1-AC28).
+    expect(first.write?.apply?.applied).toBe(true);
+    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("changed\n");
   }, 30_000);
 
   it("reverts a file outside the claims, names it, and commits only the claimed change with its diff", async () => {
