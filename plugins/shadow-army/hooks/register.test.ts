@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TurnResult, WriteOutcome } from "../../../src/v2/channel.js";
+
+/** A turn result in the post office's own type, so a fake cannot drift from what the card reads. */
+const turn = (summary: string, write?: Partial<WriteOutcome>): TurnResult => ({
+  status: "completed", text: summary, refusal: false, summary,
+  ...(write ? { write: { worktree: "w", branch: "shadow/tank", base: "b", claims: ["src/**"], inScope: [], outOfScope: [], reverted: false, leaseLost: false, uncommittedIgnored: false, diff: "", applicable: true, ...write } } : {}),
+});
 
 type Handler = (...args: any[]) => any;
 const URL_ = "http://127.0.0.1:4321";
@@ -121,21 +128,21 @@ describe("the /send command (M1-AC23)", () => {
 describe("the summary card (M1-AC25, SEC-6)", () => {
   it("holds the soldier, at most five summary lines, the log path and the files applied", async () => {
     const summary = ["1", "2", "3", "4", "5", "6", "7"].join("\n");
-    const { send } = await mod(() => ({ status: "completed", summary, applied: ["src/a.ts", "src/b.ts"] }));
+    const { send } = await mod(() => turn(summary, { apply: { applied: true, files: [{ change: "M", path: "src/a.ts" }, { change: "A", path: "src/b.ts" }] } }));
     const row = await send("claude-sonnet --claim src/** go");
     expect(row).toBe(`Shadow Army · Tank · completed\n1\n2\n3\n4\n5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nApplied: src/a.ts, src/b.ts`);
   });
 
   it("gives the reason when nothing was applied, and names a reverted file", async () => {
-    const { send } = await mod(() => ({ status: "completed", summary: "s", reason: "you changed src/a.ts yourself", reverted: ["docs/x.md"] }));
+    const { send } = await mod(() => turn("s", { outOfScope: ["docs/x.md"], reverted: true, apply: { applied: false, reason: "your folder has changes to the same files", clashes: ["src/a.ts"] } }));
     const row = await send("claude-sonnet --claim src/** go");
-    expect(row).toContain("Not applied: you changed src/a.ts yourself");
+    expect(row).toContain("Not applied: your folder has changes to the same files: src/a.ts");
     expect(row).toContain("Reverted, outside its claims: docs/x.md");
   });
 
   it("shows each Cc and Cf character as a placeholder and keeps newline and tab", async () => {
     const hostile = "a\u001b[31mred‮drawer​z\ttab\nnext\u0007";
-    const { send } = await mod(() => ({ status: "completed", summary: hostile, applied: ["we‮ird.ts"] }));
+    const { send } = await mod(() => turn(hostile, { apply: { applied: true, files: [{ change: "A", path: "we‮ird.ts" }] } }));
     const row = await send("claude-sonnet --claim src/** go");
     expect(row).toContain("a\\u{1b}[31mred\\u{202e}drawer\\u{200b}z\ttab\nnext\\u{7}");
     expect(row).toContain("we\\u{202e}ird.ts");

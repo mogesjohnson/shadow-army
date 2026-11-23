@@ -1,6 +1,7 @@
 import type {
   EngineInterface, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register, Timer,
 } from "claude-code";
+import type { TurnResult } from "../../../src/v2/channel.js";
 
 interface Runtime {
   session: string;
@@ -195,8 +196,8 @@ async function ensure($: EngineInterface): Promise<Runtime> {
 }
 
 interface Soldier { key: string; name: string; roles: string[]; supported: boolean }
-/** The turn result the post office returns; `applied`, `reverted` and `reason` come from the claim audit and the apply (B3, B4). */
-interface Delivery { status: string; summary?: string; error?: { message?: string }; applied?: string[]; reverted?: string[]; reason?: string }
+/** The turn result the post office returns. The claim audit and the apply (B3, B4) put their outcome in `write`. */
+type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write">;
 
 /** SEC-6: each Cc or Cf character except newline and tab shows as a placeholder such as \u{1b}. */
 function show(text: unknown): string {
@@ -215,8 +216,12 @@ function parseSend(args: string): { name?: string; claims: string[]; brief: stri
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
 function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
   const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || delivery.error?.message || "no summary";
-  const files = delivery.applied?.length ? `Applied: ${delivery.applied.join(", ")}` : `Not applied: ${delivery.reason ?? "no change was applied"}`;
-  const reverted = delivery.reverted?.length ? `\nReverted, outside its claims: ${delivery.reverted.join(", ")}` : "";
+  const apply = delivery.write?.apply;
+  const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`
+    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || "no change was applied"}`;
+  const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];
+  const reverted = outside.length ? `
+Reverted, outside its claims: ${outside.join(", ")}` : "";
   return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}\n${summary}\nLog: ${log}\n${files}${reverted}`), credential);
 }
 
