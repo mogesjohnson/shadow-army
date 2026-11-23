@@ -84,6 +84,9 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(events.find((event) => event.type === "error")?.data).toMatchObject({ kind: "rate_limit" });
     expect(result.status).toBe("failed");
     expect(result.error?.message).toContain("partial work is retained");
+    // W11-1, PO-8: the CLI's own kind and words survive the guard failure.
+    expect(result.error?.kind).toBe("rate_limit");
+    expect(result.error?.message).toContain("API Error after successful Edit: rate limit");
     expect(events.filter((event) => event.type === "guard")).toHaveLength(1);
     await expect(office.send("scout", "partial-success-fail")).rejects.toThrow("reconnect explicitly");
     expect(deliveries).toEqual(["partial-success-fail"]);
@@ -149,7 +152,7 @@ describe("M1 office integration with synthetic native processes", () => {
     const repo = makeRepo(); repos.push(repo);
     const channels: { options: ChannelOptions; sent: string[] }[] = [];
     const events: OfficeEvent[] = [];
-    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
       const channel = { options, sent: [] as string[] }; channels.push(channel);
       return { async send(text) { channel.sent.push(text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
     } }); offices.push(office);
