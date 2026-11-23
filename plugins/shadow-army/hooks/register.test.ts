@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({})) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -30,9 +30,9 @@ async function mod(respond: (command: any) => unknown = () => ({})) {
   const logs: string[] = [];
   const registered: any[] = [];
   const $ = {
-    session: { id: async () => "session-1", cwd: async () => "/repo" },
+    session: { id: async () => "session-1", cwd: async () => env.cwd ?? "/repo" },
     plugin: { root: "/x/plugins/shadow-army" },
-    fs: { exists: async () => true },
+    fs: { exists: async (path: string) => env.git === undefined || path === `${env.git}/.git` || path.includes("/dist/") },
     clock: { every: () => ({ cancel() {} }), after: () => ({ cancel() {} }) },
     ui: { log: (line: string) => logs.push(line) },
     command: { register: async (spec: unknown) => { registered.push(spec); } },
@@ -152,5 +152,30 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
   it("falls back to the error text for a failed turn with no summary", async () => {
     const { send } = await mod(() => ({ status: "failed", error: { message: "read-only guard failed" } }));
     expect(await send("claude-sonnet --claim a go")).toContain("Shadow Army · Tank · failed\nread-only guard failed\n");
+  });
+
+  it("names the log under the repository root when Claude started in a subfolder (W12-5)", async () => {
+    const { send } = await mod(() => turn("s", { apply: { applied: true, files: [{ change: "M", path: "a.ts" }] } }), { cwd: "/repo/packages/app", git: "/repo" });
+    expect(await send("claude-sonnet --claim a.ts go")).toContain("\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\n");
+  });
+
+  it("shows the audit's error when the turn has a reply but no write outcome (W12-6a)", async () => {
+    const { send } = await mod(() => ({ ...turn("I edited it"), error: { kind: "other", message: "claim audit could not complete: a folder on its path is a link" } }));
+    const row = await send("claude-sonnet --claim a go");
+    expect(row).toContain("I edited it\nError: claim audit could not complete: a folder on its path is a link\n");
+    expect(row).toContain("Not applied: claim audit could not complete: a folder on its path is a link");
+  });
+
+  it("shows the error of a failed turn that has a reply, and none for a clean completion", async () => {
+    const failed = await mod(() => ({ ...turn("partial", { reverted: false }), status: "failed", error: { kind: "rate_limit", message: "429 too many requests" } }));
+    expect(await failed.send("claude-sonnet --claim a go")).toContain("partial\nError: 429 too many requests\n");
+    const clean = await mod(() => turn("fine", { apply: { applied: true, files: [{ change: "M", path: "a.ts" }] } }));
+    const row = await clean.send("claude-sonnet --claim a go");
+    expect(row).not.toContain("Error:"); expect(row).not.toContain("refused");
+  });
+
+  it("marks a refusal as refused although its status is completed (W12-6b)", async () => {
+    const { send } = await mod(() => ({ ...turn("I can't help with that."), refusal: true }));
+    expect(await send("claude-sonnet --claim a go")).toContain("Shadow Army · Tank · completed (refused)\nI can't help with that.\n");
   });
 });
