@@ -19,7 +19,7 @@ The owner pre-approved the orchestrator's recommendations on 2026-11-23. Each en
 - **Risk:** if S-1's T3 Code trial passes, B1 and the mod (B2) become throwaway; B3 and B4 (claims, audit, guard, apply) do not. B1 is still the shortest way to a prototype the owner can watch.
 - **B1's result:** 19 commits on `claude/63-m1a-transport` (head `2ab8925`), each within V6, 3,309 lines in 30 files. Locally on Windows: `tsc` passes, 457 tests pass and 4 skip, and line coverage is 91.51% with the threshold kept at 85. `processTree.ts` is now Windows-only, so it is excluded from coverage on Linux and macOS only; orch-1 accepted that.
 - **CI is off:** the CI, PR format and mac probes workflows are all `disabled_manually` on GitHub, so CI and the PR-format check can't run, even by hand. Local runs are the only evidence until the owner turns them back on. Turning them on is the owner's call.
-- **Status:** B1 is done; packaging waits for the owner. B2 and B3 go ahead as draft PRs stacked on B1's branch, each within V6.
+- **Status:** answered by the owner, 2026-11-23: "for B1 do whatever is easier (we dont want merge conflicts)". B1 is one draft PR, #95, under a V6 size exception in those words; the slice's stacks sit on its branch, so nothing has to be rebased.
 
 ## S-2 Who builds the M1 slice (2026-11-23, session 25)
 
@@ -48,4 +48,10 @@ The owner pre-approved the orchestrator's recommendations on 2026-11-23. Each en
   - C: pivot now to a thin policy layer on T3.
 - **Recommended:** B. If T3 passes, Shadow Army becomes the policy layer (v1's router, claims, audit, guard and apply) and the post office stops. If it fails, the measured reasons sharpen our own design.
 - **Can be undone:** yes. But installing T3 Code on this machine is outside the repository, so it **waits for the owner**.
-- **Status:** waiting for the owner. Until then the slice goes ahead: its policy parts are needed either way.
+- **Status:** declined by the owner, 2026-11-23: "s-1 we are not downlaoding t3". We build our own post office.
+
+## S-4 Where the checks run (2026-11-23, the owner)
+
+- **Decision (the owner):** "we will only do Local CI windows is all we are working for, forget mac, if linux tests if you can create the ci iniside of wsl and then run in that enviroment do that".
+- **What follows:** GitHub's workflows stay off. `w10-local-ci` builds `npm run ci:local`: Windows, then Linux inside WSL Ubuntu. macOS is dropped, so the spec's "Not tested: macOS" notes stand. PR `Validation:` lines quote the script's output.
+- **Status:** in progress (`w10-local-ci`).
