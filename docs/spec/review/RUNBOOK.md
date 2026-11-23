@@ -4,6 +4,104 @@ Written 2026-10-23 at the owner's request. **When the owner types "look at secon
 
 **THE SPEED OF THIS PROJECT IS BEYOND THE DEADLINE AND THIS NEEDS TO BE SPED UP NOW!!!**
 
+## 0. The orchestrator model (the owner, 2026-11-23)
+
+This section replaces sections 1 to 4 where they differ. The owner's words, tidied:
+
+- The next session is the orchestrator. It opens new terminal tabs with the trace-computer skill.
+- Each tab's session does one task and reports back, and the orchestrator closes its tab.
+- At 300k the orchestrator writes a handoff and starts the next orchestrator, which it tells that workers stop at 150k.
+- One session works on a file or set of files at a time; different files may change in parallel. Merges must go well, pulling current first.
+- The orchestrator makes the decisions, and the owner goes with its suggestions. Big changes and architecture questions go in `suggested.md`.
+- Every session says hi to the API every 50 minutes. This is mandatory.
+
+### 0.1 Every session
+
+1. **The hi timer (mandatory).** First, start `sleep 3000` with the Bash tool, `run_in_background: true`. Each time it ends, reply `hi` (nothing more when idle) and start it again at once, working or idle, until your tab closes. It keeps the 1-hour prompt cache warm (the cockpit mod's `FORKING.md`).
+2. **Name your task** in the cockpit's task file, as its prompt hook asks.
+3. **Measure your context** from your line in `~/.claude/cockpit/current-context/<session id>.txt`. Never estimate it. The orchestrator stops at 300k, a worker at 150k.
+4. **Git.**
+   - Run `git fetch origin` first and start from the current `origin/<base>`.
+   - Before every push, run `git pull --rebase origin <branch>`. It replays only your own unpushed commits.
+   - Never force-push, never use `--no-verify`, never run `git add -A`.
+   - CLAUDE.md's commit and PR rules apply: V6 sizes, `#63` subjects, the trailer.
+
+### 0.2 The orchestrator (named `orch-<n>`)
+
+**It coordinates and does no task work.** It plans tasks, writes worker briefs, launches and closes workers, and checks their results. It keeps and commits the records: `handoffs/LATEST.md`, both `STATE.md` files, `suggested.md`, PR comments and the second-brain handoff.
+
+**Start.**
+1. Do section 1's reading.
+2. Close the previous session's tab once the cockpit marks that session parked, in your peer note or your line's same-dir field.
+3. Plan.
+
+**Tasks.**
+- A task is about 70k of work, with a list of the files it may change.
+- Two live workers never share a file. Tasks whose files overlap run one after another: the next starts only after the first has pushed and its tab is closed.
+- Tasks with separate files run in parallel, with at most three workers at once and at most three subagents running across all sessions (flow section 4).
+- Start no new worker while the 5-hour figure on your cockpit line is 80% or more.
+
+**The brief** goes in `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md`. It gives:
+- the task;
+- its files, and the files it must not touch;
+- the branch and its base;
+- the model and effort;
+- what done means;
+- the orchestrator's name for the report.
+
+Workers are named `w<n>-<task>`.
+
+**Launch a worker.** Read the trace-computer-use skill and its references first, then:
+1. Run `trace_computer_doctor`.
+2. Run `trace_computer_list_windows` with `processName: "WindowsTerminal"` and open a session on that window.
+3. Observe, press `ctrl+shift+t` for a new tab, and observe that it has focus.
+4. Type this line and press Enter:
+
+   ```
+   cd C:\Users\johns\projects\AIConnections; claude -n <name> --model <opus|sonnet> --effort <level> "You are worker <name>. Read C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md and do that one task, under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."; exit
+   ```
+
+5. Observe that Claude Code started in the tab and that the tab's title shows the name.
+6. Run `trace_computer_close_session`.
+
+The trailing `exit` closes the tab when Claude Code ends.
+
+**Close a worker** once its report is in and checked with `git show --stat <sha>`:
+1. Open a TRACE session on the terminal.
+2. Select the worker's tab by its title.
+3. Type `/exit` and press Enter.
+4. Observe that the tab is gone.
+
+**Decide.** The owner pre-approved the orchestrator's recommendations (2026-11-23), so decide and go on.
+- For a big change or an architecture question, add an entry to `suggested.md`: the question, the options, your recommendation and why, whether it can be undone, and its status.
+- Go ahead on your recommendation when it can be undone and stays inside the repository.
+- Otherwise, wait for the owner and do other work meanwhile. That covers: installing software, a merge without Codex's approval at the head, deleting branches or worktrees, closing issues, publishing, changing the owner's settings, and a `full`-autonomy soldier run.
+
+**Cockpit holds** (the same-file guard and the duplicate-task stop) are the owner's controls. Never lift one by typing into a tab. Re-plan instead: close one of the two workers and run the tasks in order.
+
+**Merge** with merge commits only (V13), after retargeting the PRs stacked on the branch (V14). Merge only with Codex's approval at the exact head. Workers on the shared review branch run one at a time.
+
+**At 300k:**
+1. Make section 3's save point. Its `LATEST.md` also names the running workers, their tasks and their files.
+2. Launch `orch-<n+1>` the same way with this line, then stop:
+
+   ```
+   cd C:\Users\johns\projects\AIConnections; claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k; you hand off at 300k. First close the tab of orch-<n> once the cockpit marks it parked."; exit
+   ```
+
+### 0.3 A worker
+
+- **One task:** the one in its brief. Work in the branch or worktree the brief names, and touch only the brief's files. If the cockpit holds an edit or flags an overlap, stop and report it; never work around it.
+- **When done:**
+  1. Commit and push.
+  2. SendMessage the orchestrator one line: `<sha> <files> <one line>`.
+  3. Wait, with the hi timer running, until the orchestrator closes the tab. Take no second task.
+- **At 150k:**
+  1. Commit and push what is done.
+  2. Write what is left at the end of the brief, under `## Left`.
+  3. Report that, and wait.
+- **Subagents** only as the brief allows.
+
 ## 1. Start
 
 1. Retrieve the second-brain brief: `bash /c/Users/johns/Obsidian-codex-setup/brain.sh brief --cwd "$PWD" --query 'spec 2.0 review continue work' --json`.
