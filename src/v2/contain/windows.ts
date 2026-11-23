@@ -25,14 +25,8 @@ export interface ManagedProcessOptions {
 }
 
 
-/**
- * Kernel ownership: a kill-on-close Job Object. Windows only (M1a): Linux and macOS are
- * "Not tested" (D-34), so they fail clearly instead of running containment nobody has checked.
- */
+/** Windows containment driver: a kill-on-close Job Object, reached through the PO-12 table in index.ts. */
 export async function spawnManagedProcess(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  if (process.platform !== "win32") {
-    throw new Error(`Session process containment is Windows only in M1a; ${process.platform} is not tested (D-34).`);
-  }
   return spawnWindows(options);
 }
 
