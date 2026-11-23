@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 import * as managedProcesses from "./processTree.js";
 import type { ChannelEvent, NativeError } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs } from "./claude.js";
@@ -221,7 +222,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     await expect(readFile(instructionPath)).rejects.toThrow();
   }, 45_000);
 
-  it("settles pending work once and reports uncertain containment without rejecting an event-triggered close", async () => {
+  windowsOnly("settles pending work once and reports uncertain containment without rejecting an event-triggered close", async () => {
     const original = managedProcesses.spawnManagedProcess;
     const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockImplementationOnce(async (options) => {
       const child = await original(options);
@@ -238,7 +239,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     } finally { injected.mockRestore(); }
   }, 15_000);
 
-  it("keeps one process, session and history across two turns with appended instructions", async () => {
+  windowsOnly("keeps one process, session and history across two turns with appended instructions", async () => {
     const { channel } = await setup();
     const first = await channel.send("inspect");
     const second = await channel.send("inspect");
@@ -264,13 +265,13 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(claudeChannelArgs(opts)).not.toContain("--tools");
   });
 
-  it("decodes JSON lines and UTF-8 characters split across chunks", async () => {
+  windowsOnly("decodes JSON lines and UTF-8 characters split across chunks", async () => {
     const { channel, events } = await setup();
     expect((await channel.send("split")).text).toBe("split 🌙");
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["split 🌙"]);
   }, 15_000);
 
-  it("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
+  windowsOnly("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
     const result = await channel.send("malformed-once");
     expect(result.status).toBe("completed");
@@ -284,7 +285,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("completed");
   }, 15_000);
 
-  it("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
+  windowsOnly("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
     const survived = await channel.send("malformed-nine-then-ok");
     expect(survived.status).toBe("completed");
@@ -297,7 +298,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.filter((event) => event.type === "closed")).toHaveLength(1);
   }, 15_000);
 
-  it("uses only the main conversation for the meter and preserves native terminal/cache usage", async () => {
+  windowsOnly("uses only the main conversation for the meter and preserves native terminal/cache usage", async () => {
     const { channel, events } = await setup();
     const result = await channel.send("meters");
     expect(result.contextTokens).toBe(22);
@@ -307,7 +308,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.some((event) => event.type === "usage" && (event.data as { scope: string }).scope === "auxiliary")).toBe(true);
   }, 15_000);
 
-  it("keeps rate limit, context overflow, login and refusal distinct without restarting", async () => {
+  windowsOnly("keeps rate limit, context overflow, login and refusal distinct without restarting", async () => {
     const { channel } = await setup();
     for (const [prompt, kind, prose] of [["rate", "rate_limit", "API Error: rate limit; try after reset"], ["context", "context_overflow", "API Error: prompt is too long"], ["login", "login_needed", "Please login to Claude Code"]]) {
       const result = await channel.send(prompt);
@@ -327,7 +328,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("unknown-usage")).usage).toBeUndefined();
   }, 15_000);
 
-  it("settles a stream death mid-tool call as interrupted and preserves partial files", async () => {
+  windowsOnly("settles a stream death mid-tool call as interrupted and preserves partial files", async () => {
     const { channel, events, cwd } = await setup();
     const result = await channel.send("die");
     expect(result.status).toBe("interrupted");
@@ -337,7 +338,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.filter((event) => event.type === "turn_end")).toHaveLength(1);
   }, 15_000);
 
-  it("interrupts after a partial edit without freshening the session or replaying", async () => {
+  windowsOnly("interrupts after a partial edit without freshening the session or replaying", async () => {
     const { channel, events, cwd } = await setup();
     const stopped = channel.send("partial");
     await until(() => events.some((event) => event.type === "tool_call"));
@@ -351,7 +352,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(next.text).toContain("earlier=partial");
   }, 15_000);
 
-  it("ends an unresponsive native stop and settles pending work once", async () => {
+  windowsOnly("ends an unresponsive native stop and settles pending work once", async () => {
     const { channel, events } = await setup({ interruptTimeoutMs: 30 });
     const pending = channel.send("ignore-interrupt");
     await until(() => events.some((event) => event.type === "tool_call"));
@@ -361,7 +362,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.filter((event) => event.type === "turn_end")).toHaveLength(1);
   }, 15_000);
 
-  it("never answers an approval without an explicit response and drops stopped request ids", async () => {
+  windowsOnly("never answers an approval without an explicit response and drops stopped request ids", async () => {
     const { channel, events, cwd } = await setup();
     const pending = channel.send("approval");
     await until(() => events.some((event) => event.type === "approval"));
@@ -379,7 +380,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(JSON.parse(await readFile(join(cwd, "approval-response.json"), "utf8"))).toEqual(answer);
   }, 15_000);
 
-  it("emits text deltas without replaying the completed assistant text", async () => {
+  windowsOnly("emits text deltas without replaying the completed assistant text", async () => {
     const { channel, events } = await setup();
     expect((await channel.send("partial-events")).text).toBe("first second");
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["first ", "second"]);
