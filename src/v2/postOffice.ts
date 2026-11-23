@@ -267,3 +267,11 @@ export class PostOffice {
     return this.closePromise ??= (async () => {
       this.closed = true;
       await Promise.allSettled(this.opening.values());
+      const ended = await Promise.allSettled([...this.sessions.keys()].map((key) => this.closeSession(key)));
+      this.record({ type: "closed", data: { retained: true } });
+      await this.logPending;
+      const failed = ended.filter((item): item is PromiseRejectedResult => item.status === "rejected");
+      if (failed.length) throw new AggregateError(failed.map((item) => item.reason), "some native sessions could not be closed");
+    })();
+  }
+}
