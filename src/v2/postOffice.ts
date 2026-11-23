@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { captureState, diffState } from "../workspace/guard.js";
-import { repoRoot } from "../workspace/git.js";
-import { ensureShadowRoot } from "../workspace/session.js";
+import { git, repoRoot } from "../workspace/git.js";
+import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { createSnapshot } from "../workspace/worktree.js";
-import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult } from "./channel.js";
+import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
@@ -18,8 +18,12 @@ export interface OfficeOptions {
   channelFactory?: ChannelFactory;
   onEvent?: (event: OfficeEvent) => void;
 }
+/** A claims lease outlives a turn: the audit stops v1's heartbeat, so the lease is long and released with the session. */
+const WRITE_LEASE_MS = 60 * 60_000;
+export interface TurnOptions { claims?: string[]; }
 interface Session {
   spec: SoldierSpec;
+  write?: { ws: WriteSession; claims: string[] };
   id: string;
   cwd: string;
   instructions: string;
@@ -91,48 +95,61 @@ export class PostOffice {
     });
   }
 
-  async open(key: string): Promise<{ soldier: string; cwd: string; session: string }> {
+  async open(key: string, options: TurnOptions = {}): Promise<{ soldier: string; cwd: string; session: string; branch?: string }> {
     this.check();
     let existing = this.sessions.get(key);
     if (existing?.down) {
       if (existing.containmentFailed) throw new Error("native descendants were not confirmed stopped; end this caller and inspect them before starting another session");
       if (existing.active) throw new Error("cannot reconnect while the previous turn is finalizing");
       await existing.channel?.close();
+      await existing.write?.ws.release();
       // A fresh snapshot keeps partial work in the previous one, never silently repeats it.
       this.sessions.delete(key);
       existing = undefined;
     }
-    const session = await this.session(key);
-    return { soldier: key, cwd: session.cwd, session: session.id };
+    const session = await this.session(key, options.claims);
+    return { soldier: key, cwd: session.cwd, session: session.id, ...(session.write ? { branch: session.write.ws.branch } : {}) };
   }
 
-  private async session(key: string): Promise<Session> {
+  private async session(key: string, claims?: string[]): Promise<Session> {
     this.check();
+    const wanted = claims?.length ? [...claims].sort() : undefined;
     const existing = this.sessions.get(key);
     if (existing) {
       await existing.restart;
       if (existing.down) throw new Error(`channel ${key} is down; reconnect explicitly`);
+      // One process has one working directory, so a session's claims are fixed when it opens.
+      const held = existing.write ? [...existing.write.claims].sort() : undefined;
+      if (wanted && JSON.stringify(wanted) !== JSON.stringify(held)) {
+        throw new Error(held ? `${key} holds claims ${held.join(", ")}; close its session before sending other claims` : `${key} has a read-only session; close it before sending claims`);
+      }
       return existing;
     }
     const pending = this.opening.get(key);
     if (pending) return pending;
-    const next = this.makeSession(key);
+    const next = this.makeSession(key, claims);
     this.opening.set(key, next);
     try { return await next; } finally { this.opening.delete(key); }
   }
 
-  private async makeSession(key: string): Promise<Session> {
+  private async makeSession(key: string, claims?: string[]): Promise<Session> {
     const spec = this.roster.soldiers.get(key);
     if (!spec) throw new Error(`unknown soldier ${key}`);
     if (spec.cli !== "claude") throw new Error(`${key}: ${spec.cli} live channels are not implemented in M1`);
-    const instructions = buildStandingInstructions(this.roster, spec, { readOnly: true });
+    // Hard rule: writes need the build role and a soldier the roster lets write. Nothing starts otherwise.
+    if (claims?.length && (!spec.write || !spec.roles.includes("build"))) throw new Error(`${key} cannot write: claims need the build role and write access in the roster`);
+    // Bad or overlapping claims throw here, naming the holder, before any process starts (WSP-2).
+    const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS }) : undefined;
+    const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
-    const snapshot = await createSnapshot(this.root, join(this.root, ".shadow", "v2"), "HEAD", id);
-    const session: Session = { spec, id, cwd: snapshot.path, instructions, generation: 0, restarts: 0, down: false, tainted: false, restartPending: false };
+    let cwd: string;
+    try { cwd = ws ? ws.cwd : (await createSnapshot(this.root, join(this.root, ".shadow", "v2"), "HEAD", id)).path; }
+    catch (error) { await ws?.release(); throw error; }
+    const session: Session = { spec, id, cwd, instructions, generation: 0, restarts: 0, down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
-    if (this.closed) { session.down = true; throw new Error("post office closed while opening session"); }
+    if (this.closed) { session.down = true; await ws?.release(); throw new Error("post office closed while opening session"); }
     this.start(session);
-    this.record({ soldier: key, type: "opened", data: { session: id, cwd: snapshot.path } }, session);
+    this.record({ soldier: key, type: "opened", data: { session: id, cwd, ...(ws ? { branch: ws.branch, claims: session.write!.claims } : {}) } }, session);
     return session;
   }
 
@@ -180,10 +197,10 @@ export class PostOffice {
     });
   }
 
-  async send(key: string, text: string): Promise<TurnResult> {
+  async send(key: string, text: string, options: TurnOptions = {}): Promise<TurnResult> {
     this.check();
     if (!text.trim()) throw new Error("message is empty");
-    const session = await this.session(key);
+    const session = await this.session(key, options.claims);
     if (session.active) throw new Error(`${key} already has a running turn`);
     session.stopRequested = false;
     // A copied credential in a brief must never enter a soldier's stdin/context either.
@@ -199,7 +216,8 @@ export class PostOffice {
   private async run(session: Session, text: string): Promise<TurnResult> {
     // Both checks run even after transport failure/cancellation. M2 extends this native result
     // boundary to actual background jobs; persistent session services must survive ordinary turns.
-    const [checkoutBefore, snapshotBefore] = await Promise.all([captureState(this.root), captureState(session.cwd)]);
+    // A write session has no read-only snapshot to guard: the claim audit takes its place.
+    const [checkoutBefore, snapshotBefore] = await Promise.all([captureState(this.root), session.write ? undefined : captureState(session.cwd)]);
     let result: TurnResult;
     try {
       this.check();
@@ -209,23 +227,46 @@ export class PostOffice {
     }
     let changes: string[];
     try {
-      const [checkoutAfter, snapshotAfter] = await Promise.all([captureState(this.root), captureState(session.cwd)]);
-      changes = [...diffState(checkoutBefore, checkoutAfter), ...diffState(snapshotBefore, snapshotAfter).map((message) => `read-only snapshot: ${message}`)];
+      const [checkoutAfter, snapshotAfter] = await Promise.all([captureState(this.root), snapshotBefore ? captureState(session.cwd) : undefined]);
+      changes = [...diffState(checkoutBefore, checkoutAfter), ...(snapshotBefore && snapshotAfter ? diffState(snapshotBefore, snapshotAfter).map((message) => `read-only snapshot: ${message}`) : [])];
     } catch (error) {
       changes = [`checkout guard could not complete: ${String(error)}`];
+    }
+    // The audit runs once, after the turn and the guard, also for a failed or cut-short turn (WSP-2).
+    let write: WriteOutcome | undefined;
+    if (session.write) {
+      try { write = await this.audit(session, result, changes); }
+      catch (error) { changes.push(`claim audit could not complete: ${String(error)}`); }
     }
     if (changes.length) {
       session.tainted = true;
       session.down = true;
       await session.channel!.close();
-      result = { ...result, status: "failed", error: { kind: "other", message: `read-only guard failed; partial work is retained at ${session.cwd}: ${changes.join("; ")}` } };
+      const guard = session.write ? "checkout guard failed; nothing is applied" : "read-only guard failed";
+      result = { ...result, status: "failed", error: { kind: "other", message: `${guard}; partial work is retained at ${session.cwd}: ${changes.join("; ")}` } };
+      if (write) write = { ...write, applicable: false, reason: changes.join("; ") };
     }
+    if (write) result = { ...result, write };
     this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
+    if (write) this.record({ soldier: session.spec.key, type: "audit", data: { ...write, diff: undefined } }, session);
     result = { ...result, summary: result.text.split(/\r?\n/).slice(0, 5).join("\n") };
     this.record({ soldier: session.spec.key, type: "delivery", data: { state: result.status === "completed" ? "answered" : "interrupted", result } }, session);
     await this.logPending;
     if (this.logFailure) throw this.logFailure;
     return redact(result, this.secrets) as TurnResult;
+  }
+
+  /** v1's claim audit: revert edits outside the claims, commit the rest on the soldier's branch, and hand B4 the audited diff. */
+  private async audit(session: Session, result: TurnResult, guardChanges: string[]): Promise<WriteOutcome> {
+    const info = await session.write!.ws.finish(`${session.spec.key}: turn`);
+    const diff = info.commit ? await git(info.path, ["diff", info.base, "HEAD"]) : "";
+    let reason: string | undefined;
+    if (guardChanges.length) reason = guardChanges.join("; ");
+    else if (result.status !== "completed") reason = `the turn ${result.status}; its claimed work stays on ${info.branch}`;
+    else if (info.leaseLost) reason = "the claims lease was lost during the turn, so the files may have changed hands";
+    else if (!info.commit) reason = "the soldier changed nothing";
+    return { worktree: info.path, branch: info.branch, base: info.base, commit: info.commit, claims: info.claims, inScope: info.inScope, outOfScope: info.outOfScope,
+      reverted: info.reverted, leaseLost: info.leaseLost, uncommittedIgnored: info.uncommittedIgnored, diff, applicable: !reason, ...(reason ? { reason } : {}) };
   }
 
   async interrupt(key: string): Promise<void> {
@@ -253,6 +294,7 @@ export class PostOffice {
     await session.active?.catch(() => {});
     await session.restart;
     if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
+    await session.write?.ws.release();
     this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
   }

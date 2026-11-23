@@ -14,6 +14,27 @@ export interface TurnUsage {
   costSource?: "native_cli_estimate";
   raw: Record<string, unknown>;
 }
+/** What a turn with claims leaves in the soldier's worktree for the apply (B4) and the card. */
+export interface WriteOutcome {
+  worktree: string;
+  branch: string;
+  base: string;
+  /** Short sha of the branch tip when it holds any change. */
+  commit?: string;
+  claims: string[];
+  inScope: string[];
+  /** Changed outside the claims and reverted. */
+  outOfScope: string[];
+  reverted: boolean;
+  leaseLost: boolean;
+  /** The owner's folder had uncommitted changes the worktree (made from HEAD) does not contain. */
+  uncommittedIgnored: boolean;
+  /** The audited change: `git diff base HEAD` in the worktree, claimed files only. */
+  diff: string;
+  /** True only when the turn completed and passed the guard and the audit with a change to apply. */
+  applicable: boolean;
+  reason?: string;
+}
 export interface TurnResult {
   status: "completed" | "failed" | "interrupted";
   text: string;
@@ -24,6 +45,7 @@ export interface TurnResult {
   error?: NativeError;
   /** Office summaries are bounded independently of the native full reply retained in logs. */
   summary?: string;
+  write?: WriteOutcome;
 }
 export interface ChannelEvent {
   type: "text" | "thinking" | "tool_call" | "tool_result" | "approval" | "usage" | "turn_end" | "error" | "closed" | "raw";
