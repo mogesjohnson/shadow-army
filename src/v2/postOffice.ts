@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
-import { captureState, diffState } from "../workspace/guard.js";
+import { captureState, diffState, type RepoState } from "../workspace/guard.js";
+import { Locks } from "../workspace/locks.js";
 import { git, repoRoot } from "../workspace/git.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { createSnapshot } from "../workspace/worktree.js";
@@ -18,14 +19,27 @@ export interface OfficeOptions {
   roster?: Roster;
   channelFactory?: ChannelFactory;
   onEvent?: (event: OfficeEvent) => void;
+  /** Waits before the first, second and third automatic restart (PO-1: 1, 5 and 30 seconds). */
+  restartDelaysMs?: readonly number[];
 }
-/** A claims lease outlives a turn: the audit stops v1's heartbeat, so the lease is long and released with the session. */
+/** v1's heartbeat stops at the first audit, so the office renews the claims lease for the session's whole life and at every turn (WSP-2). */
 const WRITE_LEASE_MS = 60 * 60_000;
+const RESTART_DELAYS_MS = [1_000, 5_000, 30_000];
+/** PO-1: a fourth crash within 10 minutes of the first leaves a channel down; 10 minutes without a crash resets the count. */
+const CRASH_WINDOW_MS = 10 * 60_000;
 export interface TurnOptions { claims?: string[]; }
 interface Session {
   spec: SoldierSpec;
   /** `applied` is the branch tip last put into the owner's folder, so a later turn applies only what is new. */
-  write?: { ws: WriteSession; claims: string[]; applied?: string };
+  /** `tip` is the branch tip after the last turn; `lease` is v1's claims lease, renewed here; `leaseLost` sticks once a renewal fails. */
+  write?: { ws: WriteSession; claims: string[]; applied?: string; tip?: string; lease?: { locks: Locks; id: string }; leaseLost?: boolean; heartbeat?: ReturnType<typeof setInterval> };
+  /** The checkout state at the start of the running turn, carried past Shadow Army's own applies (W12-3). */
+  guardBase?: RepoState;
+  /** Times of the crashes counted toward PO-1's limit. */
+  crashes: number[];
+  loginNeeded?: boolean;
+  /** Ends a restart's wait early when the session closes. */
+  wake?: () => void;
   id: string;
   cwd: string;
   instructions: string;
@@ -41,6 +55,24 @@ interface Session {
   containmentFailed?: boolean;
 }
 
+/**
+ * After an apply, move each running turn's guard base past exactly what the apply changed: a path whose state the turn
+ * started with is now expected in its applied state. A path the turn had already seen change is left, so the guard still names it.
+ */
+function carryApply(sessions: Session[], before: RepoState, after: RepoState, paths: string[]): void {
+  for (const session of sessions) {
+    const base = session.guardBase;
+    if (!base) continue;
+    for (const key of ["dirty", "index"] as const) {
+      for (const path of paths) {
+        if (base[key].get(path) !== before[key].get(path)) continue;
+        const now = after[key].get(path);
+        if (now === undefined) base[key].delete(path); else base[key].set(path, now);
+      }
+    }
+  }
+}
+
 /** M1 transport foundation. Routing, write claims, handoffs and background-job attribution are later milestones. */
 export class PostOffice {
   readonly root: string;
@@ -54,6 +86,8 @@ export class PostOffice {
   private logPending = Promise.resolve();
   private logFailure?: Error;
   private readonly secrets: string[];
+  /** Applies and guard captures take turns, so no guard reads the owner's folder halfway through an apply. */
+  private applying = Promise.resolve();
 
   private constructor(root: string, private readonly options: OfficeOptions) {
     this.root = root;
@@ -104,7 +138,7 @@ export class PostOffice {
       if (existing.containmentFailed) throw new Error("native descendants were not confirmed stopped; end this caller and inspect them before starting another session");
       if (existing.active) throw new Error("cannot reconnect while the previous turn is finalizing");
       await existing.channel?.close();
-      await existing.write?.ws.release();
+      await this.releaseWrite(existing);
       // A fresh snapshot keeps partial work in the previous one, never silently repeats it.
       this.sessions.delete(key);
       existing = undefined;
@@ -147,12 +181,36 @@ export class PostOffice {
     let cwd: string;
     try { cwd = ws ? ws.cwd : (await createSnapshot(this.root, join(this.root, ".shadow", "v2"), "HEAD", id)).path; }
     catch (error) { await ws?.release(); throw error; }
-    const session: Session = { spec, id, cwd, instructions, generation: 0, restarts: 0, down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
+    const session: Session = { spec, id, cwd, instructions, generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
-    if (this.closed) { session.down = true; await ws?.release(); throw new Error("post office closed while opening session"); }
+    if (ws) await this.holdLease(session);
+    if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
     this.start(session);
     this.record({ soldier: key, type: "opened", data: { session: id, cwd, ...(ws ? { branch: ws.branch, claims: session.write!.claims } : {}) } }, session);
     return session;
+  }
+
+  /** WSP-2: the lease must hold while the session is open, so keep renewing it until release. Owner, pid and claims name it: no two live leases overlap. */
+  private async holdLease(session: Session): Promise<void> {
+    const write = session.write!;
+    const locks = new Locks(join(this.root, ".shadow"));
+    const claims = JSON.stringify([...write.ws.claims].sort());
+    const lease = (await locks.list()).filter((held) => held.owner === session.spec.key && held.pid === process.pid && JSON.stringify([...held.claims].sort()) === claims).at(-1);
+    if (lease) write.lease = { locks, id: lease.id };
+    write.heartbeat = setInterval(() => { void this.renewLease(session); }, WRITE_LEASE_MS / 3);
+    write.heartbeat.unref?.();
+  }
+
+  private async renewLease(session: Session): Promise<void> {
+    const write = session.write;
+    if (!write) return;
+    const kept = write.lease ? await write.lease.locks.renew(write.lease.id, WRITE_LEASE_MS).catch(() => false) : false;
+    if (!kept) write.leaseLost = true;
+  }
+
+  private async releaseWrite(session: Session): Promise<void> {
+    clearInterval(session.write?.heartbeat);
+    await session.write?.ws.release();
   }
 
   private start(session: Session): void {
@@ -162,6 +220,7 @@ export class PostOffice {
       onEvent: (event: ChannelEvent) => {
         if (generation !== session.generation) return;
         this.record({ soldier: session.spec.key, ...event }, session);
+        if (event.type === "error" && (event.data as { kind?: string } | undefined)?.kind === "login_needed") session.loginNeeded = true;
         if (event.type === "closed") {
           if ((event.data as { containmentStopped?: boolean })?.containmentStopped === false) {
             session.containmentFailed = true;
@@ -170,6 +229,19 @@ export class PostOffice {
             return;
           }
           if (this.closed || session.down) return;
+          // PO-1: a login needed never restarts the channel; the soldier waits for the owner to log in and reconnect.
+          if (session.loginNeeded) {
+            session.down = true;
+            this.record({ soldier: session.spec.key, type: "down", data: { reason: "log in: the CLI needs a login; reconnect after logging in" } }, session);
+            return;
+          }
+          // A close while a restart is already pending is the same crash.
+          if (!session.restartPending) {
+            const now = Date.now();
+            const last = session.crashes.at(-1);
+            if (last !== undefined && now - last >= CRASH_WINDOW_MS) session.crashes = [];
+            session.crashes.push(now);
+          }
           session.restartPending = true;
           if (!session.active) this.restart(session);
         }
@@ -182,12 +254,20 @@ export class PostOffice {
     session.restart = (async () => {
       await session.channel?.close();
       if (this.closed || session.down) return;
-      if (session.restarts >= 3) {
+      const delays = this.options.restartDelaysMs ?? RESTART_DELAYS_MS;
+      if (session.crashes.length > delays.length) {
         session.down = true;
-        this.record({ soldier: session.spec.key, type: "down", data: { reason: "three automatic restarts exhausted; reconnect explicitly" } }, session);
+        this.record({ soldier: session.spec.key, type: "down", data: { reason: `${session.crashes.length} crashes within 10 minutes; reconnect explicitly` } }, session);
         return;
       }
-      session.restarts++;
+      // PO-1: wait 1, 5, then 30 seconds before each restart; closing the session ends the wait.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delays[session.crashes.length - 1] ?? 0);
+        session.wake = () => { clearTimeout(timer); resolve(); };
+      });
+      session.wake = undefined;
+      if (this.closed || session.down) return;
+      session.restarts = session.crashes.length;
       this.start(session);
       this.record({ soldier: session.spec.key, type: "restarted", data: { attempt: session.restarts, replayed: false } }, session);
     })().catch((error: unknown) => {
@@ -219,7 +299,10 @@ export class PostOffice {
     // Both checks run even after transport failure/cancellation. M2 extends this native result
     // boundary to actual background jobs; persistent session services must survive ordinary turns.
     // A write session has no read-only snapshot to guard: the claim audit takes its place.
-    const [checkoutBefore, snapshotBefore] = await Promise.all([captureState(this.root), session.write ? undefined : captureState(session.cwd)]);
+    const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
+    session.guardBase = await this.exclusive(() => captureState(this.root));
+    // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
+    await this.renewLease(session);
     let result: TurnResult;
     try {
       this.check();
@@ -227,13 +310,19 @@ export class PostOffice {
     } catch (error) {
       result = { status: "failed", text: "", refusal: false, error: { kind: "transport", message: String(error) } };
     }
+    if (result.status === "completed") session.loginNeeded = false;
+    else if (result.error?.kind === "login_needed") session.loginNeeded = true;
     let changes: string[];
     try {
-      const [checkoutAfter, snapshotAfter] = await Promise.all([captureState(this.root), snapshotBefore ? captureState(session.cwd) : undefined]);
-      changes = [...diffState(checkoutBefore, checkoutAfter), ...(snapshotBefore && snapshotAfter ? diffState(snapshotBefore, snapshotAfter).map((message) => `read-only snapshot: ${message}`) : [])];
+      const [checkout, snapshotAfter] = await Promise.all([
+        this.exclusive(async () => { const after = await captureState(this.root); const base = session.guardBase!; session.guardBase = undefined; return diffState(base, after); }),
+        snapshotBefore ? captureState(session.cwd) : undefined]);
+      changes = [...checkout, ...(snapshotBefore && snapshotAfter ? diffState(snapshotBefore, snapshotAfter).map((message) => `read-only snapshot: ${message}`) : [])];
     } catch (error) {
+      session.guardBase = undefined;
       changes = [`checkout guard could not complete: ${String(error)}`];
     }
+    await this.renewLease(session);
     // The audit runs once, after the turn and the guard, also for a failed or cut-short turn (WSP-2).
     let write: WriteOutcome | undefined;
     if (session.write) {
@@ -244,13 +333,31 @@ export class PostOffice {
       session.tainted = true;
       session.down = true;
       await session.channel!.close();
-      const guard = session.write ? "checkout guard failed; nothing is applied" : "read-only guard failed";
-      result = { ...result, status: "failed", error: { kind: "other", message: `${guard}; partial work is retained at ${session.cwd}: ${changes.join("; ")}` } };
+      const guard = `${session.write ? "checkout guard failed; nothing is applied" : "read-only guard failed"}; partial work is retained at ${session.cwd}: ${changes.join("; ")}`;
+      // PO-8: the CLI's own error keeps its kind and words; the guard failure follows it.
+      result = { ...result, status: "failed", error: result.error ? { ...result.error, message: `${result.error.message}\n${guard}` } : { kind: "other", message: guard } };
       if (write) write = { ...write, applicable: false, reason: changes.join("; ") };
     }
+    // W12-1: a turn that is not applied but moved the branch leaves work the owner's folder never got. A later turn's
+    // apply would carry it in, so the session goes down, as after a guard failure; reconnecting starts a fresh worktree.
+    if (write && !write.applicable && write.commit && write.commit !== session.write!.tip && !session.down) {
+      session.down = true;
+      await session.channel!.close();
+      write = { ...write, reason: `${write.reason}; the session is down so a later turn cannot carry this work in; reconnect to start fresh` };
+      this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
+    }
+    if (session.write && write) session.write.tip = write.commit;
     // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
     if (write?.applicable) {
-      const apply = await applyAudited(this.root, write, session.write!.applied);
+      const audited = write;
+      const apply = await this.exclusive(async () => {
+        const others = [...this.sessions.values()].filter((other) => other !== session && other.guardBase);
+        const before = others.length ? await captureState(this.root) : undefined;
+        const applied = await applyAudited(this.root, audited, session.write!.applied);
+        // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
+        if (before && applied.applied && applied.files.length) carryApply(others, before, await captureState(this.root), applied.files.map((file) => file.path));
+        return applied;
+      });
       if (apply.applied && write.commit) session.write!.applied = write.commit;
       write = { ...write, apply };
     }
@@ -271,10 +378,10 @@ export class PostOffice {
     let reason: string | undefined;
     if (guardChanges.length) reason = guardChanges.join("; ");
     else if (result.status !== "completed") reason = `the turn ${result.status}; its claimed work stays on ${info.branch}`;
-    else if (info.leaseLost) reason = "the claims lease was lost during the turn, so the files may have changed hands";
+    else if (info.leaseLost || session.write!.leaseLost) reason = "the claims lease was lost, so the files may have changed hands";
     else if (!info.commit) reason = "the soldier changed nothing";
     return { worktree: info.path, branch: info.branch, base: info.base, commit: info.commit, claims: info.claims, inScope: info.inScope, outOfScope: info.outOfScope,
-      reverted: info.reverted, leaseLost: info.leaseLost, uncommittedIgnored: info.uncommittedIgnored, diff, applicable: !reason, ...(reason ? { reason } : {}) };
+      reverted: info.reverted, leaseLost: info.leaseLost || !!session.write!.leaseLost, uncommittedIgnored: info.uncommittedIgnored, diff, applicable: !reason, ...(reason ? { reason } : {}) };
   }
 
   async interrupt(key: string): Promise<void> {
@@ -298,13 +405,21 @@ export class PostOffice {
     const session = this.sessions.get(key);
     if (!session) return;
     session.down = true;
+    session.wake?.();
     await session.channel?.close();
     await session.active?.catch(() => {});
     await session.restart;
     if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
-    await session.write?.ws.release();
+    await this.releaseWrite(session);
     this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
+  }
+
+  /** Runs `fn` alone among applies and checkout-guard captures. */
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.applying.then(fn);
+    this.applying = next.then(() => {}, () => {});
+    return next;
   }
 
   refused(): void { this.record({ type: "command_refused", data: { reason: "wrong or missing Monarch credential" } }); }
