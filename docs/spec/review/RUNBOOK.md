@@ -30,6 +30,11 @@ This section replaces sections 1 to 4 where they differ. The owner's words, tidi
 
 **It coordinates and does no task work.** It plans tasks, writes worker briefs, launches and closes workers, and checks their results. It keeps and commits the records: `handoffs/LATEST.md`, both `STATE.md` files, `suggested.md`, PR comments and the second-brain handoff.
 
+**Keep the second brain cheap and current** (the owner, 2026-11-23). Its brief loads into every new session, workers included.
+- The handoff is one short capture with `--agent claude-code`: the state in two or three sentences, then `Next:` with a pointer to `LATEST.md`. `LATEST.md` holds the detail.
+- Pass `--supersedes <previous handoff's id>` so only the newest handoff shows.
+- When a note in the brief is outdated, archive it with `archive --moved-to <its successor>`, or supersede it with a current one.
+
 **Start.**
 1. Do section 1's reading.
 2. Close the previous session's tab once the cockpit marks that session parked, in your peer note or your line's same-dir field.
