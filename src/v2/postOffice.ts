@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
+import { applyAudited } from "./apply.js";
 import { captureState, diffState } from "../workspace/guard.js";
 import { git, repoRoot } from "../workspace/git.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
@@ -23,7 +24,8 @@ const WRITE_LEASE_MS = 60 * 60_000;
 export interface TurnOptions { claims?: string[]; }
 interface Session {
   spec: SoldierSpec;
-  write?: { ws: WriteSession; claims: string[] };
+  /** `applied` is the branch tip last put into the owner's folder, so a later turn applies only what is new. */
+  write?: { ws: WriteSession; claims: string[]; applied?: string };
   id: string;
   cwd: string;
   instructions: string;
@@ -245,6 +247,12 @@ export class PostOffice {
       const guard = session.write ? "checkout guard failed; nothing is applied" : "read-only guard failed";
       result = { ...result, status: "failed", error: { kind: "other", message: `${guard}; partial work is retained at ${session.cwd}: ${changes.join("; ")}` } };
       if (write) write = { ...write, applicable: false, reason: changes.join("; ") };
+    }
+    // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
+    if (write?.applicable) {
+      const apply = await applyAudited(this.root, write, session.write!.applied);
+      if (apply.applied && write.commit) session.write!.applied = write.commit;
+      write = { ...write, apply };
     }
     if (write) result = { ...result, write };
     this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);

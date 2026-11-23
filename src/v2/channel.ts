@@ -1,4 +1,5 @@
 import type { Autonomy } from "../adapters/Adapter.js";
+import type { ApplyResult } from "../workspace/apply.js";
 
 export type NativeErrorKind = "rate_limit" | "context_overflow" | "login_needed" | "transport" | "other";
 export interface NativeError {
@@ -34,6 +35,8 @@ export interface WriteOutcome {
   /** True only when the turn completed and passed the guard and the audit with a change to apply. */
   applicable: boolean;
   reason?: string;
+  /** What B4 did with the change: the files now uncommitted in the owner's folder, or why none. Absent unless applicable. */
+  apply?: ApplyResult;
 }
 export interface TurnResult {
   status: "completed" | "failed" | "interrupted";
