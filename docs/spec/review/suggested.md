@@ -4,6 +4,23 @@ Big changes and architecture questions. Only the orchestrator writes this file (
 
 The owner pre-approved the orchestrator's recommendations on 2026-11-23. Each entry says whether the work went ahead on its recommendation or waits for the owner. Newest first.
 
+## S-6 Two M1a stand-ins that M1b keeps (2026-11-23, orch-7)
+
+From w20's plan (`.shadow/v2-tools/tasks/w20-m1b-plan-report.md`, blockers B1 and B2).
+
+- **B1, `/send` opens a session.** WSP-11 says only `sa live` opens one in M1, but M1a's `/send` does. Options: A, remove it in M1b (the prototype loses it until M3's HOST-10); B, keep it as a listed stand-in until HOST-10. **Recommendation: B.** Prototype first (D-39): the owner's live run drives the slice through `/send`. Tasks M1b-28 and M1b-29 keep the path and name it a stand-in. Can be undone.
+- **B2, the write path.** M1a's write path (v1 worktree, claims, apply) stands in for WSP-1 and WSP-2, which are M6; no M1 requirement replaces it. **Recommendation:** keep it, with its git calls moved onto harness git in M1b-26. Can be undone.
+- **Status:** going ahead on both.
+
+## S-5 Where M1b's branches start and land (2026-11-23, orch-7)
+
+M1a is 16 unmerged draft PRs (#89 to #104), and its run branch `claude/63-m1a-integrate` has no PR.
+
+- **Options:** A, base M1b on `main` (waits for 16 unreviewed PRs); B, stack on single M1a PRs (16 bases and V14 retarget churn); C, target `claude/63-m1a-integrate` (mixes M1b into the owner's live-run head); D, a new integration branch.
+- **Recommendation: D.** `claude/63-m1b`, cut from `claude/63-m1a-integrate` at `2b78df6`. Each task branches from it, and its draft PR targets it. The orchestrator merges green task PRs into it with merge commits. Codex fixes to M1a land on their M1a PRs, then reach M1b by merging `claude/63-m1a-integrate` into `claude/63-m1b`, never by rebase. Codex reviews each task PR on its own diff. M1b reaches `main` through one merge-only PR, `claude/63-m1b` → `main`, after M1a merges. That PR is far over V6 and needs the owner's `Size exception` before it opens (w20's B9).
+- **Can be undone:** yes, it is one branch.
+- **Status:** going ahead. `claude/63-m1b` was pushed at `2b78df6`. Wave 1 started: w21 (M1b-2), w22 (M1b-1), w23 (M1b-6).
+
 ## S-3 How #75's ported code reaches review (2026-11-23, orch-1)
 
 - **Question:** T4 (`.shadow/v2-tools/tasks/T4-report.md`) found the slice can keep most of #75's code: the post office, the claude channel, the server, the client, the lease and the logs, at 92 to 100% line coverage. That base is about 3,300 lines without tests. V6 allows 400 lines per PR. How should it reach Codex?
