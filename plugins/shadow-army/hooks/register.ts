@@ -193,3 +193,64 @@ async function ensure($: EngineInterface): Promise<Runtime> {
   }
   return runtime;
 }
+
+interface Soldier { key: string; name: string; roles: string[]; supported: boolean }
+/** The turn result the post office returns; `applied`, `reverted` and `reason` come from the claim audit and the apply (B3, B4). */
+interface Delivery { status: string; summary?: string; error?: { message?: string }; applied?: string[]; reverted?: string[]; reason?: string }
+
+/** SEC-6: each Cc or Cf character except newline and tab shows as a placeholder such as \u{1b}. */
+function show(text: unknown): string {
+  return String(text).replace(/[\p{Cc}\p{Cf}]/gu, (char) => char === "\n" || char === "\t" ? char : `\\u{${char.codePointAt(0)!.toString(16)}}`);
+}
+
+function parseSend(args: string): { name?: string; claims: string[]; brief: string } {
+  let rest = args.trim();
+  const word = () => { const match = /^(\S+)\s*/.exec(rest); rest = rest.slice(match?.[0].length ?? 0); return match?.[1]; };
+  const name = word();
+  const claims: string[] = [];
+  while (rest.startsWith("--claim ")) { word(); const path = word(); if (path) claims.push(path); }
+  return { name, claims, brief: rest };
+}
+
+/** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
+function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
+  const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || delivery.error?.message || "no summary";
+  const files = delivery.applied?.length ? `Applied: ${delivery.applied.join(", ")}` : `Not applied: ${delivery.reason ?? "no change was applied"}`;
+  const reverted = delivery.reverted?.length ? `\nReverted, outside its claims: ${delivery.reverted.join(", ")}` : "";
+  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}\n${summary}\nLog: ${log}\n${files}${reverted}`), credential);
+}
+
+async function send($: EngineInterface, args: string): Promise<string> {
+  const { name, claims, brief } = parseSend(args);
+  if (!name || !brief) return "Usage: /send <soldier> --claim <path-or-glob> <brief>";
+  if (!claims.length) return "Nothing sent: /send needs at least one --claim <path-or-glob>, so the soldier's changes can be audited.";
+  const runtime = await ensure($);
+  const soldiers = await post($, runtime, { action: "army" }) as Soldier[];
+  if (!Array.isArray(soldiers)) throw new Error("invalid army response");
+  const soldier = soldiers.find((item) => item.key.toLowerCase() === name.toLowerCase() || item.name.toLowerCase() === name.toLowerCase());
+  if (!soldier) return "Nothing sent: unknown soldier.";
+  if (!soldier.supported || !soldier.roles.includes("build")) return show(`Nothing sent: ${soldier.name} is not a claude soldier with the build role.`);
+  if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
+  const opened = await post($, runtime, { action: "open", soldier: soldier.key }) as { session?: string };
+  const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
+  return card(soldier, delivery, `${runtime.cwd}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
+}
+
+export const register: Register = (on) => {
+  on("session.start", async ($, e, next) => {
+    await $.command.register({ name: "send", description: "Send one brief to a claude soldier and wait for its summary.", argumentHint: "<soldier> --claim <path-or-glob> <brief>", immediate: true });
+    return next(e);
+  });
+  on("command.run", { command: "send" }, async ($, e) => {
+    try { return { text: await send($, e.args) }; }
+    catch (error) { return { text: show(`Shadow Army: ${safeText(error, active?.credential)}`) }; }
+  }).catch((_$, _e, next) => ({ text: show(`Shadow Army: ${safeText(next.error.message)}`) }));
+  on("session.end", async ($, e, next) => {
+    const runtime = active;
+    if (runtime?.session === e.sessionId) {
+      try { await release($, runtime); }
+      catch { /* Cancelled renewals let the independent lease expire if release cannot arrive. */ }
+    }
+    return next(e);
+  });
+};
