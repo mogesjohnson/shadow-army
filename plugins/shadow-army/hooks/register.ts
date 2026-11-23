@@ -214,7 +214,7 @@ function parseSend(args: string): { name?: string; claims: string[]; brief: stri
 }
 
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
-function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
+export function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
   const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || delivery.error?.message || "no summary";
   const apply = delivery.write?.apply;
   const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`

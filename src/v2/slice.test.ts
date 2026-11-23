@@ -10,6 +10,7 @@ import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { ClaudeChannel } from "./claude.js";
 import { startOfficeServer, type OfficeServer } from "./server.js";
 import type { OfficeEvent } from "./postOffice.js";
+import { card } from "../../plugins/shadow-army/hooks/register.js";
 import { credential } from "./fixture-main.testutil.js";
 
 const fake = fileURLToPath(new URL("../../test/fakes/claude.mjs", import.meta.url));
@@ -54,6 +55,8 @@ describe("M1a slice, end to end with the fake claude (no real model)", () => {
       const response = await fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify(value) });
       const body = (await response.json()) as { result: any }; return body;
     };
+    const tank = { key: "tank", name: "Tank", roles: ["build"], supported: true };
+    const cardOf = (result: Parameters<typeof card>[1]) => card(tank, result, "log.jsonl", credential);
     const head = repo.git("rev-parse", "HEAD");
 
     // The mod's calls: army, open, then send with the claims.
@@ -72,6 +75,8 @@ describe("M1a slice, end to end with the fake claude (no real model)", () => {
     expect(repo.git("diff", "--cached", "--name-only")).toBe("");
     expect(repo.git("status", "--porcelain")).toContain("src/a.ts");
 
+    expect(cardOf(first)).toContain("Applied: src/a.ts");
+
     // Turn 2, a file outside its claims too: reverted in the worktree, named, and not applied.
     plan({ "src/b.ts": "claimed edit b\n", "README.md": "out of claims\n" });
     const second = (await command({ action: "send", soldier: "tank", text: "edit more", claims: ["src/**"] })).result;
@@ -82,6 +87,8 @@ describe("M1a slice, end to end with the fake claude (no real model)", () => {
     expect(await readFile(join(repo.dir, "README.md"), "utf8")).toBe("hello\n");
     expect(await readFile(join(repo.dir, "src/b.ts"), "utf8")).toBe("claimed edit b\n");
 
+    expect(cardOf(second)).toContain("Reverted, outside its claims: README.md");
+
     // Turn 3, edits a file an earlier turn already applied: refused with the clash reason, work stays on the branch.
     plan({ "src/a.ts": "edited again\n" });
     const third = (await command({ action: "send", soldier: "tank", text: "edit a again", claims: ["src/**"] })).result;
@@ -89,6 +96,7 @@ describe("M1a slice, end to end with the fake claude (no real model)", () => {
     expect(third.write.apply.applied).toBe(false);
     expect(third.write.apply.clashes).toEqual(["src/a.ts"]);
     expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("claimed edit\n");
+    expect(cardOf(third)).toContain("Not applied:"); expect(cardOf(third)).toContain("src/a.ts");
     expect(events.filter((event) => event.type === "guard").every((event) => !(event.data as { changes?: string[] }).changes?.length)).toBe(true);
   }, 60_000);
 });
