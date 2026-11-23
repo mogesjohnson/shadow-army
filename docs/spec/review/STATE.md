@@ -2,6 +2,13 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 2 (2026-11-23, `99e6c5ce`): B2 and B3 are in, B4 is running.**
+- Closed the tabs of orch-1, `w6-mod-send` and `w7-write-path`.
+- Done: B2 (`w6-mod-send`). To keep V6 without an exception, it is split into two stacked drafts: #91 (`claude/63-m1a-mod-core`, `30119eb`, the `/send` command and its card, 399 lines, 2 files) on B1's branch, and #89 (`fab6f82`, the manifest, hook list and README, 29 lines, 3 files) retargeted onto #91. Locally: 467 tests pass, 91.51% lines.
+- Done: B3 (`w7-write-path`), draft #90 (`298dbd4`, 212 lines, 3 files) on B1's branch. Its tsc and its 24 tests pass; it did not run the full suite or the build, so B4 runs both. Gap it found: `server.ts` doesn't pass the command's claims on, so B4 fixes that too.
+- Running: `w8-apply`, B4 (Sonnet, medium): `src/v2/apply.ts` and its test, the call in `postOffice.ts`, the claims in `server.ts`; branch `claude/63-m1a-apply`, stacked on B3.
+- **Next:** check B4, then write the owner's steps for M1-AC29, the live run.
+
 **Orchestrator 1 handed off to orchestrator 2 (2026-11-23).** The owner set the orchestrator's limit to 175k (it was 300k) and asked for a 5-minute watch on the workers (RUNBOOK section 0.2). B2 and B3 are running. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
 
 **Orchestrator 1 (2026-11-23, `c3d0e213`): the spec is frozen as v0.28 and M1a is cut; the build has started.**
