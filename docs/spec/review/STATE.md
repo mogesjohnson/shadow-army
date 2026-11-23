@@ -2,6 +2,13 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 1 (2026-11-23, `c3d0e213`): started.**
+- Closed session 25's tab.
+- Workers running, with briefs in `.shadow/v2-tools/tasks/`:
+  - `w1-f-round5`, T1 (Opus, high): `v2.md`, `ledger.md`, `batches/F-R5-*`, `raw/F-R5-V*`.
+  - `w2-read-75`, T4 (Sonnet, medium): read-only; writes `.shadow/v2-tools/tasks/T4-report.md`.
+- **Next:** T2 after T1 pushes, then T3. The slice's build tasks are split after T3 and T4.
+
 **Session 25 (2026-11-23, `44bad808`): new rules, and orchestrator 1 is next.**
 - **Prototype first.** The owner chose D-39 (flow section 0): one review round per milestone, only confirmed P0 and P1 block, P2s become build notes, and a milestone is done when it runs.
 - **The orchestrator model.** The owner also set how sessions work (RUNBOOK section 0):
