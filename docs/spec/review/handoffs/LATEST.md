@@ -7,7 +7,7 @@
 - **Previous handoff:** `git show c673348:docs/spec/review/handoffs/LATEST.md`.
 
 **First:**
-1. Close session 25's tab, titled "T3code vs Shadow Army", once the cockpit marks session `44bad808` parked. It was not started with `; exit`, so close the tab itself (ctrl+shift+w).
+1. Close session 25's tab, titled "T3code vs Shadow Army", once the cockpit marks session `44bad808` parked. Use TRACE: `invoke` its `Close Tab` button (RUNBOOK section 0.2).
 2. Start your hi timer.
 
 ## Next

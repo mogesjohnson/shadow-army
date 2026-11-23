@@ -51,26 +51,25 @@ This section replaces sections 1 to 4 where they differ. The owner's words, tidi
 
 Workers are named `w<n>-<task>`.
 
-**Launch a worker.** Read the trace-computer-use skill and its references first, then:
-1. Run `trace_computer_doctor`.
-2. Run `trace_computer_list_windows` with `processName: "WindowsTerminal"` and open a session on that window.
-3. Observe, press `ctrl+shift+t` for a new tab, and observe that it has focus.
-4. Type this line and press Enter:
+**Launch a worker.** TRACE can't type into Windows Terminal: every keystroke fails its focus check (tested 2026-11-23). Its accessibility `invoke` works, so TRACE checks and closes tabs, and Windows Terminal's own command opens them.
+
+1. Open the tab from the PowerShell tool:
 
    ```
-   cd C:\Users\johns\projects\AIConnections; claude -n <name> --model <opus|sonnet> --effort <level> "You are worker <name>. Read C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md and do that one task, under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."; exit
+   wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n <name> --model <opus|sonnet> --effort <level> "You are worker <name>. Read C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md and do that one task, under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."
    ```
 
-5. Observe that Claude Code started in the tab and that the tab's title shows the name.
-6. Run `trace_computer_close_session`.
-
-The trailing `exit` closes the tab when Claude Code ends.
+   Put no `;` in the prompt, because `wt` reads it as a command separator. The tab closes by itself when Claude Code ends.
+2. Check it with TRACE (read the trace-computer-use skill and its references first):
+   1. Run `trace_computer_list_windows` with `processName: "WindowsTerminal"`, and open a session on that window.
+   2. Observe the tab bar with `rootElementId: "TabView"`, `accessibilityDepth: 3`, `interactiveOnly: true` and `screenshot: "none"`.
+   3. Check that a tab item carries the worker's name.
+   4. Run `trace_computer_close_session`.
 
 **Close a worker** once its report is in and checked with `git show --stat <sha>`:
-1. Open a TRACE session on the terminal.
-2. Select the worker's tab by its title.
-3. Type `/exit` and press Enter.
-4. Observe that the tab is gone.
+1. Open a TRACE session on the terminal window and observe the tab bar as above.
+2. `invoke` the `Close Tab` button under the worker's tab item, found by its title.
+3. Check that the tab is gone, then close the session.
 
 **Decide.** The owner pre-approved the orchestrator's recommendations (2026-11-23), so decide and go on.
 - For a big change or an architecture question, add an entry to `suggested.md`: the question, the options, your recommendation and why, whether it can be undone, and its status.
@@ -86,7 +85,7 @@ The trailing `exit` closes the tab when Claude Code ends.
 2. Launch `orch-<n+1>` the same way with this line, then stop:
 
    ```
-   cd C:\Users\johns\projects\AIConnections; claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k; you hand off at 300k. First close the tab of orch-<n> once the cockpit marks it parked."; exit
+   wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 300k. First start your hi timer, then close the tab of orch-<n> once the cockpit marks it parked."
    ```
 
 ### 0.3 A worker
