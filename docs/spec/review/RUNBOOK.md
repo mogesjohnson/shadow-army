@@ -61,9 +61,11 @@ Workers are named `w<n>-<task>`.
 1. Open the tab from the PowerShell tool:
 
    ```
-   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n <name> --model <opus|sonnet> --effort <level> "You are worker <name>. Read C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md and do that one task, under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."
+   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n <name> --model <opus|sonnet> --effort medium "<Task in a few words, with its files>. Your name is <name>. Your brief is C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md. Work under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."
    ```
 
+   - **Lead the prompt with the task, not with "You are worker".** Until a worker names its task, the cockpit compares prompts: two workers started together with near-identical prompts tripped its duplicate-task stop (2026-11-23).
+   - **Effort is medium** (the owner, 2026-11-23).
    - **Clear the `CLAUDE*` variables first,** as the line does. A tab opened from inside a session inherits them: that session's id, its messaging socket, and a child-session marker that turns off transcript saving (found 2026-11-23). The owner's settings set `CLAUDE_CODE_PLUGIN_DIRS` again.
    - **Put no `;` in the prompt.** `wt` reads it as a command separator.
    - The tab closes by itself when Claude Code ends.
@@ -73,6 +75,14 @@ Workers are named `w<n>-<task>`.
    2. Observe the tab bar with `rootElementId: "TabView"`, `accessibilityDepth: 3`, `interactiveOnly: true` and `screenshot: "none"`.
    3. Check that a tab item carries the worker's name.
    4. Run `trace_computer_close_session`.
+
+**Watch the workers every 5 minutes** (the owner, 2026-11-23). Keep a background `sleep 300` beside the hi timer. Each time it ends:
+1. Run `python C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/check_workers.py <your session id prefix>`. It prints one line per worker: its name, whether it is working or stopped, its context, its idle minutes and its last words.
+2. For a stopped worker that has not reported, read why from its last words.
+   - A usage limit: its hi timer resumes it.
+   - A cockpit hold: re-plan as below.
+   - Anything else: fix the cause, then close it and launch a fresh worker on what is left.
+3. Start the timer again.
 
 **Close a worker** once its report is in and checked with `git show --stat <sha>`:
 1. Open a TRACE session on the terminal window and observe the tab bar as above.
