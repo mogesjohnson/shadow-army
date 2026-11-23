@@ -5,10 +5,11 @@ Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update
 **Orchestrator 1 (2026-11-23, `c3d0e213`): started.**
 - Closed session 25's tab.
 - Workers running, with briefs in `.shadow/v2-tools/tasks/`:
-  - `w1-f-round5`, T1 (Opus, high): `v2.md`, `ledger.md`, `batches/F-R5-*`, `raw/F-R5-V*`.
+  - `w3-close-m1`, T2 (Sonnet, medium): `v2.md`, `ledger.md`.
   - `w4-port-transport`, B1 (Sonnet, high): #75's transport cut to M1a, on `claude/63-m1a-transport` from `main`, no PR yet (`suggested.md` S-3).
+- Done: `w1-f-round5`, T1 (`09c1de5`, `c8d8921`, `bc8acfc`). F's round 5 is rows R-F-173 to R-F-187. R-F-173 was CONFIRMED P1 and is fixed: harness git gets CH-1's cleaned `PATH`. R-F-180 is a duplicate of R-M1-179, now P2. The other P2s and P3s are build notes; R-F-177, R-F-183 and R-F-184 hold choices for the builder. Both checkers 0. **F has no open P0 or P1.**
 - Done: `w2-read-75`, T4. Its report `.shadow/v2-tools/tasks/T4-report.md` splits the build into B1 to B6. S-3 waits for the owner.
-- **Next:** T2 after T1 pushes, then T3. B2 (the mod) and B3 (the write path) after B1, then B4 (apply).
+- **Next:** T3 (`w5-freeze-cut`, brief written) after T2 pushes. B2 (the mod) and B3 (the write path) after B1, then B4 (apply).
 
 **Session 25 (2026-11-23, `44bad808`): new rules, and orchestrator 1 is next.**
 - **Prototype first.** The owner chose D-39 (flow section 0): one review round per milestone, only confirmed P0 and P1 block, P2s become build notes, and a milestone is done when it runs.
