@@ -66,9 +66,19 @@ export async function applyToCheckout(root: string, base: string, branch: string
       };
     }
     // git apply is all or nothing: if it fails, no file has changed.
-    // Add new paths to the index as intent-to-add within the same operation. This includes ignored
-    // additions and acquires the index lock before editing files, so an index failure changes nothing.
-    await git(root, ["apply", "--intent-to-add", "--whitespace=nowarn", patch]);
+    await git(root, ["apply", "--whitespace=nowarn", patch]);
+    // Mark new paths intent-to-add, ignored ones too. This is a separate `git add -N` because `git apply
+    // --intent-to-add` also stages modified and deleted files on git 2.43 (it only marks new ones on 2.52).
+    // If the index cannot be changed (for example, the owner holds index.lock), take the edits back out.
+    const added = files.filter((f) => f.change === "A").map((f) => f.path);
+    if (added.length) {
+      try {
+        await git(root, ["--literal-pathspecs", "add", "-N", "-f", "--", ...added]);
+      } catch (e) {
+        await git(root, ["apply", "-R", "--whitespace=nowarn", patch]).catch(() => undefined);
+        throw e;
+      }
+    }
   } catch (e) {
     if (!(e instanceof GitError)) throw e;
     return { applied: false, reason: e.message, clashes: [] };
