@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 4 (2026-11-23, `c690b07d`): the pre-review's fixes are in; Linux failures are next.** Draft PRs on #94: #96 (W11-2, W11-4), #97 (W12-5, W12-6, W12-4 note), #99 (W12-1, W12-2, W12-3, W11-1, W11-3); #98 adds `npm run ci:local` on `main`, which found 6 Linux-only failures on `main` and 36 on #94. Codex has reviewed none of #89 to #99. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
+
 **Orchestrator 3 (2026-11-23, `9db80795`): pre-review of M1a while Codex and the live run wait.**
 
 - Closed orch-2's tab. Codex has not reviewed #89 to #95 yet.
