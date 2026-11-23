@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -74,10 +75,26 @@ export class OfficeClient {
   async request<T = unknown>(command: Record<string, unknown>): Promise<T> {
     const url = await this.ready;
     if (this.ended) throw new Error("post office is closed");
-    const response = await fetch(`${url}/command`, { method: "POST", headers: { Authorization: `Bearer ${this.#credential}`, "Content-Type": "application/json" }, body: JSON.stringify(command) });
-    const data = await response.json() as { result?: T; error?: string };
-    if (!response.ok) throw new Error(data.error ?? `post office command failed (${response.status})`);
+    // A send's reply arrives when its turn ends, however long that takes. Global fetch (undici)
+    // fails after 300 s without response headers (W11-4); node:http has no such timeout.
+    const { status, text } = await this.post(`${url}/command`, JSON.stringify(command));
+    const data = JSON.parse(text) as { result?: T; error?: string };
+    if (status < 200 || status > 299) throw new Error(data.error ?? `post office command failed (${status})`);
     return data.result as T;
+  }
+
+  private post(url: string, body: string): Promise<{ status: number; text: string }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(url, { method: "POST", headers: { Authorization: `Bearer ${this.#credential}`, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }, (res) => {
+        const decoder = new StringDecoder("utf8");
+        let text = "";
+        res.on("data", (chunk: Buffer) => { text += decoder.write(chunk); });
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text: text + decoder.end() }));
+        res.on("error", reject);
+      });
+      req.on("error", reject);
+      req.end(body);
+    });
   }
 
   close(): Promise<void> {

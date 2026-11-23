@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { canonicalPath } from "../workspace/git.js";
 import { OfficeClient } from "./client.js";
@@ -41,6 +41,33 @@ afterEach(async () => {
     await new Promise<void>((done) => child.once("close", done));
   }
   repos.splice(0).forEach((repo) => repo.cleanup());
+});
+// A stand-in post office that holds every reply's headers back, as the real one does until a turn ends.
+const slowOffice = `
+const http = require("node:http");
+const server = http.createServer((req, res) => {
+  let body = "";
+  req.on("data", (c) => { body += c; });
+  req.on("end", () => {
+    const action = JSON.parse(body).action;
+    const delay = action === "send" ? 1200 : 0;
+    setTimeout(() => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ result: { action } })); if (action === "shutdown") process.exit(0); }, delay);
+  });
+});
+server.listen(0, "127.0.0.1", () => console.log(JSON.stringify({ type: "ready", data: { url: "http://127.0.0.1:" + server.address().port } })));
+process.stdin.resume();
+`;
+describe("W11-4 long sends", () => {
+  it("sends over node:http, not global fetch whose headers timeout is 300 s, and waits for a late reply", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const client = new OfficeClient({ cwd: process.cwd(), command: { file: process.execPath, args: ["-e", slowOffice, "--"] } }); clients.push(client);
+      const started = Date.now();
+      expect(await client.request<{ action: string }>({ action: "send" })).toEqual({ action: "send" });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1000);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally { fetchSpy.mockRestore(); }
+  }, 15_000);
 });
 describe("M1 caller subprocess contract", () => {
   it("resolves a relative repository folder once before spawning the helper", async () => {

@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as managedProcesses from "./processTree.js";
-import type { ChannelEvent } from "./channel.js";
+import type { ChannelEvent, NativeError } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs } from "./claude.js";
 
 const channels: ClaudeChannel[] = [];
@@ -270,13 +270,30 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["split 🌙"]);
   }, 15_000);
 
-  it("fails a malformed protocol explicitly and settles the pending turn once", async () => {
+  it("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
-    const result = await channel.send("malformed");
+    const result = await channel.send("malformed-once");
+    expect(result.status).toBe("completed");
+    expect(result.text).toBe("after bad line");
+    const errors = events.filter((event) => event.type === "error").map((event) => event.data as NativeError);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].kind).toBe("other");
+    expect(errors[0].message).toContain("broken JSON");
+    expect(errors[0].message).not.toContain("sk-ant-abcdefghijklmnop");
+    expect(events.some((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")).toBe(true);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 15_000);
+
+  it("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
+    const { channel, events } = await setup();
+    const survived = await channel.send("malformed-nine-then-ok");
+    expect(survived.status).toBe("completed");
+    const result = await channel.send("malformed-ten");
     expect(result.status).toBe("interrupted");
-    expect(result.error?.message).toContain("malformed JSON");
+    expect(result.error?.kind).toBe("transport");
+    expect(result.error?.message).toContain("10 unparseable lines in a row");
     await channel.close();
-    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
     expect(events.filter((event) => event.type === "closed")).toHaveLength(1);
   }, 15_000);
 
