@@ -6,6 +6,9 @@ Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update
 
 - Closed orch-2's tab. Codex has not reviewed #89 to #95 yet.
 - Workers running (Opus, medium, read-only, briefs in `.shadow/v2-tools/tasks/`): `w11-review-transport` reviews B1 (#95, `origin/main..2ab8925`) and `w12-review-slice` reviews #89 to #94 (`2ab8925..8d3b298`), each for incorrect behavior and the owner's seven failure simulations, as Codex will. Their findings become one fix worker per PR stack. `w10-local-ci` is still running.
+- Done: both pre-reviews. B1: 1 P1 (W11-4, a send fails after 300 s), 3 P2. #89 to #94: 1 P1 (W12-1, a failed turn's partial edit reaches the owner's folder through the next turn), 5 P2. Reports in `.shadow/v2-tools/tasks/`.
+- Fixes started as sibling draft PRs on #94: `w13-fix-office` (Opus; post office, apply, lease) and `w14-fix-channel` (Sonnet; claude channel, client). `w15-fix-mod` (the card) waits for a free slot.
+- **Next:** `handoffs/LATEST.md` (orch-3 to orch-4).
 
 **Orchestrator 2 (2026-11-23, `99e6c5ce`): M1a is built and joined; the live run (M1-AC29) waits for the owner.**
 - Closed the tabs of orch-1, `w6-mod-send`, `w7-write-path`, `w8-apply` and `w9-slice-run`.
