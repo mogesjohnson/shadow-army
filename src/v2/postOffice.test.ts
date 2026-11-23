@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
@@ -28,7 +29,7 @@ afterEach(async () => {
 });
 
 describe("M1 office integration with synthetic native processes", () => {
-  it("keeps two messages in one process, preserves owner changes and redacts credentials in replies, events and logs", async () => {
+  windowsOnly("keeps two messages in one process, preserves owner changes and redacts credentials in replies, events and logs", async () => {
     const { repo, office, events, deliveries } = await setup();
     const first = await office.send("scout", "inspect");
     const second = await office.send("scout", "inspect");
@@ -51,7 +52,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("owner's uncommitted work\n");
   }, 30_000);
 
-  it.each(["die", "partial"])("finalizes both guards after %s, retains partial work, then requires explicit reconnect without replay", async (prompt) => {
+  windowsOnly.each(["die", "partial"])("finalizes both guards after %s, retains partial work, then requires explicit reconnect without replay", async (prompt) => {
     const { repo, office, events } = await setup();
     const opened = await office.open("scout");
     const pending = office.send("scout", prompt);
@@ -75,7 +76,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
   }, 30_000);
 
-  it("retains a successful Edit followed by provider failure and requires an explicit fresh retry without replay", async () => {
+  windowsOnly("retains a successful Edit followed by provider failure and requires an explicit fresh retry without replay", async () => {
     const { office, events, deliveries } = await setup();
     const opened = await office.open("scout");
     const result = await office.send("scout", "partial-success-fail");
@@ -97,7 +98,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("successful first edit\n");
   }, 30_000);
 
-  it("keeps rate limits, context overflow, login and refusal distinct without restart or automatic retry", async () => {
+  windowsOnly("keeps rate limits, context overflow, login and refusal distinct without restart or automatic retry", async () => {
     const { office, events } = await setup();
     for (const [text, kind] of [["rate", "rate_limit"], ["context", "context_overflow"], ["login", "login_needed"]]) {
       const result = await office.send("scout", text!);
@@ -110,7 +111,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(events.filter((event) => event.type === "restarted")).toHaveLength(0);
   }, 30_000);
 
-  it("passes through provider usage/cache fields and leaves missing usage unknown", async () => {
+  windowsOnly("passes through provider usage/cache fields and leaves missing usage unknown", async () => {
     const { office } = await setup();
     const meters = await office.send("scout", "meters");
     expect(meters.contextTokens).toBe(22);
@@ -120,7 +121,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(unknown.usage).toBeUndefined(); expect(unknown.contextTokens).toBeUndefined();
   }, 30_000);
 
-  it("rejects a credential inside an approval response without consuming the native owner request", async () => {
+  windowsOnly("rejects a credential inside an approval response without consuming the native owner request", async () => {
     const { office, events } = await setup();
     const opened = await office.open("scout");
     const pending = office.send("scout", "approval");
@@ -244,7 +245,7 @@ describe("M1 office integration with synthetic native processes", () => {
     await expect(office.open("scout")).rejects.toThrow("closed");
   }, 30_000);
 
-  it.each(["model", "system instructions"])("preserves a native reported cache hit after changing only %s in a fresh session", async (changed) => {
+  windowsOnly.each(["model", "system instructions"])("preserves a native reported cache hit after changing only %s in a fresh session", async (changed) => {
     const repo = makeRepo(); repos.push(repo);
     const custom = makeRoster({ scout: { cli: "claude", model: "first-model", roles: ["review"], write: false } });
     custom.rules.all = "FIRST SYSTEM INSTRUCTION";
@@ -364,7 +365,7 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(started).toHaveLength(1);
   }, 30_000);
 
-  it("keeps the claimed work of a cut-short turn on the branch, unusable until the owner decides", async () => {
+  windowsOnly("keeps the claimed work of a cut-short turn on the branch, unusable until the owner decides", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event), channelFactory: factory }); offices.push(office);
