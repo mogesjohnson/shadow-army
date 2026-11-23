@@ -2,6 +2,16 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Session 25 (2026-11-23, `44bad808`): new rules, and orchestrator 1 is next.**
+- **Prototype first.** The owner chose D-39 (flow section 0): one review round per milestone, only confirmed P0 and P1 block, P2s become build notes, and a milestone is done when it runs.
+- **The orchestrator model.** The owner also set how sessions work (RUNBOOK section 0):
+  - An orchestrator opens worker tabs with TRACE, one task each, and hands off at 300k.
+  - Workers stop at 150k.
+  - Every session says hi every 50 minutes.
+- **Big questions** go in `suggested.md`: S-1, whether to build on T3 Code (second-brain note `c6c9cf8e`), and S-2, who builds the slice.
+- **The spec is unchanged** (v0.27).
+- **Next:** `handoffs/LATEST.md`.
+
 **Session 24, main with three forks (2026-10-30).** **v0.27 applied (`1d99e92`), round 5 for F run, not clean.** fork1 drafted V26-FC1's six P3 repairs (`drafts/v027/`, rows R-M1-295 to 300); main applied them, both checkers 0 problems, snapshot `v2@1d99e92.md`. fork2 wrote round 5's F packet (`drafts/r5/PROMPTS-F.md`: implementer and enterprise operator) and stopped at 121k before starting the agents. fork3 ran both reviewers: `raw/F-R5-implementer.md` (P1 1, P2 4, P3 2) and `raw/F-R5-enterprise.md` (P1 1, P2 4, P3 3). Next: verify F's 2 P1 and 8 P2 and repair; round 5 for M1 (packet and run in separate forks). Round 5 is the last the flow allows (flow line 122). Handoff: `handoffs/LATEST.md`.
 
 **Session 23, main with three forks (2026-10-30).** **V25-FC1 done, v0.26 applied (`a411314`), V26-FC1 done and clean** (no new CONFIRMED P0 to P2). fork1 ran V25-FC1 on `v2@5e90643.md` (`raw/V25-FC1.md`): FIXED 9, SOUND 5, NOT SOUND 1 (main's submodule alternative for V24 N2), new N1 (P2: a submodule's `.git` folder, its `commondir`, a gitlink missing from `.gitmodules`) and N2 to N6 (P3). fork2 drafted all six (`drafts/v026/`, 8 pairs, rows R-M1-289 to 294); main applied them, and both checkers give 0 problems. fork3 ran V26-FC1 on `v2@a411314.md` (`raw/V26-FC1.md`): FIXED 6, SOUND 7, CONFIRMED 4 by its table (its counts line miscounts), nothing NOT FIXED or NOT SOUND; new N1 to N6, all P3. Next: v0.27 (those six P3 repairs), then round 5 for F and M1, the last round the flow allows. Handoff: `handoffs/LATEST.md`.
@@ -119,7 +129,7 @@ Last updated: 2026-10-21, end of session 7. The spec is v0.14 (`02d5f84`): fix c
 | F | Rounds 1 and 2 closed and repaired (v0.7 to v0.14). Round 3 (implementer, owner's advocate) not clean: confirmed P2s, repaired in v0.16. **Round 4** (consistency auditor on v0.17, red team on v0.20) **not clean**: R-F-157 CONFIRMED P2 (F-R4-V1); the red team's R-F-166 (P1) and R-F-167 to 169 (P2) wait for verifiers; R-F-159 to 165 and 170 are P3s to apply unverified. Streak 0. Next: verify, repair in v0.21, fix check V21-FC1, then round 5. |
 | M1 | Rounds 1 and 2 closed and repaired (v0.8 to v0.14). Round 3 (red team, enterprise operator) not clean: R-M1-161, 168 and 169 confirmed P1, repaired in v0.16 and v0.17. **Round 4** (chaos on v0.17, implementer on v0.20, the Windows probes) **not clean**: R-M1-206 CONFIRMED P1 twice, R-M1-221 CONFIRMED P1, R-M1-207 to 212, 214 and 222 confirmed lower; the implementer's R-M1-235 (P1) and 236 to 242 (P2) wait for verifiers (235 and 236 need probes P-16 and P-17). V18-FC1: R-M1-194 NOT FIXED, new R-M1-224 to 234. Streak 0. Next: verify, v0.21, V21-FC1, then round 5. R-M1-71 stays parked for M2 except grok's part, which R-M1-221 applies. |
 | C (M1's rows) | Not started. |
-| M2–M6, C, X1–X5 | Not started. |
+| M2–M6, C, X1–X5 | Not started. **D-39 (2026-11-23):** M2 to M6 and C get one round each, just before they are built; X1 to X5 are dropped, and one red-team pass runs before real `full` use. F verifies round 5's two P1s once; M1 is done once no confirmed P0 or P1 is open. |
 
 | Decision | State |
 |---|---|

@@ -4,6 +4,23 @@ How the review of `docs/spec/v2.md` runs until it is the finished **Shadow Army 
 
 Written 2026-10-14 by session 7ac7daad, from the owner's instructions that day.
 
+## 0. Prototype first (the owner, 2026-11-23; D-39)
+
+This section replaces the rest of this file where they differ. The goal is no longer a converged spec but a working prototype: the spec is good enough once the next milestone can be built.
+
+- **What is reviewed:** only the sections of the milestone about to be built, once, just before it is built. C and M2 to M6 each get their one round when their turn comes. The whole-document passes X1 to X5 are dropped; one red-team pass over the whole spec runs before `full` autonomy is used for real.
+- **One round,** with two reviewers, always the implementer and the red team, both applying the owner's seven failure simulations. No second round, no sign-offs, no streaks.
+- **What blocks:** a confirmed P0 or P1, and nothing else. A P1 must name a concrete failure that a test or a live run could show; otherwise it is P2 at most.
+- **P2s** are not fixed in the spec. Each becomes a build note in the ledger (resolution `build note`), and the builder settles it when the code gets there, with a test or a one-line spec fix in the build PR.
+- **P3s** are skipped unless the fix is free. **Fix checks** run only for P0 fixes.
+- **Exit:** no open confirmed P0 or P1 in the milestone's sections. Then the spec version is frozen and the milestone is built.
+- **A milestone is done** when it runs live on the owner's Windows machine, its ACs pass as tests, and Codex approves its code PR. What can't run here says "Not tested" (D-34).
+- **Spec edits follow the code:** a build PR updates the spec text it touched. No more review versions of text that isn't being built.
+- **Budget:** at most one session of review per milestone.
+- **Kept:** section 9's Codex gate on code PRs, section 10's rules, and the trace checker, with ACs now traced to tests.
+
+**F and M1** (2026-11-23): F's two round-5 P1s are verified once; a confirmed one is fixed, and the P2s and P3s become build notes. M1 runs no round 5: it is done once no confirmed P0 or P1 is open. Then the spec is frozen as v0.28, M1 is cut to the prototype slice (`handoffs/LATEST.md`), and the slice is built. Sessions run as RUNBOOK section 0 says.
+
 ## 1. The goal and who decides
 
 - **The owner's words:** "constant skeptics and critical review agents … work till we have a fully built out spec 2.0 … enterprise/corporate ready, production ready … 2 agents verify the same section 2 or 3 times and so then the area is complete."
@@ -119,7 +136,7 @@ Findings that belong to a later unit are **parked** in the ledger (`parked for M
 
 **Severity.** P0: harm in production as written. P1: wrong, unbuildable or untestable, or a failure with no defined outcome. P2: two readings that matter; a missing limit, default, format or message; an unverified vendor fact. P3: wording; never blocks a round.
 
-**Done.** Two clean rounds in a row, then two PASS sign-offs. At most five rounds; a unit still failing after five gets a design note to the owner.
+**Done.** (Replaced by section 0 on 2026-11-23.) Two clean rounds in a row, then two PASS sign-offs. At most five rounds; a unit still failing after five gets a design note to the owner.
 
 ## 7. Decisions: the bake-off
 

@@ -568,6 +568,17 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Answer:** **(a)**, 2026-10-30, from the owner in chat. V21-FC1 called (a) the only option that makes `n` mean what it says. Drafted in v0.22, batch 2 (`drafts/v022/repairs2.txt`, `repairs2-late.txt`): the trusted state is logged at start and each time it changes, a y or Shadow Army's own snapshot or worktree command, so a restart doesn't see the last post office's own snapshots as a change; the restart compares with that state, so a hold from a guard timeout doesn't carry; the filters residual, now 15, says the log that keeps the hold is a file the soldier's user can write. To fix-check.
 - **Its carried comparison's cost, answered** (V22-FC1 N1, R-M1-260): after an end with harness git held or a turn still open, the next start compares with the last trusted state, so an owner's own config edit made since is held like a soldier's, in M1 until it is undone; the alternative was to state the gap in residual 15 instead. **Answer:** keep the main fix, 2026-10-30, from the owner in chat, with two additions. Wherever a start's comparison holds harness git, its card from M2 and its M1 transcript line name the file that changed, say the change can't be told from the owner's own, and say how to release the hold; in M1 the release is undoing the edit. The owner: "documentation is what most important so thing can get tied back." And two ideas for the M2 hold card, recorded as ideas only, citing D-38 and R-M1-269: Accept this config, and Inspect the issue against the project's goals, with its three safety rules (v2.md Q10). Drafted in v0.25, batch 1 (`drafts/v025/repairs1.txt`); ledger R-M1-278. To fix-check.
 
+## D-39 Prototype first: one review round, only P0 and P1 block (the owner, 2026-11-23)
+
+- **Question:** the flow's exit rule could no longer be met. After five rounds, neither F nor M1 had a clean one. Findings weren't falling: F's round 5 had 2 P1 candidates against round 4's 1. The spec grew from 1,069 to 1,867 lines during review, and C, M2 to M6 and X1 to X5 had not started.
+- **Kind:** big. It reverses D-21, where the owner kept every recheck (2026-10-16).
+- **Options:**
+  - A: keep the flow.
+  - B: one round per milestone, where only confirmed P0 and P1 block, P2s become build notes, and a milestone is done when it runs. Recommended by session 25 (`44bad808`).
+  - C: stop the spec until T3 Code is tried. That is now suggestion S-1 in `suggested.md`.
+- **Choice:** B. The owner asked "how should we change the rules so the spec can be a working prototype? one round of reviews?", then answered "lets do that" (2026-11-23).
+- **Applied:** flow section 0, RUNBOOK section 0 (the orchestrator model) and `handoffs/LATEST.md`.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
