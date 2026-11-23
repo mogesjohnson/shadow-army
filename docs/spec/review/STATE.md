@@ -2,6 +2,11 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 3 (2026-11-23, `9db80795`): pre-review of M1a while Codex and the live run wait.**
+
+- Closed orch-2's tab. Codex has not reviewed #89 to #95 yet.
+- Workers running (Opus, medium, read-only, briefs in `.shadow/v2-tools/tasks/`): `w11-review-transport` reviews B1 (#95, `origin/main..2ab8925`) and `w12-review-slice` reviews #89 to #94 (`2ab8925..8d3b298`), each for incorrect behavior and the owner's seven failure simulations, as Codex will. Their findings become one fix worker per PR stack. `w10-local-ci` is still running.
+
 **Orchestrator 2 (2026-11-23, `99e6c5ce`): M1a is built and joined; the live run (M1-AC29) waits for the owner.**
 - Closed the tabs of orch-1, `w6-mod-send`, `w7-write-path`, `w8-apply` and `w9-slice-run`.
 - Done: B2 (`w6-mod-send`). To keep V6 without an exception, it is split into two stacked drafts: #91 (`claude/63-m1a-mod-core`, `30119eb`, the `/send` command and its card, 399 lines, 2 files) on B1's branch, and #89 (`fab6f82`, the manifest, hook list and README, 29 lines, 3 files) retargeted onto #91. Locally: 467 tests pass, 91.51% lines.
