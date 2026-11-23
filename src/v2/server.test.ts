@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { makeRoster } from "../core/roster.testutil.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 import { startOfficeServer, type OfficeServer } from "./server.js";
 import type { OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
@@ -89,7 +90,7 @@ describe("M1 authenticated loopback command server", () => {
     servers.push(await startOfficeServer(options));
   }, 20_000);
 
-  it("shutdown settles an active native turn, retains its edit and closes stalled request bodies", async () => {
+  windowsOnly("shutdown settles an active native turn, retains its edit and closes stalled request bodies", async () => {
     const { repo, server, events } = await setup();
     const opened = await (await command(server, { action: "open", soldier: "scout" })).json() as { result: { cwd: string } };
     const pending = command(server, { action: "send", soldier: "scout", text: "partial" });
