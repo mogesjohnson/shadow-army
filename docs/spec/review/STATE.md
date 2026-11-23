@@ -2,12 +2,14 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-**Orchestrator 2 (2026-11-23, `99e6c5ce`): B2 and B3 are in, B4 is running.**
+**Orchestrator 2 (2026-11-23, `99e6c5ce`): B2 to B4 are in, so M1a's code is complete; B5 joins it for the live run.**
 - Closed the tabs of orch-1, `w6-mod-send` and `w7-write-path`.
 - Done: B2 (`w6-mod-send`). To keep V6 without an exception, it is split into two stacked drafts: #91 (`claude/63-m1a-mod-core`, `30119eb`, the `/send` command and its card, 399 lines, 2 files) on B1's branch, and #89 (`fab6f82`, the manifest, hook list and README, 29 lines, 3 files) retargeted onto #91. Locally: 467 tests pass, 91.51% lines.
 - Done: B3 (`w7-write-path`), draft #90 (`298dbd4`, 212 lines, 3 files) on B1's branch. Its tsc and its 24 tests pass; it did not run the full suite or the build, so B4 runs both. Gap it found: `server.ts` doesn't pass the command's claims on, so B4 fixes that too.
-- Running: `w8-apply`, B4 (Sonnet, medium): `src/v2/apply.ts` and its test, the call in `postOffice.ts`, the claims in `server.ts`; branch `claude/63-m1a-apply`, stacked on B3.
-- **Next:** check B4, then write the owner's steps for M1-AC29, the live run.
+- Done: B4 (`w8-apply`), two stacked drafts to keep V6's 6 files: #92 (`claude/63-m1a-apply-core`, `839a0d1`, the apply, 154 lines) on B3, and #93 (`claude/63-m1a-apply-claims`, `f44b4a4`, the claims through `server.ts`, 33 lines) on #92. Locally on #93's head: tsc and build pass, 471 tests pass, 91.61% lines. Known limit: a second turn that edits a file an earlier turn already applied is refused with the clash reason; the work stays on the soldier's branch. The unused remote branch `claude/63-m1a-apply` waits for the owner to delete it.
+- M1a's code is now complete in two stacks on B1: the mod (#91, #89) and the write path (#90, #92, #93), with disjoint files.
+- Running: `w9-slice-run`, B5 (Sonnet, medium): joins both stacks with a merge commit into `claude/63-m1a-slice`, runs the slice end to end with the fake claude, and writes `docs/v2-m1a-live-run.md`, the owner's steps for M1-AC29.
+- **Next:** check B5, then hand the live run to the owner.
 
 **Orchestrator 1 handed off to orchestrator 2 (2026-11-23).** The owner set the orchestrator's limit to 175k (it was 300k) and asked for a 5-minute watch on the workers (RUNBOOK section 0.2). B2 and B3 are running. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
 
