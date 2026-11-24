@@ -176,7 +176,7 @@ describe("M1 office integration with synthetic native processes", () => {
     await expect(office.send("scout", "must not replay")).rejects.toThrow("reconnect explicitly");
     await office.open("scout"); expect(channels).toHaveLength(5);
     expect(channels[4]!.sent).toEqual([]);
-  }, 30_000);
+  }, 90_000);
 
   it("blocks restart and owner reconnect when native descendant termination is uncertain", async () => {
     const repo = makeRepo(); repos.push(repo);
@@ -654,7 +654,7 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     expect(existsSync(spy.cwd)).toBe(true);
     expect(office.army()).toEqual([expect.objectContaining({ key: "scout", state: "closed" }), expect.objectContaining({ key: "spy", state: "idle" })]);
     expect((await office.send("spy", "again")).status).toBe("completed");
-  });
+  }, 90_000);
 
   it("a restart reports the old snapshot's writes, opens a fresh one and says the session is new; a close reports them too (M1-AC4)", async () => {
     const { office, events, channels } = await fakeOffice();
@@ -673,5 +673,5 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     await office.closeSession("scout");
     expect(lines(events, "read_violation")[1]).toMatch(/read-only snapshot had writes at its close: late.txt$/);
     expect(existsSync(cwd)).toBe(false);
-  });
+  }, 90_000);
 });

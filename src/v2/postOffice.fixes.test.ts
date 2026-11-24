@@ -133,16 +133,20 @@ describe("W11-3: crash restarts (PO-1)", () => {
     expect(events.filter((event) => event.type === "restarted")).toHaveLength(2);
   }, 30_000);
 
+  /** Each restart makes a fresh snapshot (WSP-11): several seconds of harness git on Windows, past `until`'s bound. */
+  const made = async (channels: unknown[], count: number) => {
+    for (const end = performance.now() + 60_000; channels.length < count; await new Promise((done) => setTimeout(done, 20))) if (performance.now() > end) throw new Error(`restart ${count - 1} did not come`);
+  };
   it("resets the count after 10 minutes without a crash", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const { o, channels, events } = await crashing([0, 0, 0]);
-    for (let i = 0; i < 3; i++) { channels[i]!.onEvent({ type: "closed", data: {} }); await until(() => channels.length === i + 2); }
+    for (let i = 0; i < 3; i++) { channels[i]!.onEvent({ type: "closed", data: {} }); await made(channels, i + 2); }
     vi.setSystemTime(Date.now() + 11 * 60_000);
     channels[3]!.onEvent({ type: "closed", data: {} });
-    await until(() => channels.length === 5);
+    await made(channels, 5);
     expect(events.some((event) => event.type === "down")).toBe(false);
     expect(o.army()).toEqual([expect.objectContaining({ state: "idle", restarts: 1 })]);
-  }, 30_000);
+  }, 120_000);
 
   it("never restarts after a login needed", async () => {
     const { o, channels, events } = await crashing([0, 0, 0]);
