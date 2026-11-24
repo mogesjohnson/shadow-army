@@ -19,7 +19,6 @@ import { containmentFailedMessage, DownSoldiers, holdGuardOpen, readTrees, still
 import { sweepTrees, systemOps, type SweepOps } from "./contain/sweep.js";
 
 /** A channel that can list its tree's processes (PO-11). The Claude channel doesn't expose `list` yet. */
-type ListedChannel = NativeChannel & { list?(): Promise<Identity[]> };
 /** PO-1: each turn's checkout baseline is kept on disk while the turn runs, so a later post office can close its guard. */
 const turnsDir = (root: string) => join(root, ".shadow", "v2", "turns");
 const stateToJson = (state: RepoState) => ({ ...state, dirty: [...state.dirty], index: [...state.index], refs: [...state.refs] });
@@ -98,6 +97,10 @@ interface Session {
   snapshot?: Snapshot;
   /** PO-16's record of the soldier's process tree, removed once the tree has ended. Created before start in M1b-26. */
   tree?: TreeRecord;
+  /** The last guardian identity added to the tree record (PO-9): a restart's new guardian is a new identity. */
+  guardianRecorded?: Identity;
+  /** A guardian line that could not be added is reported once per session, as PO-16 says for a record line. */
+  guardianFailureReported?: boolean;
   /** claude's background tasks: `task_started` until its `task_notification` (PO-8, WSP-11). */
   tasks: Set<string>;
   /** Wakes a guard waiting on background work. */
@@ -350,6 +353,22 @@ export class PostOffice {
       .catch((error: unknown) => { throw failed(`tree record not written: ${String(error)}`); });
   }
 
+  /** Adds the channel's guardian to the session's tree record once per identity. A line that can't be added is reported once; the next turn tries again. */
+  private async recordGuardian(session: Session): Promise<void> {
+    const guardian = session.channel?.guardian, tree = session.tree;
+    if (!guardian || !tree) return;
+    if (session.guardianRecorded?.pid === guardian.pid && session.guardianRecorded.startTime === guardian.startTime) return;
+    const identity: Identity = { pid: guardian.pid, startTime: guardian.startTime };
+    try {
+      await tree.add({ kind: "guardian", ...identity });
+      session.guardianRecorded = identity;
+    } catch (error) {
+      if (session.guardianFailureReported) return;
+      session.guardianFailureReported = true;
+      this.record({ soldier: session.spec.key, type: "tree_record", data: { guardian: false, reason: String(error) } }, session);
+    }
+  }
+
   private processOps(ops: SweepOps): ProcessOps {
     return { startTimeOf: (pid) => ops.startTimeOf(pid), end: async (processes) => { for (const one of processes) await ops.endProcess(one.pid, false); } };
   }
@@ -502,7 +521,7 @@ export class PostOffice {
     this.hold?.setTurnOpen(++this.openTurns > 0);
     // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
     await this.renewLease(session);
-    const channel = session.channel as ListedChannel | undefined, generation = session.generation;
+    const channel = session.channel, generation = session.generation;
     const before = channel?.list ? await channel.list().catch(() => []) : [];
     let result: TurnResult;
     try {
@@ -513,6 +532,8 @@ export class PostOffice {
     }
     if (result.status === "completed") session.loginNeeded = false;
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
+    // PO-9: the guardian holds the job, so its identity goes into the tree record once the channel has one.
+    await this.recordGuardian(session);
     // PO-11: the tree's processes as the channel lists them go into its record.
     const after = channel?.list ? await channel.list().catch(() => []) : [];
     if (channel?.list && session.tree) await session.tree.listing(after);
