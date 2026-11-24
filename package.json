@@ -19,7 +19,7 @@
     "plugins/typescript7-lsp/README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/build-native.mjs && tsc",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
