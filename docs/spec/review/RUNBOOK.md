@@ -56,25 +56,20 @@ This section replaces sections 1 to 4 where they differ. The owner's words, tidi
 
 Workers are named `w<n>-<task>`.
 
-**Launch a worker.** TRACE can't type into Windows Terminal: every keystroke fails its focus check (tested 2026-11-23). Its accessibility `invoke` works, so TRACE checks and closes tabs, and Windows Terminal's own command opens them.
+**Launch a session from the + button, with TRACE** (the owner, 2026-11-23). Orchestrators run in colour and workers in black and white. The tool shells carry `NO_COLOR=1`, and a tab opened with `wt.exe` from one inherits it (that is why orch-9 and orch-10 started black and white). A tab opened from the + button starts from Windows Terminal's own clean environment. Read the trace-computer-use skill and its `operation-and-recovery.md` first. Tested by orch-10 on 2026-11-23:
 
-1. Open the tab from the PowerShell tool:
+1. Run `trace_computer_list_windows` with `processName: "WindowsTerminal"`, open a session, and observe the tab bar: `rootElementId: "TabView"`, `accessibilityDepth: 3`, `interactiveOnly: true`, `screenshot: "none"`.
+2. `invoke` `NewTabButton`. A `click` on it opened its dropdown instead. A "Windows PowerShell" tab opens.
+3. Observe the whole window with `accessibilityDepth: 6`, `interactiveOnly: true` and `screenshot: "none"`. Focus then binds to the terminal's Text control, under a `Custom` element. A TabView-scoped observation gives `focus_not_acquired`. An observation made while PowerShell is still starting gives `stale_element`. Once its prompt is up, observe again with `rootElementId` set to that `Custom` element at depth 2. Do not pass `expectedFocusElementId`.
+4. `type_text` the line:
+   - a worker: `$env:NO_COLOR=1; cd C:\Users\johns\projects\AIConnections; claude -n <name> --model <opus|sonnet|haiku> --effort <low|medium|high> "<Task in a few words, with its files>. Your name is <name>. Your brief is C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md. Work under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."`
+   - an orchestrator: the same line without `$env:NO_COLOR=1;`, with section 0.2's 175k prompt.
+5. Observe with `screenshot: "scaled"` and check the typed line. Then `press_key` `Enter`, close the session, and check with `check_workers.py` that the worker appears.
 
-   ```
-   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n <name> --model <opus|sonnet> --effort medium "<Task in a few words, with its files>. Your name is <name>. Your brief is C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md. Work under sections 0.1 and 0.3 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md."
-   ```
-
-   - **Lead the prompt with the task, not with "You are worker".** Until a worker names its task, the cockpit compares prompts: two workers started together with near-identical prompts tripped its duplicate-task stop (2026-11-23).
-   - **Effort is medium** (the owner, 2026-11-23).
-   - **Clear the `CLAUDE*` variables first,** as the line does. A tab opened from inside a session inherits them: that session's id, its messaging socket, and a child-session marker that turns off transcript saving (found 2026-11-23). The owner's settings set `CLAUDE_CODE_PLUGIN_DIRS` again.
-   - **Put no `;` in the prompt.** `wt` reads it as a command separator.
-   - The tab closes by itself when Claude Code ends.
-   - Check that the new tab's status bar does not say "Transcript saving is off".
-2. Check it with TRACE (read the trace-computer-use skill and its references first):
-   1. Run `trace_computer_list_windows` with `processName: "WindowsTerminal"`, and open a session on that window.
-   2. Observe the tab bar with `rootElementId: "TabView"`, `accessibilityDepth: 3`, `interactiveOnly: true` and `screenshot: "none"`.
-   3. Check that a tab item carries the worker's name.
-   4. Run `trace_computer_close_session`.
+- **Model and effort by difficulty** (the owner, 2026-11-23). Use Opus at medium for concurrency, security stores and design. Use Sonnet at medium for ordinary modules, and at high for safety code such as redaction and filters. Use Haiku at low for mechanical edits. The brief's `## Model and effort` names it.
+- **Lead the prompt with the task, not with "You are worker".** Until a worker names its task, the cockpit compares prompts: two workers started together with near-identical prompts tripped its duplicate-task stop (2026-11-23).
+- The tab closes by itself when Claude Code ends.
+- **Fallback, if TRACE's typing fails:** run `Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n <name> --model <m> --effort <e> "<prompt>"` from the PowerShell tool. For an orchestrator, also run `Remove-Item Env:NO_COLOR` first. A tab opened that way inherits the session's `CLAUDE*` variables, which the line clears: the session id, the messaging socket, and a marker that turns off transcript saving. The prompt must contain no `;`, which `wt` reads as a command separator.
 
 **Watch the workers every 5 minutes** (the owner, 2026-11-23). Keep a background `sleep 300` beside the hi timer. Each time it ends:
 1. Run `python C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/check_workers.py <your session id prefix>`. It prints one line per worker: its name, whether it is working or stopped, its context, its idle minutes and its last words.
@@ -100,10 +95,10 @@ Workers are named `w<n>-<task>`.
 
 **At 175k:**
 1. Make section 3's save point. Its `LATEST.md` also names the running workers, their tasks and their files.
-2. Launch `orch-<n+1>` the same way with this line, then stop:
+2. Launch `orch-<n+1>` from the + button as above, in colour (no `NO_COLOR`), with this line, then stop:
 
    ```
-   Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -d C:\Users\johns\projects\AIConnections claude -n orch-<n+1> "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 175k. First start your hi timer and the 5-minute watch, then close the tab of orch-<n> once the cockpit marks it parked."
+   cd C:\Users\johns\projects\AIConnections; claude -n orch-<n+1> --model opus "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 175k. First start your hi timer and the 5-minute watch, then close the tab of orch-<n> once the cockpit marks it parked."
    ```
 
 ### 0.3 A worker
