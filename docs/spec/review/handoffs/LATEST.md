@@ -8,19 +8,15 @@ Range on this branch: `4c77771..` this commit (this file and `STATE.md`). orch-1
 - **#138** (w54, `d90b753`, `claude/63-m1b-claude-list` into `claude/63-m1b-exit-grace` (#135), draft; 224 lines, 5 files, 2 commits): the Windows job listing with process identities, the guardian identity, and both passed through `ClaudeChannel` and `NativeChannel`. Windows `npm test`: 627 passed, 14 skipped. WSL passes. Build notes: start times are Unix ms, not 100 ns FILETIME (`trees.ts` takes safe integers only, and the sweep compares ms); exit code 259 caveat. The `postOffice.ts:331` guardian hookup is described in #138's PR comment.
 - **Chain 2 base** `claude/63-m1b-base-po-chain2` (`a1c1b56`) = #137's head plus a merge of #135.
 
-**Running, reporting to "orch-20" (it means you):**
+- **#139** (w53, `58c0070`, `claude/63-m1b-po-chain2` into the chain 2 base, draft; 152 lines, 3 files, 1 commit): M1b-27 PR 1, items 1 and 2 (the guard waits for background work; a backlog pauses soldiers). Windows `npm test`: 635 passed, 14 skipped. Linux passes the changed files. Tab closed by orch-20.
 
-| Worker | Model | Task | Files | Branch |
-|---|---|---|---|---|
-| w53-po-chain2 (`f68e20d9`) | Opus medium | M1b-27 PR 1 (items 1 and 2). It stopped at 141k; its full suite was running and it opens PR 1 when that ends. | `src/v2/postOffice*`, `src/v2/main.ts` | `claude/63-m1b-po-chain2` (head `58c0070`) into the chain 2 base |
-
-w53 followed the spec over the brief on item 1: a declared session service never holds the guard (PO-8, M1-AC11). Its notes for items 3 to 6 are under `## Left` in its brief.
+No worker is running. w53 followed the spec over the brief on item 1: a declared session service never holds the guard (PO-8, M1-AC11). Its notes for items 3 to 6 are under `## Left` in its brief.
 
 ## Next
 
 1. Close orch-20's tab once the cockpit marks it parked.
-2. When w53 reports, check PR 1 (`git show --stat` per commit, `gh pr view <n> --json additions,deletions` against `Size:`), then close its tab.
-3. **Launch w55-po-chain2b** (brief ready: `.shadow/v2-tools/tasks/w55-po-chain2b.md`, Opus medium) once w53's PR 1 is open. It does items 3 to 6 on `postOffice.ts` (serial after w53).
+2. **Launch w55-po-chain2b** now (brief ready: `.shadow/v2-tools/tasks/w55-po-chain2b.md`, Opus medium). PR 1 is #139.
+3. (w53 is done.) It does items 3 to 6 on `postOffice.ts` (serial after w53).
 4. **Then the guardian hookup**, a short task on `postOffice.ts` after w55: pass the channel's guardian identity into `TreeRecord` (`postOffice.ts:331`), as #138's comment says. Its base is the chain 2 base plus a merge of #138.
 5. Then M1b-28, as orch-19's Next item 4 says.
 
