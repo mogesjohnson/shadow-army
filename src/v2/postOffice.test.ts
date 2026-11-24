@@ -610,3 +610,68 @@ describe("M1b-27 the guard waits for background work, and a backlog pauses soldi
     expect(calls).toEqual(["c1 pause", "c2 pause", "c1 resume", "c2 resume"]);
   });
 });
+
+describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-AC4, M1-AC11)", () => {
+  const two = makeRoster({ scout: { cli: "claude", model: "m", roles: ["review"], write: false }, spy: { cli: "claude", model: "m", roles: ["review"], write: false } });
+  /** Fake channels: each turn runs `during` with the channel's options; `channels` keeps every one made, in order. */
+  async function fakeOffice(during: (options: ChannelOptions, text: string) => Promise<void> | void = () => {}) {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [], channels: ChannelOptions[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: two, processOps: null, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
+      channelFactory: (options): NativeChannel => {
+        channels.push(options);
+        return { async send(text) { await during(options, text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+      } }); offices.push(office);
+    return { repo, office, events, channels };
+  }
+  const lines = (events: OfficeEvent[], type: string) => events.filter((event) => event.type === type).map((event) => (event.data as { line: string }).line);
+
+  it("a working tree made inside the folder during a turn, edited and removed after it, passes the turn with one line each (M1-AC11)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      await git(repo.dir, ["worktree", "add", "--detach", ".claude/worktrees/fix-1"]);
+      await writeFile(join(repo.dir, ".claude/worktrees/fix-1/README.md"), "the owner's edit\n");
+    });
+    expect((await office.send("scout", "go")).status).toBe("completed");
+    expect(lines(events, "worktree")).toEqual([expect.stringMatching(/added at .*\.claude\/worktrees\/fix-1$/)]);
+    await git(repo.dir, ["worktree", "remove", "--force", ".claude/worktrees/fix-1"]);
+    await office.close();
+    expect(lines(events, "worktree")[1]).toMatch(/fix-1 was removed$/);
+    expect(events.some((event) => event.type === "harness_git_held")).toBe(false);
+  });
+
+  it("one soldier's crash, restart and close leave the other's turn and snapshot running", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    const { office, events, channels } = await fakeOffice(async (_options, text) => { if (text === "wait") await gate; });
+    await office.open("scout");
+    const spy = await office.open("spy");
+    const turn = office.send("spy", "wait");
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "restarted"));
+    await office.closeSession("scout");
+    release();
+    expect((await turn).status).toBe("completed");
+    expect(existsSync(spy.cwd)).toBe(true);
+    expect(office.army()).toEqual([expect.objectContaining({ key: "scout", state: "closed" }), expect.objectContaining({ key: "spy", state: "idle" })]);
+    expect((await office.send("spy", "again")).status).toBe("completed");
+  });
+
+  it("a restart reports the old snapshot's writes, opens a fresh one and says the session is new; a close reports them too (M1-AC4)", async () => {
+    const { office, events, channels } = await fakeOffice();
+    const { cwd } = await office.open("scout");
+    await writeFile(join(cwd, "note.txt"), "written after the turn\n");
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "restarted"));
+    const types = events.map((event) => event.type);
+    expect(types.indexOf("read_violation")).toBeLessThan(types.indexOf("restarted"));
+    expect(lines(events, "read_violation")).toEqual([expect.stringMatching(/read-only snapshot had writes before its restart: note.txt$/)]);
+    expect(lines(events, "restarted")[0]).toContain("this is a new session, and its earlier context is gone");
+    expect(channels[1]!.cwd).toBe(cwd);
+    expect(existsSync(join(cwd, "note.txt"))).toBe(false);
+    expect((await office.send("scout", "after")).status).toBe("completed");
+    await writeFile(join(cwd, "late.txt"), "x\n");
+    await office.closeSession("scout");
+    expect(lines(events, "read_violation")[1]).toMatch(/read-only snapshot had writes at its close: late.txt$/);
+    expect(existsSync(cwd)).toBe(false);
+  });
+});

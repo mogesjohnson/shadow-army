@@ -6,6 +6,7 @@ import { makeRoster } from "../core/roster.testutil.js";
 import type { ChannelOptions, NativeChannel, TurnResult } from "./channel.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, until } from "./fixture-main.testutil.js";
+import { Locks } from "../workspace/locks.js";
 
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
@@ -151,5 +152,24 @@ describe("W11-3: crash restarts (PO-1)", () => {
     expect(channels).toHaveLength(1);
     expect(JSON.stringify(events.find((event) => event.type === "down")!.data)).toContain("log in");
     await expect(o.send("scout", "x")).rejects.toThrow("reconnect explicitly");
+  }, 30_000);
+});
+
+describe("#99: the session heartbeat renews the claims lease (WSP-2)", () => {
+  it("renews the lease every 20 minutes between turns, so overlapping claims stay refused past the first hour", async () => {
+    // Fake Date before the office exists (as W12-2), and the interval, so no real wait passes.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const start = Date.now();
+    const { repo, office: o } = await office({ tank: [] });
+    await o.open("tank", { claims: ["src/**"] });
+    const locks = new Locks(join(repo.dir, ".shadow"));
+    const expiry = async () => (await locks.list()).find((lease) => lease.owner === "tank")?.expiresAt;
+    expect(await expiry()).toBe(start + 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    await until(async () => await expiry() === start + 80 * 60_000);
+    await vi.advanceTimersByTimeAsync(45 * 60_000);
+    // The renewals at 40 and 60 minutes run on real file I/O, so the later one may read a clock already past 60.
+    await until(async () => (await expiry() ?? 0) >= start + 120 * 60_000);
+    await expect(o.open("medic", { claims: ["src/b.ts"] })).rejects.toThrow(/tank/);
   }, 30_000);
 });
