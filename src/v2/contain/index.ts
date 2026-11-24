@@ -1,3 +1,4 @@
+import { spawnManagedProcess as spawnLinux } from "./linux.js";
 import { spawnManagedProcess as spawnWindows, type ManagedProcess, type ManagedProcessOptions } from "./windows.js";
 
 export type { ManagedProcess, ManagedProcessOptions, ProcessExit } from "./windows.js";
@@ -10,8 +11,8 @@ type Driver = (options: ManagedProcessOptions) => Promise<ManagedProcess>;
  * Both get PO-14's "no helper" message.
  */
 export const containmentTable: Readonly<Record<string, Driver | null>> = {
-  "linux-x64": null,
-  "linux-arm64": null,
+  "linux-x64": spawnLinux,
+  "linux-arm64": spawnLinux,
   "darwin-arm64": null,
   "darwin-x64": null,
   "win32-x64": spawnWindows,

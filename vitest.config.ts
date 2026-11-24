@@ -25,9 +25,10 @@ export default defineConfig({
         "src/v2/modRelay.ts",
         // Holds only types (NativeChannel, TurnResult, ChannelEvent): no executable lines.
         "src/v2/channel.ts",
-        // Windows-only containment (M1a). Off Windows its code cannot run and its tests skip with a
-        // "Not tested" note (D-34), so it is left out of the count there. On Windows it is measured.
-        ...(process.platform === "win32" ? [] : ["src/v2/processTree.ts"]),
+        // Each containment driver runs only on its own system; elsewhere its live tests skip with a
+        // "Not tested" note (D-34), so it is left out of the count there. On its system it is measured.
+        ...(process.platform === "win32" ? [] : ["src/v2/contain/windows.ts"]),
+        ...(process.platform === "linux" ? [] : ["src/v2/contain/linux.ts"]),
       ],
       // Vitest cleans its report directory: only a fresh generated directory is disposable.
       reportsDirectory: `.shadow/v2-coverage/run-${Date.now()}-${process.pid}`,
