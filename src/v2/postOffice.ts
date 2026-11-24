@@ -9,7 +9,7 @@ import { captureState, diffState, type RepoState } from "../workspace/guard.js";
 import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { HarnessGit } from "./git/harness.js";
-import type { GitRepo } from "./git/hold.js";
+import { HarnessHold, type GitRepo } from "./git/hold.js";
 import { openSnapshot, posixInspect, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, type GitFactory, type Snapshot } from "./snapshot.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
@@ -128,6 +128,9 @@ export class PostOffice {
   private readonly ops: SweepOps | undefined;
   /** The post office's own identity for its tree records, read once. */
   private self?: Promise<Identity | undefined>;
+  /** WSP-10's hold on the repository, and how many turns have their guard open (PO-8). */
+  private hold?: HarnessHold;
+  private openTurns = 0;
 
   private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
     private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
@@ -156,9 +159,16 @@ export class PostOffice {
     const root = top.stdout.trim();
     const repo = { ...found, workTree: root };
     await ensureShadowRoot(join(root, ".shadow"));
-    const office = new PostOffice(root, repo, gitFor, snapshots, options);
+    // WSP-10: every later harness git command runs between the hold's checks; the hold reads the repository with plain harness git.
+    const hold = new HarnessHold({ repo, gitFor: (at) => ({ run: (args, kind) => gitFor(at).run(args, kind) }),
+      statePath: join(root, ".shadow", "v2", "logs", "harness-hold.json"), log: (event) => office.record({ type: "harness_hold", data: event }) });
+    const held: GitFactory = (at) => { const git = gitFor(at); return { run: (args, kind, cwd) => hold.run({ run: (a, k) => git.run(a, k, cwd) }, args, kind) }; };
+    const office: PostOffice = new PostOffice(root, repo, held, snapshots, options);
+    office.hold = hold;
     const lastLogEnd = await stat(join(root, ".shadow", "v2", "logs", "post-office.jsonl")).then((file) => file.mtime.toISOString(), () => undefined);
     await office.logs.write("post-office", { type: "started", time: new Date().toISOString(), pid: process.pid });
+    const start = await hold.start();
+    if (start.held) office.record({ type: "harness_git_held", data: { line: start.line } });
     await office.finishLast(lastLogEnd);
     return office;
   }
@@ -451,6 +461,8 @@ export class PostOffice {
     await mkdir(turnsDir(this.root), { recursive: true })
       .then(() => writeFile(turnFile, JSON.stringify({ soldier: session.spec.key, time: new Date().toISOString(), base: stateToJson(session.guardBase!) }), { mode: 0o600 }))
       .catch((error: unknown) => this.record({ soldier: session.spec.key, type: "turn_baseline", data: { written: false, reason: String(error) } }, session));
+    // WSP-10: a post office that stops with a turn open leaves the next one the state trusted before it, not the state it finds.
+    this.hold?.setTurnOpen(++this.openTurns > 0);
     // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
     await this.renewLease(session);
     let result: TurnResult;
@@ -469,15 +481,18 @@ export class PostOffice {
     if (session.containmentFailed && this.ops) await holdGuardOpen(await this.leftovers(session), this.processOps(this.ops), { wait: this.ops.wait });
     let changes: string[];
     try {
-      const [checkout, snapshotAfter] = await Promise.all([
+      // Both captures settle before the turn ends: a failed one must not leave the other's git running in the folder.
+      const settled = await Promise.allSettled([
         this.exclusive(async () => { const after = await captureState(this.root); const base = session.guardBase!; session.guardBase = undefined; return diffState(base, after); }),
         snapshotBefore ? captureState(session.cwd) : undefined]);
+      const [checkout, snapshotAfter] = settled.map((item) => { if (item.status === "rejected") throw item.reason; return item.value; }) as [string[], RepoState | undefined];
       changes = [...checkout, ...(snapshotBefore && snapshotAfter ? diffState(snapshotBefore, snapshotAfter).map((message) => `read-only snapshot: ${message}`) : [])];
     } catch (error) {
       session.guardBase = undefined;
       changes = [`checkout guard could not complete: ${String(error)}`];
     }
     await unlink(turnFile).catch(() => {});
+    this.hold?.setTurnOpen(--this.openTurns > 0);
     await this.renewLease(session);
     // The audit runs once, after the turn and the guard, also for a failed or cut-short turn (WSP-2).
     let write: WriteOutcome | undefined;

@@ -433,6 +433,21 @@ describe("M1b-26 harness git and outside snapshots", () => {
     } finally { process.env.SHADOW_ARMY_SNAPSHOTS = snapshots; }
   });
 
+  it("holds harness git while a repository hook differs from what it trusted, across a restart, and logs the hold (WSP-10)", async () => {
+    const { repo, office, events } = await setup();
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    await writeFile(hook, "#!/bin/sh\necho planted\n");
+    await expect(office.open("scout")).rejects.toThrow(/harness git held · \.git\/hooks\/post-checkout changed/);
+    await office.close();
+    // The restart keeps the state the held post office trusted, so the hook still holds harness git.
+    const restarted = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: factory, onEvent: (event) => events.push(event) }); offices.push(restarted);
+    expect(events.find((event) => event.type === "harness_git_held")?.data).toMatchObject({ line: expect.stringContaining(".git/hooks/post-checkout differs from what the last post office trusted") });
+    rmSync(hook);
+    expect((await restarted.open("scout")).cwd.startsWith(repo.dir)).toBe(false);
+    const log = (await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(log.filter((record) => record.type === "harness_hold").map((record) => record.data.event)).toEqual(["trusted", "held", "held", "released"]);
+  });
+
   it("refuses a folder outside any git working tree", async () => {
     const outside = mkdtempSync(join(homedir(), ".sa-test-nogit-"));
     try { await expect(PostOffice.create({ cwd: outside, credential, roster })).rejects.toThrow("the army runs only inside a git working tree"); }
