@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { armyMark, snapshotSubfolder } from "./snapshot.js";
 import { sha256 } from "./trust.js";
 import { shadowName } from "./instructions.js";
@@ -730,11 +730,11 @@ describe("M1b-28 part B: sessions and restarts wait for the trust card (ARM-7, M
   const policy = { "README.md": "hello\n", "shadow.config.json": config, "agent.md": "# Rules\n\n## claude-opus\nBe brief.\n" };
   const homes: string[] = [];
   afterAll(() => homes.forEach((home) => rmSync(home, { recursive: true, force: true })));
-  async function trustOffice(files: Record<string, string> = policy) {
+  async function trustOffice(files: Record<string, string> = policy, restartDelaysMs: readonly number[] | undefined = [0, 0, 0]) {
     const repo = makeRepo(files); repos.push(repo);
     const home = mkdtempSync(join(tmpdir(), "sa-trust-home-")); homes.push(home);
     const events: OfficeEvent[] = [], channels: ChannelOptions[] = [];
-    const office = await PostOffice.create({ cwd: repo.dir, credential, processOps: null, restartDelaysMs: [0, 0, 0], trustHome: home, onEvent: (event) => events.push(event),
+    const office = await PostOffice.create({ cwd: repo.dir, credential, processOps: null, ...(restartDelaysMs ? { restartDelaysMs } : {}), trustHome: home, onEvent: (event) => events.push(event),
       channelFactory: (options): NativeChannel => {
         channels.push(options);
         return { async send(text) { return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
@@ -749,6 +749,8 @@ describe("M1b-28 part B: sessions and restarts wait for the trust card (ARM-7, M
   };
   const shown = (rows: TrustRow[]) => rows.flatMap((row) => row.kind === "file" ? [row.hash] : []);
   const hash = (text: string) => sha256(Buffer.from(text));
+  /** Closes an office with several snapshots inside the test's own time, not the 10 s afterEach hook's. */
+  const closeHere = async (office: PostOffice) => { offices.splice(offices.indexOf(office), 1); await office.close(); };
   /** The office's session snapshots; the subfolder goes once its last snapshot does. */
   const sessions = (office: PostOffice) => { const at = snapshotSubfolder(snapshots, office.root); return existsSync(at) ? readdirSync(at, { withFileTypes: true }).filter((entry) => entry.isDirectory()) : []; };
 
@@ -820,5 +822,35 @@ describe("M1b-28 part B: sessions and restarts wait for the trust card (ARM-7, M
     await untilRestart(() => events.some((event) => event.type === "restarted"));
     expect(channels.map((one) => one.model)).toEqual(["opus", "sonnet", "opus"]);
     expect((await office.send("claude-opus", "back")).status).toBe("completed");
+    await closeHere(office);
+  }, 120_000);
+
+  it("on the fake clock, a crash restart with an untrusted file waits its 1 s, then schedules nothing more until the card is accepted", async () => {
+    const { repo, office, channels, events } = await trustOffice(policy, undefined);
+    await office.trust(shown(await card(office.open("claude-opus"))));
+    await office.open("claude-opus");
+    repo.write("agent.md", "# Rules\n");
+    const tick = () => new Promise<void>((done) => setImmediate(done));
+    try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      channels[0]!.onEvent({ type: "closed", data: {} });
+      for (let i = 0; vi.getTimerCount() === 0; i++) { if (i > 10_000) throw new Error("the restart wait was never set"); await tick(); }
+      // PO-1: the first restart waits 1 s; nothing is checked or started before it ends.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(events.some((event) => event.type === "trust_wait" || event.type === "restarted")).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      await untilRestart(() => events.some((event) => event.type === "trust_wait"));
+      // ARM-7: ten minutes on, the restart has scheduled nothing and started nothing.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+    expect(channels).toHaveLength(1);
+    expect(events.some((event) => event.type === "restarted" || event.type === "down")).toBe(false);
+    await office.trust(shown(await card(office.send("claude-opus", "hi"))));
+    await untilRestart(() => events.some((event) => event.type === "restarted"));
+    expect(channels).toHaveLength(2);
+    await closeHere(office);
   }, 120_000);
 });
