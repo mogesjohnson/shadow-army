@@ -17,6 +17,10 @@ import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 const snapshots = mkdtempSync(join(homedir(), ".sa-test-snapshots-"));
 process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
 afterAll(() => rmSync(snapshots, { recursive: true, force: true }));
+/** Each restart makes a fresh snapshot (WSP-11): about 7.5 s of harness git on Windows, past `until`'s 6 s bound. */
+const untilRestart = async (check: () => boolean): Promise<void> => {
+  for (const end = performance.now() + 60_000; !check(); await new Promise((done) => setTimeout(done, 20))) if (performance.now() > end) throw new Error("expected restart did not arrive");
+};
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 async function setup() {
@@ -168,7 +172,7 @@ describe("M1 office integration with synthetic native processes", () => {
     await office.send("scout", "delivered once");
     for (let i = 0; i < 4; i++) {
       channels[i]!.options.onEvent({ type: "closed", data: { crash: i } });
-      await until(() => i < 3 ? channels.length === i + 2 : events.some((event) => event.type === "down"));
+      await untilRestart(() => i < 3 ? channels.length === i + 2 : events.some((event) => event.type === "down"));
     }
     expect(channels).toHaveLength(4);
     expect(channels.map((channel) => channel.sent)).toEqual([["delivered once"], [], [], []]);
@@ -176,7 +180,7 @@ describe("M1 office integration with synthetic native processes", () => {
     await expect(office.send("scout", "must not replay")).rejects.toThrow("reconnect explicitly");
     await office.open("scout"); expect(channels).toHaveLength(5);
     expect(channels[4]!.sent).toEqual([]);
-  }, 90_000);
+  }, 120_000);
 
   it("blocks restart and owner reconnect when native descendant termination is uncertain", async () => {
     const repo = makeRepo(); repos.push(repo);
@@ -647,21 +651,21 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     const spy = await office.open("spy");
     const turn = office.send("spy", "wait");
     channels[0]!.onEvent({ type: "closed", data: {} });
-    await until(() => events.some((event) => event.type === "restarted"));
+    await untilRestart(() => events.some((event) => event.type === "restarted"));
     await office.closeSession("scout");
     release();
     expect((await turn).status).toBe("completed");
     expect(existsSync(spy.cwd)).toBe(true);
     expect(office.army()).toEqual([expect.objectContaining({ key: "scout", state: "closed" }), expect.objectContaining({ key: "spy", state: "idle" })]);
     expect((await office.send("spy", "again")).status).toBe("completed");
-  }, 90_000);
+  }, 120_000);
 
   it("a restart reports the old snapshot's writes, opens a fresh one and says the session is new; a close reports them too (M1-AC4)", async () => {
     const { office, events, channels } = await fakeOffice();
     const { cwd } = await office.open("scout");
     await writeFile(join(cwd, "note.txt"), "written after the turn\n");
     channels[0]!.onEvent({ type: "closed", data: {} });
-    await until(() => events.some((event) => event.type === "restarted"));
+    await untilRestart(() => events.some((event) => event.type === "restarted"));
     const types = events.map((event) => event.type);
     expect(types.indexOf("read_violation")).toBeLessThan(types.indexOf("restarted"));
     expect(lines(events, "read_violation")).toEqual([expect.stringMatching(/read-only snapshot had writes before its restart: note.txt$/)]);
@@ -673,5 +677,5 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     await office.closeSession("scout");
     expect(lines(events, "read_violation")[1]).toMatch(/read-only snapshot had writes at its close: late.txt$/);
     expect(existsSync(cwd)).toBe(false);
-  }, 90_000);
+  }, 120_000);
 });
