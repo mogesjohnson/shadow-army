@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 import { until } from "./fixture-main.testutil.js";
 
-it("the actual mod relay exposes only a loopback endpoint and releases its detached helper", async () => {
+windowsOnly("the actual mod relay exposes only a loopback endpoint and releases its detached helper", async () => {
   const repo = makeRepo();
   const credential = "d2".repeat(32);
   const entry = fileURLToPath(new URL("../../dist/v2/modRelay.js", import.meta.url));
