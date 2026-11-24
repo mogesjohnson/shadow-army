@@ -1,4 +1,6 @@
 import { connect, type Socket } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { makeRoster } from "../core/roster.testutil.js";
@@ -9,6 +11,7 @@ import { processStartTime, startOfficeServer, type OfficeServer, type ServerOpti
 import type { StartTimeOf } from "./lock.js";
 import type { LeaseClock } from "./lease.js";
 import type { OfficeEvent } from "./postOffice.js";
+import type { TrustAnswer } from "./cli.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
 const servers: OfficeServer[] = [];
@@ -99,6 +102,26 @@ describe("M1 authenticated loopback command server", () => {
     expect((await command(server, { action: "send", soldier: "tank", text: "edit", claims: [""] })).status).toBe(400);
   }, 30_000);
 
+  it("answers open and send with the trust card while agent.md is untrusted, and a trust command with the card's hashes lets open go on (ARM-7)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "sa-trust-home-"));
+    try {
+      const { repo, server } = await setup(undefined, undefined, { trustHome: home });
+      repo.write("agent.md", "# Rules\n");
+      const opened = await (await command(server, { action: "open", soldier: "scout" })).json() as { result: TrustAnswer };
+      const rows = opened.result.trust.rows;
+      expect(rows.map((row) => row.kind === "file" ? [row.name, row.state] : [])).toEqual([["agent.md", "new"]]);
+      const sent = await (await command(server, { action: "send", soldier: "scout", text: "hi" })).json() as { result: TrustAnswer };
+      expect(sent.result.trust.rows).toEqual(rows);
+      const wrong = await command(server, { action: "trust", hashes: ["0".repeat(64)] });
+      expect(wrong.status).toBe(400);
+      expect(await wrong.json()).toEqual({ error: "the hashes are not the ones the trust card showed; nothing was accepted" });
+      const hashes = rows.flatMap((row) => row.kind === "file" ? [row.hash] : []);
+      expect(await (await command(server, { action: "trust", hashes })).json()).toEqual({ result: { ok: true } });
+      const reopened = await (await command(server, { action: "open", soldier: "scout" })).json() as { result: { session?: string; trust?: unknown } };
+      expect(reopened.result.trust).toBeUndefined();
+      expect(reopened.result.session).toEqual(expect.any(String));
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  }, 30_000);
   it("takes the PO-1 lock with its port and starter, refuses a second start, and releases it on shutdown", async () => {
     const { repo, server } = await setup();
     const options = { cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps };
