@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
 import { captureState, diffState, type RepoState } from "../workspace/guard.js";
 import { Locks } from "../workspace/locks.js";
-import { git, repoRoot } from "../workspace/git.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
-import { createSnapshot } from "../workspace/worktree.js";
+import { HarnessGit } from "./git/harness.js";
+import type { GitRepo } from "./git/hold.js";
+import { openSnapshot, posixInspect, removeSnapshot, validateSnapshotRoot, type GitFactory, type Snapshot } from "./snapshot.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
@@ -22,6 +25,21 @@ export interface OfficeOptions {
   onEvent?: (event: OfficeEvent) => void;
   /** Waits before the first, second and third automatic restart (PO-1: 1, 5 and 30 seconds). */
   restartDelaysMs?: readonly number[];
+  /** Harness git for a repository (WSP-10); tests pass their own. */
+  gitFactory?: GitFactory;
+}
+
+/** The repository `cwd` is in, found from its `.git` as git finds it, so nothing the repository names runs to find it. */
+export function findRepo(cwd: string): GitRepo {
+  for (let dir = resolve(cwd), past = ""; dir !== past; past = dir, dir = dirname(dir)) {
+    const dotGit = join(dir, ".git");
+    let gitDir: string;
+    try { gitDir = statSync(dotGit).isDirectory() ? dotGit : resolve(dir, readFileSync(dotGit, "utf8").replace(/^gitdir:\s*/, "").trim()); } catch { continue; }
+    let commonDir = gitDir;
+    try { commonDir = resolve(gitDir, readFileSync(join(gitDir, "commondir"), "utf8").trim()); } catch { /* the main working tree */ }
+    return { gitDir, workTree: dir, commonDir };
+  }
+  throw new Error("the army runs only inside a git working tree");
 }
 /** v1's heartbeat stops at the first audit, so the office renews the claims lease for the session's whole life and at every turn (WSP-2). */
 const WRITE_LEASE_MS = 60 * 60_000;
@@ -54,6 +72,8 @@ interface Session {
   restartPending: boolean;
   stopRequested?: boolean;
   containmentFailed?: boolean;
+  /** WSP-11's throwaway snapshot of HEAD, outside the folder; a read-only session's working directory. */
+  snapshot?: Snapshot;
   /** PO-16's record of the soldier's process tree, removed once the tree has ended. Created before start in M1b-26. */
   tree?: TreeRecord;
 }
@@ -94,7 +114,8 @@ export class PostOffice {
   /** Applies and guard captures take turns, so no guard reads the owner's folder halfway through an apply. */
   private applying = Promise.resolve();
 
-  private constructor(root: string, private readonly options: OfficeOptions) {
+  private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
+    private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
     this.root = root;
     this.roster = options.roster ?? loadRoster(root);
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
@@ -104,9 +125,22 @@ export class PostOffice {
 
   static async create(options: OfficeOptions): Promise<PostOffice> {
     if (!/^[a-f0-9]{64}$/i.test(options.credential)) throw new Error("post office requires a credential of 32 random bytes");
-    const root = await repoRoot(options.cwd);
+    const found = findRepo(options.cwd);
+    // WSP-10: an empty hooks folder Shadow Army keeps; PATH may not name the folder or the snapshots.
+    const hooksDir = join(found.workTree, ".shadow", "v2", "hooks");
+    mkdirSync(hooksDir, { recursive: true });
+    // WSP-11: a bad SHADOW_ARMY_SNAPSHOTS starts no soldier, so it is kept to name at each open. The Windows ACL reader is M1b-17.
+    const snapshots = validateSnapshotRoot(process.env.SHADOW_ARMY_SNAPSHOTS, { home: homedir(), folder: found.workTree, workTrees: [],
+      inspect: process.platform === "win32" ? () => ({ owner: "owner", writableByOthers: false }) : posixInspect });
+    const untrusted = [found.workTree, ...(snapshots.ok ? [snapshots.root] : [])];
+    const gitFor: GitFactory = options.gitFactory ?? ((repo) => new HarnessGit({ repo, hooksDir, untrusted }));
+    // The folder as `git rev-parse --show-toplevel` prints it: the army's mark is taken from this path (WSP-11).
+    const top = await gitFor(found).run(["rev-parse", "--show-toplevel"]);
+    if (top.code !== 0) throw new Error(`the army runs only inside a git working tree: ${top.stderr.trim()}`);
+    const root = top.stdout.trim();
+    const repo = { ...found, workTree: root };
     await ensureShadowRoot(join(root, ".shadow"));
-    const office = new PostOffice(root, options);
+    const office = new PostOffice(root, repo, gitFor, snapshots, options);
     await office.logs.write("post-office", { type: "started", time: new Date().toISOString(), pid: process.pid });
     return office;
   }
@@ -183,10 +217,14 @@ export class PostOffice {
     const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS }) : undefined;
     const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
-    let cwd: string;
-    try { cwd = ws ? ws.cwd : (await createSnapshot(this.root, join(this.root, ".shadow", "v2"), "HEAD", id)).path; }
-    catch (error) { await ws?.release(); throw error; }
-    const session: Session = { spec, id, cwd, instructions, generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
+    let snapshot: Snapshot | undefined;
+    try {
+      // WSP-11: a soldier whose snapshot can't be made does not start, and never runs in the folder itself.
+      if (!ws && !this.snapshots.ok) throw new Error(`${key} can't start: ${this.snapshots.reason}`);
+      if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
+    } catch (error) { await ws?.release(); throw error; }
+    const cwd = ws ? ws.cwd : snapshot!.path;
+    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
     if (ws) await this.holdLease(session);
     if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
@@ -379,7 +417,7 @@ export class PostOffice {
   /** v1's claim audit: revert edits outside the claims, commit the rest on the soldier's branch, and hand B4 the audited diff. */
   private async audit(session: Session, result: TurnResult, guardChanges: string[]): Promise<WriteOutcome> {
     const info = await session.write!.ws.finish(`${session.spec.key}: turn`);
-    const diff = info.commit ? await git(info.path, ["diff", info.base, "HEAD"]) : "";
+    const diff = info.commit ? (await this.git(findRepo(info.path)).run(["diff", info.base, "HEAD"])).stdout : "";
     let reason: string | undefined;
     if (guardChanges.length) reason = guardChanges.join("; ");
     else if (result.status !== "completed") reason = `the turn ${result.status}; its claimed work stays on ${info.branch}`;
@@ -427,8 +465,14 @@ export class PostOffice {
     // PO-16: the tree has ended, so its entry goes. A failed removal is logged; the next sweep finds an empty tree.
     await session.tree?.remove().catch((error: unknown) => this.record({ soldier: key, type: "tree_record", data: { removed: false, reason: String(error) } }, session));
     await this.releaseWrite(session);
+    // WSP-11: the snapshot goes with its session. A tainted one keeps the partial work its guard line names.
+    let retained = !session.snapshot || session.tainted;
+    if (!retained && this.snapshots.ok) {
+      await removeSnapshot(session.snapshot!, this.snapshots.root, this.repo, this.git)
+        .catch((error: unknown) => { retained = true; this.record({ soldier: key, type: "snapshot", data: { removed: false, reason: String(error) } }, session); });
+    }
     this.sessions.delete(key);
-    this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
+    this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained } }, session);
   }
 
   /** Runs `fn` alone among applies and checkout-guard captures. */

@@ -1,6 +1,9 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { armyMark } from "./snapshot.js";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
@@ -9,6 +12,10 @@ import type { ChannelOptions, NativeChannel } from "./channel.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
+// WSP-11: snapshots go outside the folder; these tests keep theirs in a folder of their own in the home.
+const snapshots = mkdtempSync(join(homedir(), ".sa-test-snapshots-"));
+process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
+afterAll(() => rmSync(snapshots, { recursive: true, force: true }));
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 async function setup() {
@@ -401,4 +408,33 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
       else expect(failed).toBeUndefined();
     } finally { await office.close().catch(() => {}); }
   }, 30_000);
+});
+
+describe("M1b-26 harness git and outside snapshots", () => {
+  it("opens a read-only session in a snapshot outside the folder, under the army's mark, and removes it at close", async () => {
+    const { repo, office, events } = await setup();
+    const opened = await office.open("scout");
+    const subfolder = join(snapshots, `${office.root.split("/").at(-1)}-${armyMark(office.root)}`);
+    expect(opened.cwd).toBe(join(subfolder, opened.session));
+    expect(opened.cwd.startsWith(repo.dir)).toBe(false);
+    expect(readdirSync(opened.cwd)).toContain("README.md");
+    await office.closeSession("scout");
+    expect(existsSync(opened.cwd)).toBe(false);
+    expect(existsSync(subfolder)).toBe(false);
+    expect(events.find((event) => event.type === "session_closed")?.data).toMatchObject({ retained: false });
+  });
+
+  it("starts no soldier when SHADOW_ARMY_SNAPSHOTS is bad, and never runs it in the folder", async () => {
+    process.env.SHADOW_ARMY_SNAPSHOTS = "relative/path";
+    try {
+      const { office } = await setup();
+      await expect(office.open("scout")).rejects.toThrow("SHADOW_ARMY_SNAPSHOTS must be an absolute path");
+    } finally { process.env.SHADOW_ARMY_SNAPSHOTS = snapshots; }
+  });
+
+  it("refuses a folder outside any git working tree", async () => {
+    const outside = mkdtempSync(join(homedir(), ".sa-test-nogit-"));
+    try { await expect(PostOffice.create({ cwd: outside, credential, roster })).rejects.toThrow("the army runs only inside a git working tree"); }
+    finally { rmSync(outside, { recursive: true, force: true }); }
+  });
 });
