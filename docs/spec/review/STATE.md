@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 11 (2026-11-24, `c60839b3`): wave 1 nearly done.** #111 (M1b-11), #112 (M1b-5), #113 (M1b-4) and #114 (M1b-9) reported and checked; ten M1b PRs (#105 to #114) wait for Codex. w34-trust (M1b-10), w29-logs (M1b-7) and w32-roster (M1b-8) run; w35 (M1b-12) is the last ready brief. Detail: `handoffs/LATEST.md`.
+
 **Orchestrator 6 (2026-11-23, `c6d2c417`): M1a's run branch is green on Windows and Linux; M1b is being planned.** `claude/63-m1a-integrate` (`2b78df6`) is #94 plus #96, #97, #99, #101, #102, #103 and #104. Windows: 497 passed. Linux: 463 passed, 38 skipped (native-session tests, Windows-only containment, D-39), 0 failed. #102 to #104 (w18) add the `windowsOnly` guard; #103 waits for the owner's V6 size exception. `w20-m1b-plan` splits M1b into worker tasks. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
 
 **Orchestrator 5 (2026-11-23, `aba81e8b`): the live run can start; the Linux fixes are under way.** The run branch `claude/63-m1a-integrate` (`22da257`) is #94 plus #96, #97 and #99, and it passes on Windows. On Linux, #100 (`main`) and #101 (#94) fix the git 2.43 apply bug, and `w18-linux-channel` is guarding the tests that need Windows-only containment. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
