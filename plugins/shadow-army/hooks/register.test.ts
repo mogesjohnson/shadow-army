@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -26,6 +26,8 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   };
   register(on as never);
   const spawns: any[] = [];
+  const probes: any[] = [];
+  const killed: string[] = [];
   const commands: any[] = [];
   const logs: string[] = [];
   const registered: any[] = [];
@@ -33,7 +35,9 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const every: { ms: number; run: () => void; cancelled: boolean }[] = [];
   const after: { ms: number; run: () => void; cancelled: boolean }[] = [];
   const $ = {
-    session: { id: async () => claudeId.value, cwd: async () => env.cwd ?? "/repo" },
+    session: { id: async () => claudeId.value, cwd: async () => env.cwd ?? "/repo", version: async () => env.host ?? "2.1.294" },
+    env: { get: async (name: string) => env.vars?.[name] },
+    settings: { read: async () => ({ env: env.settingsEnv ?? {} }) },
     plugin: { root: "/x/plugins/shadow-army" },
     fs: { exists: async (path: string) => env.git === undefined || path === `${env.git}/.git` || path.includes("/dist/") },
     clock: {
@@ -43,7 +47,18 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
     ui: { log: (line: string) => logs.push(line) },
     command: { register: async (spec: unknown) => { registered.push(spec); } },
     process: {
-      spawn: (options: unknown) => {
+      spawn: (options: { argv: string[] }) => {
+        if (options.argv[1] === "--version") {
+          probes.push(options);
+          const tool = env.tools?.[options.argv[0]!] ?? (options.argv[0] === "node" ? "v22.1.0" : "git version 2.43.0");
+          if (tool === "missing") throw new Error("not found");
+          let end: () => void = () => {};
+          const hung = new Promise<void>((done) => { end = done; });
+          return {
+            async *[Symbol.asyncIterator]() { if (tool === "hang") await hung; else yield { stream: "stdout", text: tool + "\n" }; },
+            return: async () => { killed.push(options.argv[0]!); end(); return { done: true }; },
+          };
+        }
         spawns.push(options);
         let stop: () => void = () => {};
         const closed = new Promise<void>((done) => { stop = done; });
@@ -58,6 +73,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
     },
     http: {
       fetch: async (_url: string, init: { body: string }) => {
+        if (env.refuse) throw new Error(env.refuse);
         const command = JSON.parse(init.body);
         commands.push(command);
         if (command.action === env.hang) await new Promise(() => {});
@@ -72,7 +88,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, probes, killed, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {

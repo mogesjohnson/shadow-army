@@ -2,6 +2,7 @@ import type {
   EngineInterface, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register, Timer,
 } from "claude-code";
 import type { TurnResult } from "../../../src/v2/channel.js";
+import { sanitize } from "../../../src/v2/sanitize.js";
 
 interface Runtime {
   session: string;
@@ -31,6 +32,14 @@ const RENEW_EVERY_MS = 10_000;
 const RENEW_WAIT_MS = 5_000;
 /** `session.end` reasons that keep the army running (HOST-2, PO-7). */
 const KEEPS_ARMY = new Set(["clear", "resume"]);
+/** HOST-2: each `--version` run ends after 10 s, and a post office that never reports ready is ended after 60 s. */
+const VERSION_WAIT_MS = 10_000;
+const READY_WAIT_MS = 60_000;
+const MIN_HOST = [2, 1, 294];
+const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
+const NO_PROXY_VARIABLES = ["NO_PROXY", "no_proxy"];
+/** The preflight passed in this process; HOST-2 checks before the first start only. */
+let checked = false;
 
 function safeText(value: unknown, credential = ""): string {
   let text = String(value);
@@ -49,12 +58,20 @@ function cancelTimers(runtime: Runtime): void {
 
 async function post($: EngineInterface, runtime: Runtime, command: Record<string, unknown>): Promise<unknown> {
   if (!runtime.url || !runtime.credential) throw new Error("post office is not connected");
+  let response: { ok: boolean; status: number; text: string };
   try {
-    const response = await $.http.fetch(`${runtime.url}/command`, {
+    response = await $.http.fetch(`${runtime.url}/command`, {
       method: "POST",
       headers: { Authorization: `Bearer ${runtime.credential}`, "Content-Type": "application/json" },
       body: JSON.stringify(command),
     });
+  } catch (error) {
+    // Claude Code itself refused (HOST-2): stop renewing so the lease ends the post office, and send nothing more.
+    const words = safeText(error instanceof Error ? error.message : error, runtime.credential);
+    if (!runtime.closing) fail($, runtime, `Shadow Army can't reach its post office: Claude Code refused the request (${words || "your organization's policy doesn't allow web fetch"})`);
+    throw new Error(words);
+  }
+  try {
     const body = JSON.parse(response.text) as { result?: unknown; error?: unknown };
     if (!response.ok) throw new Error(typeof body.error === "string" ? body.error : `post office command failed (${response.status})`);
     return body.result;
@@ -83,7 +100,7 @@ function fail($: EngineInterface, runtime: Runtime, error: unknown): void {
   cancelTimers(runtime);
   runtime.reject(new Error(message));
   if (active === runtime) active = undefined;
-  if (!wasClosing) $.ui.log(`Shadow Army: ${message}`);
+  if (!wasClosing) $.ui.log(sanitize(prefixed(message)));
   // The native stream owns only the relay. Returning it cannot skip the
   // detached post office's independent expiry/containment/finalization path.
   if (runtime.stream) void runtime.stream.return({ code: null, signal: null }).catch(() => {});
@@ -123,7 +140,7 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
   // M1 observes the event stream without adding another model turn/context.
   // The richer pane and transcript cards belong to the later mod milestones.
   if (!runtime.closing && ["error", "channel_down", "containment_uncertain"].includes(value.type)) {
-    $.ui.log(safeText(`Shadow Army${value.soldier ? ` · ${value.soldier}` : ""}: ${JSON.stringify(value.data)}`, runtime.credential));
+    $.ui.log(sanitize(safeText(`Shadow Army${value.soldier ? ` · ${value.soldier}` : ""}: ${JSON.stringify(value.data)}`, runtime.credential)));
   }
 }
 
@@ -160,6 +177,60 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
   }
 }
 
+/** A tool's `--version` as numbers, `undefined` when it is missing, or `"late"` after 10 s, with its processes ended (HOST-2). */
+async function versionOf($: EngineInterface, tool: string, cwd: string): Promise<number[] | undefined | "late"> {
+  let stream: HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
+  try { stream = $.process.spawn({ argv: [tool, "--version"], cwd }); } catch { return undefined; }
+  let timer: Timer | undefined;
+  const late = new Promise<"late">((done) => { timer = $.clock.after(VERSION_WAIT_MS, () => done("late")); });
+  const read = (async () => {
+    let out = "";
+    try { for await (const chunk of stream) if (chunk.stream === "stdout") out += chunk.text; } catch { return undefined; }
+    const found = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(out);
+    return found ? [Number(found[1]), Number(found[2]), Number(found[3] ?? 0)] : undefined;
+  })();
+  const result = await Promise.race([read, late]);
+  timer?.cancel();
+  if (result === "late") void stream.return({ code: null, signal: null }).catch(() => {});
+  return result;
+}
+
+const olderThan = (found: number[], least: number[]): boolean => {
+  for (let i = 0; i < least.length; i++) if (found[i]! !== least[i]!) return found[i]! < least[i]!;
+  return false;
+};
+
+/** A variable's value from the shell (`$.env.get`) or the merged settings' `env`. */
+async function setting($: EngineInterface, name: string): Promise<string | undefined> {
+  const shell = await $.env.get(name);
+  if (shell) return shell;
+  const merged = await $.settings.read() as { env?: Record<string, string> } | undefined;
+  return merged?.env?.[name] || undefined;
+}
+
+/** HOST-2's preflight: the line to show when the army must not start, or `undefined` to go on. */
+async function preflight($: EngineInterface, cwd: string): Promise<string | undefined> {
+  const host = String(await $.session.version());
+  const hostParts = /(\d+)\.(\d+)\.(\d+)/.exec(host)?.slice(1).map(Number);
+  if (!hostParts || olderThan(hostParts, MIN_HOST)) return `Shadow Army needs Claude Code 2.1.294 or later; this is ${host}`;
+  for (const [tool, name, least] of [["node", "Node.js", [22, 0]], ["git", "git", [2, 34]]] as const) {
+    const found = await versionOf($, tool, cwd);
+    if (found === undefined || found === "late") {
+      return `${found === "late" ? `${tool} --version gave no answer in 10 s · ` : ""}Shadow Army needs ${name} ${least.join(".")} or later on PATH; none was found`;
+    }
+    if (olderThan(found, [...least])) return `Shadow Army needs ${name} ${least.join(".")} or later on PATH; found ${found.join(".")}`;
+  }
+  // P-16: Claude Code sends the mod's fetch through a proxy named in these variables, the loopback address too.
+  const listed = (await Promise.all(NO_PROXY_VARIABLES.map((name) => setting($, name)))).some((value) =>
+    (value ?? "").split(",").some((entry) => ["127.0.0.1", "*"].includes(entry.trim())));
+  if (!listed) {
+    for (const name of PROXY_VARIABLES) {
+      if (await setting($, name)) return `Shadow Army: ${name} would send the army's commands through a proxy · add 127.0.0.1 to NO_PROXY · nothing started`;
+    }
+  }
+  return undefined;
+}
+
 async function ensure($: EngineInterface): Promise<Runtime> {
   const session = await $.session.id();
   const cwd = await $.session.cwd();
@@ -188,8 +259,16 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     };
     active = runtime;
     const owned = runtime;
-    owned.deadline = $.clock.after(30_000, () => fail($, owned, "post office did not start within 30 seconds"));
-    owned.finished = consume($, owned).catch((error) => fail($, owned, error)).finally(() => { retiring.delete(owned); });
+    // HOST-2: two uses at once share this one start and its refusal; `active` is set before the first wait.
+    owned.finished = (async () => {
+      if (!checked) {
+        const refusal = await preflight($, cwd);
+        if (refusal) throw new Error(refusal);
+        checked = true;
+      }
+      owned.deadline = $.clock.after(READY_WAIT_MS, () => fail($, owned, "post office did not report ready within 60 s · step: waiting for its ready event · ended with its processes"));
+      await consume($, owned);
+    })().catch((error) => fail($, owned, error instanceof Error ? error.message : error)).finally(() => { retiring.delete(owned); });
   }
   await runtime.ready;
   if (runtime.closing) throw new Error("The army ended before the command could run");
@@ -200,9 +279,10 @@ interface Soldier { key: string; name: string; roles: string[]; supported: boole
 /** The turn result the post office returns. The claim audit and the apply (B3, B4) put their outcome in `write`. */
 type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write" | "refusal">;
 
-/** SEC-6: each Cc or Cf character except newline and tab shows as a placeholder such as \u{1b}. */
+/** SEC-6: every drawn text goes through M1b-9's placeholder function. */
+const prefixed = (message: string): string => message.startsWith("Shadow Army") ? message : `Shadow Army: ${message}`;
 function show(text: unknown): string {
-  return String(text).replace(/[\p{Cc}\p{Cf}]/gu, (char) => char === "\n" || char === "\t" ? char : `\\u{${char.codePointAt(0)!.toString(16)}}`);
+  return sanitize(String(text));
 }
 
 function parseSend(args: string): { name?: string; claims: string[]; brief: string } {
@@ -251,6 +331,7 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (!soldier) return "Nothing sent: unknown soldier.";
   if (!soldier.supported || !soldier.roles.includes("build")) return show(`Nothing sent: ${soldier.name} is not a claude soldier with the build role.`);
   if (runtime.closing) throw new Error("The army ended before the send could run");
+  // Stand-in (S-6, B1): WSP-11 lets only `sa live` open a session in M1, so `/send` still opens one here until M1b-28/29 settle it.
   const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
   const root = await repoRoot($, runtime.cwd);
@@ -268,7 +349,7 @@ export const register: Register = (on) => {
   on("command.run", { command: "send" }, async ($, e, next) => {
     if (inert) return next(e);
     try { return { text: await send($, e.args) }; }
-    catch (error) { return { text: show(`Shadow Army: ${safeText(error instanceof Error ? error.message : error, active?.credential)}`) }; }
+    catch (error) { return { text: show(prefixed(safeText(error instanceof Error ? error.message : error, active?.credential))) }; }
   }).catch((_$, _e, next) => ({ text: show(`Shadow Army: ${safeText(next.error.message)}`) }));
   on("session.end", async ($, e, next) => {
     const runtime = active;
