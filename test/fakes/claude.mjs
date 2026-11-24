@@ -5,7 +5,25 @@ import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+// Fault switches arrive as arguments after the adapter's own, since the channel passes no environment:
+//   --fake-version <text>       what `--version` prints (default 2.1.295)
+//   --fake-version-hang         `--version` never answers or exits
+//   --fake-refuse-managed       exit before any event with a managed-settings refusal on stderr
+//   --fake-mode <mode>          the permissionMode that system/init reports instead of the one passed
+const argv = process.argv.slice(2);
+const flag = (name) => argv.includes(name);
+const option = (name) => argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined;
+if (flag("--version")) {
+  if (flag("--fake-version-hang")) { process.stdin.resume(); setInterval(() => {}, 1000); await new Promise(() => {}); }
+  process.stdout.write(`${option("--fake-version") ?? "2.1.295"} (Claude Code)\n`);
+  process.exit(0);
+}
+if (flag("--fake-refuse-managed")) {
+  process.stderr.write("Error: --permission-mode bypassPermissions is disabled by your organization's managed settings (permissions.disableBypassPermissionsMode)\n");
+  process.exit(1);
+}
 const session = randomUUID();
+let lastUuid;
 const history = [];
 let current;
 let cost = 0;
@@ -29,7 +47,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (frame.type === "control_request") {
     if (frame.request.subtype === "initialize") {
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
-      emit({ type: "system", subtype: "init", model: "fake-claude", version: "synthetic-2.1.295" });
+      emit({ type: "system", subtype: "init", model: "fake-claude", version: "synthetic-2.1.295", permissionMode: option("--fake-mode") ?? option("--permission-mode") });
     } else if (frame.request.subtype === "interrupt") {
       if (current?.message.content === "ignore-interrupt") continue;
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
@@ -47,13 +65,42 @@ for await (const line of createInterface({ input: process.stdin })) {
     continue;
   }
   if (frame.type !== "user") throw new Error("unexpected fake input");
+  const previous = lastUuid;
   current = frame;
+  lastUuid = frame.uuid;
   const text = frame.message.content;
   history.push(text);
   if (text === "malformed") { process.stdout.write("{broken JSON}\n"); continue; }
   if (text === "malformed-once") { process.stdout.write("{broken JSON sk-ant-abcdefghijklmnop}\n"); result("after bad line"); continue; }
   if (text === "malformed-ten") { for (let i = 0; i < 10; i++) process.stdout.write("{broken JSON}\n"); continue; }
   if (text === "malformed-nine-then-ok") { for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); assistant("ok"); for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); result("survived"); continue; }
+  if (text === "login-exit") {
+    assistant("Please login to Claude Code", undefined, { error: "authentication_failed" });
+    result("Please login to Claude Code", { is_error: true, terminal_reason: "api_error", api_error_status: 401 });
+    await new Promise((resolve) => setTimeout(resolve, 15)); process.exit(1);
+  }
+  if (text === "model-change") {
+    const model = (name) => ({ type: "assistant", parent_tool_use_id: null, message: { id: randomUUID(), model: name, role: "assistant", content: [{ type: "text", text: `from ${name}` }], usage: { input_tokens: 10, output_tokens: 2 }, stop_reason: "end_turn" } });
+    emit(model("fake-claude")); emit(model("fake-fallback")); result("changed"); continue;
+  }
+  if (text === "background-start") {
+    emit({ type: "system", subtype: "task_started", task_id: "bg-1" });
+    result("started a task"); continue;
+  }
+  if (text === "background-next") {
+    // The earlier message's task finishes while this message runs: its follow-up result names the earlier message.
+    emit({ type: "system", subtype: "task_notification", task_id: "bg-1", status: "completed" });
+    emit({ type: "result", subtype: "success", is_error: false, result: "task done", user_message_uuid: previous, origin: { kind: "task-notification" }, total_cost_usd: 99, usage: { input_tokens: 1, output_tokens: 1 } });
+    emit({ type: "result", subtype: "success", is_error: false, result: "late", user_message_uuid: previous, total_cost_usd: 98, usage: { input_tokens: 1, output_tokens: 1 } });
+    assistant("own work"); result("own result"); continue;
+  }
+  if (text === "unknown-frames") {
+    emit({ type: "hologram", payload: { anything: true } });
+    emit({ type: "system", subtype: "from_the_future", detail: 1 });
+    emit({ type: "assistant", parent_tool_use_id: null, novel_field: { nested: 1 }, message: { id: randomUUID(), role: "assistant", content: [{ type: "text", text: "known frame" }, { type: "hologram_block", x: 1 }], usage: { input_tokens: 10, output_tokens: 2 }, stop_reason: "end_turn", new_message_field: true } });
+    result("known result", { new_result_field: [1, 2] }); continue;
+  }
+  if (text === "cutoff") { process.stdout.write('{"type":"assistant","message":{"content":[{"type":"te'); process.exit(0); }
   if (text === "split") {
     const bytes = Buffer.from(`${JSON.stringify({ type: "assistant", parent_tool_use_id: null, session_id: session, message: { content: [{ type: "text", text: "split 🌙" }], usage: { input_tokens: 12 }, stop_reason: "end_turn" } })}\n`);
     const moon = bytes.indexOf(Buffer.from("🌙"));

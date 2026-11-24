@@ -15,6 +15,59 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 /** CH-1: one unparseable line is an error and the session carries on; this many in a row is a lost connection. */
 export const MAX_BAD_LINES_IN_A_ROW = 10;
 const BAD_LINE_EXCERPT = 200;
+/** CH-2: the oldest claude a soldier runs on. */
+export const OLDEST_CLAUDE = "2.1.277";
+/** Spec "Versions": a `--version` run ends after 10 s, with every process it started. */
+export const VERSION_TIMEOUT_MS = 10_000;
+/** How long the exit handler waits for stderr to finish, so a refusal's words are read. */
+const STDERR_DRAIN_MS = 500;
+
+export interface ClaudeChannelOptions extends ChannelOptions {
+  /** Test seam for the 10 s `--version` bound. */
+  versionTimeoutMs?: number;
+}
+
+const versionParts = (text: string): number[] | undefined => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.slice(1).map(Number);
+const isOlder = (found: number[], oldest: number[]): boolean => {
+  for (let i = 0; i < 3; i++) if (found[i] !== oldest[i]) return found[i] < oldest[i];
+  return false;
+};
+
+/**
+ * CH-2: read `claude --version` before a session opens. Returns the line for the soldier's log and
+ * Claude's transcript when claude is too old, gave no answer in time, or could not be run. Such a
+ * start is not a crash (PO-1), so the caller reports it with kind "other".
+ */
+export async function claudeVersionProblem(command: { file: string; args?: string[] }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
+  let child: ManagedProcess;
+  try { child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), "--version"], cwd }); }
+  catch (error) { return `claude --version could not run: ${error instanceof Error ? error.message : String(error)}`; }
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  child.stdin.on("error", () => {});
+  child.stdin.end();
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("timeout");
+  const outcome = await Promise.race([
+    child.exited.then(() => "exited" as const, () => "exited" as const),
+    new Promise<typeof timedOut>((resolve) => { timer = setTimeout(() => resolve(timedOut), timeoutMs); }),
+  ]);
+  clearTimeout(timer);
+  if (outcome === "exited") await new Promise((resolve) => setTimeout(resolve, 20)); // let stdout's last chunk land
+  await child.close().catch(() => {});
+  if (outcome === timedOut) return `claude --version gave no answer in ${timeoutMs / 1000} s`;
+  const found = versionParts(output);
+  if (!found) return `claude --version gave an answer that is not a version: ${output.trim().slice(0, 80) || "(nothing)"}`;
+  if (isOlder(found, versionParts(OLDEST_CLAUDE)!)) return `claude ${found.join(".")} is older than ${OLDEST_CLAUDE}; update claude`;
+  return undefined;
+}
+
+/** CH-2: the permission mode each autonomy level passes. */
+const permissionModeFor = (autonomy: ChannelOptions["autonomy"]): string => autonomy === "full" ? "bypassPermissions" : autonomy === "auto" ? "auto" : "plan";
+
+/** A start the CLI refused because managed settings forbid a flag (PO-1). `--mcp-config` under disableSideloadFlags is PO-4's, never this. */
+const MANAGED_REFUSAL = /managed settings|disableBypassPermissionsMode|disabled by your organization/i;
+const SIDELOAD_REFUSAL = /disableSideloadFlags|--mcp-config/i;
 
 interface PendingTurn {
   id: string;
@@ -23,6 +76,7 @@ interface PendingTurn {
   contextTokens?: number;
   error?: NativeError;
   refusal: boolean;
+  model?: string;
   partialText: boolean;
   stopped: boolean;
   usageSteps: Map<string, { assistant?: Frame; stream?: Frame; outputTokens?: number }>;
@@ -31,7 +85,7 @@ interface PendingTurn {
 
 /** Native Claude flags only: preserve its prompt, tools, permissions and session persistence. */
 export function claudeChannelArgs(options: ChannelOptions, instructionPath?: string): string[] {
-  const permission = options.autonomy === "full" ? "bypassPermissions" : options.autonomy === "auto" ? "auto" : "plan";
+  const permission = permissionModeFor(options.autonomy);
   return [
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
@@ -83,16 +137,24 @@ export class ClaudeChannel implements NativeChannel {
   private reason: NativeError = { kind: "transport", message: "Claude channel closed" };
   private stopTimer?: NodeJS.Timeout;
   private instructionDirectory?: string;
+  private model?: string;
+  private sawFrame = false;
+  private stderrText = "";
+  private stderrDone: Promise<void> = Promise.resolve();
+  private loginNeeded?: NativeError;
 
-  constructor(private readonly options: ChannelOptions) {
+  constructor(private readonly options: ClaudeChannelOptions) {
     this.process = this.spawn();
     this.ready = this.open();
     // Spawn/initialization errors must remain observed even if the owner closes before sending.
-    void this.ready.catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
+    void this.ready.catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error), false, (error as { refusedStart?: boolean })?.refusedStart ? "other" : "transport"));
   }
 
   private async spawn(): Promise<ManagedProcess> {
     const command = this.options.command ?? { file: "claude" };
+    // CH-2: an old or silent claude opens no session. This is a refused start, not a crash.
+    const problem = await claudeVersionProblem(command, this.options.cwd, this.options.versionTimeoutMs);
+    if (problem) throw Object.assign(new Error(problem), { refusedStart: true });
     let instructionPath: string | undefined;
     // npm's Windows .cmd shim cannot preserve multiline argv. The vendor's append-file flag
     // preserves the same standing text and default prompt. Credentials never enter these options.
@@ -108,22 +170,34 @@ export class ClaudeChannel implements NativeChannel {
     this.options.onEvent({ type, data });
   }
 
+  /** The process or its output ended. Wait briefly for stderr, so a refusal's words are read before the reason is fixed. */
+  private async ended(message: string): Promise<void> {
+    if (this.closed) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([this.stderrDone, new Promise((resolve) => { timer = setTimeout(resolve, STDERR_DRAIN_MS); })]);
+    clearTimeout(timer);
+    await this.failTransport(message, true);
+  }
+
   private async open(): Promise<void> {
     const child = await this.process;
     if (this.closed) return;
+    this.stderrDone = new Promise((resolve) => { child.stderr.once("end", () => resolve()); child.stderr.once("close", () => resolve()); });
     child.stdout.on("data", (chunk: Buffer) => this.read(this.decoder.write(chunk)));
     child.stdout.on("end", () => {
       this.read(this.decoder.end());
       if (this.buffer.trim()) this.parseLine(this.buffer);
       this.buffer = "";
-      if (!this.closed) void this.failTransport("Claude output stream ended", true);
+      void this.ended("Claude output stream ended");
     });
     child.stdout.on("error", (error: Error) => { void this.failTransport(error.message); });
     child.stdin.on("error", (error: Error) => { void this.failTransport(error.message); });
-    child.stderr.on("data", (chunk: Buffer) => this.emit("raw", { type: "stderr", text: chunk.toString("utf8") }));
-    void child.exited.then((exit) => {
-      if (!this.closed) void this.failTransport(`Claude process ended (${exit.code ?? exit.signal ?? "unknown"})`, true);
-    }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      if (this.stderrText.length < 8192) this.stderrText += text;
+      this.emit("raw", { type: "stderr", text });
+    });
+    void child.exited.then((exit) => this.ended(`Claude process ended (${exit.code ?? exit.signal ?? "unknown"})`)).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
     await this.control({ subtype: "initialize", hooks: null });
   }
 
@@ -153,6 +227,7 @@ export class ClaudeChannel implements NativeChannel {
       return;
     }
     this.badLines = 0;
+    this.sawFrame = true;
     this.emit("raw", frame);
     if (typeof frame.session_id === "string") this.sessionId = frame.session_id;
     const response = object(frame.response);
@@ -181,6 +256,7 @@ export class ClaudeChannel implements NativeChannel {
       return;
     }
     const turn = this.current;
+    if (frame.type === "system" && frame.subtype === "init") { this.init(frame); return; }
     if (frame.type === "result") { this.result(frame); return; }
     if (!turn) return;
     if (frame.type === "rate_limit_event") {
@@ -219,6 +295,7 @@ export class ClaudeChannel implements NativeChannel {
       const message = object(frame.message);
       const text = textContent(frame);
       if (frame.parent_tool_use_id === null) {
+        this.noteModel(turn, string(message?.model));
         const usage = object(message?.usage);
         this.recordUsage(turn, string(message?.id), usage, "assistant");
         if (usage && number(usage.input_tokens) !== undefined) {
@@ -227,7 +304,11 @@ export class ClaudeChannel implements NativeChannel {
         }
         if (message?.stop_reason === "refusal") turn.refusal = true;
         if (text && !turn.partialText) { turn.text += text; this.emit("text", text); }
-        if (frame.error) { turn.error = claudeNativeError(frame, text); this.emit("error", turn.error); }
+        if (frame.error) {
+          turn.error = claudeNativeError(frame, text);
+          if (turn.error.kind === "login_needed") this.loginNeeded = turn.error;
+          this.emit("error", turn.error);
+        }
       } else if (message?.usage) this.emit("usage", { scope: "auxiliary", raw: message.usage });
       if (Array.isArray(message?.content)) for (const part of message.content) {
         const block = object(part);
@@ -239,6 +320,24 @@ export class ClaudeChannel implements NativeChannel {
       if (Array.isArray(content)) for (const part of content) if (object(part)?.type === "tool_result") this.emit("tool_result", part);
     }
     if (frame.type === "model_refusal_no_fallback") turn.refusal = true;
+  }
+
+  /** CH-2: system/init names the model in use, and the mode claude actually runs in (M1-AC5). */
+  private init(frame: Frame): void {
+    this.noteModel(this.current, string(frame.model));
+    const mode = string(frame.permissionMode) ?? string(frame.permission_mode);
+    const expected = permissionModeFor(this.options.autonomy);
+    if (mode !== undefined && mode !== expected) {
+      this.emit("error", { kind: "other", message: `Claude runs in permission mode ${mode}, but Shadow Army passed ${expected} for autonomy ${this.options.autonomy ?? "supervised"}` } satisfies NativeError);
+    }
+  }
+
+  /** CH-2: the model in use is claude's own report. A change it makes by itself is logged, and the turn's usage names the new model. */
+  private noteModel(turn: PendingTurn | undefined, model: string | undefined): void {
+    if (!model) return;
+    if (this.model !== undefined && model !== this.model) this.emit("raw", { type: "model_changed", from: this.model, to: model });
+    this.model = model;
+    if (turn) turn.model = model;
   }
 
   private recordUsage(turn: PendingTurn, id: string | undefined, usage: Frame | undefined, source: "assistant" | "stream"): void {
@@ -272,7 +371,12 @@ export class ClaudeChannel implements NativeChannel {
   private result(frame: Frame): void {
     const turn = this.current;
     // A notification or stale result cannot change another turn's usage/cost boundary.
-    if (!turn || object(frame.origin)?.kind === "task-notification" || typeof frame.user_message_uuid === "string" && frame.user_message_uuid !== turn.id) return;
+    // CH-2: a result ends a message's turn only when it names that message. Any other result is recorded and ends nothing.
+    const named = Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : typeof frame.user_message_uuid === "string" ? [frame.user_message_uuid] : undefined;
+    if (!turn || object(frame.origin)?.kind === "task-notification" || named !== undefined && !named.includes(turn.id)) {
+      this.emit("raw", { type: "result_ignored", user_message_uuid: frame.user_message_uuid, origin: frame.origin });
+      return;
+    }
     const errors = Array.isArray(frame.errors) ? frame.errors.filter((value): value is string => typeof value === "string") : [];
     const text = string(frame.result) ?? (errors.length ? errors.join("\n") : turn.text);
     const failed = frame.is_error === true || string(frame.subtype)?.startsWith("error_") === true;
@@ -307,10 +411,12 @@ export class ClaudeChannel implements NativeChannel {
     } else if (nativeUsage || cumulative !== undefined) usage = {
       inputTokens: number(nativeUsage?.input_tokens), cachedInputTokens: number(nativeUsage?.cache_read_input_tokens), outputTokens: number(nativeUsage?.output_tokens), ...costUsage, raw: terminal,
     };
+    if (usage && turn.model) usage = { ...usage, raw: { ...usage.raw, model: turn.model } };
     if (usage) this.emit("usage", { scope: "turn", ...usage });
     const error = failure && !interrupted ? terminalError ?? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
     // Some error results expose only the generic terminal code; keep an earlier typed API error.
     const nativeError = error?.kind === "other" && turn.error ? { ...turn.error, message: turn.error.kind === "other" ? error.message || turn.error.message : turn.error.message } : error;
+    if (nativeError?.kind === "login_needed") this.loginNeeded = nativeError;
     const result: TurnResult = { status: interrupted ? "interrupted" : failure ? "failed" : "completed", text, refusal: !failure && (turn.refusal || frame.stop_reason === "refusal"), sessionId: this.sessionId, contextTokens: turn.contextTokens, usage, ...(nativeError ? { error: nativeError } : {}) };
     // A root-exit notification can outrun stdout on a separate transport. Drain native output
     // while containment closes, then decide whether this turn had already completed.
@@ -380,9 +486,16 @@ export class ClaudeChannel implements NativeChannel {
     await this.write({ type: "control_response", response: { subtype: "success", request_id: requestId, response: answer } });
   }
 
-  private async failTransport(message: string, drainTerminal = false): Promise<void> {
+  private async failTransport(message: string, drainTerminal = false, kind: NativeError["kind"] = "transport"): Promise<void> {
     if (this.closed) return;
-    this.reason = { kind: "transport", message };
+    this.reason = { kind, message };
+    if (drainTerminal && !this.sawFrame && MANAGED_REFUSAL.test(this.stderrText) && !SIDELOAD_REFUSAL.test(this.stderrText)) {
+      // PO-1: a start managed settings refuse is not a crash and is never restarted.
+      this.reason = { kind: "other", message: `claude can't start at ${this.options.autonomy ?? "supervised"}: your organization's managed settings refuse it (${this.stderrText.trim().split(/\r?\n/)[0].slice(0, 200)}) · lower its autonomy` };
+    } else if (drainTerminal && this.loginNeeded) {
+      // CH-2: a login needed never restarts the channel, even when the CLI exits after it.
+      this.reason = { ...this.loginNeeded };
+    }
     this.drainTerminal = drainTerminal;
     this.emit("error", this.reason);
     await this.close();
