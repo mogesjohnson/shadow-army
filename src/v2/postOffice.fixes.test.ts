@@ -6,11 +6,21 @@ import { makeRoster } from "../core/roster.testutil.js";
 import type { ChannelOptions, NativeChannel, TurnResult } from "./channel.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, until } from "./fixture-main.testutil.js";
+import { Locks } from "../workspace/locks.js";
+
+// C4: a hook that runs right after an apply, before the office reads the folder again.
+const hooks = vi.hoisted(() => ({ afterApply: undefined as undefined | (() => void) }));
+vi.mock("./apply.js", async (load) => {
+  const real = await load<typeof import("./apply.js")>();
+  return { applyAudited: async (...args: Parameters<typeof real.applyAudited>) => { const out = await real.applyAudited(...args); hooks.afterApply?.(); return out; } };
+});
 
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  hooks.afterApply = undefined;
   await Promise.all(offices.splice(0).map((office) => office.close().catch(() => {})));
   repos.splice(0).forEach((repo) => repo.cleanup());
 });
@@ -49,16 +59,21 @@ describe("post office fixes from the M1a pre-review", () => {
     expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("a\n");
   }, 30_000);
 
-  it("W12-2: a lease that expired between turns is reported lost and nothing is applied", async () => {
+  it("W12-2/C2: a lease lost between turns sends and applies nothing, and the session needs a fresh open", async () => {
     // v1 Locks keeps the Date.now it was made with, so time is faked before the office exists.
     vi.useFakeTimers({ toFake: ["Date"] });
-    const { repo, office: o } = await office({ tank: [
+    const steps: Record<string, Step[]> = { tank: [
       async (cwd) => { await put(cwd, "src/a.ts", "t1\n"); return "completed"; },
       async (cwd) => { await put(cwd, "src/b.ts", "t2\n"); return "completed"; },
-    ] });
+    ] };
+    const { repo, office: o } = await office(steps);
     await o.send("tank", "one", { claims: ["src/**"] });
     vi.setSystemTime(Date.now() + 61 * 60_000);
+    await o.open("medic", { claims: ["src/b.ts"] });
     const second = await o.send("tank", "two", { claims: ["src/**"] });
+    expect(steps.tank).toHaveLength(1);
+    expect(second.error?.message).toContain("lease");
+    await expect(o.send("tank", "three")).rejects.toThrow("reconnect explicitly");
     expect(second.write?.leaseLost).toBe(true);
     expect(second.write?.applicable).toBe(false);
     expect(await readFile(join(repo.dir, "src/b.ts"), "utf8")).toBe("b\n");
@@ -105,6 +120,67 @@ describe("post office fixes from the M1a pre-review", () => {
     release();
     expect((await medic).error?.message).toContain("src/a.ts");
   }, 30_000);
+
+  it("C4: an owner's edit between another soldier's apply and the office's next read still fails the guard", async () => {
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void; const medicStarted = new Promise<void>((resolve) => { started = resolve; });
+    const { repo, office: o } = await office({
+      tank: [async (cwd) => { await medicStarted; await put(cwd, "src/a.ts", "tank\n"); return "completed"; }],
+      medic: [async () => { started(); await gate; return "completed"; }],
+    });
+    await o.open("tank", { claims: ["src/a.ts"] }); await o.open("medic", { claims: ["src/b.ts"] });
+    const medic = o.send("medic", "b");
+    hooks.afterApply = () => { hooks.afterApply = undefined; repo.write("src/a.ts", "owner\n"); };
+    await o.send("tank", "a");
+    release();
+    expect((await medic).error?.message).toContain("src/a.ts");
+  }, 30_000);
+
+  it("C1: a moved tip whose apply was refused takes the session down, so a later no-op cannot carry it in", async () => {
+    const { repo, office: o } = await office({ tank: [
+      async (cwd) => { await put(cwd, "src/a.ts", "soldier\n"); return "completed"; },
+      async () => "completed",
+    ] });
+    repo.write("src/a.ts", "owner\n");
+    const first = await o.send("tank", "one", { claims: ["src/**"] });
+    expect(first.write?.apply?.applied).toBe(false);
+    expect(first.write?.reason).toContain("reconnect");
+    repo.write("src/a.ts", "a\n");
+    await expect(o.send("tank", "two")).rejects.toThrow("reconnect explicitly");
+    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("a\n");
+  }, 30_000);
+
+  it("C3: a writing session is used only once its lease and channel are set up, and a failed setup frees its claims", async () => {
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    const list = Locks.prototype.list;
+    vi.spyOn(Locks.prototype, "list").mockImplementationOnce(async function (this: Locks) { await gate; return list.call(this); })
+      .mockImplementationOnce(async () => { throw new Error("lease read failed"); });
+    const { office: o } = await office({ tank: [async () => "completed"] });
+    const opened = o.open("tank", { claims: ["src/**"] });
+    const sent = o.send("tank", "x", { claims: ["src/**"] });
+    await Promise.race([sent, new Promise((resolve) => setTimeout(resolve, 2_000))]); // the send must wait for the opening
+    release();
+    await opened;
+    expect((await sent).status).toBe("completed");
+    await o.closeSession("tank");
+    await expect(o.open("medic", { claims: ["src/a.ts"] })).rejects.toThrow("lease read failed");
+    await o.open("tank", { claims: ["src/a.ts"] });
+  }, 30_000);
+
+  it("C6: the heartbeat renews the lease while the session is idle and stops when it closes", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const renewals: Promise<boolean>[] = [];
+    const renew = Locks.prototype.renew;
+    vi.spyOn(Locks.prototype, "renew").mockImplementation(function (this: Locks, ...args: Parameters<Locks["renew"]>) { const p = renew.apply(this, args); renewals.push(p); return p; });
+    const { office: o } = await office({ tank: [async () => "completed"] });
+    await o.send("tank", "one", { claims: ["src/**"] }); // the turn's audit stops v1's own heartbeat
+    for (let i = 0; i < 4; i++) { await vi.advanceTimersByTimeAsync(20 * 60_000); await Promise.all(renewals); }
+    await expect(o.open("medic", { claims: ["src/b.ts"] })).rejects.toThrow(/tank/);
+    await o.closeSession("tank");
+    const count = renewals.length;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(renewals).toHaveLength(count);
+  }, 30_000);
 });
 
 describe("W11-3: crash restarts (PO-1)", () => {
@@ -141,6 +217,19 @@ describe("W11-3: crash restarts (PO-1)", () => {
     await until(() => channels.length === 5);
     expect(events.some((event) => event.type === "down")).toBe(false);
     expect(o.army()).toEqual([expect.objectContaining({ state: "idle", restarts: 1 })]);
+  }, 30_000);
+
+  it("C5: counts only crashes within 10 minutes of each other: spaced crashes restart, four close ones take it down", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { channels, events } = await crashing([0, 0, 0]);
+    for (let i = 0; i < 4; i++) { // minutes 0, 4, 8 and 12
+      if (i) vi.setSystemTime(Date.now() + 4 * 60_000);
+      channels[i]!.onEvent({ type: "closed", data: {} }); await until(() => channels.length === i + 2);
+    }
+    expect(events.some((event) => event.type === "down")).toBe(false);
+    vi.setSystemTime(Date.now() + 60_000);
+    channels[4]!.onEvent({ type: "closed", data: {} }); // minute 13: four crashes since minute 4
+    await until(() => events.some((event) => event.type === "down"));
   }, 30_000);
 
   it("never restarts after a login needed", async () => {

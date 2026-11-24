@@ -25,7 +25,7 @@ export interface OfficeOptions {
 /** v1's heartbeat stops at the first audit, so the office renews the claims lease for the session's whole life and at every turn (WSP-2). */
 const WRITE_LEASE_MS = 60 * 60_000;
 const RESTART_DELAYS_MS = [1_000, 5_000, 30_000];
-/** PO-1: a fourth crash within 10 minutes of the first leaves a channel down; 10 minutes without a crash resets the count. */
+/** PO-1: a fourth crash within 10 minutes of the first counted one leaves a channel down; older crashes stop counting. */
 const CRASH_WINDOW_MS = 10 * 60_000;
 export interface TurnOptions { claims?: string[]; }
 interface Session {
@@ -55,16 +55,27 @@ interface Session {
   containmentFailed?: boolean;
 }
 
+/** The blob `rev:path` names, or undefined when the path is absent there. */
+const blob = (root: string, rev: string, path: string) => git(root, ["rev-parse", "--verify", "-q", `${rev}:${path}`]).then((out) => out.trim() || undefined, () => undefined);
+
 /**
  * After an apply, move each running turn's guard base past exactly what the apply changed: a path whose state the turn
  * started with is now expected in its applied state. A path the turn had already seen change is left, so the guard still names it.
+ * C4: only a path the folder holds as the apply wrote it (the commit's blob, or absent) moves; any other bytes are someone
+ * else's change, so the guard still names that path.
  */
-function carryApply(sessions: Session[], before: RepoState, after: RepoState, paths: string[]): void {
+async function carryApply(root: string, sessions: Session[], before: RepoState, after: RepoState, paths: string[], commit: string): Promise<void> {
+  const own: string[] = [];
+  for (const path of paths) {
+    const entry = after.dirty.get(path);
+    const hash = entry === undefined ? await blob(root, "HEAD", path) : entry.slice(entry.lastIndexOf(" ") + 1);
+    if (hash !== "" && (hash === "gone" ? undefined : hash) === await blob(root, commit, path)) own.push(path);
+  }
   for (const session of sessions) {
     const base = session.guardBase;
     if (!base) continue;
     for (const key of ["dirty", "index"] as const) {
-      for (const path of paths) {
+      for (const path of own) {
         if (base[key].get(path) !== before[key].get(path)) continue;
         const now = after[key].get(path);
         if (now === undefined) base[key].delete(path); else base[key].set(path, now);
@@ -182,10 +193,13 @@ export class PostOffice {
     try { cwd = ws ? ws.cwd : (await createSnapshot(this.root, join(this.root, ".shadow", "v2"), "HEAD", id)).path; }
     catch (error) { await ws?.release(); throw error; }
     const session: Session = { spec, id, cwd, instructions, generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
-    this.sessions.set(key, session);
-    if (ws) await this.holdLease(session);
-    if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
+    // C3: other calls wait on the opening promise; the session is published only once its lease and channel exist.
+    try {
+      if (ws) await this.holdLease(session);
+      if (this.closed) throw new Error("post office closed while opening session");
+    } catch (error) { session.down = true; await this.releaseWrite(session); throw error; }
     this.start(session);
+    this.sessions.set(key, session);
     this.record({ soldier: key, type: "opened", data: { session: id, cwd, ...(ws ? { branch: ws.branch, claims: session.write!.claims } : {}) } }, session);
     return session;
   }
@@ -237,10 +251,9 @@ export class PostOffice {
           }
           // A close while a restart is already pending is the same crash.
           if (!session.restartPending) {
+            // C5: the window starts at the first crash still counted, so older crashes drop out as time passes.
             const now = Date.now();
-            const last = session.crashes.at(-1);
-            if (last !== undefined && now - last >= CRASH_WINDOW_MS) session.crashes = [];
-            session.crashes.push(now);
+            session.crashes = [...session.crashes.filter((at) => now - at < CRASH_WINDOW_MS), now];
           }
           session.restartPending = true;
           if (!session.active) this.restart(session);
@@ -306,7 +319,12 @@ export class PostOffice {
     let result: TurnResult;
     try {
       this.check();
-      result = session.stopRequested ? { status: "interrupted", text: "", refusal: false } : await session.channel!.send(text);
+      if (session.write?.leaseLost) {
+        // C2: the claims may now be someone else's, so nothing reaches the CLI; a fresh open claims them again.
+        session.down = true;
+        await session.channel!.close();
+        result = { status: "failed", text: "", refusal: false, error: { kind: "other", message: "the claims lease was lost before this turn, so nothing was sent; reconnect to claim the files again" } };
+      } else result = session.stopRequested ? { status: "interrupted", text: "", refusal: false } : await session.channel!.send(text);
     } catch (error) {
       result = { status: "failed", text: "", refusal: false, error: { kind: "transport", message: String(error) } };
     }
@@ -338,14 +356,7 @@ export class PostOffice {
       result = { ...result, status: "failed", error: result.error ? { ...result.error, message: `${result.error.message}\n${guard}` } : { kind: "other", message: guard } };
       if (write) write = { ...write, applicable: false, reason: changes.join("; ") };
     }
-    // W12-1: a turn that is not applied but moved the branch leaves work the owner's folder never got. A later turn's
-    // apply would carry it in, so the session goes down, as after a guard failure; reconnecting starts a fresh worktree.
-    if (write && !write.applicable && write.commit && write.commit !== session.write!.tip && !session.down) {
-      session.down = true;
-      await session.channel!.close();
-      write = { ...write, reason: `${write.reason}; the session is down so a later turn cannot carry this work in; reconnect to start fresh` };
-      this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
-    }
+    const tip = session.write?.tip;
     if (session.write && write) session.write.tip = write.commit;
     // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
     if (write?.applicable) {
@@ -355,11 +366,20 @@ export class PostOffice {
         const before = others.length ? await captureState(this.root) : undefined;
         const applied = await applyAudited(this.root, audited, session.write!.applied);
         // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
-        if (before && applied.applied && applied.files.length) carryApply(others, before, await captureState(this.root), applied.files.map((file) => file.path));
+        if (before && applied.applied && applied.files.length) await carryApply(this.root, others, before, await captureState(this.root), applied.files.map((file) => file.path), audited.commit!);
         return applied;
       });
       if (apply.applied && write.commit) session.write!.applied = write.commit;
       write = { ...write, apply };
+    }
+    // W12-1: a turn that moved the branch but did not reach the folder (not applicable, or its apply refused: C1) leaves
+    // work the owner never got. A later turn's apply would carry it in, so the session goes down, as after a guard
+    // failure; reconnecting starts a fresh worktree.
+    if (write && !write.apply?.applied && write.commit && write.commit !== tip && !session.down) {
+      session.down = true;
+      await session.channel!.close();
+      write = { ...write, reason: `${write.reason ?? write.apply?.reason ?? "the apply was refused"}; the session is down so a later turn cannot carry this work in; reconnect to start fresh` };
+      this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
     }
     if (write) result = { ...result, write };
     this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
