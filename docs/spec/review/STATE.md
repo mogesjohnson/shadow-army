@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 19 (2026-11-24, `7bc327ea`): M1b-26 is built; #137 is being finished.** #136 is fixed (`5d8da6c`) and #137 (`7112624`) adds PO-1 startup and the tree callers, with one EPERM teardown flake. w52-po-finish finishes #137; M1b-27's brief (w53) is ready. Thirty-three M1b drafts (#105 to #137) wait for Codex. Detail: `handoffs/LATEST.md`.
+
 **Orchestrator 12 (2026-11-24, `b0d026b4`): wave 1 done, wave 2 started.** #116 (M1b-7), #117 (M1b-12), #118 and #119 (M1b-8) reported and checked; fifteen M1b PRs (#105 to #119) wait for Codex. w36-snapshots (M1b-25) and w37-git-hold (M1b-24) run, stacked on #106. Detail: `handoffs/LATEST.md`.
 
 **Orchestrator 6 (2026-11-23, `c6d2c417`): M1a's run branch is green on Windows and Linux; M1b is being planned.** `claude/63-m1a-integrate` (`2b78df6`) is #94 plus #96, #97, #99, #101, #102, #103 and #104. Windows: 497 passed. Linux: 463 passed, 38 skipped (native-session tests, Windows-only containment, D-39), 0 failed. #102 to #104 (w18) add the `windowsOnly` guard; #103 waits for the owner's V6 size exception. `w20-m1b-plan` splits M1b into worker tasks. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
