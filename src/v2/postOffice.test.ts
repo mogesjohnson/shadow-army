@@ -380,4 +380,25 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(result.write?.worktree).toBe(opened.cwd);
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
   }, 30_000);
+  // PO-7 / PO-16 / PO-15: the close path removes an ended tree's record; a close that throws keeps it and the soldier down.
+  it.each([["ends", false], ["throws", true]] as const)("on shutdown, a tree that %s has its record handled (M1b-23)", async (_name, throws) => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event), channelFactory: (): NativeChannel => ({
+      async send() { return { status: "completed", text: "", refusal: false }; }, async interrupt() {}, async respondApproval() {},
+      async close() { if (throws) throw new Error("tree not empty: 4120 node child.js"); },
+    }) });
+    let removed = 0;
+    try {
+      await office.open("scout");
+      (office as unknown as { sessions: Map<string, { tree?: unknown }> }).sessions.get("scout")!.tree = { remove: async () => { removed++; } };
+      if (throws) await expect(office.close()).rejects.toBeInstanceOf(AggregateError);
+      else await office.close();
+      expect(removed).toBe(throws ? 0 : 1);
+      expect(office.downSoldiers.isDown("scout")).toBe(throws);
+      const failed = events.find((event) => event.type === "containment_failed");
+      if (throws) expect((failed!.data as { message: string }).message).toMatch(/^Containment failed for .+: tree not empty: 4120 node child\.js\. .+ is down and won't restart by itself\.$/);
+      else expect(failed).toBeUndefined();
+    } finally { await office.close().catch(() => {}); }
+  }, 30_000);
 });

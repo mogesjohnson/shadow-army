@@ -11,6 +11,7 @@ import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutc
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
+import { containmentFailedMessage, DownSoldiers, type TreeRecord } from "./contain/trees.js";
 
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
@@ -53,6 +54,8 @@ interface Session {
   restartPending: boolean;
   stopRequested?: boolean;
   containmentFailed?: boolean;
+  /** PO-16's record of the soldier's process tree, removed once the tree has ended. Created before start in M1b-26. */
+  tree?: TreeRecord;
 }
 
 /**
@@ -79,6 +82,8 @@ export class PostOffice {
   private readonly roster: Roster;
   private readonly logs: SessionLogs;
   private readonly sessions = new Map<string, Session>();
+  /** PO-15: soldiers whose containment failed at their close; nothing restarts them by itself. */
+  readonly downSoldiers = new DownSoldiers();
   private readonly opening = new Map<string, Promise<Session>>();
   private readonly factory: ChannelFactory;
   private closed = false;
@@ -406,10 +411,21 @@ export class PostOffice {
     if (!session) return;
     session.down = true;
     session.wake?.();
-    await session.channel?.close();
+    let failure: string | undefined;
+    try { await session.channel?.close(); } catch (error) {
+      session.containmentFailed = true;
+      failure = error instanceof Error ? error.message : String(error);
+    }
     await session.active?.catch(() => {});
     await session.restart;
-    if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
+    if (session.containmentFailed) {
+      // PO-15: the tree record stays for the next start's sweep (PO-16), and the soldier stays down.
+      this.downSoldiers.fail(key);
+      this.record({ soldier: key, type: "containment_failed", data: { message: containmentFailedMessage(shadowName(key), failure ? { reason: failure } : { leftovers: "unknown" }) } }, session);
+      throw new Error(`native descendants for ${key} were not confirmed stopped`);
+    }
+    // PO-16: the tree has ended, so its entry goes. A failed removal is logged; the next sweep finds an empty tree.
+    await session.tree?.remove().catch((error: unknown) => this.record({ soldier: key, type: "tree_record", data: { removed: false, reason: String(error) } }, session));
     await this.releaseWrite(session);
     this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
