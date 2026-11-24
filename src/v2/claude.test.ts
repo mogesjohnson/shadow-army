@@ -10,7 +10,7 @@ import { ClaudeChannel, claudeChannelArgs } from "./claude.js";
 
 const channels: ClaudeChannel[] = [];
 const folders: string[] = [];
-async function setup(extra: { interruptTimeoutMs?: number } = {}) {
+async function setup(extra: { interruptTimeoutMs?: number; badLineQuietMs?: number } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "sa-native-claude-"));
   folders.push(cwd);
   const events: ChannelEvent[] = [];
@@ -289,13 +289,49 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     const { channel, events } = await setup();
     const survived = await channel.send("malformed-nine-then-ok");
     expect(survived.status).toBe("completed");
+    const before = events.length;
     const result = await channel.send("malformed-ten");
     expect(result.status).toBe("interrupted");
     expect(result.error?.kind).toBe("transport");
     expect(result.error?.message).toContain("10 unparseable lines in a row");
+    const errors = events.slice(before).filter((event) => event.type === "error").map((event) => event.data as NativeError);
+    // Review 3 C3: the tenth line keeps its own diagnostic before the connection is lost.
+    expect(errors.filter((error) => error.kind === "other")).toHaveLength(10);
+    expect(errors.at(-1)?.kind).toBe("transport");
+    expect(events.slice(before).filter((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")).toHaveLength(10);
     await channel.close();
     expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
     expect(events.filter((event) => event.type === "closed")).toHaveLength(1);
+  }, 15_000);
+
+  windowsOnly("records the whole redacted unparseable line and cuts only the error message (review 3 C2)", async () => {
+    const { channel, events } = await setup();
+    expect((await channel.send("malformed-long")).text).toBe("after long bad line");
+    const raw = events.find((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")!.data as { text: string };
+    expect(raw.text).toContain("y".repeat(40));
+    expect(raw.text).not.toMatch(/sk-ant-a/);
+    const error = events.find((event) => event.type === "error")!.data as NativeError;
+    expect(error.message).not.toMatch(/sk-ant-a/);
+    expect(error.message.endsWith("...")).toBe(true);
+  }, 15_000);
+
+  windowsOnly("settles a turn whose result line was unparseable once, and keeps the channel for the next turn (review 3 C1)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 50 });
+    const lost = await channel.send("malformed-idle");
+    expect(lost.status).toBe("failed");
+    expect(lost.error).toMatchObject({ kind: "other", message: expect.stringContaining("no valid frame within 50 ms") });
+    expect((await channel.send("hello")).status).toBe("completed");
+    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
+    expect(events.some((event) => event.type === "closed")).toBe(false);
+  }, 15_000);
+
+  windowsOnly("stops a turn natively when it stays quiet after an unparseable line (review 3 C1)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 5_000 });
+    const stopped = await channel.send("malformed");
+    expect(stopped.status).toBe("failed");
+    expect(stopped.error?.kind).toBe("other");
+    expect((await channel.send("hello")).status).toBe("completed");
+    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
   }, 15_000);
 
   windowsOnly("uses only the main conversation for the meter and preserves native terminal/cache usage", async () => {

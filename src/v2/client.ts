@@ -77,6 +77,7 @@ export class OfficeClient {
     if (this.ended) throw new Error("post office is closed");
     // A send's reply arrives when its turn ends, however long that takes. Global fetch (undici)
     // fails after 300 s without response headers (W11-4); node:http has no such timeout.
+    // This covers OfficeClient only. The mod's /send calls $.http.fetch itself and is unverified (review 3 C4).
     const { status, text } = await this.post(`${url}/command`, JSON.stringify(command));
     const data = JSON.parse(text) as { result?: T; error?: string };
     if (status < 200 || status > 299) throw new Error(data.error ?? `post office command failed (${status})`);

@@ -15,6 +15,8 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 /** CH-1: one unparseable line is an error and the session carries on; this many in a row is a lost connection. */
 export const MAX_BAD_LINES_IN_A_ROW = 10;
 const BAD_LINE_EXCERPT = 200;
+/** A turn quiet this long after an unparseable line may have lost its result; long tool runs emit no frames. */
+const BAD_LINE_QUIET_MS = 10 * 60_000;
 
 interface PendingTurn {
   id: string;
@@ -82,9 +84,10 @@ export class ClaudeChannel implements NativeChannel {
   private closingResult?: TurnResult;
   private reason: NativeError = { kind: "transport", message: "Claude channel closed" };
   private stopTimer?: NodeJS.Timeout;
+  private badLineTimer?: NodeJS.Timeout;
   private instructionDirectory?: string;
 
-  constructor(private readonly options: ChannelOptions) {
+  constructor(private readonly options: ChannelOptions & { badLineQuietMs?: number }) {
     this.process = this.spawn();
     this.ready = this.open();
     // Spawn/initialization errors must remain observed even if the owner closes before sending.
@@ -145,14 +148,22 @@ export class ClaudeChannel implements NativeChannel {
     try { frame = object(JSON.parse(line)); } catch { /* A malformed protocol cannot safely delimit the active turn. */ }
     if (!frame || typeof frame.type !== "string") {
       this.badLines++;
-      const excerpt = line.length > BAD_LINE_EXCERPT ? `${line.slice(0, BAD_LINE_EXCERPT)}...` : line;
-      const message = `Claude emitted an unparseable line: ${String(redact(excerpt))}`;
-      this.emit("raw", { type: "unparseable_line", text: String(redact(excerpt)) });
+      // CH-1: record the whole bounded line after redaction; only the error message is cut.
+      const text = String(redact(line));
+      const excerpt = text.length > BAD_LINE_EXCERPT ? `${text.slice(0, BAD_LINE_EXCERPT)}...` : text;
+      this.emit("raw", { type: "unparseable_line", text });
+      this.emit("error", { kind: "other", message: `Claude emitted an unparseable line: ${excerpt}` } satisfies NativeError);
       if (this.badLines >= MAX_BAD_LINES_IN_A_ROW) void this.failTransport(`Claude connection lost: ${MAX_BAD_LINES_IN_A_ROW} unparseable lines in a row`);
-      else this.emit("error", { kind: "other", message } satisfies NativeError);
+      else if (this.current && !this.current.stopped && !this.badLineTimer) {
+        const turn = this.current;
+        this.badLineTimer = setTimeout(() => { this.badLineTimer = undefined; void this.recover(turn); }, this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS);
+        this.badLineTimer.unref();
+      }
       return;
     }
     this.badLines = 0;
+    clearTimeout(this.badLineTimer);
+    this.badLineTimer = undefined;
     this.emit("raw", frame);
     if (typeof frame.session_id === "string") this.sessionId = frame.session_id;
     const response = object(frame.response);
@@ -318,12 +329,33 @@ export class ClaudeChannel implements NativeChannel {
     else this.finish(result);
   }
 
+  /**
+   * The bad line may have been the turn's result. After a quiet window, ask Claude to stop the
+   * turn natively; if no result follows within a second window, settle it locally as failed.
+   * The connection stays open, so the next turn is not blocked.
+   */
+  private async recover(turn: PendingTurn): Promise<void> {
+    if (this.current !== turn || turn.stopped || this.closed) return;
+    const quiet = this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS;
+    turn.stopped = true;
+    turn.error = { kind: "other", message: `Claude sent no valid frame within ${quiet} ms of an unparseable line` };
+    this.emit("error", turn.error);
+    this.approvals.clear();
+    this.stopTimer = setTimeout(() => {
+      if (this.current === turn) this.finish({ status: "failed", text: turn.text, refusal: false, sessionId: this.sessionId, contextTokens: turn.contextTokens, usage: this.eventUsage(turn), error: turn.error });
+    }, this.options.interruptTimeoutMs ?? 30_000);
+    this.stopTimer.unref();
+    await this.write({ type: "control_request", request_id: randomUUID(), request: { subtype: "interrupt" } }).catch(() => undefined);
+  }
+
   private finish(result: TurnResult): void {
     const turn = this.current;
     if (!turn) return;
     this.current = undefined;
     clearTimeout(this.stopTimer);
     this.stopTimer = undefined;
+    clearTimeout(this.badLineTimer);
+    this.badLineTimer = undefined;
     this.approvals.clear();
     this.emit("turn_end", result);
     turn.resolve(result);
@@ -392,6 +424,7 @@ export class ClaudeChannel implements NativeChannel {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
     clearTimeout(this.stopTimer);
+    clearTimeout(this.badLineTimer);
     this.approvals.clear();
     for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error(this.reason.message)); }
     this.controls.clear();

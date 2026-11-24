@@ -52,6 +52,9 @@ for await (const line of createInterface({ input: process.stdin })) {
   history.push(text);
   if (text === "malformed") { process.stdout.write("{broken JSON}\n"); continue; }
   if (text === "malformed-once") { process.stdout.write("{broken JSON sk-ant-abcdefghijklmnop}\n"); result("after bad line"); continue; }
+  // The turn's own result arrives broken; the CLI is then idle and an interrupt ends nothing.
+  if (text === "malformed-idle") { process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue; }
+  if (text === "malformed-long") { process.stdout.write(`{broken ${"x".repeat(185)} sk-ant-abcdefghijklmnop ${"y".repeat(40)}}\n`); result("after long bad line"); continue; }
   if (text === "malformed-ten") { for (let i = 0; i < 10; i++) process.stdout.write("{broken JSON}\n"); continue; }
   if (text === "malformed-nine-then-ok") { for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); assistant("ok"); for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); result("survived"); continue; }
   if (text === "split") {
