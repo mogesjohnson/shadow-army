@@ -1,11 +1,29 @@
 import { spawn } from "node:child_process";
+import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { checkContainment, type CheckOptions, type Clock, type StepContext, type StepOutcome, type SystemSteps } from "./check.js";
+import { checkContainment, createContainmentGate, type CheckOptions, type Clock, type StepContext, type StepOutcome, type SystemSteps } from "./check.js";
+import type { ManagedProcess } from "./index.js";
 import { failureMessage, type Failure, type Where } from "./messages.js";
 
 const ok: StepOutcome = { ok: true };
 const flush = () => new Promise<void>((done) => setImmediate(done));
+
+/** A contained probe that reports both pids; its `stdout` ends at `close()`, unless `leaks`. */
+function fakeProbe(leaks = false): { spawn: CheckOptions["spawn"]; closed: () => number } {
+  let closes = 0;
+  return {
+    closed: () => closes,
+    spawn: async () => {
+      const stdout = new PassThrough();
+      stdout.write('{"role":"probe","pid":10}\n{"role":"grandchild","pid":12}\n');
+      return {
+        pid: 10, stdin: new Writable(), stdout, stderr: new PassThrough(), exited: new Promise(() => {}),
+        close: async () => { closes++; if (!leaks) stdout.end(); },
+      } as unknown as ManagedProcess;
+    },
+  };
+}
 
 class FakeClock implements Clock {
   time = 0;
@@ -24,11 +42,37 @@ const steps = (over: Partial<SystemSteps> = {}): SystemSteps => ({
 });
 
 const base = (over: Partial<CheckOptions> = {}, system: SystemSteps = steps()): CheckOptions => ({
-  platform: "win32", arch: "x64", osVersion: "10.0.26200", shadowArmy: "2.0.1", clock: new FakeClock(),
+  platform: "win32", arch: "x64", osVersion: "10.0.26200", shadowArmy: "2.0.1", clock: new FakeClock(), spawn: fakeProbe().spawn,
   systems: { "win32-x64": system, "darwin-arm64": system, "linux-x64": system }, ...over,
 });
 
 describe("PO-14 check", () => {
+  it("passes when every step does, and logs one line saying so", async () => {
+    const lines: string[] = [];
+    const result = await checkContainment(base({ log: (line) => lines.push(line) }));
+    expect(result.ok).toBe(true);
+    expect(lines).toEqual([expect.stringMatching(/^Containment check passed on Windows 10\.0\.26200 \(x64\) in [\d.]+ s: helper, checksums, mode, probe\.$/)]);
+  });
+
+  it("fails with 'outlived' when the probe's pipe stays open after the kill, and kills what it started", async () => {
+    const clock = new FakeClock();
+    const probe = fakeProbe(true);
+    const pending = checkContainment(base({ clock, spawn: probe.spawn }));
+    await flush();
+    await clock.advance(3000);
+    const result = await pending;
+    expect(result).toMatchObject({ ok: false, step: "probe", failure: { cause: "outlived" } });
+    expect(!result.ok && result.message).toMatch(/a test process outlived its containment/);
+    expect(probe.closed()).toBe(2);
+  });
+
+  it("fails when the listing misses the grandchild, or on macOS the coalition is not new", async () => {
+    const missing = await checkContainment(base({}, steps({ listTree: async () => ({ pids: [10], newCoalition: true }) })));
+    expect(!missing.ok && missing.message).toMatch(/did not show the test process and its grandchild/);
+    const shared = await checkContainment(base({ platform: "darwin", arch: "arm64", dispatch: () => ok }, steps({ listTree: async () => ({ pids: [10, 12] }) })));
+    expect(!shared.ok && shared.message).toMatch(/not in a new coalition/);
+  });
+
   it("gives a system or processor with no helper PO-14's message, and keeps running (AC17)", async () => {
     const result = await checkContainment(base({ platform: "linux", arch: "riscv64" }));
     expect(result).toMatchObject({ ok: false, step: "helper", failure: { cause: "no-helper" } });
@@ -40,7 +84,7 @@ describe("PO-14 check", () => {
     const result = await checkContainment(base({
       platform: "darwin", arch: "arm64", osVersion: "99.1", testedMacOS: { oldest: "14.0", newest: "27.1" }, log: (line) => lines.push(line), dispatch: () => ok,
     }));
-    expect(result).toMatchObject({ ok: false, failure: { cause: "not-built", step: "probe" } });
+    expect(result.ok).toBe(true);
     expect(lines[0]).toBe("macOS 99.1 is untested by this Shadow Army; the containment check still decides.");
   });
 
@@ -87,7 +131,30 @@ describe("PO-14 check", () => {
     await clock.sleep(3_600_000);
     expect(lines).toEqual(["The post office did not run for 3600 s during the containment check; 5 s of it count."]);
     release();
-    expect(await pending).toMatchObject({ ok: false, failure: { cause: "not-built", step: "probe" } });
+    expect((await pending).ok).toBe(true);
+  });
+});
+
+describe("rerun at reconnect (PO-14, PO-15)", () => {
+  it("checks at start, keeps a pass, and checks again only after a failed containment", async () => {
+    let runs = 0;
+    const gate = createContainmentGate(base({}, steps({ helper: async () => { runs++; return ok; } })));
+    expect((await gate.start()).ok).toBe(true);
+    await gate.ready();
+    expect(runs).toBe(1);
+    gate.containmentFailed();
+    await gate.ready();
+    expect(runs).toBe(2);
+  });
+
+  it("checks again before every start while the last check failed, and shares a check already running", async () => {
+    let runs = 0;
+    const gate = createContainmentGate(base({}, steps({ helper: async () => { runs++; return { ok: false, failure: { cause: "cannot-run" } }; } })));
+    expect((await gate.start()).ok).toBe(false);
+    await Promise.all([gate.ready(), gate.ready()]);
+    expect(runs).toBe(2);
+    await gate.ready();
+    expect(runs).toBe(3);
   });
 });
 

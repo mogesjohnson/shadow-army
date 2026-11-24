@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
-import { arch as osArch, platform as osPlatform, release } from "node:os";
-import { containmentFor, type ManagedProcess, type ManagedProcessOptions } from "./index.js";
+import { arch as osArch, platform as osPlatform, release, tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
+import { containmentFor, spawnManagedProcess, type ManagedProcess, type ManagedProcessOptions } from "./index.js";
 import { failureMessage, type Failure, type Where } from "./messages.js";
 
 /** PO-14's four steps, in order. */
@@ -68,6 +69,8 @@ export type CheckResult =
 
 const TIMEOUT_MS = 10_000;
 const LONGEST_STEP_MS = 5_000;
+const PIPE_END_MS = 3_000;
+const DEFAULT_PROBE = fileURLToPath(new URL("../../../native/probe.mjs", import.meta.url));
 
 const versionParts = (version: string) => version.split(".").map((part) => Number.parseInt(part, 10) || 0);
 function compareVersions(a: string, b: string): number {
@@ -77,6 +80,58 @@ function compareVersions(a: string, b: string): number {
 }
 
 const SYSTEM_NAMES: Record<string, string> = { darwin: "macOS", linux: "Linux", win32: "Windows" };
+const aborted = (signal: AbortSignal) => new Promise<never>((_, reject) => {
+  signal.addEventListener("abort", () => reject(new Error("check ended")), { once: true });
+});
+
+/** Waits for the probe's two report lines; ends early if the pipe ends first. */
+function readPids(child: ManagedProcess, ended: Promise<void>): Promise<{ probe: number; grandchild: number }> {
+  return new Promise((resolve, reject) => {
+    const pids: Record<string, number> = {};
+    let buffer = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buffer += chunk;
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        try { const { role, pid } = JSON.parse(line) as { role: string; pid: number }; pids[role] = pid; } catch { /* not a report */ }
+      }
+      if (pids.probe && pids.grandchild) resolve({ probe: pids.probe, grandchild: pids.grandchild });
+    });
+    void ended.then(() => reject(new Error("the test process ended before it reported")));
+  });
+}
+
+async function probeStep(ctx: StepContext, o: Required<Pick<CheckOptions, "platform" | "spawn" | "probePath">>, steps: SystemSteps): Promise<StepOutcome> {
+  let child: ManagedProcess;
+  try {
+    child = await o.spawn({ file: process.execPath, args: [o.probePath], cwd: tmpdir() });
+  } catch (error) {
+    return fail({ cause: "helper-failed", detail: `the test process would not start (${error instanceof Error ? error.message : String(error)})` });
+  }
+  ctx.killOnFail(() => child.close());
+  const ended = new Promise<void>((done) => {
+    for (const event of ["end", "close", "error"]) child.stdout.once(event, () => done());
+  });
+  try {
+    const pids = await Promise.race([readPids(child, ended), aborted(ctx.signal)]);
+    const listed = await steps.listTree(ctx, pids.probe);
+    if (!listed.pids.includes(pids.probe) || !listed.pids.includes(pids.grandchild)) {
+      return fail({ cause: "helper-failed", detail: "the listing did not show the test process and its grandchild" });
+    }
+    if (o.platform === "darwin" && listed.newCoalition !== true) {
+      return fail({ cause: "helper-failed", detail: "the test process is not in a new coalition" });
+    }
+  } catch (error) {
+    if (ctx.signal.aborted) throw error;
+    return fail({ cause: "helper-failed", detail: error instanceof Error ? error.message : String(error) });
+  }
+  await child.close(); // killed with no grace; the pipe's end, not the listing, is the proof
+  const outlived = new Promise<StepOutcome>((done) => { ctx.after(PIPE_END_MS, () => done(fail({ cause: "outlived" }))); });
+  return Promise.race([ended.then(() => PASS), outlived, aborted(ctx.signal)]);
+}
+
 /** PO-14: the check, as the machine is now, within 10 seconds of counted time. It never throws. */
 export async function checkContainment(options: CheckOptions): Promise<CheckResult> {
   const platform = options.platform ?? osPlatform();
@@ -121,6 +176,7 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
   const ctx: StepContext = { signal: controller.signal, killOnFail: (kill) => { killers.push(kill); }, after };
   const steps = options.systems[`${platform}-${arch}`];
   const need = (step: string): Failure => ({ cause: "not-built", step });
+  const spawn = options.spawn ?? ((spawnOptions: ManagedProcessOptions) => spawnManagedProcess(spawnOptions, platform, arch));
   const runners: Record<StepName, () => Promise<StepOutcome>> = {
     async helper() {
       try { (options.dispatch ?? containmentFor)(platform, arch); } catch { return fail({ cause: "no-helper" }); }
@@ -128,7 +184,7 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
     },
     checksums: async () => (steps ? steps.checksums(ctx) : fail(need("checksums"))),
     mode: async () => (steps ? steps.mode(ctx) : fail(need("mode"))),
-    probe: async () => fail(need("probe")), // M1b-20 part 2 starts the probe here
+    probe: async () => (steps ? probeStep(ctx, { platform, spawn, probePath: options.probePath ?? DEFAULT_PROBE }, steps) : fail(need("probe"))),
   };
 
   let current: StepName = STEPS[0];
@@ -159,4 +215,22 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
   const message = failureMessage(result.failure, where);
   log(message);
   return { ok: false, step: current, failure: result.failure, message };
+}
+
+/**
+ * PO-14's rule for when to check: when the post office starts, and again before a soldier is started or
+ * reconnected after a failed check or a failed containment (PO-15). Concurrent callers share one check.
+ */
+export function createContainmentGate(options: CheckOptions) {
+  let last: CheckResult | undefined;
+  let running: Promise<CheckResult> | undefined;
+  const run = () => (running ??= checkContainment(options).then((result) => { last = result; return result; }).finally(() => { running = undefined; }));
+  return {
+    /** The check at start-up, before any soldier starts. */
+    start: run,
+    /** Before a soldier starts or reconnects: the last pass stands until a failure is reported. */
+    ready: () => (last?.ok ? Promise.resolve(last) : run()),
+    /** PO-15: a session's containment failed, so the next start checks again. */
+    containmentFailed: () => { last = undefined; },
+  };
 }
