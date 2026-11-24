@@ -1,5 +1,6 @@
 import { mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { redact } from "../logs.js";
 
 /** PO-16: a process is named by its pid and its start time, so a reused pid never matches (PO-11). */
 export interface Identity { pid: number; startTime: number }
@@ -110,4 +111,74 @@ export class TreeRecord {
   async remove(): Promise<void> {
     try { await unlink(this.file); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
+}
+
+/** The processes' state on this machine: injected, so the failure path runs on a fake clock and fake processes. */
+export interface ProcessOps {
+  /** The process's start time, or `undefined` when no such process runs. */
+  startTimeOf(pid: number): Promise<number | undefined>;
+  /** Ends each process (the caller's own signal or kill). A process that is already gone is not an error. */
+  end(processes: readonly Identity[]): Promise<void>;
+}
+
+/** A process the post office could not end, named by identity and command line (PO-15). */
+export interface Leftover extends Identity { command: string }
+
+/** The leftovers whose pid still belongs to the same process. */
+export async function stillRunning(ops: ProcessOps, leftovers: readonly Leftover[]): Promise<Leftover[]> {
+  const running = await Promise.all(leftovers.map(async (leftover) => (await ops.startTimeOf(leftover.pid)) === leftover.startTime));
+  return leftovers.filter((_, index) => running[index]);
+}
+
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 200);
+
+/**
+ * PO-15's line for the log and Claude's transcript. Each command line goes through `redact()` (WSP-8). Where the
+ * post office can't tell which processes remain (`"unknown"`), it says processes the CLI started may still run.
+ */
+export function containmentFailedMessage(
+  soldier: string, what: { reason: string } | { leftovers: readonly Leftover[] | "unknown" }, redactText: (text: string) => string = (text) => redact(text) as string,
+): string {
+  const named = "reason" in what ? undefined : what.leftovers;
+  const detail = "reason" in what ? oneLine(redactText(what.reason))
+    : named === "unknown" || named?.length === 0 ? "processes the CLI started may still be running"
+      : `${named!.length} process${named!.length === 1 ? "" : "es"} couldn't be ended (${named!.map((one) => `${one.pid} ${oneLine(redactText(one.command))}`).join(", ")})`;
+  return `Containment failed for ${soldier}: ${detail}. ${soldier} is down and won't restart by itself.`;
+}
+
+/** Soldiers whose containment failed. PO-1's crash count does not restart them (PO-15). */
+export class DownSoldiers {
+  private readonly down = new Map<string, readonly Leftover[]>();
+
+  /** Marks the soldier down, naming the processes still running. Nothing restarts it by itself. */
+  fail(soldier: string, leftovers: readonly Leftover[] = []): void { this.down.set(soldier, leftovers); }
+  isDown(soldier: string): boolean { return this.down.has(soldier); }
+
+  /** A reconnect starts the CLI only once no process the error named still runs (PO-15). */
+  async mayStart(soldier: string, ops: ProcessOps): Promise<boolean> {
+    const named = this.down.get(soldier);
+    if (!named) return true;
+    if ((await stillRunning(ops, named)).length > 0) return false;
+    this.down.delete(soldier);
+    return true;
+  }
+}
+
+/**
+ * A turn's guard stays open while a process the post office named still runs: it tries to end them again
+ * every 10 seconds, and returns `"ended"` once all have. With no process to wait for, the turn is cut short.
+ */
+export async function holdGuardOpen(
+  leftovers: readonly Leftover[] | "unknown", ops: ProcessOps,
+  options: { intervalMs?: number; wait?: (ms: number) => Promise<void>; signal?: AbortSignal } = {},
+): Promise<"ended" | "cut-short"> {
+  if (leftovers === "unknown" || leftovers.length === 0) return "cut-short";
+  const { intervalMs = 10_000, wait = (ms) => new Promise<void>((done) => setTimeout(done, ms)), signal } = options;
+  for (let remaining = [...leftovers]; !signal?.aborted;) {
+    remaining = await stillRunning(ops, remaining);
+    if (remaining.length === 0) return "ended";
+    try { await ops.end(remaining); } catch { /* Tried again after the interval. */ }
+    await wait(intervalMs);
+  }
+  return "cut-short";
 }

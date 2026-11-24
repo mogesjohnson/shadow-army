@@ -2,7 +2,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseTreeFile, parseTreeLine, readTrees, TreeRecord, treesDir } from "./trees.js";
+import {
+  containmentFailedMessage, DownSoldiers, holdGuardOpen, parseTreeFile, parseTreeLine, readTrees, stillRunning, TreeRecord, treesDir,
+  type Leftover, type ProcessOps,
+} from "./trees.js";
 
 describe("tree records (PO-16, M1-AC16)", () => {
   let root: string;
@@ -62,5 +65,71 @@ describe("tree records (PO-16, M1-AC16)", () => {
     await record.listing([{ pid: 7, startTime: 70 }]);
     await record.listing([{ pid: 8, startTime: 80 }]);
     expect(errors).toHaveLength(1);
+  });
+});
+
+describe("the failure path (PO-15, M1-AC19)", () => {
+  const sudo: Leftover = { pid: 4242, startTime: 9, command: "sudo make install --password=abc Bearer sk-ant-0123456789abcdef" };
+  /** Fake processes by pid: `end` removes the ones named in `endable`, as a signal the owner's user may not send would not. */
+  function fakeOps(alive: Record<number, number>, endable = true): ProcessOps & { ended: number[][] } {
+    const ended: number[][] = [];
+    return {
+      ended,
+      startTimeOf: async (pid) => alive[pid],
+      end: async (processes) => { ended.push(processes.map((one) => one.pid)); if (endable) for (const one of processes) delete alive[one.pid]; },
+    };
+  }
+
+  it("says what failed and names each leftover, with its command line redacted", () => {
+    const message = containmentFailedMessage("Iron", { leftovers: [sudo] });
+    expect(message).toBe("Containment failed for Iron: 1 process couldn't be ended (4242 sudo make install --password=[REDACTED] Bearer [REDACTED]). Iron is down and won't restart by itself.");
+    expect(containmentFailedMessage("Iron", { leftovers: [sudo, { ...sudo, pid: 4243, command: "a\nb" }] })).toContain("2 processes couldn't be ended (4242 sudo");
+    expect(containmentFailedMessage("Iron", { leftovers: [sudo, { ...sudo, pid: 4243, command: "a\nb" }] })).toContain(", 4243 a b)");
+    expect(containmentFailedMessage("Iron", { leftovers: "unknown" })).toBe("Containment failed for Iron: processes the CLI started may still be running. Iron is down and won't restart by itself.");
+    expect(containmentFailedMessage("Iron", { leftovers: [] })).toContain("may still be running");
+    expect(containmentFailedMessage("Iron", { reason: "the tree entry couldn't be written: EACCES Bearer abc123" })).toBe("Containment failed for Iron: the tree entry couldn't be written: EACCES Bearer [REDACTED]. Iron is down and won't restart by itself.");
+    expect(containmentFailedMessage("Iron", { leftovers: [{ ...sudo, command: "x".repeat(500) }] }).length).toBeLessThan(330);
+  });
+
+  it("counts a leftover as running only while its pid still has the recorded start time", async () => {
+    const ops = fakeOps({ 4242: 9, 7: 1 });
+    expect(await stillRunning(ops, [sudo, { ...sudo, pid: 7, startTime: 2 }, { ...sudo, pid: 8 }])).toEqual([sudo]);
+  });
+
+  it("keeps a failed soldier down, and lets a reconnect start the CLI only once the named processes are gone", async () => {
+    const alive: Record<number, number> = { 4242: 9 };
+    const ops = fakeOps(alive);
+    const down = new DownSoldiers();
+    expect(await down.mayStart("Iron", ops)).toBe(true);
+    down.fail("Iron", [sudo]);
+    expect(down.isDown("Iron")).toBe(true);
+    expect(await down.mayStart("Iron", ops)).toBe(false);
+    alive[4242] = 10; // The pid is now another process: the named one is gone.
+    expect(await down.mayStart("Iron", ops)).toBe(true);
+    expect(down.isDown("Iron")).toBe(false);
+    down.fail("Igris"); // Nothing is named (unknown leftovers): the next reconnect runs the check and starts.
+    expect(await down.mayStart("Igris", ops)).toBe(true);
+  });
+
+  it("holds the guard open, ending the named processes again every 10 s, until they have all ended", async () => {
+    const alive: Record<number, number> = { 4242: 9, 4243: 5 };
+    const ops = fakeOps(alive, false);
+    const waits: number[] = [];
+    const held = holdGuardOpen([sudo, { ...sudo, pid: 4243, startTime: 5 }], ops, {
+      wait: async (ms) => { waits.push(ms); if (waits.length === 2) delete alive[4242]; if (waits.length === 3) delete alive[4243]; },
+    });
+    expect(await held).toBe("ended");
+    expect(waits).toEqual([10_000, 10_000, 10_000]);
+    expect(ops.ended).toEqual([[4242, 4243], [4242, 4243], [4243]]);
+  });
+
+  it("cuts the turn short where it can't tell which processes remain, and when the hold is aborted", async () => {
+    expect(await holdGuardOpen("unknown", fakeOps({}))).toBe("cut-short");
+    expect(await holdGuardOpen([], fakeOps({}))).toBe("cut-short");
+    const abort = new AbortController();
+    const ops = fakeOps({ 4242: 9 }, false);
+    ops.end = async () => { throw new Error("EPERM"); }; // A process run as another user through sudo can't be signalled.
+    const held = holdGuardOpen([sudo], ops, { wait: async () => abort.abort(), signal: abort.signal });
+    expect(await held).toBe("cut-short");
   });
 });
