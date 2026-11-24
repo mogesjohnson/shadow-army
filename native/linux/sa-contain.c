@@ -30,14 +30,20 @@
  *   term    send SIGTERM to the CLI, if it hasn't exited (PO-10, at 9.5 s)
  *   kill    the close command: kill the tree and reap it (PO-10)
  *
- * An unknown command is refused and changes nothing. If the pipe reaches its
- * end, or the guardian gets SIGTERM, SIGINT or SIGHUP, it kills the tree at
- * once (PO-10, "when the post office is gone").
+ * An unknown command is refused and changes nothing; a line too long for
+ * any command is refused once and dropped up to its newline. If the pipe
+ * reaches its end, or the guardian gets SIGTERM, SIGINT or SIGHUP, it kills
+ * the tree at once (PO-10, "when the post office is gone"). It keeps
+ * watching the pipe and signals while the CLI's exec is pending.
  *
- * Killing the tree: the guardian SIGKILLs each of its children (found in
- * /proc/<pid>/stat by their parent pid), and each process it adopts as their
- * parents die, and reaps them, until wait() reports ECHILD. It signals only
- * its own unreaped children, whose pids the kernel can't reuse.
+ * Killing the tree: the guardian SIGKILLs each of its children, and each
+ * process it adopts as their parents die, and reaps them, until wait()
+ * reports ECHILD. Children are found by their parent pid in /proc/<pid>/stat
+ * and signalled through that /proc/<pid> directory (pidfd_send_signal), so
+ * the signal reaches the process that was read, never a pid number. Before
+ * `ready` the guardian opens /proc, checks that it is procfs and that its
+ * `self` is the guardian's own pid (the guardian's pid namespace), and keeps
+ * that verified view; if it can't, it fails and starts nothing.
  *
  * Reports never block: lines queue in a fixed buffer and are sent without
  * waiting, so a stalled post office can't stop the kill. Lines that don't
@@ -72,10 +78,17 @@
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef SYS_pidfd_send_signal
+#define SYS_pidfd_send_signal 424
+#endif
+#define PROC_MAGIC 0x9fa0 /* PROC_SUPER_MAGIC */
 
 #define REPORT_FD 3
 #define OUT_CAP 8192
@@ -224,13 +237,59 @@ static int reap_ready(int killing, int *reaped) {
   }
 }
 
-/* Reads the parent pid from /proc/<pid>/stat. The command name is in
+/* The verified /proc (PO-10, PO-17): procfs, in the guardian's own pid
+ * namespace. Opened once before `ready`; every scan goes through it. */
+static int proc_fd = -1;
+static pid_t proc_self = -1;
+
+static int signal_dir(int dir, int sig) {
+  return (int)syscall(SYS_pidfd_send_signal, dir, sig, NULL, 0);
+}
+
+static int open_proc_view(void) {
+  char self[32], link[32];
+  struct statfs fs;
+  proc_fd = open("/proc", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (proc_fd < 0) {
+    fail("guard", "proc-open", errno);
+    return -1;
+  }
+  if (fstatfs(proc_fd, &fs) != 0) {
+    fail("guard", "proc-type", errno);
+    return -1;
+  }
+  if (fs.f_type != PROC_MAGIC) {
+    fail("guard", "proc-type", 0);
+    return -1;
+  }
+  snprintf(self, sizeof self, "%d", (int)getpid());
+  ssize_t n = readlinkat(proc_fd, "self", link, sizeof link - 1);
+  if (n <= 0) {
+    fail("guard", "proc-self", n < 0 ? errno : 0);
+    return -1;
+  }
+  link[n] = '\0';
+  if (strcmp(link, self) != 0) {
+    fail("guard", "proc-namespace", 0);
+    return -1;
+  }
+  /* Signal 0 to our own directory: the kernel can signal through one. */
+  int dir = openat(proc_fd, self, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (dir < 0 || signal_dir(dir, 0) != 0) {
+    fail("guard", "proc-signal", errno);
+    if (dir >= 0) close(dir);
+    return -1;
+  }
+  close(dir);
+  proc_self = getpid();
+  return 0;
+}
+
+/* Reads the parent pid from <dir>/stat. The command name is in
  * parentheses and may hold any byte, so the fields start after the last ')'. */
-static pid_t parent_of(const char *pid_name) {
-  char path[64];
+static pid_t parent_of(int dir) {
   char buf[512];
-  if (snprintf(path, sizeof path, "/proc/%s/stat", pid_name) >= (int)sizeof path) return -1;
-  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  int fd = openat(dir, "stat", O_RDONLY | O_CLOEXEC);
   if (fd < 0) return -1;
   ssize_t n = read(fd, buf, sizeof buf - 1);
   close(fd);
@@ -244,32 +303,39 @@ static pid_t parent_of(const char *pid_name) {
   return (pid_t)ppid;
 }
 
-/* SIGKILLs each process whose parent is the guardian. Each is an unreaped
- * child, so its pid can't have been reused. */
-static void kill_children(pid_t self) {
-  DIR *proc = opendir("/proc");
-  if (!proc) return;
+/* SIGKILLs each process whose parent is the guardian in the verified view,
+ * through its /proc directory: the signal reaches the process whose stat was
+ * read, or none. Each is an unreaped child of ours. */
+static void kill_children(void) {
+  int scan = openat(proc_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (scan < 0) return;
+  DIR *proc = fdopendir(scan);
+  if (!proc) {
+    close(scan);
+    return;
+  }
   struct dirent *entry;
   while ((entry = readdir(proc)) != NULL) {
     const char *name = entry->d_name;
     if (name[0] < '1' || name[0] > '9') continue;
-    if (parent_of(name) != self) continue;
-    pid_t pid = (pid_t)strtol(name, NULL, 10);
-    if (pid > 0 && pid != self) kill(pid, SIGKILL);
+    int dir = openat(proc_fd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dir < 0) continue;
+    if (parent_of(dir) == proc_self) signal_dir(dir, SIGKILL);
+    close(dir);
   }
   closedir(proc);
 }
 
 /* PO-10: kill and reap until ECHILD. Waits between rounds on the SIGCHLD
  * descriptor, with a short and then longer timeout, so a process that can't
- * be signalled (another user's) is tried again without spinning. */
+ * be signalled (another user's) is tried again without spinning. Reports
+ * never wait (see the top). */
 static int kill_tree(int sigfd) {
-  pid_t self = getpid();
   int reaped = 0;
   int timeout = 10;
   for (;;) {
     if (cli_pid > 0 && !cli_reaped) kill(cli_pid, SIGKILL);
-    kill_children(self);
+    kill_children();
     if (reap_ready(1, &reaped)) break;
     flush_out();
     struct pollfd p = {.fd = sigfd, .events = POLLIN};
@@ -284,6 +350,9 @@ static int kill_tree(int sigfd) {
   return 0;
 }
 
+static int exec_fd = -1; /* the exec-status pipe while the start is pending */
+
+/* Forks the CLI and returns at once; the event loop watches exec_fd. */
 static int start_cli(char **argv) {
   int status_pipe[2];
   if (pipe2(status_pipe, O_CLOEXEC) != 0) {
@@ -310,23 +379,25 @@ static int start_cli(char **argv) {
     _exit(127);
   }
   close(status_pipe[1]);
+  cli_pid = pid; /* tracked from fork: a kill now reaches it */
+  exec_fd = status_pipe[0];
+  return 0;
+}
+
+/* exec_fd is readable: an errno means exec failed, the end means it ran. */
+static int finish_start(void) {
   int err = 0;
   ssize_t n;
   do {
-    n = read(status_pipe[0], &err, sizeof err);
+    n = read(exec_fd, &err, sizeof err);
   } while (n < 0 && errno == EINTR);
-  close(status_pipe[0]);
-  cli_pid = pid;
-  if (n == (ssize_t)sizeof err) {
-    /* exec failed: the child has exited with 127. Reap it and fail. */
-    int status;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
-    }
-    cli_reaped = 1;
-    fail("guard", "exec", err);
+  close(exec_fd);
+  exec_fd = -1;
+  if (n != 0) {
+    fail("guard", "exec", n == (ssize_t)sizeof err ? err : n < 0 ? errno : 0);
     return -1;
   }
-  reportf("{\"op\":\"guard\",\"event\":\"started\",\"pid\":%d}", (int)pid);
+  reportf("{\"op\":\"guard\",\"event\":\"started\",\"pid\":%d}", (int)cli_pid);
   return 0;
 }
 
@@ -373,18 +444,28 @@ static int op_guard(int argc, char **argv) {
     return 1;
   }
 
+  if (open_proc_view() != 0) return 1;
+
   reportf("{\"op\":\"guard\",\"event\":\"ready\",\"pid\":%d}", (int)getpid());
 
   char buf[256];
   size_t used = 0;
   int started = 0;
+  int discarding = 0; /* inside a line too long for any command */
   for (;;) {
-    struct pollfd fds[2] = {{.fd = sigfd, .events = POLLIN},
-                            {.fd = report_fd, .events = POLLIN | (out_used ? POLLOUT : 0)}};
-    if (poll(fds, 2, -1) < 0) {
+    struct pollfd fds[3] = {
+        {.fd = sigfd, .events = POLLIN},
+        {.fd = report_fd, .events = POLLIN | (out_used ? POLLOUT : 0)},
+        {.fd = exec_fd, .events = POLLIN}, /* ignored while -1 */
+    };
+    if (poll(fds, 3, -1) < 0) {
       if (errno == EINTR) continue;
       fail("guard", "poll", errno);
       { kill_tree(sigfd); return 1; }
+    }
+    /* First, so a failed exec is reported as one before its exit. */
+    if (exec_fd >= 0 && (fds[2].revents & (POLLIN | POLLHUP | POLLERR))) {
+      if (finish_start() != 0) { kill_tree(sigfd); return 1; }
     }
     if (fds[1].revents & POLLOUT) flush_out();
     if (fds[0].revents & POLLIN) {
@@ -401,6 +482,13 @@ static int op_guard(int argc, char **argv) {
       if (n < 0 && errno == EINTR) continue;
       if (n <= 0) return kill_tree(sigfd); /* the post office is gone */
       used += (size_t)n;
+      if (discarding) {
+        char *end = memchr(buf, '\n', used);
+        size_t skip = end ? (size_t)(end - buf) + 1 : used;
+        used -= skip;
+        memmove(buf, buf + skip, used);
+        if (end) discarding = 0;
+      }
       char *nl;
       while ((nl = memchr(buf, '\n', used)) != NULL) {
         size_t len = (size_t)(nl - buf);
@@ -426,9 +514,11 @@ static int op_guard(int argc, char **argv) {
         memmove(buf, nl + 1, used);
       }
       if (used == sizeof buf) {
-        /* A line longer than any command: refuse it and drop it. */
+        /* A line longer than any command: refuse it once, and drop the
+         * rest of it up to its newline, so none of it runs (C4). */
         report("{\"op\":\"guard\",\"event\":\"refused\",\"reason\":\"unknown command\"}\n");
         used = 0;
+        discarding = 1;
       }
     }
   }
