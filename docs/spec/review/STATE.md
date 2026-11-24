@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrator 21 (2026-11-24, `1536f0b6`): M1b-28 is cut in two; part A is up.** #140 (w56) adds `sa live`'s trust question and the wire shape for part B. w55 finishes M1b-27 PR 2; w57 (guardian identity) and w58 (part B) have briefs and run after it, serially on `postOffice.ts`. Codex review prompts for #89 to #140 are in `codex-reviews/` (main checkout). Detail: `handoffs/LATEST.md`.
+
 **Orchestrator 20 (2026-11-24, `b1e03056`): #137 is finished; M1b-27 is being built.** #137's full Windows run and WSL run pass at `1c2566f`. #138 (w54) adds the Windows tree listing and the guardian identity. w53 builds M1b-27 PR 1; w55's brief (PR 2) is ready. Thirty-four M1b drafts (#105 to #138) wait for Codex. Detail: `handoffs/LATEST.md`.
 
 **Orchestrator 19 (2026-11-24, `7bc327ea`): M1b-26 is built; #137 is being finished.** #136 is fixed (`5d8da6c`) and #137 (`7112624`) adds PO-1 startup and the tree callers, with one EPERM teardown flake. w52-po-finish finishes #137; M1b-27's brief (w53) is ready. Thirty-three M1b drafts (#105 to #137) wait for Codex. Detail: `handoffs/LATEST.md`.
