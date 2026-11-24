@@ -192,3 +192,64 @@ describe("a command that gets the trust answer", () => {
   });
 });
 
+describe("sa live with a trust card", () => {
+  const realStdin = Object.getOwnPropertyDescriptor(process, "stdin")!;
+  afterEach(() => { Object.defineProperty(process, "stdin", realStdin); });
+  function run(stdin: PassThrough, args: string[]) {
+    Object.defineProperty(process, "stdin", { value: stdin, configurable: true });
+    let printed = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => { printed += String(chunk); return true; });
+    vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => { printed += `${parts.join(" ")}\n`; });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const program = new Command(); registerLiveCommand(program);
+    return { running: program.parseAsync(["node", "sa", "live", ...args]), printed: () => printed, errors };
+  }
+  const actions = () => fake.request.mock.calls.map(([command]) => command.action);
+
+  it("opens and sends once the owner types Trust these files", async () => {
+    let needed = true;
+    fake.request.mockImplementation(async (command) => command.action === "open" && needed ? card() : command.action === "send" ? { status: "completed", text: "done", refusal: false } : (needed = false, {}));
+    const stdin = new PassThrough(); stdin.end("Trust these files\n");
+    const live = run(stdin, ["scout", "the task"]);
+    await live.running;
+    expect(actions()).toEqual(["open", "trust", "open", "send"]);
+    expect(live.printed()).toContain("Trust this folder's Shadow Army files?");
+    expect(live.printed()).toContain("done");
+    expect(process.exitCode).toBe(originalExitCode);
+  });
+
+  it.each([["Not now\n"], ["\n"], [""], ["trust these files\n"]])("starts nothing on %j, and says why", async (typed) => {
+    fake.request.mockImplementation(async () => card());
+    const stdin = new PassThrough(); stdin.end(typed);
+    const live = run(stdin, ["scout", "the task"]);
+    await live.running;
+    expect(actions()).toEqual(["open"]);
+    expect(live.errors.mock.calls.flat().join("\n")).toContain("Nothing was started");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("asks again in the interactive form when a send gets the card, and reads the answer from the same input", async () => {
+    let sends = 0;
+    fake.request.mockImplementation(async (command) => command.action === "send" ? (sends++ === 0 ? card() : { status: "completed", text: "reply", refusal: false }) : {});
+    const stdin = new PassThrough();
+    const live = run(stdin, ["scout"]);
+    stdin.write("hello\n");
+    await vi.waitFor(() => expect(live.printed()).toContain("Trust this folder's Shadow Army files?"));
+    stdin.write("Trust these files\n");
+    await vi.waitFor(() => expect(live.printed()).toContain("reply"));
+    stdin.end("/exit\n");
+    await live.running;
+    expect(actions()).toEqual(["open", "send", "trust", "send"]);
+    expect(fake.request.mock.calls.filter(([command]) => command.action === "send").map(([command]) => (command as { text?: string }).text)).toEqual(["hello", "hello"]);
+  });
+
+  it("does not send a task typed after an interactive open's card was declined", async () => {
+    let needed = true;
+    fake.request.mockImplementation(async (command) => command.action === "open" && needed ? card() : (needed = false, {}));
+    const stdin = new PassThrough(); stdin.end("Not now\nhello\n");
+    const live = run(stdin, ["scout"]);
+    await live.running;
+    expect(actions()).toEqual(["open"]);
+    expect(process.exitCode).toBe(1);
+  });
+});
