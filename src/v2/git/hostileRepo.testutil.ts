@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { HarnessClock } from "./harness.js";
 
 /**
@@ -12,6 +12,8 @@ import type { HarnessClock } from "./harness.js";
 export interface HostileRepo {
   root: string;
   gitDir: string;
+  /** The user's global git config, which the repository's git reads and the test may change. */
+  globalConfig: string;
   /** Names of the traps that have run: `hook-<event>`, `config-hook`, `fsmonitor`, `pager`, `signing`, `external-diff`. */
   ran(): string[];
 }
@@ -24,7 +26,9 @@ const posix = (path: string) => path.replace(/\\/g, "/");
 export function createHostileRepo(base: string): HostileRepo {
   const root = join(base, "repo"), markers = join(base, "markers"), traps = join(base, "traps");
   for (const folder of [root, markers, traps]) mkdirSync(folder, { recursive: true });
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: join(base, "none"), GIT_CONFIG_NOSYSTEM: "1" } });
+  const globalConfig = join(base, "global-config");
+  writeFileSync(globalConfig, "");
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: "1" } });
   const trap = (name: string, file = join(traps, `${name}.sh`)) => {
     writeFileSync(file, `#!/bin/sh\necho ran >> "${posix(join(markers, name))}"\n`);
     chmodSync(file, 0o755);
@@ -42,7 +46,7 @@ export function createHostileRepo(base: string): HostileRepo {
   git("config", "core.pager", trap("pager"));
   git("config", "gpg.program", trap("signing")); git("config", "commit.gpgsign", "true"); git("config", "user.signingkey", "k");
   git("config", "diff.external", trap("external-diff"));
-  return { root, gitDir, ran: () => readdirSync(markers).sort() };
+  return { root, gitDir, globalConfig, ran: () => readdirSync(markers).sort() };
 }
 
 /**
@@ -66,4 +70,29 @@ export function createFakeClock(): HarnessClock & { advance(ms: number): void; s
     advance(ms) { mono += ms; wall += ms; fire(); },
     suspend(ms) { wall += ms; fire(); },
   };
+}
+
+/** The changes M1-AC10 plants after the post office has started. Each returns a function that undoes it. */
+export function plantChange(repo: HostileRepo, change: "config" | "hook" | "info" | "global-filter"): () => void {
+  const filter = '[filter "evil"]\n\tclean = evil-clean\n';
+  const file = { config: join(repo.gitDir, "config"), "global-filter": repo.globalConfig, hook: join(repo.gitDir, "hooks", "pre-rebase"), info: join(repo.gitDir, "info", "attributes") }[change];
+  const before = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  mkdirSync(dirname(file), { recursive: true });
+  appendFileSync(file, change === "hook" || change === "info" ? "* filter=evil\n" : filter);
+  return () => (before === undefined ? rmSync(file) : writeFileSync(file, before));
+}
+
+/** A repository inside `repo` that is a gitlink, with `.git` as a folder, or moved to `.git/modules/<name>` with a `.git` file. */
+export function addSubmodule(repo: HostileRepo, name: string, absorb = false): string {
+  const folder = join(repo.root, name), git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: repo.globalConfig, GIT_CONFIG_NOSYSTEM: "1" } });
+  mkdirSync(folder, { recursive: true });
+  git(folder, "init", "-q"); git(folder, "config", "user.name", "t"); git(folder, "config", "user.email", "t@example.com");
+  writeFileSync(join(folder, "file.txt"), "sub\n");
+  git(folder, "add", "file.txt"); git(folder, "commit", "-q", "-m", "sub");
+  git(repo.root, "add", name);
+  if (absorb) {
+    for (const [key, value] of [["path", name], ["url", `./${name}`]]) git(repo.root, "config", "-f", ".gitmodules", `submodule.${name}.${key}`, value!);
+    git(repo.root, "submodule", "absorbgitdirs", name);
+  }
+  return folder;
 }
