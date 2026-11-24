@@ -1,28 +1,30 @@
-# Handoff: orchestrator 19 (`7bc327ea`) to orchestrator 20 (2026-11-24)
+# Handoff: orchestrator 20 (`b1e03056`) to orchestrator 21 (2026-11-24)
 
-Range on this branch: `712d602..` this commit (this file and `STATE.md`). orch-18's handoff is `git show 712d602:docs/spec/review/handoffs/LATEST.md`; its Next and For the owner still hold except as below. orch-19 started at 14:35 UTC at 80k and handed off at about 15:05 at about 165k. Working notes: `.shadow/v2-tools/tasks/orch-19-notes.md` in the main checkout.
+Range on this branch: `4c77771..` this commit (this file and `STATE.md`). orch-19's handoff is `git show 4c77771:docs/spec/review/handoffs/LATEST.md`; its Next item 4 and its For the owner still hold. orch-20 started at 16:25 UTC at 79k and handed off at about 16:50 at about 165k. Working notes: `.shadow/v2-tools/tasks/orch-20-notes.md` in the main checkout.
 
 **Done.**
-- Closed orch-18's tab.
-- **#136** (w51, fix `5d8da6c`): `client.test.ts:78` now expects the snapshot outside the folder. 109 lines, 3 files, 2 commits. Windows: 618 passed, 14 skipped. WSL passes.
-- **#137** (w51, `7112624`, `claude/63-m1b-po-startup` into `claude/63-m1b-po-chain1`, draft; 214 lines, 2 files): PO-1 startup (sweep, a late guard from an on-disk baseline, the last post office's snapshots) and the tree callers (record before start, listing, `holdGuardOpen`, `mayStart`). `npm test` fails 1 of 636: the new startup test's afterEach `rmSync` gets EPERM on Windows, though its assertions pass. WSL not run. w51 stopped at 162k; its `## Left` is in its brief. Tab closed.
+- Closed the tabs of orch-19, w52 and w54.
+- **#137** (w52, `1c2566f`; 250 lines, 2 files, 2 commits, draft): the EPERM teardown flake is fixed (`Promise.allSettled` over the two guard captures) and `HarnessHold` is wired in. orch-20 reran what low memory had stopped. Windows full `npm test` passes: 67/67 files, 623 passed, 14 skipped. WSL `postOffice.test.ts` passes: 24 passed, 10 skipped. The body and a PR comment are updated.
+- **#138** (w54, `d90b753`, `claude/63-m1b-claude-list` into `claude/63-m1b-exit-grace` (#135), draft; 224 lines, 5 files, 2 commits): the Windows job listing with process identities, the guardian identity, and both passed through `ClaudeChannel` and `NativeChannel`. Windows `npm test`: 627 passed, 14 skipped. WSL passes. Build notes: start times are Unix ms, not 100 ns FILETIME (`trees.ts` takes safe integers only, and the sweep compares ms); exit code 259 caveat. The `postOffice.ts:331` guardian hookup is described in #138's PR comment.
+- **Chain 2 base** `claude/63-m1b-base-po-chain2` (`a1c1b56`) = #137's head plus a merge of #135.
 
-**Running, reporting to "orch-19" (it means you):**
+**Running, reporting to "orch-20" (it means you):**
 
 | Worker | Model | Task | Files | Branch |
 |---|---|---|---|---|
-| w52-po-finish (`54572d22`, launched 15:01) | Opus medium | Finish #137: the EPERM teardown flake, wire `HarnessHold` (M1b-24), the WSL run, #137's `Size:`/`Validation:` and AC comment | `src/v2/postOffice*`, `test/fakes/` (new) | `claude/63-m1b-po-startup` |
+| w53-po-chain2 (`f68e20d9`) | Opus medium | M1b-27 PR 1 (items 1 and 2). It stopped at 141k; its full suite was running and it opens PR 1 when that ends. | `src/v2/postOffice*`, `src/v2/main.ts` | `claude/63-m1b-po-chain2` (head `58c0070`) into the chain 2 base |
 
-Check its report with `git show --stat` per commit and `gh pr view 137 --json additions,deletions` against `Size:`, then close its tab.
+w53 followed the spec over the brief on item 1: a declared session service never holds the guard (PO-8, M1-AC11). Its notes for items 3 to 6 are under `## Left` in its brief.
 
 ## Next
 
-1. Close orch-19's tab once the cockpit marks it parked.
-2. **M1b-27** once w52 has reported and its tab is closed (serial on `postOffice.ts`): the brief is ready, `.shadow/v2-tools/tasks/w53-po-chain2.md` (Opus medium). It makes the base `claude/63-m1b-base-po-chain2` = #137's head plus a merge of #135, then PR 1 (PO-8 session services for the guard, plus #135's `onBacklog` to `pause?()`/`resume?()` caller in `main.ts`) and PR 2 (worktree lines, two soldiers, M1 restarts, the #99 heartbeat test). Launch line as RUNBOOK 0.2 with `-n w53-po-chain2`.
-3. **Parallel candidate (separate files):** #137's caller work in `src/v2/claude.ts`: the Claude channel's `list()` and guardian identity, which the tree callers need. Based on #135 (`claude/63-m1b-exit-grace`, which also changes `claude.ts`). No brief yet. Sonnet or Opus medium. Its PR then joins the chain 2 base by a merge.
-4. Then M1b-28 (w20 plan line 59, with w45's `trust` command). Blocked as before: M1b-16/17 (B3), M1b-18/19/33/34/35 (CI off, no local macOS), M1b-32 (B6).
+1. Close orch-20's tab once the cockpit marks it parked.
+2. When w53 reports, check PR 1 (`git show --stat` per commit, `gh pr view <n> --json additions,deletions` against `Size:`), then close its tab.
+3. **Launch w55-po-chain2b** (brief ready: `.shadow/v2-tools/tasks/w55-po-chain2b.md`, Opus medium) once w53's PR 1 is open. It does items 3 to 6 on `postOffice.ts` (serial after w53).
+4. **Then the guardian hookup**, a short task on `postOffice.ts` after w55: pass the channel's guardian identity into `TreeRecord` (`postOffice.ts:331`), as #138's comment says. Its base is the chain 2 base plus a merge of #138.
+5. Then M1b-28, as orch-19's Next item 4 says.
 
 ## For the owner
 
-- Codex's review queue: drafts #89 to #137, none reviewed.
-- The rest as in orch-17's handoff.
+- Codex's review queue: drafts #89 to #138, none reviewed.
+- Memory: Claude Code stopped w52's and orch-19's background jobs because of low memory. Keep at most two workers and one full test run at a time. A full Windows `npm test` takes about 13 minutes.
