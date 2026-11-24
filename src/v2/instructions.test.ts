@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeRoster, shippedRoster } from "../core/roster.testutil.js";
-import { buildStandingInstructions, estimateInstructionTokens, MAX_INSTRUCTION_TOKENS, shadowName } from "./instructions.js";
+import { buildStandingInstructions, estimateInstructionTokens, InstructionsTooLargeError, MAX_INSTRUCTION_TOKENS, shadowName } from "./instructions.js";
 
 describe("standing instructions", () => {
   it("includes the actual team, hard rules, full shared and soldier rules, report and handoff", () => {
@@ -17,7 +17,8 @@ describe("standing instructions", () => {
         expect(text).toContain(`${shadowName(member.key)} (${member.key}): ${member.model}; ${member.roles.filter((role) => role !== "orchestrate").join(", ")}`);
       }
       expect(text).not.toContain("Tank (");
-      expect(text).toContain("at most five lines");
+      expect(text).toContain("at most five lines of at most 120 characters each");
+      expect(text).toContain("When asked for a handoff, reply under these headings: working on, done, decided, files, open");
       expect(text).toContain("200,000 context tokens");
       expect(text).toContain("working on, done, decided, files, open");
       expect(estimateInstructionTokens(text)).toBeLessThan(MAX_INSTRUCTION_TOKENS);
@@ -58,6 +59,28 @@ describe("standing instructions", () => {
     const roster = makeRoster({ a: { cli: "claude", model: "opus", roles: ["build"] } }, undefined,
       { all: "x".repeat(4_500), perSoldier: new Map() });
     expect(() => buildStandingInstructions(roster, roster.soldiers.get("a")!)).toThrow(/must be below 1500/);
+  });
+
+  it("refuses at exactly 1,500 tokens, naming the count, rules.md and the agent.md section (SI-3)", () => {
+    const make = (n: number) => makeRoster({ a: { cli: "claude", model: "opus", roles: ["build"] } }, undefined, { all: "x".repeat(n), perSoldier: new Map() });
+    const base = estimateInstructionTokens(buildStandingInstructions(make(0), make(0).soldiers.get("a")!));
+    // each x adds one byte, so three bytes add one token
+    const pad = (MAX_INSTRUCTION_TOKENS - 1 - base) * 3;
+    const ok = make(pad);
+    expect(estimateInstructionTokens(buildStandingInstructions(ok, ok.soldiers.get("a")!))).toBe(MAX_INSTRUCTION_TOKENS - 1);
+    const over = make(pad + 3);
+    let error: unknown;
+    try { buildStandingInstructions(over, over.soldiers.get("a")!); } catch (e) { error = e; }
+    expect(error).toBeInstanceOf(InstructionsTooLargeError);
+    expect((error as InstructionsTooLargeError).estimate).toBe(MAX_INSTRUCTION_TOKENS);
+    expect((error as Error).message).toMatch(/estimate 1500 tokens.*rules\.md.*"## a" section of agent\.md/);
+  });
+
+  it("uses configured shadow names for the soldier and the team", () => {
+    const roster = makeRoster({ a: { cli: "claude", model: "opus", roles: ["build"] }, b: { cli: "claude", model: "sonnet", roles: ["research"] } });
+    const text = buildStandingInstructions(roster, roster.soldiers.get("a")!, { names: new Map([["a", "Scout"], ["b", "Ward"]]) });
+    expect(text).toContain("You are Scout (a)");
+    expect(text).toContain("- Ward (b)");
   });
 
   it("counts UTF-8 bytes in the estimate and uses a fallback name for custom soldiers", () => {
