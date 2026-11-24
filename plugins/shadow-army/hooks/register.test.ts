@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; root?: string } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -32,7 +32,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const $ = {
     session: { id: async () => "session-1", cwd: async () => env.cwd ?? "/repo" },
     plugin: { root: "/x/plugins/shadow-army" },
-    fs: { exists: async (path: string) => env.git === undefined || path === `${env.git}/.git` || path.includes("/dist/") },
+    fs: { exists: async () => true },
     clock: { every: () => ({ cancel() {} }), after: () => ({ cancel() {} }) },
     ui: { log: (line: string) => logs.push(line) },
     command: { register: async (spec: unknown) => { registered.push(spec); } },
@@ -43,7 +43,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
         const closed = new Promise<void>((done) => { stop = done; });
         return {
           async *[Symbol.asyncIterator]() {
-            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
+            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: env.root ?? "/repo" } })}\n` };
             await closed;
           },
           return: async () => { stop(); return { done: true }; },
@@ -161,16 +161,10 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
     expect(row).toContain("Not applied: guard: README.md changed outside the claims");
   });
 
-  it("puts the log under the Git root when Claude Code starts in a nested folder (M1-AC25)", async () => {
-    const { $, send } = await mod(() => turn("s"));
-    $.session.cwd = async () => "/repo/src/deep";
-    $.fs.exists = async (path: string) => path === "/repo/.git" || path.endsWith("modRelay.js");
-    expect(await send("claude-sonnet --claim src/** go")).toContain("\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\n");
-  });
-
-  it("names the log under the repository root when Claude started in a subfolder (W12-5)", async () => {
-    const { send } = await mod(() => turn("s", { apply: { applied: true, files: [{ change: "M", path: "a.ts" }] } }), { cwd: "/repo/packages/app", git: "/repo" });
-    expect(await send("claude-sonnet --claim a.ts go")).toContain("\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\n");
+  it("names the log under the root the relay reports, not Claude's folder or an alias of it (M1-AC25, W12-5)", async () => {
+    const { send, spawns } = await mod(() => turn("s"), { cwd: "/alias/app", root: "/real/repo" });
+    expect(await send("claude-sonnet --claim a.ts go")).toContain("\nLog: /real/repo/.shadow/v2/logs/tank-1.jsonl\n");
+    expect(spawns[0].argv.at(-1)).toBe("/alias/app");
   });
 
   it("shows the audit's error when the turn has a reply but no write outcome (W12-6a)", async () => {

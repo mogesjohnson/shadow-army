@@ -6,6 +6,8 @@ import type { TurnResult } from "../../../src/v2/channel.js";
 interface Runtime {
   session: string;
   cwd: string;
+  /** The canonical repository root the relay reports; the post office keeps `.shadow` there (M1-AC25). */
+  root?: string;
   credential: string;
   closing: boolean;
   ready: Promise<void>;
@@ -98,7 +100,10 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     if (runtime.url) throw new Error("post office sent ready more than once");
     const url = value.data?.url ?? value.url;
     if (typeof url !== "string" || !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):\d+$/.test(url)) throw new Error("invalid post office loopback endpoint");
+    const root = value.data?.root;
+    if (typeof root !== "string" || !root) throw new Error("post office sent no repository root");
     runtime.url = url;
+    runtime.root = root;
     runtime.deadline?.cancel();
     runtime.deadline = undefined;
     if (runtime.closing) {
@@ -230,17 +235,6 @@ Reverted, outside its claims: ${outside.join(", ")}` : "";
   return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}${delivery.refusal ? " (refused)" : ""}\n${summary}${error}\nLog: ${log}\n${files}${reverted}`), credential);
 }
 
-/** The post office writes its logs under the repository root, which can sit above Claude's cwd: the nearest folder up that holds `.git`. */
-async function repoRoot($: EngineInterface, cwd: string): Promise<string> {
-  let dir = cwd.replace(/[\\/]+$/, "");
-  for (;;) {
-    if (await $.fs.exists(`${dir}/.git`)) return dir;
-    const up = dir.replace(/[\\/][^\\/]*$/, "");
-    if (!up || up === dir) return cwd;
-    dir = up;
-  }
-}
-
 async function send($: EngineInterface, args: string): Promise<string> {
   const { name, claims, brief } = parseSend(args);
   if (!name || !brief) return "Usage: /send <soldier> --claim <path-or-glob> <brief>";
@@ -254,8 +248,7 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
   const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
-  const root = await repoRoot($, runtime.cwd);
-  return card(soldier, delivery, `${root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
+  return card(soldier, delivery, `${runtime.root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
 
 export const register: Register = (on) => {
