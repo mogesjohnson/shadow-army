@@ -5,7 +5,8 @@ import { makeRoster } from "../core/roster.testutil.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
-import { startOfficeServer, type OfficeServer } from "./server.js";
+import { processStartTime, startOfficeServer, type OfficeServer, type ServerOptions } from "./server.js";
+import type { StartTimeOf } from "./lock.js";
 import type { LeaseClock } from "./lease.js";
 import type { OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
@@ -13,10 +14,12 @@ import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 const servers: OfficeServer[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 const sockets: Socket[] = [];
-async function setup(lease?: { session: string }, leaseClock?: LeaseClock) {
+/** A fake process table: this process and the one that started it exist; nothing else does. */
+const stamps: StartTimeOf = async (pid) => pid === process.pid ? "1000" : pid === process.ppid ? "50" : null;
+async function setup(lease?: { session: string }, leaseClock?: LeaseClock, extra: Partial<ServerOptions> = {}) {
   const repo = makeRepo(); repos.push(repo);
   const events: OfficeEvent[] = [];
-  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, leaseClock, onEvent: (event) => events.push(event) }); servers.push(server);
+  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, leaseClock, startTimeOf: stamps, ...extra, onEvent: (event) => events.push(event) }); servers.push(server);
   return { repo, server, events };
 }
 const command = (server: OfficeServer, value: Record<string, unknown>) => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify(value) });
@@ -96,16 +99,60 @@ describe("M1 authenticated loopback command server", () => {
     expect((await command(server, { action: "send", soldier: "tank", text: "edit", claims: [""] })).status).toBe(400);
   }, 30_000);
 
-  it("enforces a folder singleton and releases its non-secret lock on shutdown", async () => {
+  it("takes the PO-1 lock with its port and starter, refuses a second start, and releases it on shutdown", async () => {
     const { repo, server } = await setup();
-    const options = { cwd: repo.dir, credential, roster, channelFactory: factory };
-    const lock = join(repo.dir, ".shadow", "v2", "post-office.lock");
-    expect(await readFile(lock, "utf8")).not.toContain(credential);
-    await expect(startOfficeServer(options)).rejects.toThrow("lock already exists");
+    const options = { cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps };
+    const dir = join(repo.dir, ".shadow", "v2", "lock");
+    const text = await readFile(join(dir, "1.lock"), "utf8");
+    expect(text).not.toContain(credential);
+    expect(JSON.parse(text)).toEqual({ pid: process.pid, startTime: "1000", port: Number(new URL(server.url).port), starter: { pid: process.ppid, startTime: "50" } });
+    await expect(startOfficeServer(options)).rejects.toThrow("the army is still closing");
+    expect(await readFile(join(dir, "1.lock"), "utf8")).toBe(text);
     await server.close();
-    await expect(readFile(lock)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(join(dir, "1.lock"), "utf8"))).toEqual({ released: true });
     servers.push(await startOfficeServer(options));
   }, 20_000);
+
+  it("replaces a lock whose process is gone and logs it, and starts nothing without a start time", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const dir = join(repo.dir, ".shadow", "v2", "lock");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "1.lock"), JSON.stringify({ pid: 4242, startTime: "7", port: 1, starter: { pid: 4243, startTime: "8" } }));
+    const logged: Record<string, unknown>[] = [];
+    const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps, log: (record) => { logged.push(record); }, memoryProtection: "memory protection: Yama ptrace_scope 1" }); servers.push(server);
+    expect(logged).toContainEqual({ type: "memory_protection", line: "memory protection: Yama ptrace_scope 1" });
+    expect(logged.some((r) => r.type === "lock" && String(r.line).includes("no process has its pid"))).toBe(true);
+    const other = makeRepo(); repos.push(other);
+    await expect(startOfficeServer({ cwd: other.dir, credential, roster, channelFactory: factory, startTimeOf: async () => null })).rejects.toThrow("lock not written");
+  }, 20_000);
+
+  it("reads this system's creation stamp the same way twice, and none for a pid with no process", async () => {
+    const first = await processStartTime(process.pid);
+    expect(first).toMatch(/\S/);
+    expect(await processStartTime(process.pid)).toBe(first);
+    expect(await processStartTime(2_000_000_000)).toBeNull();
+  }, 20_000);
+
+  it("reports 1,000 refused requests once in full, then once a minute with the count, on a fake clock", async () => {
+    const timers: (() => void)[] = [];
+    const logged: Record<string, unknown>[] = [];
+    const { server, events } = await setup(undefined, undefined, { log: (record) => { logged.push(record); }, refusalTimer: (fn) => { timers.push(fn); return () => {}; } });
+    const refuse = (n: number) => Promise.all(Array.from({ length: n }, () => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${"cd".repeat(32)}` }, body: "{}" }).then((r) => r.status)));
+    const counts = () => logged.filter((r) => r.type === "command_refused").map((r) => (r.data as { count: number }).count);
+    for (let i = 0; i < 20; i++) expect((await refuse(50)).every((status) => status === 401)).toBe(true);
+    expect(events.filter((event) => event.type === "command_refused")).toHaveLength(1);
+    expect(counts()).toEqual([]);
+    timers.shift()!();
+    expect(counts()).toEqual([999]);
+    await refuse(2);
+    timers.shift()!();
+    expect(counts()).toEqual([999, 2]);
+    timers.shift()!();
+    expect(counts()).toEqual([999, 2]);
+    await refuse(1);
+    expect(events.filter((event) => event.type === "command_refused")).toHaveLength(2);
+    expect(JSON.stringify([events, logged])).not.toContain(credential);
+  }, 60_000);
 
   windowsOnly("shutdown settles an active native turn, retains its edit and closes stalled request bodies", async () => {
     const { repo, server, events } = await setup();

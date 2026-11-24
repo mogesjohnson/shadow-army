@@ -1,13 +1,28 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type Server, type IncomingMessage } from "node:http";
-import { open, readFile, unlink } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { PostOffice, type OfficeOptions } from "./postOffice.js";
 import { redact } from "./logs.js";
 import { SessionLease, type LeaseClock, type LeaseOptions } from "./lease.js";
+import { acquireLock, lockMessages, type HeldLock, type StartTimeOf } from "./lock.js";
+import { assertLoopback, bindLoopback } from "./bind.js";
+import { RefusalReporter, type After } from "./credential.js";
 
 export interface OfficeServer { url: string; office: PostOffice; close(): Promise<void>; }
-export interface ServerOptions extends OfficeOptions { host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; leaseClock?: LeaseClock; }
+export interface ServerOptions extends OfficeOptions {
+  host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; leaseClock?: LeaseClock;
+  /** The creation stamp of a process, for PO-1's lock. Defaults to the system's own (see processStartTime). */
+  startTimeOf?: StartTimeOf;
+  /** Appends one record to the post office's log. Passed in by the caller so the log has one writer; no-op by default. */
+  log?: (record: Record<string, unknown>) => void | Promise<void>;
+  /** The `memory protection:` line (PO-3), taken by the caller before it read the secret; logged first. */
+  memoryProtection?: string;
+  /** Schedules the refusal reports' minute; tests pass a fake monotonic clock. */
+  refusalTimer?: After;
+}
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
   let size = 0;
@@ -22,19 +37,25 @@ async function body(request: IncomingMessage): Promise<Record<string, unknown>> 
   return value as Record<string, unknown>;
 }
 
-/** Non-secret PID lock. Never reclaim a live/unknown PID; stale locks are handled conservatively. */
-async function folderLock(root: string): Promise<() => Promise<void>> {
-  const path = join(root, ".shadow", "v2", "post-office.lock");
-  const record = JSON.stringify({ pid: process.pid });
-  let file;
-  try { file = await open(path, "wx", 0o600); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const current = await readFile(path, "utf8").catch(() => "");
-    throw new Error(`post office lock already exists; close the existing caller or remove its stale lock after checking the recorded PID: ${current}`);
-  }
-  try { await file.writeFile(record); } finally { await file.close(); }
-  return async () => { if (await readFile(path, "utf8").catch(() => "") === record) await unlink(path); };
-}
+const run = promisify(execFile);
+
+/**
+ * PO-1's creation stamp: field 22 of /proc/<pid>/stat on Linux. STOP-GAP on win32 and darwin until
+ * M1b-17's script (GetProcessTimes) and M1b-1's helper (proc_pidinfo) exist: PowerShell's StartTime in FILETIME
+ * units, and `ps` on darwin (not tested, there is no Mac). Null when no process has the pid.
+ */
+export const processStartTime: StartTimeOf = async (pid) => {
+  try {
+    if (process.platform === "linux") {
+      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+    }
+    const { stdout } = process.platform === "win32"
+      ? await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`], { windowsHide: true })
+      : await run("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" } });
+    return stdout.trim() || null;
+  } catch { return null; }
+};
 
 /** `/send --claim` arrives as `claims`: a list of non-empty path patterns, or nothing. */
 function turnOptions(claims: unknown): { claims?: string[] } {
@@ -44,10 +65,16 @@ function turnOptions(claims: unknown): { claims?: string[] } {
 }
 
 export async function startOfficeServer(options: ServerOptions): Promise<OfficeServer> {
-  const host = options.host ?? "127.0.0.1";
-  if (host !== "127.0.0.1" && host !== "::1") throw new Error(`post office refuses non-loopback address ${host}`);
+  // PO-2: refused before any office or lock exists. `host` only exists so a test can prove the refusal.
+  if (options.host !== undefined) assertLoopback(options.host);
   const office = await PostOffice.create(options);
-  let unlock: (() => Promise<void>) | undefined;
+  const log = (record: Record<string, unknown>) => { void Promise.resolve(options.log?.(record)).catch(() => {}); };
+  const refusals = new RefusalReporter((count, first) => {
+    // The first refusal is the office's own full event and log line; later ones are counts since the last report.
+    if (first) office.refused();
+    else log({ type: "command_refused", data: { reason: "wrong or missing Monarch credential", count, since: "the last report" } });
+  }, options.refusalTimer);
+  let held: HeldLock | undefined;
   let server: Server | undefined;
   let lease: SessionLease | undefined;
   let api: OfficeServer | undefined;
@@ -57,7 +84,7 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
     else void api?.close().catch(() => {});
   };
   try {
-    unlock = await folderLock(office.root);
+    if (options.memoryProtection) log({ type: "memory_protection", line: options.memoryProtection });
     const credential = Buffer.from(options.credential, "hex");
     server = createServer((request, response) => {
       void (async () => {
@@ -66,7 +93,7 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
         const presented = request.headers.authorization;
         const match = typeof presented === "string" ? /^Bearer ([a-f0-9]{64})$/i.exec(presented) : null;
         if (!match || !timingSafeEqual(credential, Buffer.from(match[1]!, "hex"))) {
-          office.refused();
+          refusals.refuse();
           response.writeHead(401); response.end(JSON.stringify({ error: "wrong or missing Monarch credential" }));
           request.resume();
           return;
@@ -112,14 +139,23 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
     // This bounds receipt of a command body, not the provider's response time.
     server.requestTimeout = 30_000;
     server.headersTimeout = 30_000;
-    await new Promise<void>((resolve, reject) => { server!.once("error", reject); server!.listen(options.port ?? 0, host, resolve); });
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("post office did not bind a TCP port");
+    // PO-2: the loopback address only. The lock records the port, so the bind comes first; a refused lock closes it again.
+    const address = await bindLoopback(server, options.port ?? 0, options.host);
+    // PO-1: the lock names this process and the one that started it (PO-7's watch), by creation stamp.
+    const startTimeOf = options.startTimeOf ?? processStartTime;
+    const [startTime, starterTime] = await Promise.all([startTimeOf(process.pid), startTimeOf(process.ppid)]);
+    if (startTime === null || starterTime === null) throw new Error(lockMessages.notWritten(`no start time for pid ${startTime === null ? process.pid : process.ppid}`));
+    const taken = await acquireLock(join(office.root, ".shadow", "v2", "lock"), { pid: process.pid, startTime, port: address.port, starter: { pid: process.ppid, startTime: starterTime } }, startTimeOf);
+    if (!taken.ok) throw new Error(taken.message);
+    held = taken.lock;
+    if (taken.replaced) log({ type: "lock", line: taken.replaced.logLine });
     let closing: Promise<void> | undefined;
     const bound = server;
-    api = { office, url: `http://${host === "::1" ? "[::1]" : host}:${address.port}`, close() {
+    const host = address.family === "IPv6" ? "[::1]" : address.address;
+    api = { office, url: `http://${host}:${address.port}`, close() {
       return closing ??= (async () => {
         lease?.dispose();
+        refusals.flush();
         const stopped = new Promise<void>((resolve, reject) => bound.close((error) => error ? reject(error) : resolve()));
         try {
           await office.close();
@@ -130,7 +166,7 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
           // cannot launch another writer until the owner has checked the previous session.
           await stopped;
         }
-        await unlock!();
+        await held!.release();
       })();
     } };
     // No `lease` option is `sa live`'s post office: it has no lease, and renew and release are refused.
@@ -142,8 +178,9 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
   } catch (error) {
     lease?.dispose();
     server?.close();
+    refusals.flush();
     await office.close();
-    await unlock?.();
+    await held?.release();
     throw error;
   }
 }
