@@ -1,0 +1,65 @@
+# Spike S7 (M1b-13, #63): containment questions a CI runner can answer, with no model call and no secrets.
+# Lives only on branch spike/s7, which is never merged.
+name: spike-s7
+on:
+  push:
+    branches: [spike/s7]
+permissions:
+  contents: read
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: System and Smart App Control state
+        shell: powershell
+        run: |
+          $v = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          "S7 os=$($v.ProductName) build=$($v.CurrentBuild).$($v.UBR) edition=$($v.EditionID) arch=$env:PROCESSOR_ARCHITECTURE"
+          $p = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction SilentlyContinue
+          "S7 VerifiedAndReputablePolicyState=$(if ($p -and $null -ne $p.VerifiedAndReputablePolicyState) { $p.VerifiedAndReputablePolicyState } else { 'absent' })"
+          "S7 CI\Policy values: $(if ($p) { ($p.PSObject.Properties | Where-Object Name -notlike 'PS*' | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ' ' } else { 'key absent' })"
+          "S7 ExecutionPolicy: $((Get-ExecutionPolicy -List | ForEach-Object { "$($_.Scope)=$($_.ExecutionPolicy)" }) -join ' ')"
+      - name: Build the DLL from M1a's C# (.NET Framework 4)
+        shell: powershell
+        run: |
+          node spike/s7/build-dll.mjs "$env:RUNNER_TEMP\ShadowJobSupervisor.cs"
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $csc)) { $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe" }
+          & $csc /nologo /target:library /r:System.Web.Extensions.dll "/out:$env:RUNNER_TEMP\ShadowJobSupervisor.dll" "$env:RUNNER_TEMP\ShadowJobSupervisor.cs"
+          "S7 csc=$csc rc=$LASTEXITCODE"
+      - run: npm ci && npm run build
+      - name: AppLocker cases
+        shell: powershell
+        run: spike/s7/applocker.ps1 -Dll "$env:RUNNER_TEMP\ShadowJobSupervisor.dll"
+      - name: CLIs at end of input, plain and in M1a's job
+        run: |
+          npm install -g @anthropic-ai/claude-code @openai/codex
+          node spike/s7/clis.mjs
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: launchctl submit and remove
+        if: runner.os == 'macOS'
+        run: bash spike/s7/launchd.sh
+      - name: CLIs at end of input
+        run: |
+          npm install -g @anthropic-ai/claude-code @openai/codex
+          node spike/s7/clis.mjs
