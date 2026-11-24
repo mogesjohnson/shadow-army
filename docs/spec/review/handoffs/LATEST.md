@@ -1,59 +1,45 @@
-# Handoff: orchestrator 8 (`b1e83e65`) to orchestrator 9 (2026-11-23)
+# Handoff: orchestrator 9 (`1d93de76`) to orchestrator 10 (2026-11-23)
 
-Range on this branch: `18b2395..` this commit. Only this file changed.
+Range on this branch: `1d2b6b5..` this commit. Only this file and `STATE.md` changed.
 
-orch-8 waited out the 5-hour limit, which rose from 94% to 99% between 18:10 and 20:00. It launched no worker before the 20:00 reset.
+orch-9 started at 01:03 UTC (2026-11-24), closed orch-8's tab, and handed off at 150k: the start cost about 70k, and one TRACE screenshot about 20k. Read a worker's screen only when its last words do not explain a stop.
 
 **State.**
-- **M1b:** it runs on `claude/63-m1b` (S-5).
-  - w20's plan is `.shadow/v2-tools/tasks/w20-m1b-plan-report.md`, in the main checkout. Its section 2 gives the order, and each task's row gives that task's files.
-- **Done before orch-8, not merged yet:** both PRs wait for Codex's approval at their heads.
-  - #105, M1b-2 (the seam), head `129c211`.
-  - #106, M1b-6 (harness git), head `30069d8`.
-- **Blocked: w22-linux-helper** (M1b-1, Opus) sits at its own AskUserQuestion about V6.
-  - It has been there since before 18:10, at 135k, and has pushed nothing. TRACE's screenshot at 18:20 shows the dialog.
-  - Its work is built and checked on both systems, and committed locally only.
-  - Two messages wait behind the dialog: orch-7's "option 3", and orch-8's "report to orch-8, option 3 stands".
-  - **The owner must press 3 or Esc in its tab.** TRACE can't type into Windows Terminal.
-  - After that, w22 pushes two PRs into `claude/63-m1b`:
-    - PR 1: `native/linux/sa-contain.c`, in two commits of 200 lines or fewer each.
-    - PR 2: `scripts/build-native.mjs`, its test and `package.json`, stacked on PR 1.
-  - w22 reports to orch-8. **Send it "report to orch-9 instead".**
-- **Running since 20:01, both launched by orch-8 and reporting to orch-8.** Tell each one "report to orch-9 instead".
-  - **w24-s7-spike** (M1b-13, Opus). Brief: `.shadow/v2-tools/tasks/w24-s7-spike.md`. Files: `.github/workflows/spike-s7.yml` and `spike/s7/**`, on branch `spike/s7` only, with no PR. Its report goes to `w24-s7-spike-report.md` and a comment on #63.
-  - **w25-lease** (M1b-3, Sonnet). Brief: `.shadow/v2-tools/tasks/w25-lease.md`. Files: `src/v2/lease.ts`, `lease.test.ts`, `server.ts` and `server.test.ts`. It opens a draft PR into `claude/63-m1b`.
-- **Brief ready, not launched:** `w26-claude-faults.md` (M1b-11, Sonnet).
-  - Files: `src/v2/claude.ts`, `claude.test.ts`, `test/fakes/claude.mjs`.
-  - It waits for a free slot (at most three workers at once).
-  - Change its "Report to" lines to orch-9 before launching it.
+- **M1b** runs on `claude/63-m1b` (S-5). w20's plan is `.shadow/v2-tools/tasks/w20-m1b-plan-report.md` in the main checkout: section 2 gives the order, and each task's row gives its files.
+- **Waiting for Codex at their heads** (draft PRs into `claude/63-m1b`): #105 M1b-2 seam `129c211`, #106 M1b-6 harness git `30069d8`, #107 M1b-3 lease `9cd931c`. No reviews on any of them yet.
+- **#107 left two items outside its files:** the refusal to start without a session id (needs `main.ts`) and `release`'s `reason` field (needs `postOffice.ts`). Put them into M1b-22's brief and the post-office chain's (23 onward).
+- **GitHub Actions is off on the repository** (`gh api repos/mogesjohnson/shadow-army/actions/permissions` gives `enabled: false`; nothing has run since 2026-11-07). The owner was told. PR checks don't run, so workers validate locally. Open #88 ("Make CI and PR format manual-only", grok) may be related.
+- **S7 (M1b-13) is parked on Actions.** w24 pushed `spike/s7` at `2ce34ea` and wrote the finish steps under `## Left` in `.shadow/v2-tools/tasks/w24-s7-spike.md`. Once Actions is on, launch a fresh worker on that `## Left`. Its tab is closed.
+- **w22 was stuck at its own V6 dialog** (TRACE screenshot 01:12). Its tab is closed. Its 2 local commits (`97735ba`, `69f9b2a`) sit in worktree `AIConnections-worktrees/w22-linux-helper`, branch `claude/63-m1b-linux-helper`.
+
+**Running, all launched by orch-9 and reporting to orch-9. Tell each "report to orch-10 instead".**
+
+| Worker | Task | Files | Base, PR |
+|---|---|---|---|
+| w26-claude-faults (Sonnet) | M1b-11 | `src/v2/claude.ts`, `claude.test.ts`, `test/fakes/claude.mjs` | `claude/63-m1b`, draft PR into it |
+| w30-mod-renewals (Sonnet) | M1b-14 | `plugins/shadow-army/hooks/register.ts` and its test, `src/v2/modRelay.ts` and its test | stacked on #107: `claude/63-m1b-lease` |
+| w31-linux-push (Sonnet) | M1b-1, push w22's work as option 3 | `native/linux/sa-contain.c`; `scripts/build-native.mjs` and its test, `package.json`, `.gitignore` | PR 1 into `claude/63-m1b`, PR 2 stacked on it |
+
+w26 was at 141k at 01:18, so it may stop at 150k with a `## Left`.
 
 ## Next
 
-1. Take each worker's report. Check it with `git show --stat`, its Size line and its base. Then close its tab.
-2. As slots free up, launch in this order:
-   - w26.
-   - M1b-14 (mod renewals). It needs M1b-3's lease routes, so start it after w25.
-   - Then 4, 5, 7, 8, 9, 10 and 12, in w20's order.
-
-   Model each brief on `w25-lease.md`: base `origin/claude/63-m1b`, WSL clone `~/ci/w<n>` with `export PATH=$HOME/.local/node/bin:$PATH`, and a draft PR into `claude/63-m1b`.
-3. Wave 2 still waits for unmerged code. Stack it per S-5, or wait for Codex.
-   - M1b-15 needs 1 and 2.
-   - M1b-16 and M1b-20 need 2.
-   - M1b-24 and M1b-25 need 6.
-4. When w24's S7 report is in, turn its PO-14, PO-16, PO-18 and PO-19 lines into one spec task on this branch. Send any **owner** finding to the owner.
+1. Take each report. Check it with `git show --stat`, its Size line and its base. Then close its tab.
+2. As slots free up, launch the ready briefs in `.shadow/v2-tools/tasks/`, each reporting to `orch-9`: change that to `orch-10` first (`sed -i 's/orch-9/orch-10/g'`).
+   - `w27-lock.md` (M1b-4), `w28-bind.md` (M1b-5), `w29-logs.md` (M1b-7).
+   - Then write briefs for 8, 9, 10 and 12 the same way, in w20's order.
+3. Wave 2 waits for unmerged code. Stack it per S-5, or wait for Codex.
+   - M1b-15 needs 1 and 2. M1b-16 and M1b-20 need 2. M1b-24 and M1b-25 need 6.
+   - 22 needs 3, 4 and 5. 29 needs 14 and 9. 31 needs 11.
+4. When S7 runs, turn its PO-14, PO-16, PO-18 and PO-19 lines into one spec task on this branch. Send any owner finding to the owner.
 
 ## For the owner
 
-- w22's dialog: press 3 or Esc in its tab.
-- Still open from orch-7:
-  - #103's size exception.
-  - B9: the final `claude/63-m1b` → `main` PR needs a V6 size exception.
-  - B6: esbuild as a devDependency.
-  - B4: claude recordings.
-  - B5: the live ACs.
-- The cockpit made a worktree, `AIConnections-worktrees/orch-8-m1b-coordination`, and orch-8 didn't use it. Removing it needs the owner's yes.
+- Turn GitHub Actions back on, if that's intended (Settings → Actions → General).
+- Still open from orch-7: #103's size exception; B9, the final `claude/63-m1b` → `main` PR's V6 size exception; B6, esbuild as a devDependency; B4, claude recordings; B5, the live ACs.
+- Cockpit worktrees that orch-8 and orch-9 didn't use, `AIConnections-worktrees/orch-8-m1b-coordination` and `orch-9-orchestrate-m1b-workers`: removing them needs the owner's yes.
 
 ## Notes
 
-- An orchestrator at xhigh starts at about 80k of context. Each 5-minute watch cycle adds about 1k, so a long wait for the 5-hour reset costs about 30k.
-- Previous handoff: `git show 18b2395:docs/spec/review/handoffs/LATEST.md`.
+- Some workers work in a cockpit-made worktree instead of the brief's path (w30 is in `w30-mod-renewals-renew-lease-from-mod-m1b-14`). Check the branch and base in each report, not the path.
+- Previous handoff: `git show 1d2b6b5:docs/spec/review/handoffs/LATEST.md`.
