@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrators 23 (`5fbdf366`) and 24 (`90963422`), 2026-11-24: Codex batch 2's fixes are pushed; w62 and w57 run.** Codex requested changes on #91 and #90 and approved #89 at `fab6f82` (two P2 text findings). #91's C1 to C5 are fixed at `c6a2233` (w61; the PR is now 480 lines, over V6's 400, and needs the owner's size exception). #90's C1 to C6 are answered at `3c779ef` (w63; 11 of `postOffice.test.ts`'s 27 tests fail in WSL, as 10 of 24 already did at `298dbd4`). #95's C1 to C6 are fixed at `10384ef`; w62 does its runs, body and reply, and #89's P2s. Draft #141 (w60, M1b-27 PR 2) is up at `201d0d5`. w57 (guardian identity, on #141 and #138) runs; w58 waits for it on `postOffice.ts`. Detail: `handoffs/LATEST.md`.
+
 **Orchestrator 22 (2026-11-24, `4f815f96`): Codex batch 1 is back; two workers run.** #95 has 4 P1s (w59 fixes them on its branch). w55 stopped without a PR at `1cce5cb`; w60 finishes it. w57 and w58 wait on `postOffice.ts`. Detail: `handoffs/LATEST.md`.
 
 **Orchestrator 21 (2026-11-24, `1536f0b6`): M1b-28 is cut in two; part A is up.** #140 (w56) adds `sa live`'s trust question and the wire shape for part B. w55 finishes M1b-27 PR 2; w57 (guardian identity) and w58 (part B) have briefs and run after it, serially on `postOffice.ts`. Codex review prompts for #89 to #140 are in `codex-reviews/` (main checkout). Detail: `handoffs/LATEST.md`.
