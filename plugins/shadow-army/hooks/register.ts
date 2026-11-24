@@ -215,10 +215,11 @@ function parseSend(args: string): { name?: string; claims: string[]; brief: stri
 
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
 export function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
-  const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || delivery.error?.message || "no summary";
+  const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || "no summary";
   const apply = delivery.write?.apply;
+  // M1-AC27: a failed turn's error (a guard or audit failure names the path) is the reason even after partial text.
   const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`
-    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || "no change was applied"}`;
+    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || delivery.error?.message || "no change was applied"}`;
   const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];
   const reverted = outside.length ? `
 Reverted, outside its claims: ${outside.join(", ")}` : "";
@@ -238,7 +239,19 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
   const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
-  return card(soldier, delivery, `${runtime.cwd}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
+  const root = await gitRoot($, runtime.cwd);
+  return card(soldier, delivery, `${root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
+}
+
+/** The folder the post office keeps `.shadow` in: the nearest one at or above `cwd` holding `.git`, as `git rev-parse --show-toplevel` finds it. */
+async function gitRoot($: EngineInterface, cwd: string): Promise<string> {
+  let dir = cwd.replace(/[\\/]+$/, "");
+  for (;;) {
+    if (await $.fs.exists(`${dir}/.git`)) return dir;
+    const parent = dir.replace(/[\\/][^\\/]*$/, "");
+    if (!parent || parent === dir) return cwd;
+    dir = parent;
+  }
 }
 
 export const register: Register = (on) => {
