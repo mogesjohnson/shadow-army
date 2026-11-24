@@ -4,10 +4,10 @@ import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { PostOffice, type OfficeOptions } from "./postOffice.js";
 import { redact } from "./logs.js";
-import { SessionLease, type LeaseOptions } from "./lease.js";
+import { SessionLease, type LeaseClock, type LeaseOptions } from "./lease.js";
 
 export interface OfficeServer { url: string; office: PostOffice; close(): Promise<void>; }
-export interface ServerOptions extends OfficeOptions { host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; }
+export interface ServerOptions extends OfficeOptions { host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; leaseClock?: LeaseClock; }
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
   let size = 0;
@@ -133,10 +133,11 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
         await unlock!();
       })();
     } };
+    // No `lease` option is `sa live`'s post office: it has no lease, and renew and release are refused.
     if (options.lease) lease = new SessionLease(options.lease, () => {
       office.leaseEnded(lease!.session, "expired");
       requestShutdown();
-    });
+    }, options.leaseClock);
     return api;
   } catch (error) {
     lease?.dispose();

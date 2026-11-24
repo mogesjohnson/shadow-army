@@ -6,16 +6,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import { startOfficeServer, type OfficeServer } from "./server.js";
+import type { LeaseClock } from "./lease.js";
 import type { OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
 const servers: OfficeServer[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 const sockets: Socket[] = [];
-async function setup(lease?: { session: string; ttlMs: number }) {
+async function setup(lease?: { session: string }, leaseClock?: LeaseClock) {
   const repo = makeRepo(); repos.push(repo);
   const events: OfficeEvent[] = [];
-  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, onEvent: (event) => events.push(event) }); servers.push(server);
+  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, leaseClock, onEvent: (event) => events.push(event) }); servers.push(server);
   return { repo, server, events };
 }
 const command = (server: OfficeServer, value: Record<string, unknown>) => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify(value) });
@@ -26,7 +27,7 @@ afterEach(async () => {
 });
 describe("M1 authenticated loopback command server", () => {
   it("a released mod session cannot renew or keep its folder alive", async () => {
-    const { repo, server, events } = await setup({ session: "current", ttlMs: 2000 });
+    const { repo, server, events } = await setup({ session: "current" });
     expect((await command(server, { action: "renew", session: "old" })).status).toBe(400);
     expect((await command(server, { action: "renew", session: "current" })).status).toBe(200);
     expect((await command(server, { action: "release", session: "current" })).status).toBe(200);
@@ -37,13 +38,29 @@ describe("M1 authenticated loopback command server", () => {
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
   }, 20_000);
 
-  it("missed heartbeats close the office while the owning test process stays alive", async () => {
-    const { repo, server, events } = await setup({ session: "expired", ttlMs: 100 });
+  it("30 s without a renewal on the fake clock close the office, and a renewal 10 s apart keeps it", async () => {
+    let now = 0; let check = () => {};
+    const { repo, server, events } = await setup({ session: "expired" }, { now: () => now, every: (fn) => { check = fn; return () => {}; } });
+    const run = (seconds: number) => { for (let i = 0; i < seconds; i++) { now += 1000; check(); } };
+    for (let i = 0; i < 6; i++) { run(10); expect((await command(server, { action: "renew", session: "expired" })).status).toBe(200); }
+    expect(events.some((event) => event.type === "lease_ended")).toBe(false);
+    run(30);
     await until(() => events.some((event) => event.type === "lease_ended"));
     await server.close();
     expect(events.find((event) => event.type === "lease_ended")?.data).toEqual({ session: "expired", reason: "expired" });
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
   }, 20_000);
+
+  it("a post office with no lease, as `sa live` starts it, refuses renew and release and runs on", async () => {
+    const { server, events } = await setup();
+    const renewed = await command(server, { action: "renew", session: "current" });
+    expect(renewed.status).toBe(400);
+    expect(await renewed.json()).toEqual({ error: "post office has no mod session lease" });
+    expect((await command(server, { action: "release", session: "current" })).status).toBe(400);
+    expect((await command(server, { action: "army" })).status).toBe(200);
+    expect(events.some((event) => event.type === "lease_ended")).toBe(false);
+  });
+
   it("only binds loopback, authenticates every request and has no HTTP event stream", async () => {
     const { repo, server } = await setup();
     await expect(startOfficeServer({ cwd: repo.dir, credential, host: "0.0.0.0" })).rejects.toThrow("non-loopback");
