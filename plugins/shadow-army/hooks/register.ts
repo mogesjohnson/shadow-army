@@ -34,6 +34,8 @@ const RENEW_WAIT_MS = 5_000;
 const KEEPS_ARMY = new Set(["clear", "resume"]);
 /** HOST-2: each `--version` run ends after 10 s, and a post office that never reports ready is ended after 60 s. */
 const VERSION_WAIT_MS = 10_000;
+/** PO-16: the sweep ends a tree within 10 s; the mod gives the whole one-shot process three times that. */
+const SWEEP_WAIT_MS = 30_000;
 const READY_WAIT_MS = 60_000;
 const MIN_HOST = [2, 1, 294];
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
@@ -144,6 +146,39 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
   }
 }
 
+/** PO-16: the post office's output ended with no shutdown event, so run the one-shot sweep for its folder and write one transcript line. It never throws. */
+async function sweep($: EngineInterface, runtime: Runtime): Promise<void> {
+  const say = (text: string) => $.ui.log(sanitize(safeText(text, runtime.credential)));
+  try {
+    const entry = `${$.plugin.root}/../../dist/v2/sweepMain.js`;
+    if (!await $.fs.exists(entry)) return say("Shadow Army: the post office stopped unexpectedly; the sweep program is missing, so nothing was ended");
+    const stream = $.process.spawn({ argv: ["node", entry, runtime.cwd], cwd: runtime.cwd });
+    const limit = $.clock.after(SWEEP_WAIT_MS, () => { void stream.return({ code: null, signal: null }).catch(() => {}); });
+    let out = "";
+    let code: number | null | undefined;
+    try {
+      const chunks = stream[Symbol.asyncIterator]();
+      for (let next = await chunks.next(); ; next = await chunks.next()) {
+        if (next.done) { code = (next.value as ProcessSpawnResult | undefined)?.code; break; }
+        if (next.value.stream === "stdout") out += next.value.text;
+      }
+    } finally { limit.cancel(); }
+    const lastLine = out.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
+    let report: { ended?: unknown[]; error?: unknown } | undefined;
+    try { report = JSON.parse(lastLine); } catch { report = undefined; }
+    if (code === 2) {
+      return say(`Shadow Army: the post office stopped unexpectedly; this system can't end what it left${typeof report?.error === "string" ? ` (${report.error})` : ""}`);
+    }
+    if (!report || typeof report !== "object" || !Array.isArray(report.ended)) {
+      return say("Shadow Army: the post office stopped unexpectedly; the sweep's report could not be read");
+    }
+    const count = report.ended.length;
+    say(`Shadow Army: the post office stopped unexpectedly; ${count} ${count === 1 ? "tree" : "trees"} it left ${count === 1 ? "was" : "were"} ended`);
+  } catch (error) {
+    try { $.ui.log(sanitize(safeText(`Shadow Army: the post office stopped unexpectedly; the sweep failed: ${error instanceof Error ? error.message : error}`, runtime.credential))); } catch { /* the line is best effort */ }
+  }
+}
+
 async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
   const entry = `${$.plugin.root}/../../dist/v2/modRelay.js`;
   if (!await $.fs.exists(entry)) throw new Error("Shadow Army runtime is missing; run npm run build in its repository");
@@ -171,7 +206,10 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
       }
     }
     if (buffer.trim()) throw new Error("post office ended with an incomplete event");
-    if (!runtime.closing) throw new Error(`post office relay ended${runtime.diagnostic ? `: ${runtime.diagnostic}` : ""}`);
+    if (!runtime.closing) {
+      await sweep($, runtime);
+      throw new Error(`post office relay ended${runtime.diagnostic ? `: ${runtime.diagnostic}` : ""}`);
+    }
   } finally {
     cancelTimers(runtime);
   }
