@@ -32,7 +32,11 @@ export async function runPostOffice(settings: Partial<Omit<ServerOptions, "crede
   // lease starts the shutdown. The loss is logged once (before the office exists there is no log to write it to).
   const events = eventWriter(process.stdout, {
     onLost: (error) => office?.office.logRecord({ type: "events_lost", reason: (error as NodeJS.ErrnoException).code ?? String(error) }),
-    onBacklog: (full) => office?.office.logRecord({ type: "events_backlog", full }),
+    onBacklog: (full) => {
+      office?.office.logRecord({ type: "events_backlog", full });
+      // PO-7: a full backlog pauses the soldiers' output through the post office; a drained one resumes it.
+      office?.office.backlog(full);
+    },
   });
   process.stderr.on("error", () => { errorsLost = true; });
   // The mod closes bootstrap stdin immediately, so EOF cannot mean its session has ended. PO-7's watch: the

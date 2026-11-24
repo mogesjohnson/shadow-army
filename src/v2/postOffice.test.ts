@@ -537,3 +537,76 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     await first.close().catch(() => {}); await second.close();
   }, 30_000);
 });
+
+describe("M1b-27 the guard waits for background work, and a backlog pauses soldiers (PO-8, WSP-11, PO-7)", () => {
+  type Listed = NativeChannel & { list?: () => Promise<{ pid: number; startTime: number }[]> };
+  const task = (subtype: string) => ({ type: "raw" as const, data: { type: "system", subtype, task_id: "t1" } });
+  /** A channel whose `send` runs `during` before its result, and that lists `alive` but the post office. */
+  const channel = (options: ChannelOptions, during: (text: string) => void, alive?: Map<number, number>): Listed => ({
+    async send(text) { during(text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {},
+    ...(alive ? { list: async () => [...alive].filter(([pid]) => pid !== process.pid).map(([pid, startTime]) => ({ pid, startTime })) } : {}) });
+
+  it("keeps the guard open past the result until the task's notification, so a write meanwhile fails the turn (M1-AC11)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    let emit!: ChannelOptions["onEvent"];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, onEvent: (event) => events.push(event),
+      channelFactory: (options) => { emit = options.onEvent; return channel(options, (text) => { if (text === "bg") emit(task("task_started")); }); } }); offices.push(office);
+    let done = false;
+    const turn = office.send("scout", "bg").then((result) => { done = true; return result; });
+    await until(() => events.some((event) => event.type === "background_work"));
+    expect(events.find((event) => event.type === "background_work")?.data).toEqual({ tasks: ["t1"], processes: [] });
+    expect(done).toBe(false);
+    repo.write("README.md", "written by the task\n");
+    emit(task("task_notification"));
+    const result = await turn;
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toContain("README.md");
+  });
+
+  it("closing the session ends the wait for a task that never reports its end", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, onEvent: (event) => events.push(event),
+      channelFactory: (options) => channel(options, () => options.onEvent(task("task_started"))) }); offices.push(office);
+    const turn = office.send("scout", "bg");
+    await until(() => events.some((event) => event.type === "background_work"));
+    await office.closeSession("scout");
+    expect((await turn).status).toBe("completed");
+  });
+
+  it("waits for an undeclared child but never for a declared language server, whose turn closes at its result (M1-AC11)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const alive = new Map([[process.pid, 1]]), waits: number[] = [];
+    const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => alive.get(pid), endProcess: async (pid) => { alive.delete(pid); },
+      commandOf: async (pid) => pid === 701 ? "lsp-server --stdio" : "node child.js",
+      // The injected clock: the undeclared child writes a checkout file, then exits, while the guard waits.
+      wait: async (ms) => { waits.push(ms); repo.write("README.md", "child\n"); alive.delete(700); } };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, sessionServices: ["lsp-server"],
+      channelFactory: (options) => channel(options, (text) => { alive.set(701, 5); if (text === "child") alive.set(700, 6); }, alive) }); offices.push(office);
+    const first = await office.send("scout", "edit");
+    expect(first.status).toBe("completed");
+    expect(waits).toEqual([]);
+    expect(alive.has(701)).toBe(true);
+    const second = await office.send("scout", "child");
+    expect(waits).toEqual([1_000]);
+    expect(second.status).toBe("failed");
+    expect(second.error?.message).toContain("README.md");
+  });
+
+  it("pauses every open channel's output on a full backlog, a channel opened meanwhile too, and resumes them once drained", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const calls: string[] = [];
+    let opened = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: makeRoster({ scout: { cli: "claude", model: "m", roles: ["review"], write: false }, spy: { cli: "claude", model: "m", roles: ["review"], write: false } }),
+      processOps: null, channelFactory: (options) => {
+        const name = `c${++opened}`;
+        return { ...channel(options, () => {}), pause: () => calls.push(`${name} pause`), resume: () => calls.push(`${name} resume`) };
+      } }); offices.push(office);
+    await office.open("scout");
+    office.backlog(true);
+    await office.open("spy");
+    office.backlog(false);
+    expect(calls).toEqual(["c1 pause", "c2 pause", "c1 resume", "c2 resume"]);
+  });
+});

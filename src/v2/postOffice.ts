@@ -39,6 +39,8 @@ export interface OfficeOptions {
   gitFactory?: GitFactory;
   /** The machine's processes (PO-15, PO-16); tests pass fakes. `null` where the platform has none yet (macOS: M1b-18). */
   processOps?: SweepOps | null;
+  /** PO-8's session services: the commands the CLI's configuration declares for its language and MCP servers. Such a process never holds a turn's guard. */
+  sessionServices?: readonly string[];
 }
 
 /** The repository `cwd` is in, found from its `.git` as git finds it, so nothing the repository names runs to find it. */
@@ -58,6 +60,9 @@ const WRITE_LEASE_MS = 60 * 60_000;
 const RESTART_DELAYS_MS = [1_000, 5_000, 30_000];
 /** PO-1: a fourth crash within 10 minutes of the first leaves a channel down; 10 minutes without a crash resets the count. */
 const CRASH_WINDOW_MS = 10 * 60_000;
+/** How often a turn's guard checks whether a process that joined the tree during the turn has exited. */
+const BACKGROUND_POLL_MS = 1_000;
+const identityKey = (one: Identity) => `${one.pid}@${one.startTime}`;
 export interface TurnOptions { claims?: string[]; }
 interface Session {
   spec: SoldierSpec;
@@ -88,6 +93,10 @@ interface Session {
   snapshot?: Snapshot;
   /** PO-16's record of the soldier's process tree, removed once the tree has ended. Created before start in M1b-26. */
   tree?: TreeRecord;
+  /** claude's background tasks: `task_started` until its `task_notification` (PO-8, WSP-11). */
+  tasks: Set<string>;
+  /** Wakes a guard waiting on background work. */
+  settle?: () => void;
 }
 
 /**
@@ -131,6 +140,8 @@ export class PostOffice {
   /** WSP-10's hold on the repository, and how many turns have their guard open (PO-8). */
   private hold?: HarnessHold;
   private openTurns = 0;
+  /** PO-7: the event writer's backlog is full, so soldiers' output is paused. */
+  private paused = false;
 
   private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
     private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
@@ -312,7 +323,7 @@ export class PostOffice {
       if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
     } catch (error) { await tree?.remove().catch(() => {}); await ws?.release(); throw error; }
     const cwd = ws ? ws.cwd : snapshot!.path;
-    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
+    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, tasks: new Set(), ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
     if (ws) await this.holdLease(session);
     if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
@@ -377,7 +388,15 @@ export class PostOffice {
         if (generation !== session.generation) return;
         this.record({ soldier: session.spec.key, ...event }, session);
         if (event.type === "error" && (event.data as { kind?: string } | undefined)?.kind === "login_needed") session.loginNeeded = true;
+        const frame = event.type === "raw" ? event.data as { type?: unknown; subtype?: unknown; task_id?: unknown } : undefined;
+        if (frame?.type === "system" && typeof frame.task_id === "string") {
+          if (frame.subtype === "task_started") session.tasks.add(frame.task_id);
+          if (frame.subtype === "task_notification") { session.tasks.delete(frame.task_id); session.settle?.(); }
+        }
         if (event.type === "closed") {
+          // PO-8: a CLI whose process has ended has no background work left; a waiting guard closes.
+          session.tasks.clear();
+          session.settle?.();
           if ((event.data as { containmentStopped?: boolean })?.containmentStopped === false) {
             session.containmentFailed = true;
             session.down = true;
@@ -403,6 +422,7 @@ export class PostOffice {
         }
       },
     });
+    if (this.paused) session.channel.pause?.();
   }
 
   private restart(session: Session): void {
@@ -465,6 +485,8 @@ export class PostOffice {
     this.hold?.setTurnOpen(++this.openTurns > 0);
     // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
     await this.renewLease(session);
+    const channel = session.channel as ListedChannel | undefined, generation = session.generation;
+    const before = channel?.list ? await channel.list().catch(() => []) : [];
     let result: TurnResult;
     try {
       this.check();
@@ -475,8 +497,9 @@ export class PostOffice {
     if (result.status === "completed") session.loginNeeded = false;
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
     // PO-11: the tree's processes as the channel lists them go into its record.
-    const channel = session.channel as ListedChannel | undefined;
-    if (channel?.list && session.tree) await session.tree.listing(await channel.list().catch(() => []));
+    const after = channel?.list ? await channel.list().catch(() => []) : [];
+    if (channel?.list && session.tree) await session.tree.listing(after);
+    await this.backgroundWork(session, generation, before, after);
     // PO-15: while a process the failed containment named still runs, the guard stays open; with none named it is cut short.
     if (session.containmentFailed && this.ops) await holdGuardOpen(await this.leftovers(session), this.processOps(this.ops), { wait: this.ops.wait });
     let changes: string[];
@@ -542,6 +565,49 @@ export class PostOffice {
     return redact(result, this.secrets) as TurnResult;
   }
 
+  /**
+   * WSP-11, with PO-8's session services from M1: past its end event, the turn's guard stays open while a task the
+   * session reported runs, or while a process that joined the tree during the turn runs and is no declared session
+   * service. It closes when that work ends, or when the CLI's process or the session ends.
+   */
+  private async backgroundWork(session: Session, generation: number, before: Identity[], after: Identity[]): Promise<void> {
+    const ops = this.ops, known = new Set(before.map(identityKey));
+    let joined: Leftover[] = [];
+    if (ops) {
+      for (const one of after.filter((process) => !known.has(identityKey(process)))) {
+        const command = (await ops.commandOf?.(one.pid).catch(() => undefined)) ?? "";
+        if (!this.isService(command)) joined.push({ ...one, command });
+      }
+    }
+    const live = () => generation === session.generation && !session.down && !session.restartPending && !this.closed;
+    let shown = false;
+    while (live()) {
+      if (ops && joined.length) joined = await stillRunning(this.processOps(ops), joined);
+      if (!live() || (session.tasks.size === 0 && joined.length === 0)) return;
+      if (!shown) {
+        shown = true;
+        this.record({ soldier: session.spec.key, type: "background_work", data: { tasks: [...session.tasks], processes: joined.map((one) => one.pid) } }, session);
+      }
+      const settled = new Promise<void>((done) => { session.settle = done; });
+      await (joined.length ? Promise.race([settled, ops!.wait(BACKGROUND_POLL_MS)]) : settled);
+      session.settle = undefined;
+    }
+  }
+
+  /** PO-8: a process the CLI started with a command its configuration declares for a session service. */
+  private isService(command: string): boolean {
+    const line = command.trim();
+    return line !== "" && (this.options.sessionServices ?? []).some((declared) => line === declared.trim() || line.startsWith(`${declared.trim()} `));
+  }
+
+  /** PO-7: while the event writer's backlog is full, every open channel stops reading its soldier's output; it reads on once drained. */
+  backlog(full: boolean): void {
+    this.paused = full;
+    for (const session of this.sessions.values()) {
+      if (full) session.channel?.pause?.(); else session.channel?.resume?.();
+    }
+  }
+
   /** v1's claim audit: revert edits outside the claims, commit the rest on the soldier's branch, and hand B4 the audited diff. */
   private async audit(session: Session, result: TurnResult, guardChanges: string[]): Promise<WriteOutcome> {
     const info = await session.write!.ws.finish(`${session.spec.key}: turn`);
@@ -577,6 +643,7 @@ export class PostOffice {
     if (!session) return;
     session.down = true;
     session.wake?.();
+    session.settle?.();
     let failure: string | undefined;
     try { await session.channel?.close(); } catch (error) {
       session.containmentFailed = true;
