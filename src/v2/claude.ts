@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
@@ -83,6 +84,9 @@ export class ClaudeChannel implements NativeChannel {
   private reason: NativeError = { kind: "transport", message: "Claude channel closed" };
   private stopTimer?: NodeJS.Timeout;
   private instructionDirectory?: string;
+  // Set once the CLI's initialize handshake is answered: pausing earlier would starve that very reply.
+  private stdout?: Readable;
+  private paused = false;
 
   constructor(private readonly options: ChannelOptions) {
     this.process = this.spawn();
@@ -125,6 +129,20 @@ export class ClaudeChannel implements NativeChannel {
       if (!this.closed) void this.failTransport(`Claude process ended (${exit.code ?? exit.signal ?? "unknown"})`, true);
     }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
     await this.control({ subtype: "initialize", hooks: null });
+    this.stdout = child.stdout;
+    if (this.paused && !this.closed) child.stdout.pause();
+  }
+
+  /** Stops reading the CLI's stdout (PO-7's backlog). The pipe fills and the CLI waits; nothing more is parsed or buffered here. */
+  pause(): void {
+    this.paused = true;
+    if (!this.closed) this.stdout?.pause();
+  }
+
+  /** Reads on; what the pipe held arrives in order. */
+  resume(): void {
+    this.paused = false;
+    if (!this.closed) this.stdout?.resume();
   }
 
   private read(chunk: string): void {
@@ -391,6 +409,10 @@ export class ClaudeChannel implements NativeChannel {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    // A closing channel is never paused: a CLI blocked on a full pipe cannot run its own exit,
+    // and its final frames still belong to the closing result.
+    this.paused = false;
+    this.stdout?.resume();
     clearTimeout(this.stopTimer);
     this.approvals.clear();
     for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error(this.reason.message)); }
