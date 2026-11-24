@@ -359,9 +359,12 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("still alive")).text).toContain("turn 5");
   }, 15_000);
 
-  it("leaves missing usage unknown and does not substitute estimated tokens", async () => {
+  windowsOnly("leaves missing usage unknown and does not substitute estimated tokens", async () => {
     const { channel } = await setup();
-    expect((await channel.send("unknown-usage")).usage).toBeUndefined();
+    const result = await channel.send("unknown-usage");
+    // Review 3 C1 on #103: a failed spawn also leaves usage undefined, so the turn must complete.
+    expect(result).toMatchObject({ status: "completed", text: "No usage available" });
+    expect(result.usage).toBeUndefined();
   }, 15_000);
 
   windowsOnly("settles a stream death mid-tool call as interrupted and preserves partial files", async () => {
