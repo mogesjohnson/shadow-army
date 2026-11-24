@@ -9,6 +9,7 @@ import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
+import type { SweepOps } from "./contain/sweep.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
@@ -437,4 +438,87 @@ describe("M1b-26 harness git and outside snapshots", () => {
     try { await expect(PostOffice.create({ cwd: outside, credential, roster })).rejects.toThrow("the army runs only inside a git working tree"); }
     finally { rmSync(outside, { recursive: true, force: true }); }
   });
+});
+
+describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real waits)", () => {
+  /** pid -> start time of the processes that run; ending one removes it. */
+  function fakeOps(alive: Map<number, number>, ended: number[] = [], waits: number[] = []): SweepOps {
+    return { platform: "linux", startTimeOf: async (pid) => alive.get(pid), commandOf: async (pid) => `fake ${pid}`,
+      endProcess: async (pid) => { ended.push(pid); alive.delete(pid); }, wait: async (ms) => { waits.push(ms); } };
+  }
+  const idle = (onList?: () => { pid: number; startTime: number }[]) => (options: ChannelOptions): NativeChannel & { list?: () => Promise<{ pid: number; startTime: number }[]> } => ({
+    async send(text) { return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {},
+    ...(onList ? { list: async () => onList() } : {}), ...{ options } });
+  const treeFiles = (dir: string) => { try { return readdirSync(join(dir, ".shadow", "v2", "trees")); } catch { return []; } };
+
+  it("writes the tree record before the CLI starts, lists the tree after each turn and removes the record at close", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let atStart: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])),
+      channelFactory: (options) => { atStart = treeFiles(repo.dir); return idle(() => [{ pid: 500, startTime: 7 }])(options); } }); offices.push(office);
+    const opened = await office.open("scout");
+    expect(atStart).toEqual([`${opened.session}.jsonl`]);
+    await office.send("scout", "inspect");
+    const lines = (await readFile(join(repo.dir, ".shadow", "v2", "trees", `${opened.session}.jsonl`), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(lines).toEqual([{ kind: "post-office", pid: process.pid, startTime: 1 }, { kind: "process", pid: 500, startTime: 7 }]);
+    await office.closeSession("scout");
+    expect(treeFiles(repo.dir)).toEqual([]);
+  });
+
+  it("starts no CLI when the tree can't be recorded (PO-15)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map()), channelFactory: (options) => { starts++; return idle()(options); } }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow("Containment failed for");
+    expect(starts).toBe(0);
+    expect(treeFiles(repo.dir)).toEqual([]);
+  });
+
+  it("holds the guard open while a named process runs, then reconnects only once none does", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const alive = new Map([[process.pid, 1], [600, 9]]), ended: number[] = [], waits: number[] = [];
+    const channels: ChannelOptions[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(alive, ended, waits), channelFactory: (options) => {
+      channels.push(options);
+      return { ...idle(() => [...alive].filter(([pid]) => pid === 600).map(([pid, startTime]) => ({ pid, startTime })))(options),
+        async send(text) { if (channels.length === 1 && text === "fail") options.onEvent({ type: "closed", data: { containmentStopped: false } }); return { status: "completed", text, refusal: false }; } };
+    } }); offices.push(office);
+    await office.send("scout", "list");
+    expect((await office.send("scout", "fail")).status).toBe("completed");
+    expect(ended).toEqual([600]);
+    expect(waits).toEqual([10_000]);
+    alive.set(600, 9);
+    await expect(office.open("scout")).rejects.toThrow("not confirmed stopped");
+    alive.delete(600);
+    await office.open("scout");
+    expect(channels).toHaveLength(2);
+  });
+
+  it("at startup sweeps dead trees, checks the open turn against its baseline and reports and removes the snapshot it left", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let release!: () => void;
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), send: (text) => new Promise((done) => { release = () => done({ status: "completed", text, refusal: false }); }) }) }); offices.push(first);
+    const opened = await first.open("scout");
+    const pending = first.send("scout", "hang");
+    await until(() => existsSync(join(repo.dir, ".shadow", "v2", "turns", `${opened.session}.json`)));
+    repo.write("src/late.ts", "changed after the crash\n");
+    await writeFile(join(opened.cwd, "soldier.txt"), "a write\n");
+    await mkdir(join(repo.dir, ".shadow", "v2", "turns"), { recursive: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "turns", "session-broken.json"), "{");
+    await writeFile(join(repo.dir, ".shadow", "v2", "trees", "dead.jsonl"), `${JSON.stringify({ kind: "post-office", pid: 999, startTime: 5 })}\n${JSON.stringify({ kind: "process", pid: 501, startTime: 3 })}\n`);
+    // The second post office runs on a machine where the first one's identity no longer matches: it died.
+    const events: OfficeEvent[] = [], ended: number[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2], [501, 3]]), ended), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(ended).toEqual([501]);
+    expect(treeFiles(repo.dir)).not.toContain("dead.jsonl");
+    const lines = events.filter((event) => event.type === "late_guard").map((event) => (event.data as { line: string }).line);
+    expect(lines).toEqual(expect.arrayContaining([expect.stringMatching(/^session-broken's turn at an unknown time not checked: baseline missing$/), expect.stringMatching(/turn at \d\d:\d\d checked after its post office stopped: .*src\/late\.ts/)]));
+    expect(readdirSync(join(repo.dir, ".shadow", "v2", "turns"))).toEqual([]);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ session: opened.session, files: ["soldier.txt"] });
+    expect(existsSync(opened.cwd)).toBe(false);
+    release(); await pending.catch(() => {});
+    // Two offices in one folder close one after the other, so their git calls don't race the folder's removal.
+    await first.close().catch(() => {}); await second.close();
+  }, 30_000);
 });

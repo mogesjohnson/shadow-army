@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
@@ -9,12 +10,21 @@ import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { HarnessGit } from "./git/harness.js";
 import type { GitRepo } from "./git/hold.js";
-import { openSnapshot, posixInspect, removeSnapshot, validateSnapshotRoot, type GitFactory, type Snapshot } from "./snapshot.js";
+import { openSnapshot, posixInspect, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, type GitFactory, type Snapshot } from "./snapshot.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
-import { containmentFailedMessage, DownSoldiers, type TreeRecord } from "./contain/trees.js";
+import { containmentFailedMessage, DownSoldiers, holdGuardOpen, readTrees, stillRunning, TreeRecord, type Identity, type Leftover, type ProcessOps } from "./contain/trees.js";
+import { sweepTrees, systemOps, type SweepOps } from "./contain/sweep.js";
+
+/** A channel that can list its tree's processes (PO-11). The Claude channel doesn't expose `list` yet. */
+type ListedChannel = NativeChannel & { list?(): Promise<Identity[]> };
+/** PO-1: each turn's checkout baseline is kept on disk while the turn runs, so a later post office can close its guard. */
+const turnsDir = (root: string) => join(root, ".shadow", "v2", "turns");
+const stateToJson = (state: RepoState) => ({ ...state, dirty: [...state.dirty], index: [...state.index], refs: [...state.refs] });
+const stateFromJson = (value: ReturnType<typeof stateToJson>): RepoState => ({ head: value.head, branch: value.branch, dirty: new Map(value.dirty), index: new Map(value.index), refs: new Map(value.refs) });
+const machineOps = (): SweepOps | undefined => { try { return systemOps(); } catch { return undefined; } };
 
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
@@ -27,6 +37,8 @@ export interface OfficeOptions {
   restartDelaysMs?: readonly number[];
   /** Harness git for a repository (WSP-10); tests pass their own. */
   gitFactory?: GitFactory;
+  /** The machine's processes (PO-15, PO-16); tests pass fakes. `null` where the platform has none yet (macOS: M1b-18). */
+  processOps?: SweepOps | null;
 }
 
 /** The repository `cwd` is in, found from its `.git` as git finds it, so nothing the repository names runs to find it. */
@@ -113,6 +125,9 @@ export class PostOffice {
   private readonly secrets: string[];
   /** Applies and guard captures take turns, so no guard reads the owner's folder halfway through an apply. */
   private applying = Promise.resolve();
+  private readonly ops: SweepOps | undefined;
+  /** The post office's own identity for its tree records, read once. */
+  private self?: Promise<Identity | undefined>;
 
   private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
     private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
@@ -121,6 +136,7 @@ export class PostOffice {
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
     this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets);
+    this.ops = options.processOps === undefined ? machineOps() : options.processOps ?? undefined;
   }
 
   static async create(options: OfficeOptions): Promise<PostOffice> {
@@ -141,8 +157,60 @@ export class PostOffice {
     const repo = { ...found, workTree: root };
     await ensureShadowRoot(join(root, ".shadow"));
     const office = new PostOffice(root, repo, gitFor, snapshots, options);
+    const lastLogEnd = await stat(join(root, ".shadow", "v2", "logs", "post-office.jsonl")).then((file) => file.mtime.toISOString(), () => undefined);
     await office.logs.write("post-office", { type: "started", time: new Date().toISOString(), pid: process.pid });
+    await office.finishLast(lastLogEnd);
     return office;
+  }
+
+  /**
+   * PO-1: before any channel opens, finish what earlier post offices left: their trees (PO-16), their open turns' guards and
+   * their snapshots (WSP-11). An item is logged before its file goes, so nothing is reported twice. A post office whose
+   * tree record shows it still running keeps its items.
+   */
+  private async finishLast(lastLogEnd: string | undefined): Promise<void> {
+    const ops = this.ops;
+    if (!ops) { this.record({ type: "startup", data: { finished: false, reason: `no process operations on ${process.platform}; earlier trees, turns and snapshots are left` } }); return; }
+    const trees = await readTrees(this.root);
+    const running = async (id: string) => {
+      const office = trees.find((tree) => tree.id === id)?.lines.find((line) => line.kind === "post-office");
+      return office !== undefined && "pid" in office && await ops.startTimeOf(office.pid) === office.startTime;
+    };
+    const swept = await sweepTrees(this.root, ops);
+    if (swept.swept || swept.left.length || swept.unhandled) this.record({ type: "swept", data: swept });
+    for (const name of (await readdir(turnsDir(this.root)).catch(() => [] as string[])).filter((name) => name.endsWith(".json"))) {
+      const id = name.slice(0, -".json".length), file = join(turnsDir(this.root), name);
+      if (await running(id)) continue;
+      let turn: { soldier?: string; time?: string; base?: ReturnType<typeof stateToJson> } = {};
+      try { turn = JSON.parse(await readFile(file, "utf8")); } catch { /* reported as missing below */ }
+      const who = `${turn.soldier ? shadowName(turn.soldier) : id}'s turn at ${turn.time ? new Date(turn.time).toTimeString().slice(0, 5) : "an unknown time"}`;
+      let line: string;
+      try {
+        const changes = diffState(stateFromJson(turn.base!), await this.exclusive(() => captureState(this.root)));
+        line = `${who} checked after its post office stopped: this compares the checkout now with the turn's start; the last post office's log ends at ${lastLogEnd ?? "an unknown time"}, and changes made since then, the owner's own included, show too: ${changes.length ? changes.join("; ") : "no change"}`;
+      } catch { line = `${who} not checked: baseline missing`; }
+      this.record({ ...(turn.soldier ? { soldier: turn.soldier } : {}), type: "late_guard", data: { session: id, line } });
+      await this.logPending;
+      await unlink(file).catch(() => {});
+    }
+    if (!this.snapshots.ok) return;
+    const root = this.snapshots.root, subfolder = snapshotSubfolder(root, this.root);
+    for (const entry of await readdir(subfolder, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory() || await running(entry.name)) continue;
+      const path = join(subfolder, entry.name);
+      try {
+        const gitDir = resolve(path, (await readFile(join(path, ".git"), "utf8")).replace(/^gitdir:\s*/, "").trim());
+        const status = await this.git({ gitDir, workTree: path, commonDir: this.repo.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
+        const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
+        if (files.length) this.record({ type: "read_violation", data: { session: entry.name, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
+        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+      } catch (error) {
+        // A snapshot started but not made: removed as one that timed out (WSP-10).
+        removeInside(root, path);
+        this.record({ type: "snapshot", data: { session: entry.name, removed: true, made: false, reason: String(error) } });
+      }
+    }
+    await this.logPending;
   }
 
   private check(): void {
@@ -174,7 +242,15 @@ export class PostOffice {
     this.check();
     let existing = this.sessions.get(key);
     if (existing?.down) {
-      if (existing.containmentFailed) throw new Error("native descendants were not confirmed stopped; end this caller and inspect them before starting another session");
+      if (existing.containmentFailed) {
+        // PO-15: a reconnect starts the CLI only once no process the failure named still runs; unnamed ones keep it down.
+        const left = await this.leftovers(existing);
+        if (left !== "unknown" && !this.downSoldiers.isDown(key)) this.downSoldiers.fail(key, left);
+        if (left === "unknown" || !this.ops || !(await this.downSoldiers.mayStart(key, this.processOps(this.ops)))) {
+          throw new Error("native descendants were not confirmed stopped; end this caller and inspect them before starting another session");
+        }
+        await existing.tree?.remove().catch(() => {});
+      }
       if (existing.active) throw new Error("cannot reconnect while the previous turn is finalizing");
       await existing.channel?.close();
       await this.releaseWrite(existing);
@@ -217,20 +293,47 @@ export class PostOffice {
     const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS }) : undefined;
     const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
-    let snapshot: Snapshot | undefined;
+    let snapshot: Snapshot | undefined, tree: TreeRecord | undefined;
     try {
+      // PO-16: the tree's record exists before anything of the session does; one that can't be written starts nothing (PO-15).
+      tree = await this.treeRecord(key, id);
       // WSP-11: a soldier whose snapshot can't be made does not start, and never runs in the folder itself.
       if (!ws && !this.snapshots.ok) throw new Error(`${key} can't start: ${this.snapshots.reason}`);
       if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
-    } catch (error) { await ws?.release(); throw error; }
+    } catch (error) { await tree?.remove().catch(() => {}); await ws?.release(); throw error; }
     const cwd = ws ? ws.cwd : snapshot!.path;
-    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
+    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
     if (ws) await this.holdLease(session);
     if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
     this.start(session);
     this.record({ soldier: key, type: "opened", data: { session: id, cwd, ...(ws ? { branch: ws.branch, claims: session.write!.claims } : {}) } }, session);
     return session;
+  }
+
+  private async treeRecord(key: string, id: string): Promise<TreeRecord | undefined> {
+    const ops = this.ops;
+    if (!ops) return undefined;
+    this.self ??= ops.startTimeOf(process.pid).then((startTime) => startTime === undefined ? undefined : { pid: process.pid, startTime });
+    const failed = (reason: string) => new Error(containmentFailedMessage(shadowName(key), { reason }));
+    const self = await this.self;
+    if (!self) throw failed("the post office's own start time can't be read");
+    return TreeRecord.create(this.root, id, self, undefined, (error) => this.record({ soldier: key, type: "tree_record", data: { listed: false, reason: String(error) } }))
+      .catch((error: unknown) => { throw failed(`tree record not written: ${String(error)}`); });
+  }
+
+  private processOps(ops: SweepOps): ProcessOps {
+    return { startTimeOf: (pid) => ops.startTimeOf(pid), end: async (processes) => { for (const one of processes) await ops.endProcess(one.pid, false); } };
+  }
+
+  /** PO-15: the processes of the session's tree record that still run, named by their command lines; `"unknown"` when none was recorded. */
+  private async leftovers(session: Session): Promise<Leftover[] | "unknown"> {
+    const ops = this.ops;
+    const lines = (await readTrees(this.root)).find((tree) => tree.id === session.id)?.lines ?? [];
+    const named = lines.flatMap((line) => "pid" in line && line.kind !== "post-office" ? [{ pid: line.pid, startTime: line.startTime, command: "" }] : []);
+    if (!ops || named.length === 0) return "unknown";
+    const left = await stillRunning(this.processOps(ops), named);
+    return Promise.all(left.map(async (one) => ({ ...one, command: (await ops.commandOf?.(one.pid).catch(() => undefined)) ?? "" })));
   }
 
   /** WSP-2: the lease must hold while the session is open, so keep renewing it until release. Owner, pid and claims name it: no two live leases overlap. */
@@ -344,6 +447,10 @@ export class PostOffice {
     // A write session has no read-only snapshot to guard: the claim audit takes its place.
     const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
     session.guardBase = await this.exclusive(() => captureState(this.root));
+    const turnFile = join(turnsDir(this.root), `${session.id}.json`);
+    await mkdir(turnsDir(this.root), { recursive: true })
+      .then(() => writeFile(turnFile, JSON.stringify({ soldier: session.spec.key, time: new Date().toISOString(), base: stateToJson(session.guardBase!) }), { mode: 0o600 }))
+      .catch((error: unknown) => this.record({ soldier: session.spec.key, type: "turn_baseline", data: { written: false, reason: String(error) } }, session));
     // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
     await this.renewLease(session);
     let result: TurnResult;
@@ -355,6 +462,11 @@ export class PostOffice {
     }
     if (result.status === "completed") session.loginNeeded = false;
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
+    // PO-11: the tree's processes as the channel lists them go into its record.
+    const channel = session.channel as ListedChannel | undefined;
+    if (channel?.list && session.tree) await session.tree.listing(await channel.list().catch(() => []));
+    // PO-15: while a process the failed containment named still runs, the guard stays open; with none named it is cut short.
+    if (session.containmentFailed && this.ops) await holdGuardOpen(await this.leftovers(session), this.processOps(this.ops), { wait: this.ops.wait });
     let changes: string[];
     try {
       const [checkout, snapshotAfter] = await Promise.all([
@@ -365,6 +477,7 @@ export class PostOffice {
       session.guardBase = undefined;
       changes = [`checkout guard could not complete: ${String(error)}`];
     }
+    await unlink(turnFile).catch(() => {});
     await this.renewLease(session);
     // The audit runs once, after the turn and the guard, also for a failed or cut-short turn (WSP-2).
     let write: WriteOutcome | undefined;
@@ -458,8 +571,9 @@ export class PostOffice {
     await session.restart;
     if (session.containmentFailed) {
       // PO-15: the tree record stays for the next start's sweep (PO-16), and the soldier stays down.
-      this.downSoldiers.fail(key);
-      this.record({ soldier: key, type: "containment_failed", data: { message: containmentFailedMessage(shadowName(key), failure ? { reason: failure } : { leftovers: "unknown" }) } }, session);
+      const leftovers = await this.leftovers(session);
+      this.downSoldiers.fail(key, leftovers === "unknown" ? [] : leftovers);
+      this.record({ soldier: key, type: "containment_failed", data: { message: containmentFailedMessage(shadowName(key), failure ? { reason: failure } : { leftovers }) } }, session);
       throw new Error(`native descendants for ${key} were not confirmed stopped`);
     }
     // PO-16: the tree has ended, so its entry goes. A failed removal is logged; the next sweep finds an empty tree.
