@@ -439,3 +439,48 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     });
   });
 });
+
+describe("the Claude channel's tree (PO-9, PO-11)", () => {
+  it("passes the driver's guardian identity and listing through", async () => {
+    const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+    stdin.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n").filter(Boolean)) {
+        const frame = JSON.parse(line);
+        if (frame.request?.subtype === "initialize") stdout.write(`${JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } })}\n`);
+      }
+    });
+    const tree = [{ pid: 41, startTime: 1_795_000_000_001 }, { pid: 42, startTime: 1_795_000_000_002 }];
+    const guardian = { pid: 40, startTime: 1_795_000_000_000 };
+    const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+      pid: 41, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {}, guardian, list: async () => tree,
+    });
+    const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic", instructions: "", onEvent: () => {} });
+    channels.push(channel);
+    injected.mockRestore();
+    expect(await channel.list()).toEqual(tree);
+    await until(() => channel.guardian !== undefined);
+    expect(channel.guardian).toEqual(guardian);
+  });
+
+  it("lists nothing where the driver can't list", async () => {
+    const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+    const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+      pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
+    });
+    const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic", instructions: "", onEvent: () => {} });
+    channels.push(channel);
+    injected.mockRestore();
+    expect(await channel.list()).toEqual([]);
+    expect(channel.guardian).toBeUndefined();
+  });
+
+  windowsOnly("lists the real fake CLI under a live guardian on Windows", async () => {
+    const { channel } = await setup();
+    const { pid } = JSON.parse((await channel.send("inspect")).text) as { pid: number };
+    const listed = await channel.list();
+    expect(listed.find((entry) => entry.pid === pid)?.startTime).toBeGreaterThan(0);
+    expect(channel.guardian?.pid).toBeGreaterThan(0);
+    expect(() => process.kill(channel.guardian!.pid, 0)).not.toThrow();
+    expect(listed.some((entry) => entry.pid === channel.guardian!.pid)).toBe(false);
+  });
+});

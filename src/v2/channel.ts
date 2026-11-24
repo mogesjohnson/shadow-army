@@ -1,5 +1,6 @@
 import type { Autonomy } from "../adapters/Adapter.js";
 import type { ApplyResult } from "../workspace/apply.js";
+import type { Identity } from "./contain/trees.js";
 
 export type NativeErrorKind = "rate_limit" | "context_overflow" | "login_needed" | "transport" | "other";
 export interface NativeError {
@@ -76,6 +77,10 @@ export interface NativeChannel {
   pause?(): void;
   /** Reads on again. What was held in the pipe is delivered, in order. Idempotent. */
   resume?(): void;
+  /** PO-9: the guardian holding the CLI's containment, once it has started. Optional: not every channel is contained. */
+  readonly guardian?: Identity;
+  /** PO-11: the processes in the CLI's containment, each with its identity. The post office calls it as `channel.list?.()`. */
+  list?(): Promise<Identity[]>;
   close(): Promise<void>;
 }
 export type ChannelFactory = (options: ChannelOptions) => NativeChannel;
