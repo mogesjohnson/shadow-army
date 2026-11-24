@@ -104,8 +104,8 @@ describe("the sweep (PO-16, M1-AC16)", () => {
       expect(report.ended.map((one) => one.pid)).toEqual([orphan.pid]);
       expect(report.ended[0]!.command).toContain("sleep 30");
       expect(existsSync(join(treesDir(root), "real.jsonl"))).toBe(false);
-      await new Promise((done) => orphan.once("exit", done));
-      expect(bystander.exitCode).toBeNull();
+      expect(await ops.startTimeOf(orphan.pid!)).toBeUndefined();
+      expect(await ops.startTimeOf(bystander.pid!)).toBeDefined();
     } finally { orphan.kill("SIGKILL"); bystander.kill("SIGKILL"); }
   });
 });
