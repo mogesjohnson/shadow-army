@@ -115,6 +115,7 @@ export class SessionLogs {
   private readonly secrets: string[];
   private readonly lost = new Map<string, number>();
   private readonly cut = new Set<string>();
+  private readonly fragments = new Map<string, Map<string, string[]>>();
   private readonly append: (path: string, text: string) => Promise<void>;
   private readonly retryDelayMs: number;
 
@@ -129,6 +130,22 @@ export class SessionLogs {
     const line = JSON.stringify(redact(data, this.secrets));
     if (line === undefined) throw new Error("session log record is not JSON data");
     return this.enqueue(name, () => this.tryWrite(name, line));
+  }
+
+  /** Holds one streamed fragment of a message. Nothing is written until the message ends. */
+  fragment(name: string, key: string, text: string): void {
+    this.assertName(name);
+    const open = this.fragments.get(name) ?? new Map<string, string[]>();
+    open.set(key, [...(open.get(key) ?? []), text]);
+    this.fragments.set(name, open);
+  }
+
+  /** Ends a message: its fragments are joined, redacted as one text, and written whole as `text`. */
+  async endMessage(name: string, key: string, record: Record<string, unknown> = {}): Promise<LogWriteResult> {
+    this.assertName(name);
+    const parts = this.fragments.get(name)?.get(key) ?? [];
+    this.fragments.get(name)?.delete(key);
+    return this.write(name, { ...record, text: parts.join("") });
   }
 
   private assertName(name: string): void {

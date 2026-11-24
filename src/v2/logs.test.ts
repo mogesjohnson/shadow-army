@@ -144,6 +144,29 @@ describe("every kind redact() matches (M1-AC2, SEC-4)", () => {
   });
 });
 
+describe("a secret split across fragments", () => {
+  const secret = "monarch-secret-value";
+
+  it("is caught in the log whichever of three fragments carries each part", async () => {
+    const dir = await directory();
+    const logs = new SessionLogs(dir, [secret, "sk-ant-api03-ABCDEFGHIJKLMNOP"]);
+    for (const part of ["start monarch-s", "ecret-", "value end "]) logs.fragment("soldier-1", "m1", part);
+    for (const part of ["key sk-ant-", "api03-ABCDE", "FGHIJKLMNOP!"]) logs.fragment("soldier-1", "m2", part);
+    for (const part of ["Bearer abc", "def.ghi", "jkl"]) logs.fragment("soldier-1", "m3", part);
+    expect(await readFile(join(dir, "soldier-1.jsonl"), "utf8").catch(() => "")).toBe("");
+    expect((await logs.endMessage("soldier-1", "m1", { type: "message" })).written).toBe(true);
+    await logs.endMessage("soldier-1", "m2", { type: "message" });
+    await logs.endMessage("soldier-1", "m3", { type: "message" });
+    const lines = (await readFile(join(dir, "soldier-1.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(lines).toEqual([
+      { type: "message", text: `start ${REDACTED} end ` },
+      { type: "message", text: `key ${REDACTED}!` },
+      { type: "message", text: `Bearer ${REDACTED}` },
+    ]);
+  });
+
+});
+
 describe("session logs", () => {
   it("appends complete ordered records and keeps the post office separate from sessions", async () => {
     const dir = await directory();
