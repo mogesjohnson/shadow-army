@@ -102,7 +102,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (text === "inspect") {
     const args = process.argv.slice(2);
     const appendPath = args[args.indexOf("--append-system-prompt-file") + 1];
-    result(JSON.stringify({ pid: process.pid, args, history, ...(args.includes("--append-system-prompt-file") ? { appendText: await readFile(appendPath, "utf8") } : {}) })); continue;
+    result(JSON.stringify({ pid: process.pid, args, history, autoMemoryOff: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, ...(args.includes("--append-system-prompt-file") ? { appendText: await readFile(appendPath, "utf8") } : {}) })); continue;
   }
   if (text === "partial-events") {
     emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "first " } } });

@@ -45,7 +45,7 @@ async function s6Protocol() {
     }
   });
   const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
-    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
+    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {}, droppedPath: [],
   });
   const events: ChannelEvent[] = [];
   const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event) });
@@ -204,6 +204,33 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(await pending).toMatchObject({ status: "completed", text: "Already completed", usage: { costUsd: 0.03 } });
   });
 
+  it("ends a turn only on a result whose uuid list names its message (CH-2, C2)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("earlier");
+    emit({ type: "result", subtype: "success", user_message_uuids: [first.id], result: "first reply", total_cost_usd: 0.03 });
+    expect(await first.pending).toMatchObject({ status: "completed", text: "first reply" });
+    const second = await send("later");
+    emit({ type: "result", subtype: "success", user_message_uuids: [first.id], result: "stale earlier reply", total_cost_usd: 0.05 });
+    emit({ type: "result", subtype: "success", user_message_uuids: ["unrelated", second.id], result: "true reply", total_cost_usd: 0.1 });
+    const result = await second.pending;
+    expect(result).toMatchObject({ status: "completed", text: "true reply" });
+    // The stale result moved no usage baseline: the delta runs from the first turn's total.
+    expect(result.usage?.costUsd).toBeCloseTo(0.07);
+  });
+
+  it("marks a completed result without a cost total as a gap, not part of the next turn's estimate (C5)", async () => {
+    const { emit, send } = await s6Protocol();
+    const costs: (number | undefined)[] = [];
+    for (const total of [0.03, undefined, 0.1, 0.12]) {
+      const { pending, id } = await send(`turn ${costs.length}`);
+      emit({ type: "result", subtype: "success", user_message_uuid: id, result: "done", usage: { input_tokens: 1, output_tokens: 1 }, ...(total === undefined ? {} : { total_cost_usd: total }) });
+      costs.push((await pending).usage?.costUsd);
+    }
+    expect(costs[0]).toBeCloseTo(0.03);
+    expect(costs.slice(1, 3)).toEqual([undefined, undefined]);
+    expect(costs[3]).toBeCloseTo(0.02);
+  });
+
   it.runIf(process.platform === "win32")("preserves multiline standing text through a real Windows batch shim and removes its append file", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "sa-native-claude-batch-"));
     folders.push(cwd);
@@ -216,6 +243,8 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(inspection.appendText).toBe(instructions);
     expect(inspection.args).not.toContain("--system-prompt-file");
     expect(inspection.args).not.toContain(instructions);
+    // The settings JSON survives both cmd.exe passes intact (CH-2, C3).
+    expect(JSON.parse(inspection.args[inspection.args.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
     const instructionPath = inspection.args[inspection.args.indexOf("--append-system-prompt-file") + 1];
     await channel.close();
     await expect(readFile(instructionPath)).rejects.toThrow();
@@ -254,6 +283,19 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(second.usage?.costUsd).toBeCloseTo(0.03);
     expect(second.usage?.costSource).toBe("native_cli_estimate");
     expect(second.usage?.raw.total_cost_usd).toBe(0.06);
+  }, 15_000);
+
+  it("turns auto memory off in the environment and in --settings over an inherited 0 (CH-2, C3)", async () => {
+    const previous = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "0";
+    try {
+      const { channel } = await setup();
+      const inspection = JSON.parse((await channel.send("inspect")).text);
+      expect(inspection.autoMemoryOff).toBe("1");
+      expect(JSON.parse(inspection.args[inspection.args.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY; else process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = previous;
+    }
   }, 15_000);
 
   it("uses each native autonomy mode without disabling native tools", () => {
