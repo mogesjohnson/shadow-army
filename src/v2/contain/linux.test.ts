@@ -69,13 +69,13 @@ describe("Linux guardian driver (PO-9, PO-10, M1-AC15 on Linux)", () => {
     managed.stdin.write("bytes é\n");
     await waitFor(() => stdout().includes("bytes é\n"));
     expect(JSON.parse(stdout().split("\n")[0]!)).toEqual({ argv: [out], cwd: dir, probe: "probe" });
-    const began = Date.now();
-    const closed = managed.close();
+    managed.stdin.end(); // The CLI's own exit, as close() asks for it.
     expect(await managed.exited).toEqual({ code: 7, signal: null });
     expect(await stoppedGrowing(out)).toBe(false); // The writer still runs after the CLI's own exit...
-    await closed; // ...until the tree is killed.
+    const began = Date.now();
+    await managed.close(); // ...until the tree is killed, at once since the CLI has exited.
+    expect(Date.now() - began).toBeLessThan(2_000);
     expect(await stoppedGrowing(out)).toBe(true);
-    expect(Date.now() - began).toBeLessThan(5_000);
   }, 20_000);
 
   linux("sends SIGTERM 9.5 s after asking a CLI that ignores its input to exit", async () => {
