@@ -215,11 +215,13 @@ function parseSend(args: string): { name?: string; claims: string[]; brief: stri
 
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
 export function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
-  const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || delivery.error?.message || "no summary";
+  const text = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n");
+  const summary = text || "no summary";
   // M1-AC25: when the turn did not complete or the claim audit left no `write`, the error says why (a thrown audit leaves no other trace).
   const why = delivery.status !== "completed" || !delivery.write ? delivery.error?.message : undefined;
-  const error = why && why !== summary ? `\nError: ${why}` : "";
+  const error = why && text ? `\nError: ${why}` : "";
   const apply = delivery.write?.apply;
+  // M1-AC27: a failed turn's error (a guard or audit failure names the path) is the reason even after partial text.
   const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`
     : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || why || "no change was applied"}`;
   const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];

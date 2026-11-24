@@ -149,9 +149,23 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
     expect(row).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f​‮]/);
   });
 
-  it("falls back to the error text for a failed turn with no summary", async () => {
+  it("gives the error as the reason for a failed turn with no summary", async () => {
     const { send } = await mod(() => ({ status: "failed", error: { message: "read-only guard failed" } }));
-    expect(await send("claude-sonnet --claim a go")).toContain("Shadow Army · Tank · failed\nread-only guard failed\n");
+    expect(await send("claude-sonnet --claim a go")).toBe("Shadow Army · Tank · failed\nno summary\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nNot applied: read-only guard failed");
+  });
+
+  it("names the failure even when the soldier wrote partial text and the audit left no write result (M1-AC27)", async () => {
+    const { send } = await mod(() => ({ status: "failed", summary: "I edited README.md", error: { message: "guard: README.md changed outside the claims" } }));
+    const row = await send("claude-sonnet --claim src/** go");
+    expect(row).toContain("I edited README.md\n");
+    expect(row).toContain("Not applied: guard: README.md changed outside the claims");
+  });
+
+  it("puts the log under the Git root when Claude Code starts in a nested folder (M1-AC25)", async () => {
+    const { $, send } = await mod(() => turn("s"));
+    $.session.cwd = async () => "/repo/src/deep";
+    $.fs.exists = async (path: string) => path === "/repo/.git" || path.endsWith("modRelay.js");
+    expect(await send("claude-sonnet --claim src/** go")).toContain("\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\n");
   });
 
   it("names the log under the repository root when Claude started in a subfolder (W12-5)", async () => {
