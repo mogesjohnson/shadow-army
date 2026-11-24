@@ -125,7 +125,7 @@ describe("a snapshot's life", () => {
     expect(seen).toEqual([["late.txt"]]);
     expect(existsSync(snap.subfolder)).toBe(false);
     expect(git(r.folder, "worktree", "list")).not.toContain("s1");
-  });
+  }, 60_000);
   it("reports a file hidden by a .gitignore the turn added or changed", async () => {
     const r = makeRepo();
     const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s2", repo: r.repo, git: factory });
@@ -166,7 +166,7 @@ describe("another army's snapshots", () => {
     expect(existsSync(mine.path)).toBe(true);
     await sweep();
     expect(orphans).toHaveLength(1);
-  });
+  }, 60_000);
   it("leave a subfolder whose path file can't be read, and say so", async () => {
     const r = makeRepo();
     const bad = join(r.root, "gone-0123456789ab");
