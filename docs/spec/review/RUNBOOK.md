@@ -95,7 +95,12 @@ Workers are named `w<n>-<task>`.
 
 **At 175k:**
 1. Make section 3's save point. Its `LATEST.md` also names the running workers, their tasks and their files.
-2. Launch `orch-<n+1>` from the + button as above, in colour (no `NO_COLOR`), with this line, then stop:
+2. **Watch the next orchestrator every 5 minutes until it closes your tab** (the owner, 2026-11-23). Keep a background `sleep 300`. Each time it ends:
+   - With TRACE (the screen-edge glow marks the lease), click its tab, take one `screenshot: "scaled"`, and close the session.
+   - SendMessage it a reminder: it must close your tab, and the cockpit's duplicate-task stop may block it while your session exists and is not parked.
+   - If its screen shows the cockpit's block dialog, tell the owner, and never answer it for them. orch-11 was blocked this way on 2026-11-23.
+   - Keep each check short and end your turn at once, since the cockpit counts you as parked only between turns. Pass any report that reaches you on to it.
+3. Launch `orch-<n+1>` from the + button as above, in colour (no `NO_COLOR`), with this line, then do only step 2:
 
    ```
    cd C:\Users\johns\projects\AIConnections; claude -n orch-<n+1> --model opus "You are orchestrator <n+1> for Shadow Army. Follow section 0 of C:/Users/johns/projects/AIConnections-worktrees/review/docs/spec/review/RUNBOOK.md, then handoffs/LATEST.md there. Workers stop at 150k and you hand off at 175k. First start your hi timer and the 5-minute watch, then close the tab of orch-<n> once the cockpit marks it parked."
