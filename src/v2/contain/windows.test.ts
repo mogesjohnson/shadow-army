@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,5 +89,48 @@ describe("Windows exit grace (PO-10: ten seconds after the CLI was asked to exit
       // The grace is 60 s; ending within 15 s shows the control-pipe loss skipped it.
       expect(await gone(pid, 15_000)).toBe(true);
     } finally { child.kill(); }
+  }, 60_000);
+});
+
+/** A second, independent read of a creation time: the sweep's own Windows read (Unix milliseconds). */
+const startTimeOf = (pid: number) => Number(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+  `([DateTimeOffset](Get-Process -Id ${pid} -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds()`], { encoding: "utf8", windowsHide: true }).trim());
+
+describe("Windows tree listing (PO-11) and guardian identity (PO-9)", () => {
+  windowsOnly("lists the CLI and its child with stable identities, names the guardian, and drops an ended process", async () => {
+    const session = await spawnManagedProcess({
+      file: process.execPath, cwd: await directory(), exitGraceMs: 0,
+      args: ["-e", "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log('child:'+c.pid);process.stdin.resume();setInterval(()=>{},1000);"],
+    });
+    sessions.push(session); session.stderr.resume();
+    const childPid = await new Promise<number>((done, fail) => {
+      let text = "";
+      session.stdout.on("data", (chunk: Buffer) => { text += chunk.toString(); const match = /child:(\d+)/.exec(text); if (match) done(Number(match[1])); });
+      setTimeout(() => fail(new Error("the CLI did not start its child")), 15_000);
+    });
+    stray.push(childPid);
+
+    const first = await session.list!();
+    const second = await session.list!();
+    const byPid = (pid: number) => first.find((entry) => entry.pid === pid);
+    expect(byPid(session.pid)).toBeDefined();
+    expect(byPid(childPid)).toBeDefined();
+    expect(second).toEqual(expect.arrayContaining([byPid(session.pid), byPid(childPid)]));
+    for (const pid of [session.pid, childPid]) expect(byPid(pid)!.startTime).toBe(startTimeOf(pid));
+
+    const guardian = session.guardian!;
+    expect(guardian).toBeDefined();
+    expect(alive(guardian.pid)).toBe(true);
+    expect(guardian.startTime).toBe(startTimeOf(guardian.pid));
+    expect(first.some((entry) => entry.pid === guardian.pid)).toBe(false); // It holds the job; it is not in it.
+
+    process.kill(childPid);
+    expect(await gone(childPid, 10_000)).toBe(true);
+    const third = await session.list!();
+    expect(third.some((entry) => entry.pid === childPid)).toBe(false);
+    expect(third.some((entry) => entry.pid === session.pid)).toBe(true);
+
+    await session.close();
+    expect(await session.list!()).toEqual([]);
   }, 60_000);
 });
