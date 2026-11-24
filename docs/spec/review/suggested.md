@@ -4,6 +4,14 @@ Big changes and architecture questions. Only the orchestrator writes this file (
 
 The owner pre-approved the orchestrator's recommendations on 2026-11-23. Each entry says whether the work went ahead on its recommendation or waits for the owner. Newest first.
 
+## S-7 Combined bases for M1b tasks while Codex's queue waits (2026-11-24, orch-14)
+
+Codex has reviewed none of the M1b PRs (#105 to #123), and every M1b task still to build needs two or more of them. M1b-15 needs #110 and #105; M1b-22 needs #107, #113 and #112.
+
+- **Options:** A, wait until Codex merges the dependencies into `claude/63-m1b`; B, push a base branch per task, `claude/63-m1b-base-<task>`, that merges the dependency PRs' heads with merge commits, and open the task PR into it.
+- **Recommendation: B.** Workers keep going while the review queue waits, and each task PR's diff stays its own work. When the dependencies merge, the task PR is retargeted to `claude/63-m1b` and its diff does not change. If Codex changes a dependency PR, its new head is merged into the base branch (merge commit, V13). The cost is rework if a dependency's API changes in review. Can be undone; deleting the base branches afterwards needs the owner's yes.
+- **Status:** going ahead. `claude/63-m1b-base-linux-driver` (M1b-15, w41) and `claude/63-m1b-base-server-wiring` (M1b-22, w42).
+
 ## S-6 Two M1a stand-ins that M1b keeps (2026-11-23, orch-7)
 
 From w20's plan (`.shadow/v2-tools/tasks/w20-m1b-plan-report.md`, blockers B1 and B2).
