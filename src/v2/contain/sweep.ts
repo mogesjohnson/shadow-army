@@ -84,7 +84,13 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
   if (platform === "linux") {
     return {
       platform, wait: pause,
-      startTimeOf: async (pid) => { try { return parseStat(pid, await readFile(`/proc/${pid}/stat`, "latin1"))?.startTime; } catch { return undefined; } },
+      startTimeOf: async (pid) => {
+        try {
+          const text = await readFile(`/proc/${pid}/stat`, "latin1");
+          // A zombie (Z) or dead (X) process has ended: only its parent has yet to collect it.
+          return "ZX".includes(text[text.lastIndexOf(")") + 2] ?? "?") ? undefined : parseStat(pid, text)?.startTime;
+        } catch { return undefined; }
+      },
       commandOf: async (pid) => (await readFile(`/proc/${pid}/cmdline`, "latin1")).replaceAll("\0", " ").trim(),
       endProcess: async (pid, tree) => { try { process.kill(tree ? -pid : pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } },
     };
