@@ -484,6 +484,46 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     expect(treeFiles(repo.dir)).toEqual([]);
   });
 
+  // M1b-27 / PO-9: the guardian holds the job, so its identity joins the tree record once the channel has one.
+  it("adds the channel's guardian to the tree record once per identity, and a channel without one still works", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let guardian: { pid: number; startTime: number } | undefined;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])),
+      channelFactory: (options) => Object.defineProperty(idle(() => [{ pid: 500, startTime: 7 }])(options), "guardian", { get: () => guardian }) }); offices.push(office);
+    const opened = await office.open("scout");
+    const lines = async () => (await readFile(join(repo.dir, ".shadow", "v2", "trees", `${opened.session}.jsonl`), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    await office.send("scout", "no guardian yet");
+    expect(await lines()).toEqual([{ kind: "post-office", pid: process.pid, startTime: 1 }, { kind: "process", pid: 500, startTime: 7 }]);
+    guardian = { pid: 400, startTime: 3 };
+    await office.send("scout", "guardian started");
+    await office.send("scout", "again");
+    expect(await lines()).toEqual([{ kind: "post-office", pid: process.pid, startTime: 1 }, { kind: "process", pid: 500, startTime: 7 }, { kind: "guardian", pid: 400, startTime: 3 }]);
+    guardian = { pid: 401, startTime: 4 };
+    await office.send("scout", "a restart's guardian");
+    expect((await lines()).filter((line) => line.kind === "guardian")).toEqual([{ kind: "guardian", pid: 400, startTime: 3 }, { kind: "guardian", pid: 401, startTime: 4 }]);
+  });
+
+  it("reports a guardian line that can't be added once, keeps the session working and tries again next turn", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), onEvent: (event) => events.push(event),
+      channelFactory: (options) => Object.defineProperty(idle()(options), "guardian", { get: () => ({ pid: 400, startTime: 3 }) }) }); offices.push(office);
+    const opened = await office.open("scout");
+    const session = (office as unknown as { sessions: Map<string, { tree: { add: (line: unknown) => Promise<void> } }> }).sessions.get("scout")!;
+    const real = session.tree.add.bind(session.tree);
+    let failing = true;
+    session.tree.add = async (line) => { if (failing) throw new Error("disk full"); return real(line); };
+    expect((await office.send("scout", "one")).status).toBe("completed");
+    expect((await office.send("scout", "two")).status).toBe("completed");
+    const reports = events.filter((event) => event.type === "tree_record" && (event.data as { guardian?: boolean }).guardian === false);
+    expect(reports).toHaveLength(1);
+    expect((reports[0]!.data as { reason: string }).reason).toContain("disk full");
+    failing = false;
+    await office.send("scout", "three");
+    const text = await readFile(join(repo.dir, ".shadow", "v2", "trees", `${opened.session}.jsonl`), "utf8");
+    expect(text.trim().split("\n").map((line) => JSON.parse(line)).filter((line) => line.kind === "guardian")).toEqual([{ kind: "guardian", pid: 400, startTime: 3 }]);
+  });
+
   it("starts no CLI when the tree can't be recorded (PO-15)", async () => {
     const repo = makeRepo(); repos.push(repo);
     let starts = 0;
