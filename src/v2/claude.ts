@@ -81,7 +81,13 @@ interface PendingTurn {
   stopped: boolean;
   usageSteps: Map<string, { assistant?: Frame; stream?: Frame; outputTokens?: number }>;
   streamMessageId?: string;
+  /** The message was /clear, /reset or /new: claude starts its totals over (CH-2). */
+  resetsTotals: boolean;
 }
+
+/** CH-2: auto memory stays off, in the process environment and in `--settings`, which outranks the user's, project and local settings. */
+const AUTO_MEMORY_VARIABLE = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+const AUTO_MEMORY_SETTINGS = JSON.stringify({ env: { [AUTO_MEMORY_VARIABLE]: "1" } });
 
 /** Native Claude flags only: preserve its prompt, tools, permissions and session persistence. */
 export function claudeChannelArgs(options: ChannelOptions, instructionPath?: string): string[] {
@@ -90,6 +96,7 @@ export function claudeChannelArgs(options: ChannelOptions, instructionPath?: str
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
     "--model", options.model, "--permission-mode", permission,
+    "--settings", AUTO_MEMORY_SETTINGS,
     ...(instructionPath ? ["--append-system-prompt-file", instructionPath] : ["--append-system-prompt", options.instructions]),
   ];
 }
@@ -163,7 +170,7 @@ export class ClaudeChannel implements NativeChannel {
       instructionPath = join(this.instructionDirectory, "instructions.txt");
       await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
     }
-    return spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd });
+    return spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: { ...process.env, [AUTO_MEMORY_VARIABLE]: "1" } });
   }
 
   private emit(type: ChannelEvent["type"], data: unknown): void {
@@ -391,20 +398,31 @@ export class ClaudeChannel implements NativeChannel {
     const cumulative = number(frame.total_cost_usd);
     const previous = this.cumulativeCost;
     const nativeUsage = object(frame.usage);
-    const zeroExecutionResult = frame.subtype === "error_during_execution" && nativeUsage && ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].every((key) => number(nativeUsage[key]) === 0);
-    const recoverUsage = interrupted || nativeInterrupted || zeroExecutionResult;
-    const unusableCost = recoverUsage && (cumulative === undefined || cumulative === 0 || cumulative < (previous ?? 0));
-    const costGap = this.missingCostBoundary;
-    if (unusableCost) this.missingCostBoundary = true;
-    else if (cumulative !== undefined) { this.cumulativeCost = cumulative; this.missingCostBoundary = false; }
+    const modelUsage = object(frame.modelUsage);
+    const zeroFields = nativeUsage !== undefined && ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].every((key) => number(nativeUsage[key]) === 0);
+    // CH-2: a result whose usage, total_cost_usd and modelUsage are all zero (as after a crash) reports nothing.
+    const zeroResult = zeroFields && cumulative === 0 && (modelUsage === undefined || Object.keys(modelUsage).length === 0);
+    const zeroExecutionResult = frame.subtype === "error_during_execution" && zeroFields;
+    // CH-2: a result that ends a turn the adapter stopped leaves out what the stop cut short.
+    const stoppedTurn = interrupted || nativeInterrupted;
+    const recoverUsage = stoppedTurn || zeroExecutionResult || zeroResult;
+    // CH-2: claude starts its totals over after /clear, /reset or /new, and a total above zero but below the baseline has started over too.
+    const startedOver = cumulative !== undefined && cumulative > 0 && (turn.resetsTotals || previous !== undefined && cumulative < previous);
+    let costUsd: number | undefined;
+    // CH-2: a zero total is never a baseline, so the next result has none either.
+    if (cumulative === undefined || cumulative === 0) this.missingCostBoundary = true;
+    else {
+      costUsd = stoppedTurn ? undefined : startedOver ? cumulative : this.missingCostBoundary ? undefined : cumulative - (previous ?? 0);
+      this.cumulativeCost = cumulative;
+      this.missingCostBoundary = false;
+    }
     const terminal = { ...nativeUsage, ...(frame.modelUsage === undefined ? {} : { modelUsage: frame.modelUsage }), ...(cumulative === undefined ? {} : { total_cost_usd: cumulative }) };
-    const costUsage = cumulative === undefined || unusableCost ? undefined : {
-      costUsd: cumulative === undefined || costGap ? undefined : cumulative >= (previous ?? 0) ? cumulative - (previous ?? 0) : undefined,
-      costSource: "native_cli_estimate" as const,
-    };
+    const costUsage = costUsd === undefined ? undefined : { costUsd, costSource: "native_cli_estimate" as const };
     let usage: TurnUsage | undefined;
     if (recoverUsage) {
-      const observed = this.eventUsage(turn, terminal);
+      // CH-2: a stopped or zero result's own output and cost are not reported; its input and cache are summed over the main-loop messages.
+      const summed = this.eventUsage(turn, terminal);
+      const observed = summed && { ...summed, outputTokens: undefined };
       // The native dollar estimate is distinct from the interrupted result's unusable
       // token counters. Retain it only when its cumulative boundary is actually usable.
       if (observed || costUsage) usage = { ...observed, ...costUsage, raw: observed?.raw ?? { source: "assistant_and_stream", terminal } };
@@ -440,7 +458,7 @@ export class ClaudeChannel implements NativeChannel {
     if (this.closed) return Promise.resolve({ status: "interrupted", text: "", refusal: false, sessionId: this.sessionId, error: this.reason });
     return new Promise((resolve) => {
       const id = randomUUID();
-      this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false, usageSteps: new Map() };
+      this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false, usageSteps: new Map(), resetsTotals: /^\s*\/(clear|reset|new)\s*$/i.test(text) };
       void this.ready.then(async () => {
         if (!this.current || this.current.id !== id || this.closed) return;
         await this.write({ type: "user", uuid: id, session_id: this.sessionId ?? "", message: { role: "user", content: text }, parent_tool_use_id: null });
