@@ -75,7 +75,8 @@ describe("M1 caller subprocess contract", () => {
     const repo = makeRepo(); repos.push(repo);
     const client = new OfficeClient({ cwd: relative(process.cwd(), repo.dir), command: { file: process.execPath, args: runtimeArgs } }); clients.push(client);
     const opened = await client.request<{ cwd: string }>({ action: "open", soldier: "scout" });
-    expect(relative(canonicalPath(repo.dir), canonicalPath(opened.cwd))).toMatch(/^\.shadow[\\/]v2[\\/]worktrees[\\/]session-/);
+    // WSP-11: the read-only snapshot lives outside the folder, at <root>/<folder name>-<army mark>/session-<id>.
+    expect(relative(canonicalPath(repo.dir), canonicalPath(opened.cwd))).toMatch(/^\.\.[\\/]/); expect(opened.cwd).toMatch(/[\\/][^\\/]+-[0-9a-f]{12}[\\/]session-[0-9a-f-]+$/);
     expect((await client.request<TurnResult>({ action: "send", soldier: "scout", text: "inspect" })).status).toBe("completed");
   }, 30_000);
   windowsOnly("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children while retaining partial work", async () => {
