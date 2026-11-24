@@ -1,33 +1,61 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
-const REDACTED = "[REDACTED]";
+export const REDACTED = "[REDACTED]";
+
 const SECRET_KEYS = new Set([
   "secret", "secrets", "credential", "credentials", "password", "passwd", "apikey",
   "token", "accesstoken", "refreshtoken", "authorization", "cookie", "setcookie", "privatekey",
 ]);
 
-const isSecretKey = (key: string): boolean => {
-  const normalized = key.toLowerCase().replace(/[_-]/g, "");
-  return SECRET_KEYS.has(normalized) || /(?:apikey|password|secret|credential|credentials|accesstoken|refreshtoken|privatekey)$/.test(normalized);
-};
+const NAME_SUFFIX = /(?:key|token|secret|password|credential)$/i;
+const VALUE_RULE = /^[^\s"',;}]{8,}$/;
+
+const isSecretKey = (key: string): boolean => SECRET_KEYS.has(key.toLowerCase().replace(/[_-]/g, ""));
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The spellings of one secret that Shadow Army writes: raw, hex, base64, base64url, percent and JSON escaped. */
+function spellings(secret: string): string[] {
+  const bytes = Buffer.from(secret, "utf8");
+  return [
+    secret,
+    bytes.toString("hex"),
+    bytes.toString("base64"),
+    bytes.toString("base64url"),
+    bytes.toString("base64").replace(/=+$/, ""),
+    encodeURIComponent(secret),
+    JSON.stringify(secret).slice(1, -1),
+  ].filter(Boolean);
+}
+
+function secretMatcher(secrets: readonly string[]): RegExp | undefined {
+  const all = new Set(secrets.filter(Boolean).flatMap(spellings));
+  if (all.size === 0) return undefined;
+  // Longest first, so a spelling that holds another is matched whole. Any letter case (SEC-4).
+  return new RegExp([...all].sort((a, b) => b.length - a.length).map(escapeRegExp).join("|"), "gi");
+}
+
+const NOT_IN_WORD = "(?<![A-Za-z0-9_])";
+const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*$)/g;
+const URL_PASSWORD = new RegExp(`${NOT_IN_WORD}([A-Za-z][A-Za-z0-9+.-]*://[^\\s/?#:@"']*:)[^/?#\\s"']*@`, "g");
+const AUTHORIZATION = new RegExp(`${NOT_IN_WORD}(authorization["']?[ \\t]*[=:][ \\t]*["']?)[^\\r\\n"']+`, "gi");
+const BEARER = new RegExp(`${NOT_IN_WORD}Bearer[ \\t]+[A-Za-z0-9._~+/=-]+`, "gi");
+const PREFIXED_KEY = new RegExp(`${NOT_IN_WORD}(?:sk-(?:ant-)?|gh[pousr]_)[A-Za-z0-9_-]{12,}`, "g");
+const NAMED_VALUE = new RegExp(`${NOT_IN_WORD}([A-Za-z0-9_-]*(?:key|token|secret|password|credential)["']?[ \\t]*[=:][ \\t]*["']?)[^\\s"',;}]{8,}`, "gi");
 
 /** Every log value passes this boundary, including native errors, tool output and object keys. */
 export function redact(data: unknown, secrets: readonly string[] = []): unknown {
-  const known = [...new Set(secrets.filter(Boolean))].sort((a, b) => b.length - a.length);
+  const known = secretMatcher(secrets);
   const cleanString = (text: string): string => {
-    for (const secret of known) {
-      // The credential represents bytes: uppercase/mixed-case hex authenticates identically.
-      // Other configured secrets keep their case-sensitive semantics.
-      text = /^[a-f0-9]{64}$/i.test(secret)
-        ? text.replace(new RegExp(secret, "gi"), REDACTED)
-        : text.replaceAll(secret, REDACTED);
-    }
+    if (known) text = text.replace(known, REDACTED);
     return text
-      .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, REDACTED)
-      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`)
-      .replace(/\b(?:sk-(?:ant-)?|gh[pousr]_)[A-Za-z0-9_-]{12,}/g, REDACTED)
-      .replace(/\b((?:[A-Z][A-Z0-9]*[_-])?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|credential|authorization)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, `$1${REDACTED}`);
+      .replace(PRIVATE_KEY_BLOCK, REDACTED)
+      .replace(URL_PASSWORD, `$1${REDACTED}@`)
+      .replace(AUTHORIZATION, `$1${REDACTED}`)
+      .replace(BEARER, `Bearer ${REDACTED}`)
+      .replace(PREFIXED_KEY, REDACTED)
+      .replace(NAMED_VALUE, `$1${REDACTED}`);
   };
   const seen = new WeakSet<object>();
   const visit = (value: unknown): unknown => {
@@ -42,9 +70,11 @@ export function redact(data: unknown, secrets: readonly string[] = []): unknown 
       const source = value instanceof Error
         ? { ...value, name: value.name, message: value.message, stack: value.stack }
         : value;
-      return Object.fromEntries(Object.entries(source).map(([key, entry]) => [
-        cleanString(key), isSecretKey(key) ? REDACTED : visit(entry),
-      ]));
+      return Object.fromEntries(Object.entries(source).map(([key, entry]) => {
+        const secretEntry = isSecretKey(key)
+          || (NAME_SUFFIX.test(key) && typeof entry === "string" && VALUE_RULE.test(entry));
+        return [cleanString(key), secretEntry ? REDACTED : visit(entry)];
+      }));
     } finally {
       seen.delete(value);
     }
