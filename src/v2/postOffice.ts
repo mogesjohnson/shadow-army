@@ -4,6 +4,7 @@ import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
 import { captureState, diffState } from "../workspace/guard.js";
 import { git, repoRoot } from "../workspace/git.js";
+import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { createSnapshot } from "../workspace/worktree.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
@@ -19,13 +20,13 @@ export interface OfficeOptions {
   channelFactory?: ChannelFactory;
   onEvent?: (event: OfficeEvent) => void;
 }
-/** A claims lease outlives a turn: the audit stops v1's heartbeat, so the lease is long and released with the session. */
+/** v1's heartbeat stops at the first audit, so the office renews the claims lease for the session's whole life and at every turn (WSP-2). */
 const WRITE_LEASE_MS = 60 * 60_000;
 export interface TurnOptions { claims?: string[]; }
 interface Session {
   spec: SoldierSpec;
-  /** `applied` is the branch tip last put into the owner's folder, so a later turn applies only what is new. */
-  write?: { ws: WriteSession; claims: string[]; applied?: string };
+  /** `tip` is the branch tip after the last turn; `lease` is v1's claims lease, renewed here; `leaseLost` sticks once a renewal fails. */
+  write?: { ws: WriteSession; claims: string[]; tip?: string; lease?: { locks: Locks; id: string }; leaseLost?: boolean; heartbeat?: ReturnType<typeof setInterval> };
   id: string;
   cwd: string;
   instructions: string;
@@ -104,7 +105,7 @@ export class PostOffice {
       if (existing.containmentFailed) throw new Error("native descendants were not confirmed stopped; end this caller and inspect them before starting another session");
       if (existing.active) throw new Error("cannot reconnect while the previous turn is finalizing");
       await existing.channel?.close();
-      await existing.write?.ws.release();
+      await this.releaseWrite(existing);
       // A fresh snapshot keeps partial work in the previous one, never silently repeats it.
       this.sessions.delete(key);
       existing = undefined;
@@ -128,7 +129,8 @@ export class PostOffice {
       return existing;
     }
     const pending = this.opening.get(key);
-    if (pending) return pending;
+    // A send that arrives while the first open is still making its worktree gets the same claim check.
+    if (pending) { await pending; return this.session(key, claims); }
     const next = this.makeSession(key, claims);
     this.opening.set(key, next);
     try { return await next; } finally { this.opening.delete(key); }
@@ -149,10 +151,36 @@ export class PostOffice {
     catch (error) { await ws?.release(); throw error; }
     const session: Session = { spec, id, cwd, instructions, generation: 0, restarts: 0, down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
-    if (this.closed) { session.down = true; await ws?.release(); throw new Error("post office closed while opening session"); }
+    if (ws) await this.holdLease(session);
+    if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
     this.start(session);
     this.record({ soldier: key, type: "opened", data: { session: id, cwd, ...(ws ? { branch: ws.branch, claims: session.write!.claims } : {}) } }, session);
     return session;
+  }
+
+  /** WSP-2: the lease must hold while the session is open, so keep renewing it until release. Owner, pid and claims name it. */
+  private async holdLease(session: Session): Promise<void> {
+    const write = session.write!;
+    const locks = new Locks(join(this.root, ".shadow"));
+    const claims = JSON.stringify([...write.ws.claims].sort());
+    const lease = (await locks.list()).filter((held) => held.owner === session.spec.key && held.pid === process.pid && JSON.stringify([...held.claims].sort()) === claims).at(-1);
+    if (lease) write.lease = { locks, id: lease.id };
+    write.heartbeat = setInterval(() => { void this.renewLease(session); }, WRITE_LEASE_MS / 3);
+    write.heartbeat.unref?.();
+  }
+
+  /** False once the lease could not be renewed: the files may have changed hands, so nothing more is eligible. */
+  private async renewLease(session: Session): Promise<boolean> {
+    const write = session.write;
+    if (!write) return true;
+    const kept = write.lease && !write.leaseLost ? await write.lease.locks.renew(write.lease.id, WRITE_LEASE_MS).catch(() => false) : false;
+    if (!kept) write.leaseLost = true;
+    return kept;
+  }
+
+  private async releaseWrite(session: Session): Promise<void> {
+    clearInterval(session.write?.heartbeat);
+    await session.write?.ws.release();
   }
 
   private start(session: Session): void {
@@ -204,6 +232,14 @@ export class PostOffice {
     if (!text.trim()) throw new Error("message is empty");
     const session = await this.session(key, options.claims);
     if (session.active) throw new Error(`${key} already has a running turn`);
+    // WSP-2: fail closed before the brief goes out when the claims may have changed hands.
+    if (!(await this.renewLease(session))) {
+      session.down = true;
+      await session.channel?.close();
+      const reason = "the claims lease was lost, so the files may have changed hands; reconnect to start fresh";
+      this.record({ soldier: key, type: "down", data: { reason } }, session);
+      throw new Error(`${key}: ${reason}`);
+    }
     session.stopRequested = false;
     // A copied credential in a brief must never enter a soldier's stdin/context either.
     const nativeText = text.replace(new RegExp(this.secrets[0]!, "gi"), "[REDACTED]");
@@ -237,6 +273,7 @@ export class PostOffice {
     // The audit runs once, after the turn and the guard, also for a failed or cut-short turn (WSP-2).
     let write: WriteOutcome | undefined;
     if (session.write) {
+      await this.renewLease(session);
       try { write = await this.audit(session, result, changes); }
       catch (error) { changes.push(`claim audit could not complete: ${String(error)}`); }
     }
@@ -248,12 +285,18 @@ export class PostOffice {
       result = { ...result, status: "failed", error: { kind: "other", message: `${guard}; partial work is retained at ${session.cwd}: ${changes.join("; ")}` } };
       if (write) write = { ...write, applicable: false, reason: changes.join("; ") };
     }
-    // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
-    if (write?.applicable) {
-      const apply = await applyAudited(this.root, write, session.write!.applied);
-      if (apply.applied && write.commit) session.write!.applied = write.commit;
-      write = { ...write, apply };
+    // A turn that is not applicable but moved the branch leaves work the owner never accepted. A later turn would carry it
+    // into its own audit, so the session goes down, as after a guard failure; reconnecting starts a fresh worktree.
+    if (write && !write.applicable && write.commit && write.commit !== session.write!.tip && !session.down) {
+      session.down = true;
+      await session.channel!.close();
+      write = { ...write, reason: `${write.reason}; the session is down so a later turn cannot carry this work in; reconnect to start fresh` };
+      this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
     }
+    // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder, and only what it
+    // added since the previous turn's tip.
+    if (write?.applicable) write = { ...write, apply: await applyAudited(this.root, write, session.write!.tip) };
+    if (session.write && write) session.write.tip = write.commit;
     if (write) result = { ...result, write };
     this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
     if (write) this.record({ soldier: session.spec.key, type: "audit", data: { ...write, diff: undefined } }, session);
@@ -271,10 +314,11 @@ export class PostOffice {
     let reason: string | undefined;
     if (guardChanges.length) reason = guardChanges.join("; ");
     else if (result.status !== "completed") reason = `the turn ${result.status}; its claimed work stays on ${info.branch}`;
-    else if (info.leaseLost) reason = "the claims lease was lost during the turn, so the files may have changed hands";
-    else if (!info.commit) reason = "the soldier changed nothing";
+    else if (info.leaseLost || session.write!.leaseLost) reason = "the claims lease was lost, so the files may have changed hands";
+    // The branch holds earlier turns' commits too: only a tip this turn moved is this turn's change.
+    else if (!info.commit || info.commit === session.write!.tip) reason = "the soldier changed nothing";
     return { worktree: info.path, branch: info.branch, base: info.base, commit: info.commit, claims: info.claims, inScope: info.inScope, outOfScope: info.outOfScope,
-      reverted: info.reverted, leaseLost: info.leaseLost, uncommittedIgnored: info.uncommittedIgnored, diff, applicable: !reason, ...(reason ? { reason } : {}) };
+      reverted: info.reverted, leaseLost: info.leaseLost || !!session.write!.leaseLost, uncommittedIgnored: info.uncommittedIgnored, diff, applicable: !reason, ...(reason ? { reason } : {}) };
   }
 
   async interrupt(key: string): Promise<void> {
@@ -302,7 +346,7 @@ export class PostOffice {
     await session.active?.catch(() => {});
     await session.restart;
     if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
-    await session.write?.ws.release();
+    await this.releaseWrite(session);
     this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
   }
