@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 const sessions: ManagedProcess[] = [];
@@ -107,5 +108,36 @@ describe.skipIf(!windows)("session process containment (Windows; Not tested on o
     session.stdout.on("data", (chunk) => { output += chunk; }); session.stdin.write("shim input\n");
     expect((await session.exited).code).toBe(0); await session.close();
     expect(output).toBe(`${JSON.stringify(args)}\nshim input\n`);
+  }, 30_000);
+
+  it("starts a bare name only from trusted PATH entries and gives the child that cleaned PATH (CH-1, C4)", async () => {
+    const repo = makeRepo(); const trusted = await directory(); const worktree = join(await directory(), "snapshot");
+    try {
+      repo.git("worktree", "add", "-q", "--detach", worktree);
+      const shim = (word: string) => `@echo off\r\necho ${word}\r\necho %PATH%\r\necho %NoDefaultCurrentDirectoryInExePath%\r\n`;
+      repo.write("bin/sa-c4-cli.cmd", shim("checkout"));
+      await mkdir(join(worktree, "tools"));
+      await writeFile(join(worktree, "tools", "sa-c4-cli.cmd"), shim("snapshot-tools"));
+      await writeFile(join(worktree, "sa-c4-cli.cmd"), shim("snapshot-folder"));
+      await writeFile(join(trusted, "sa-c4-cli.cmd"), shim("trusted"));
+      const untrusted = [join(repo.dir, "bin"), join(worktree, "tools"), "relative", ""];
+      const inherited = Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path");
+      const env = { ...Object.fromEntries(inherited), PATH: [...untrusted, trusted, process.env.Path ?? process.env.PATH ?? ""].join(";") };
+      const session = await spawnManagedProcess({ file: "sa-c4-cli", cwd: worktree, env }); sessions.push(session);
+      let output = ""; session.stdout.on("data", (chunk) => { output += chunk; }); session.stderr.resume();
+      expect((await session.exited).code).toBe(0); await session.close();
+      const [word, path, flag] = output.split(/\r?\n/);
+      expect(word).toBe("trusted");
+      expect(path!.split(";")).toContain(trusted);
+      for (const entry of untrusted.filter(Boolean)) expect(path!.split(";")).not.toContain(entry);
+      expect(flag).toBe("1");
+      // The machine's own PATH may add empty or missing entries after these.
+      expect(session.droppedPath.slice(0, untrusted.length)).toEqual(untrusted);
+      expect(session.droppedPath).not.toContain(trusted);
+    } finally { try { repo.git("worktree", "remove", "--force", worktree); } catch {} repo.cleanup(); }
+  }, 30_000);
+
+  it("refuses a relative configured command instead of taking it from the soldier's folder (CH-1, C4)", async () => {
+    await expect(spawnManagedProcess({ file: "bin/claude.cmd", cwd: await directory() })).rejects.toThrow(/bare name or an absolute path/);
   }, 30_000);
 });
