@@ -320,11 +320,40 @@ async function repoRoot($: EngineInterface, cwd: string): Promise<string> {
   }
 }
 
+/** ARM-7: what the post office says about the folder's policy files; `files` is empty when all are trusted. */
+interface TrustState { files: { name: string; status: "new" | "changed" | "gone"; hash: string | null }[]; details?: string[] }
+const TRUST_QUESTION = "Trust this folder's Shadow Army files?";
+const TRUST_NOT_NOW = "Not now";
+const TRUST_ACCEPT = "Trust these files";
+
+/**
+ * ARM-7's card, for the owner's own use. One notice row per untrusted file, then the question with `Not now` first.
+ * Only the exact answer `Trust these files` accepts, and what it accepts is the hashes shown. Not now, text typed
+ * under Other, a dismissed or rejecting dialog and a failed accept each return the reason and start nothing.
+ * Returns `undefined` when nothing waits on the owner or the owner accepted.
+ */
+async function trustGate($: EngineInterface, runtime: Runtime): Promise<string | undefined> {
+  const state = await post($, runtime, { action: "trust" }) as TrustState | undefined;
+  if (!state?.files?.length) return undefined;
+  for (const file of state.files) $.ui.log(show(`Shadow Army · ${file.name} · ${file.status}${file.hash ? ` · ${file.hash.slice(0, 12)}` : ""}`));
+  for (const line of state.details ?? []) $.ui.log(show(`Shadow Army · ${line}`));
+  const waits = "the army waits for you to trust this folder's Shadow Army files";
+  let answer: string;
+  try { answer = await $.ui.ask(TRUST_QUESTION, { options: [TRUST_NOT_NOW, TRUST_ACCEPT], header: "Trust" }); }
+  catch { return `Nothing started: ${waits} (the dialog was dismissed or could not open).`; }
+  if (answer !== TRUST_ACCEPT) return `Nothing started: ${waits}.`;
+  const result = await post($, runtime, { action: "trust", accept: state.files.filter((f) => f.hash !== null).map((f) => ({ name: f.name, hash: f.hash })) }) as { ok?: boolean; reason?: string } | undefined;
+  if (!result?.ok) return show(`Nothing started: nothing was accepted${result?.reason ? `, ${result.reason}` : ""}.`);
+  return undefined;
+}
+
 async function send($: EngineInterface, args: string): Promise<string> {
   const { name, claims, brief } = parseSend(args);
   if (!name || !brief) return "Usage: /send <soldier> --claim <path-or-glob> <brief>";
   if (!claims.length) return "Nothing sent: /send needs at least one --claim <path-or-glob>, so the soldier's changes can be audited.";
   const runtime = await ensure($);
+  const held = await trustGate($, runtime);
+  if (held) return held;
   const soldiers = await post($, runtime, { action: "army" }) as Soldier[];
   if (!Array.isArray(soldiers)) throw new Error("invalid army response");
   const soldier = soldiers.find((item) => item.key.toLowerCase() === name.toLowerCase() || item.name.toLowerCase() === name.toLowerCase());

@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -30,6 +30,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const killed: string[] = [];
   const commands: any[] = [];
   const logs: string[] = [];
+  const asks: { question: string; options: any }[] = [];
   const registered: any[] = [];
   const claudeId = { value: "session-1" };
   const every: { ms: number; run: () => void; cancelled: boolean }[] = [];
@@ -44,7 +45,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
       every: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; every.push(t); return { cancel() { t.cancelled = true; } }; },
       after: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; after.push(t); return { cancel() { t.cancelled = true; } }; },
     },
-    ui: { log: (line: string) => logs.push(line) },
+    ui: { log: (line: string) => logs.push(line), ask: async (question: string, options: unknown) => { asks.push({ question, options }); if (env.answer instanceof Error) throw env.answer; return env.answer ?? "Trust these files"; } },
     command: { register: async (spec: unknown) => { registered.push(spec); } },
     process: {
       spawn: (options: { argv: string[] }) => {
@@ -88,7 +89,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, probes, killed, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, probes, killed, commands, logs, registered, asks, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {
@@ -392,5 +393,63 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
     const { send, logs } = await mod(() => ({}), { refuse: "no\u001b[31m\u202e web" });
     await send("claude-sonnet --claim a go");
     expect(logs[0]).toContain("no\\u{1b}[31m\\u{202e} web");
+  });
+});
+
+describe("the mod's trust dialog (ARM-7, M1-AC13)", () => {
+  const FILES = [
+    { name: "shadow.config.json", status: "new", hash: "a".repeat(64) },
+    { name: "agent.md", status: "changed", hash: "b".repeat(64) },
+    { name: "rules.md", status: "gone", hash: null },
+  ];
+  const answerFor = (accepted: { value: any }, ok = true) => (command: any) => {
+    if (command.action === "trust" && command.accept) { accepted.value = command.accept; return ok ? { ok: true } : { ok: false, reason: "the trust record can't be written" }; }
+    if (command.action === "trust") return { files: FILES, details: ["Kaisel · claude · opus · full"] };
+    return { status: "completed", summary: "done" };
+  };
+  const run = "claude-sonnet --claim a go";
+
+  it("shows one row per file, then asks with Not now first", async () => {
+    const accepted = { value: undefined as any };
+    const { send, logs, asks } = await mod(answerFor(accepted), { answer: "Not now" });
+    await send(run);
+    expect(logs).toEqual(expect.arrayContaining([
+      `Shadow Army · shadow.config.json · new · ${"a".repeat(12)}`, `Shadow Army · agent.md · changed · ${"b".repeat(12)}`,
+      "Shadow Army · rules.md · gone", "Shadow Army · Kaisel · claude · opus · full"]));
+    expect(asks).toHaveLength(1);
+    expect(asks[0]!.question).toBe("Trust this folder's Shadow Army files?");
+    expect(asks[0]!.options.options).toEqual(["Not now", "Trust these files"]);
+  });
+
+  it.each([["Not now"], ["trust these files"], ["Trust these files, and more"], [""], [new Error("dismissed")]])("starts nothing on %s", async (answer) => {
+    const accepted = { value: undefined as any };
+    const { send, commands } = await mod(answerFor(accepted), { answer: answer as string | Error });
+    expect(await send(run)).toMatch(/Nothing started: the army waits for you to trust this folder's Shadow Army files/);
+    expect(accepted.value).toBeUndefined();
+    expect(commands.some((c) => c.action === "open" || c.action === "send")).toBe(false);
+  });
+
+  it("accepts exactly the hashes shown on the exact answer, then goes on", async () => {
+    const accepted = { value: undefined as any };
+    const { send, commands } = await mod(answerFor(accepted), { answer: "Trust these files" });
+    expect(await send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(accepted.value).toEqual([{ name: "shadow.config.json", hash: "a".repeat(64) }, { name: "agent.md", hash: "b".repeat(64) }]);
+    expect(commands.some((c) => c.action === "send")).toBe(true);
+  });
+
+  it("starts nothing and says why when the accept fails", async () => {
+    const accepted = { value: undefined as any };
+    const { send, commands } = await mod(answerFor(accepted, false), { answer: "Trust these files" });
+    expect(await send(run)).toMatch(/nothing was accepted, the trust record can't be written/);
+    expect(commands.some((c) => c.action === "send")).toBe(false);
+  });
+
+  it("shows no dialog when every file is trusted, and escapes file text in the rows", async () => {
+    const quiet = await mod((c) => c.action === "trust" ? { files: [] } : { status: "completed", summary: "ok" });
+    await quiet.send(run);
+    expect(quiet.asks).toHaveLength(0);
+    const odd = await mod((c) => c.action === "trust" ? { files: FILES.slice(0, 1), details: ["Kaisel · claude · opus · full"] } : {}, { answer: "Not now" });
+    await odd.send(run);
+    expect(odd.logs.join("|")).not.toContain("");
   });
 });
