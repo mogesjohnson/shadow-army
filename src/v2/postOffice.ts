@@ -111,9 +111,9 @@ export class PostOffice {
     if (this.logFailure) throw new Error(`post office log failed: ${this.logFailure.message}`);
   }
 
-  private record(event: OfficeEvent, session?: Session): void {
+  private record(event: OfficeEvent, session?: Session, toLogOnly = false): void {
     const safe = redact(event, this.secrets) as OfficeEvent;
-    this.options.onEvent?.(safe);
+    if (!toLogOnly) this.options.onEvent?.(safe);
     this.logPending = this.logPending.then(async () => {
       await this.logs.write(session ? session.id : "post-office", { ...safe, time: new Date().toISOString() });
     }).catch((error: unknown) => {
@@ -420,6 +420,12 @@ export class PostOffice {
     const next = this.applying.then(fn);
     this.applying = next.then(() => {}, () => {});
     return next;
+  }
+
+  /** Appends a record to post-office.jsonl through the office's one writer, redacted, without an event to the caller. */
+  logRecord(record: Record<string, unknown>): void {
+    const { type, ...rest } = record;
+    this.record({ type: String(type), data: record.data ?? rest }, undefined, true);
   }
 
   refused(): void { this.record({ type: "command_refused", data: { reason: "wrong or missing Monarch credential" } }); }

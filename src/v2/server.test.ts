@@ -133,6 +133,19 @@ describe("M1 authenticated loopback command server", () => {
     expect(await processStartTime(2_000_000_000)).toBeNull();
   }, 20_000);
 
+  it("writes the refusal reports and the memory-protection line to post-office.jsonl through the office's own writer", async () => {
+    const timers: (() => void)[] = [];
+    const { repo, server } = await setup(undefined, undefined, { memoryProtection: "memory protection: Yama ptrace_scope 1", refusalTimer: (fn) => { timers.push(fn); return () => {}; } });
+    const refuse = (n: number) => Promise.all(Array.from({ length: n }, () => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${"cd".repeat(32)}` }, body: "{}" })));
+    await refuse(3);
+    timers.shift()!();
+    await server.close();
+    const lines = (await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.filter((r) => r.type === "command_refused").map((r) => (r.data as { count?: number }).count)).toEqual([undefined, 2]);
+    expect(lines).toContainEqual(expect.objectContaining({ type: "memory_protection", data: { line: "memory protection: Yama ptrace_scope 1" } }));
+    expect(JSON.stringify(lines)).not.toContain(credential);
+  }, 30_000);
+
   it("reports 1,000 refused requests once in full, then once a minute with the count, on a fake clock", async () => {
     const timers: (() => void)[] = [];
     const logged: Record<string, unknown>[] = [];
