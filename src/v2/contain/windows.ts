@@ -22,6 +22,17 @@ export interface ManagedProcessOptions {
   args?: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  /** How long the CLI gets to exit after stdin EOF before its tree is ended. Defaults to PO-10's 10 s; tests inject less. */
+  exitGraceMs?: number;
+}
+
+/** PO-10: once the CLI has exited, or 10 seconds after it was asked to, every process still in the tree is killed. */
+export const DEFAULT_EXIT_GRACE_MS = 10_000;
+
+export function exitGraceFor(options: Pick<ManagedProcessOptions, "exitGraceMs">): number {
+  const value = options.exitGraceMs ?? DEFAULT_EXIT_GRACE_MS;
+  if (!Number.isInteger(value) || value < 0 || value > 0xFFFFFFF) throw new RangeError(`exitGraceMs must be a whole number of milliseconds, got ${String(value)}`);
+  return value;
 }
 
 
@@ -63,6 +74,7 @@ function windowsCommand(file: string, args: string[], env: NodeJS.ProcessEnv): {
 async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProcess> {
   const env = options.env ?? process.env;
   const command = windowsCommand(await resolveWindowsCommand(options.file, options.cwd, env), options.args ?? [], env);
+  const exitGraceMs = exitGraceFor(options);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
   const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
@@ -117,7 +129,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       failed(new Error(`Windows supervisor exited before launch${diagnostic ? `: ${diagnostic}` : ""}`));
       done();
     }));
-    wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token })}\n`);
+    wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token, exitGraceMs })}\n`);
     const launchTimer = setTimeout(() => failed(new Error(`Windows supervisor did not launch within 15 seconds${diagnostic ? `: ${diagnostic}` : ""}`)), 15_000);
     try { await ready; } finally { clearTimeout(launchTimer); }
     wrapper.stderr.off("data", captureDiagnostic);
@@ -126,7 +138,8 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited,
       close() {
         return closing ??= (async () => {
-          const killed = setTimeout(() => wrapper.kill(), 15_000);
+          // The supervisor needs the grace plus its own tree-empty wait; this is only the last resort.
+          const killed = setTimeout(() => wrapper.kill(), exitGraceMs + 15_000);
           wrapper.stdin.end();
           control?.write("close\n");
           try { await wrapperClosed; } finally {
@@ -141,7 +154,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     control?.destroy(); server.close();
     if (child && child.exitCode === null) {
       child.kill();
-      await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, 2_000).unref(); });
+      await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, exitGraceMs).unref(); });
     }
     await rm(directory, { recursive: true, force: true });
     throw error;
@@ -229,10 +242,12 @@ public static class ShadowJobSupervisor {
         if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; events.WriteLine(serializer.Serialize(new { kind="exited",code=code })); }
       }
       // Native stdin EOF runs the CLI's own shutdown hooks. Ordinary close gives that exit
-      // up to two seconds; loss of the owner's control pipe always bypasses the grace.
+      // up to the grace (PO-10: ten seconds unless the owner injected less); loss of the
+      // owner's control pipe always bypasses the grace.
       if(!rootExited && Interlocked.CompareExchange(ref shutdownReason,0,0)!=2) {
+        uint grace=config.ContainsKey("exitGraceMs") ? Convert.ToUInt32(config["exitGraceMs"]) : 10000;
         uint began=(uint)Environment.TickCount;
-        while(WaitForSingleObject(process.process,20)!=0 && (uint)((uint)Environment.TickCount-began)<2000 && Interlocked.CompareExchange(ref shutdownReason,0,0)!=2) {}
+        while(WaitForSingleObject(process.process,20)!=0 && (uint)((uint)Environment.TickCount-began)<grace && Interlocked.CompareExchange(ref shutdownReason,0,0)!=2) {}
       }
       if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; events.WriteLine(serializer.Serialize(new { kind="exited",code=code })); }
       Check(TerminateJobObject(job,1));
