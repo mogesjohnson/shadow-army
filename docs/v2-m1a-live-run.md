@@ -9,7 +9,7 @@ The offline version of this run passes already: `src/v2/slice.test.ts` drives th
 ## Before you start
 
 - Windows, Node on the PATH, `claude` installed and logged in.
-- A git repository of yours with a committed `HEAD`. Commit or stash your own edits to the files the soldier will touch (a clash is refused, see below).
+- A disposable git repository with a committed `HEAD` and a clean working copy (`git status --short --ignored` prints nothing), for example a new one made with `git init`, a `README.md` and one commit. Do not use a repository whose files you care about: a soldier can still write ignored files there (see "Known not to work").
 - This branch (`claude/63-m1a-slice`) checked out in a folder of yours, written `<shadow-army>` below (for example `C:\src\shadow-army`).
 
 ## 1. Build the mod
@@ -104,7 +104,7 @@ Paste these, in this order:
 - **Changing claims needs a new session.** A soldier's claims are fixed when its session opens. A later `/send` with different claims is refused with the post office's reason, shown on the card, for example `claude-sonnet holds claims notes/**; close its session before sending other claims`. The mod has no close command yet. To change claims, exit Claude Code and start it again, then send. The earlier work stays on the soldier's branch.
 - **A second turn that edits a file an earlier turn already applied is refused.** The card says `Not applied:` with the clash reason and the file. Your folder is unchanged and the work stays on the soldier's branch (`shadow/...`). Ask for a new file instead, as brief two does.
 - **Your own edits.** If you changed a file in your folder that the soldier also changed, it is not applied and the card says so.
-- **Ignored files in your folder are not guarded (W12-4).** If a soldier writes a git-ignored file there by absolute path, such as `.env` or something under `node_modules/` or `dist/`, neither the claim audit nor the checkout guard sees it, because the guard's `git status` runs without `--ignored`. Keep nothing you care about in ignored files during the live run; M1b's guard should cover them.
+- **Ignored files in your folder are not guarded (W12-4).** If a soldier writes a git-ignored file there by absolute path, such as `.env` or something under `node_modules/` or `dist/`, neither the claim audit nor the checkout guard sees it, because the guard's `git status` runs without `--ignored`. Run in the disposable repository from "Before you start", which has no ignored files, so anything ignored that appears there came from the soldier; `git status --short --ignored` after each brief shows it (`.shadow/` itself is expected there). Guarding ignored files is a follow-up for M1b's guard (W12-4).
 - **One command, one soldier.** `/send` takes one claude soldier with the build role. There is no pane, no cancel command and no merge or commit of the result.
 
 ## Not tested
