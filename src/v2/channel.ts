@@ -68,6 +68,14 @@ export interface NativeChannel {
   send(text: string): Promise<TurnResult>;
   interrupt(): Promise<void>;
   respondApproval(requestId: string, response: unknown): Promise<void>;
+  /**
+   * PO-7's backlog: stop reading the soldier's output, so nothing more is parsed or buffered here
+   * and the CLI's own pipe applies back-pressure. Idempotent. Optional so that channels built
+   * as test doubles need not stub it; the post office calls it as `channel.pause?.()`.
+   */
+  pause?(): void;
+  /** Reads on again. What was held in the pipe is delivered, in order. Idempotent. */
+  resume?(): void;
   close(): Promise<void>;
 }
 export type ChannelFactory = (options: ChannelOptions) => NativeChannel;
