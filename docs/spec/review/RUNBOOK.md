@@ -98,7 +98,7 @@ Workers are named `w<n>-<task>`.
 2. **Watch the next orchestrator every 5 minutes until it closes your tab** (the owner, 2026-11-23). Keep a background `sleep 300`. Each time it ends:
    - With TRACE (the screen-edge glow marks the lease), click its tab, take one `screenshot: "scaled"`, and close the session.
    - SendMessage it a reminder: it must close your tab, and the cockpit's duplicate-task stop may block it while your session exists and is not parked.
-   - If its screen shows the cockpit's block dialog, tell the owner, and never answer it for them. orch-11 was blocked this way on 2026-11-23.
+   - If its screen shows the cockpit's block dialog, answer it yourself with TRACE: pick "Take over now" and press `Enter` (the owner, 2026-11-23: "you are orch ... you are in charge"). orch-11 was blocked this way on 2026-11-23. A message sent while the dialog is open waits until it is answered, so type or click instead.
    - Keep each check short and end your turn at once, since the cockpit counts you as parked only between turns. Pass any report that reaches you on to it.
 3. Launch `orch-<n+1>` from the + button as above, in colour (no `NO_COLOR`), with this line, then do only step 2:
 
