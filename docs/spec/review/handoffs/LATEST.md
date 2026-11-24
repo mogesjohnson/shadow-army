@@ -6,15 +6,16 @@ orch-11 started at 01:30 UTC at 72k and handed off at about 160k. The owner answ
 
 **State.**
 - M1b runs on `claude/63-m1b` (S-5). w20's plan is `.shadow/v2-tools/tasks/w20-m1b-plan-report.md` in the main checkout.
-- **Waiting for Codex at their heads** (all draft, all based on `claude/63-m1b` unless stacked): #105 M1b-2 `129c211`, #106 M1b-6 `30069d8`, #107 M1b-3 `9cd931c`, #108 M1b-14 `1928a9d` (on #107), #109 M1b-1 C helper `915e619`, #110 M1b-1 build `96288b5` (on #109), #111 M1b-11 `c81ecf5`, #112 M1b-5 `e275b51`, #113 M1b-4 `d406d8a`, #114 M1b-9 `eabd77c`. orch-11 checked #111 to #114: every commit is within V6's 200 lines and 4 files.
+- **Waiting for Codex at their heads** (all draft, all based on `claude/63-m1b` unless stacked): #105 M1b-2 `129c211`, #106 M1b-6 `30069d8`, #107 M1b-3 `9cd931c`, #108 M1b-14 `1928a9d` (on #107), #109 M1b-1 C helper `915e619`, #110 M1b-1 build `96288b5` (on #109), #111 M1b-11 `c81ecf5`, #112 M1b-5 `e275b51`, #113 M1b-4 `d406d8a`, #114 M1b-9 `eabd77c`, #115 M1b-10 `642154b`. orch-11 checked #111 to #115: every commit is within V6's 200 lines and 4 files.
 - Still for M1b-22's brief: #108's `open` returning the log path (`server.ts`), #107's session-id refusal in `main.ts` and `release`'s `reason` in `postOffice.ts`.
 - GitHub Actions is still off. S7 (M1b-13) stays parked on it.
+
+**w34-trust reported #115 and waits: close its tab first, then launch w35 in its slot.**
 
 **Running, all reporting to orch-11. Tell each "report to orch-12 instead".**
 
 | Worker | Model | Task | Files | Base |
 |---|---|---|---|---|
-| w34-trust | Opus medium | M1b-10 | `src/v2/trust.ts`, `trust.test.ts` | `claude/63-m1b` |
 | w29-logs | Sonnet high | M1b-7 | `src/v2/logs.ts`, `logs.test.ts` | `claude/63-m1b` |
 | w32-roster | Sonnet medium | M1b-8 | `src/v2/roster.ts`, `instructions.ts`, their tests, `orchestratorDelegate.md`, `shadow.config.json` | `claude/63-m1b` |
 

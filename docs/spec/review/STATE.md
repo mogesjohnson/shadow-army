@@ -2,7 +2,7 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
-**Orchestrator 11 (2026-11-24, `c60839b3`): wave 1 nearly done.** #111 (M1b-11), #112 (M1b-5), #113 (M1b-4) and #114 (M1b-9) reported and checked; ten M1b PRs (#105 to #114) wait for Codex. w34-trust (M1b-10), w29-logs (M1b-7) and w32-roster (M1b-8) run; w35 (M1b-12) is the last ready brief. Detail: `handoffs/LATEST.md`.
+**Orchestrator 11 (2026-11-24, `c60839b3`): wave 1 nearly done.** #111 (M1b-11), #112 (M1b-5), #113 (M1b-4), #114 (M1b-9) and #115 (M1b-10) reported and checked; eleven M1b PRs (#105 to #115) wait for Codex. w29-logs (M1b-7) and w32-roster (M1b-8) run; w35 (M1b-12) is the last ready brief. Detail: `handoffs/LATEST.md`.
 
 **Orchestrator 6 (2026-11-23, `c6d2c417`): M1a's run branch is green on Windows and Linux; M1b is being planned.** `claude/63-m1a-integrate` (`2b78df6`) is #94 plus #96, #97, #99, #101, #102, #103 and #104. Windows: 497 passed. Linux: 463 passed, 38 skipped (native-session tests, Windows-only containment, D-39), 0 failed. #102 to #104 (w18) add the `windowsOnly` guard; #103 waits for the owner's V6 size exception. `w20-m1b-plan` splits M1b into worker tasks. Next: [`handoffs/LATEST.md`](handoffs/LATEST.md).
 
