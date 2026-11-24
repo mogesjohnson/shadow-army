@@ -11,7 +11,8 @@ export interface AppliedFile {
 
 export type ApplyResult =
   | { applied: true; files: AppliedFile[] }
-  | { applied: false; reason: string; clashes: string[] };
+  /** `left` is set only when taking the edits back out failed: the paths that may still be changed. */
+  | { applied: false; reason: string; clashes: string[]; left?: string[] };
 
 /** Every path `git status --porcelain=v1 -z` mentions, both sides of a rename included. */
 function changedPaths(out: string): string[] {
@@ -75,7 +76,18 @@ export async function applyToCheckout(root: string, base: string, branch: string
       try {
         await git(root, ["--literal-pathspecs", "add", "-N", "-f", "--", ...added]);
       } catch (e) {
-        await git(root, ["apply", "-R", "--whitespace=nowarn", patch]).catch(() => undefined);
+        if (!(e instanceof GitError)) throw e;
+        try {
+          await git(root, ["apply", "-R", "--whitespace=nowarn", patch]);
+        } catch {
+          // Rolling back failed too, so say which files still carry the run's edits.
+          const touched = new Set(files.map((f) => f.path.toLowerCase()));
+          const left = await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).then(
+            (out) => [...new Set(changedPaths(out).filter((p) => touched.has(p.toLowerCase())))].sort(),
+            () => files.map((f) => f.path).sort(),
+          );
+          return { applied: false, reason: `${e.message}; taking the edits back out failed too`, clashes: [], left };
+        }
         throw e;
       }
     }
@@ -101,7 +113,10 @@ export function renderApply(result: ApplyResult, branch: string, shell: Shell = 
   if (!result.applied) {
     const lines = [`Not applied to your folder: ${result.reason}.`];
     if (result.clashes.length) lines.push(...result.clashes.map((p) => `  ${p}`));
-    lines.push(`Your folder is unchanged; the work is on ${branch}.`);
+    if (result.left) {
+      lines.push("Your folder was NOT put back; these files may still carry the run's edits:", ...result.left.map((p) => `  ${p}`));
+      lines.push(`Review them with git diff. The work is on ${branch}.`);
+    } else lines.push(`Your folder is unchanged; the work is on ${branch}.`);
     return lines.join("\n");
   }
   if (!result.files.length) return "Nothing to apply to your folder.";
