@@ -6,15 +6,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import * as managedProcesses from "./processTree.js";
 import type { ChannelEvent, NativeError } from "./channel.js";
-import { ClaudeChannel, claudeChannelArgs } from "./claude.js";
+import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, VERSION_TIMEOUT_MS } from "./claude.js";
 
 const channels: ClaudeChannel[] = [];
 const folders: string[] = [];
-async function setup(extra: { interruptTimeoutMs?: number } = {}) {
+async function setup(extra: { interruptTimeoutMs?: number; versionTimeoutMs?: number; autonomy?: "supervised" | "auto" | "full"; fakeArgs?: string[] } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "sa-native-claude-"));
   folders.push(cwd);
   const events: ChannelEvent[] = [];
-  const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions: "Standing instructions remain appended.", onEvent: (event) => events.push(event), command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs")] }, ...extra });
+  const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions: "Standing instructions remain appended.", onEvent: (event) => events.push(event), command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs"), ...(extra.fakeArgs ?? [])] }, interruptTimeoutMs: extra.interruptTimeoutMs, versionTimeoutMs: extra.versionTimeoutMs, autonomy: extra.autonomy });
   channels.push(channel);
   return { cwd, channel, events };
 }
@@ -45,14 +45,18 @@ async function s6Protocol() {
       if (frame.request?.subtype === "initialize") emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
     }
   });
+  // The channel reads `claude --version` first (CH-2), which spawns once before the session does.
+  const versionOutput = new PassThrough();
+  versionOutput.end("2.1.295 (Claude Code)\n");
   const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+    pid: 2, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {},
+  }).mockResolvedValueOnce({
     pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
   });
   const events: ChannelEvent[] = [];
   const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event) });
   channels.push(channel);
-  // open() invokes the injected spawner synchronously; restoring avoids other tests' state.
-  injected.mockRestore();
+  // Both one-shot values are used by the constructor's version check and session spawn; later spawns are real.
   const send = async (text = "partial native work") => {
     const pending = channel.send(text);
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
@@ -64,6 +68,7 @@ async function s6Protocol() {
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
 const interruptedResult = (id: unknown) => ({ type: "result", subtype: "error_during_execution", is_error: true, errors: [], user_message_uuid: id, usage: zeroUsage, total_cost_usd: 0, modelUsage: {} });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(channels.splice(0).map((channel) => channel.close()));
   await Promise.all(folders.splice(0).map((folder) => rm(folder, { recursive: true, force: true })));
 });
@@ -224,7 +229,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
 
   windowsOnly("settles pending work once and reports uncertain containment without rejecting an event-triggered close", async () => {
     const original = managedProcesses.spawnManagedProcess;
-    const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockImplementationOnce(async (options) => {
+    const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockImplementationOnce(original).mockImplementationOnce(async (options) => {
       const child = await original(options);
       return { ...child, close: async () => { await child.close(); throw new Error("injected containment uncertainty"); } };
     });
@@ -385,4 +390,125 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("partial-events")).text).toBe("first second");
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["first ", "second"]);
   }, 15_000);
+  // M1-AC4 / M1-AC5 faults, through test/fakes/claude.mjs. Every frame is synthetic: no claude recordings exist yet (blocker B4).
+  // Each test below that reads a claude frame or message (login, model change, background result, unknown frames, the managed-settings
+  // refusal, the init permission mode, the cut-off line) must be re-run with the frames copied from section 5.1 C's recordings when they land.
+  const errorsOf = (events: ChannelEvent[]) => events.filter((event) => event.type === "error").map((event) => event.data as NativeError);
+  const rawOf = (events: ChannelEvent[], type: string) => events.filter((event) => event.type === "raw" && (event.data as { type?: string }).type === type);
+
+  it("bounds --version at 10 s and names the oldest claude (CH-2)", () => {
+    expect(VERSION_TIMEOUT_MS).toBe(10_000);
+    expect(OLDEST_CLAUDE).toBe("2.1.277");
+  });
+
+  windowsOnly("ends a --version that never exits, and the soldier does not start (M1-AC4)", async () => {
+    const started = Date.now();
+    expect(await claudeVersionProblem({ file: process.execPath, args: [resolve("test/fakes/claude.mjs"), "--fake-version-hang"] }, tmpdir(), 300)).toBe("claude --version gave no answer in 0.3 s");
+    expect(Date.now() - started).toBeLessThan(8_000);
+    const { channel, events } = await setup({ versionTimeoutMs: 300, fakeArgs: ["--fake-version-hang"] });
+    const result = await channel.send("hello");
+    expect(result.status).toBe("interrupted");
+    expect(result.error).toEqual({ kind: "other", message: "claude --version gave no answer in 0.3 s" });
+    expect(events.some((event) => event.type === "raw" && (event.data as { type?: string }).type === "system")).toBe(false);
+  }, 15_000);
+
+  windowsOnly("opens no session for a claude older than the oldest, and it is not a crash (CH-2, M1-AC4)", async () => {
+    const { channel, events } = await setup({ fakeArgs: ["--fake-version", "2.1.276"] });
+    const result = await channel.send("hello");
+    expect(result.status).toBe("interrupted");
+    expect(result.error).toEqual({ kind: "other", message: `claude 2.1.276 is older than ${OLDEST_CLAUDE}; update claude` });
+    expect(errorsOf(events).map((error) => error.kind)).toEqual(["other"]);
+    const { channel: oldest } = await setup({ fakeArgs: ["--fake-version", OLDEST_CLAUDE] });
+    expect((await oldest.send("hello")).status).toBe("completed");
+    const { channel: newer } = await setup({ fakeArgs: ["--fake-version", "2.2.0"] });
+    expect((await newer.send("hello")).status).toBe("completed");
+  }, 30_000);
+
+  windowsOnly("treats a start that managed settings refuse as a refused start, not a crash (PO-1, M1-AC4)", async () => {
+    const { channel, events } = await setup({ autonomy: "full", fakeArgs: ["--fake-refuse-managed"] });
+    const result = await channel.send("hello");
+    expect(result.status).toBe("interrupted");
+    expect(result.error?.kind).toBe("other");
+    expect(result.error?.message).toContain("claude can't start at full: your organization's managed settings refuse it");
+    expect(result.error?.message).toContain("disableBypassPermissionsMode");
+    expect(result.error?.message).toContain("lower its autonomy");
+    expect(rawOf(events, "stderr")).not.toHaveLength(0);
+  }, 15_000);
+
+  windowsOnly("a login needed keeps its kind whether the fake keeps running or exits after it (CH-2, M1-AC4)", async () => {
+    const running = await setup();
+    expect((await running.channel.send("login")).error?.kind).toBe("login_needed");
+    expect((await running.channel.send("hello")).status).toBe("completed");
+    const exiting = await setup();
+    const result = await exiting.channel.send("login-exit");
+    expect(result.error?.kind).toBe("login_needed");
+    await until(() => exiting.events.some((event) => event.type === "closed"));
+    expect(exiting.events.find((event) => event.type === "closed")?.data).toMatchObject({ reason: { kind: "login_needed" } });
+    const after = await exiting.channel.send("again");
+    expect(after.status).toBe("interrupted");
+    expect(after.error?.kind).toBe("login_needed");
+  }, 20_000);
+
+  windowsOnly("logs a model change claude makes by itself and names the new model in the turn's usage (CH-2, M1-AC4)", async () => {
+    const { channel, events } = await setup();
+    const result = await channel.send("model-change");
+    expect(result.status).toBe("completed");
+    expect(rawOf(events, "model_changed").map((event) => event.data)).toEqual([{ type: "model_changed", from: "fake-claude", to: "fake-fallback" }]);
+    expect(result.usage?.raw.model).toBe("fake-fallback");
+    expect(errorsOf(events)).toHaveLength(0);
+  }, 15_000);
+
+  windowsOnly("a background task's follow-up result ends only its own message (CH-2, M1-AC4)", async () => {
+    const { channel, events } = await setup();
+    expect((await channel.send("background-start")).text).toBe("started a task");
+    const next = await channel.send("background-next");
+    expect(next).toMatchObject({ status: "completed", text: "own result" });
+    expect(next.usage?.costUsd).toBeCloseTo(0.03);
+    expect(rawOf(events, "result_ignored")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
+  }, 15_000);
+
+  windowsOnly("records unknown frames and unknown fields and changes nothing else (CH-1, M1-AC4)", async () => {
+    const { channel, events } = await setup();
+    const result = await channel.send("unknown-frames");
+    expect(result).toMatchObject({ status: "completed", text: "known result", contextTokens: 10 });
+    const raw = (predicate: (data: Record<string, unknown>) => boolean) => events.filter((event) => event.type === "raw" && predicate(event.data as Record<string, unknown>));
+    expect(raw((data) => data.type === "hologram")).toHaveLength(1);
+    expect(raw((data) => data.subtype === "from_the_future")).toHaveLength(1);
+    expect(raw((data) => data.novel_field !== undefined)).toHaveLength(1);
+    expect(raw((data) => data.new_result_field !== undefined)).toHaveLength(1);
+    expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["known frame"]);
+    expect(errorsOf(events)).toHaveLength(0);
+    expect(events.filter((event) => event.type === "closed")).toHaveLength(0);
+  }, 15_000);
+
+  windowsOnly("reads a last line cut off by the fake's exit as one malformed line (CH-1, M1-AC4)", async () => {
+    const { channel, events } = await setup();
+    const result = await channel.send("cutoff");
+    expect(result.status).toBe("interrupted");
+    expect(rawOf(events, "unparseable_line")).toHaveLength(1);
+    expect(errorsOf(events).filter((error) => error.kind === "other")).toHaveLength(1);
+  }, 15_000);
+
+  windowsOnly("names both modes in one line when system/init reports another permission mode than the one passed (M1-AC5)", async () => {
+    const { events, channel } = await setup({ autonomy: "auto", fakeArgs: ["--fake-mode", "plan"] });
+    expect((await channel.send("hello")).status).toBe("completed");
+    const mismatches = errorsOf(events).filter((error) => /permission mode/.test(error.message));
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0].message).toContain("plan");
+    expect(mismatches[0].message).toContain("auto");
+    const matching = await setup({ autonomy: "full" });
+    expect((await matching.channel.send("hello")).status).toBe("completed");
+    expect(errorsOf(matching.events)).toHaveLength(0);
+  }, 15_000);
+
+  it("passes exactly one permission mode per autonomy level and removes no tool or prompt (M1-AC5)", () => {
+    const opts = { cwd: ".", model: "fake", instructions: "text", onEvent: () => {} };
+    for (const [autonomy, mode] of [["supervised", "plan"], ["auto", "auto"], ["full", "bypassPermissions"]] as const) {
+      const args = claudeChannelArgs({ ...opts, autonomy });
+      expect(args.filter((arg) => arg === "--permission-mode")).toHaveLength(1);
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe(mode);
+      for (const forbidden of ["--system-prompt", "--system-prompt-file", "--tools", "--allowedTools", "--disallowedTools", "--bare", "--dangerously-skip-permissions"]) expect(args).not.toContain(forbidden);
+    }
+  });
 });
