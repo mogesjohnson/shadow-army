@@ -1,5 +1,5 @@
 import { appendFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export const REDACTED = "[REDACTED]";
 
@@ -82,34 +82,92 @@ export function redact(data: unknown, secrets: readonly string[] = []): unknown 
   return visit(data);
 }
 
-/** Append-only JSONL files in the supplied .shadow/v2/logs directory. */
-export class SessionLogs {
-  private readonly pending = new Map<string, Promise<void>>();
-  private readonly secrets: string[];
+export interface LogWriteResult {
+  /** False when the line (and any gap line before it) could not be written, even after the retry. */
+  written: boolean;
+  error?: Error;
+}
 
-  constructor(private readonly directory: string, secrets: string[]) {
+export interface SessionLogsOptions {
+  /** Called once when a gap opens in a log: its first line lost after a failed retry. The post office reports it. */
+  onFailure?: (failure: { name: string; error: Error }) => void;
+  /** Delay before the one retry; PO-5 says 100 ms. */
+  retryDelayMs?: number;
+  /** Appends text to a log file. Tests replace it to inject faults. */
+  append?: (path: string, text: string) => Promise<void>;
+}
+
+const defaultAppend = async (path: string, text: string): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, text, { encoding: "utf8", mode: 0o600 });
+};
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Append-only JSONL files in the supplied .shadow/v2/logs directory (PO-5).
+ * A log never stops a soldier: a failed write is retried once, 100 ms later; if that fails too,
+ * `write` resolves with `written: false`, later writes try again, and the first line written
+ * after the gap is preceded by a `log-gap` line that counts the lines lost.
+ */
+export class SessionLogs {
+  private readonly pending = new Map<string, Promise<unknown>>();
+  private readonly secrets: string[];
+  private readonly lost = new Map<string, number>();
+  private readonly cut = new Set<string>();
+  private readonly append: (path: string, text: string) => Promise<void>;
+  private readonly retryDelayMs: number;
+
+  constructor(private readonly directory: string, secrets: string[], private readonly options: SessionLogsOptions = {}) {
     this.secrets = [...secrets];
+    this.append = options.append ?? defaultAppend;
+    this.retryDelayMs = options.retryDelayMs ?? 100;
   }
 
-  async write(name: string, data: unknown): Promise<void> {
+  async write(name: string, data: unknown): Promise<LogWriteResult> {
+    this.assertName(name);
+    const line = JSON.stringify(redact(data, this.secrets));
+    if (line === undefined) throw new Error("session log record is not JSON data");
+    return this.enqueue(name, () => this.tryWrite(name, line));
+  }
+
+  private assertName(name: string): void {
     // Names are identifiers, never paths or raw user/model text. Reject Windows devices too.
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name)
       || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)
       || redact(name, this.secrets) !== name) {
       throw new Error("invalid session log name");
     }
-    const line = JSON.stringify(redact(data, this.secrets));
-    if (line === undefined) throw new Error("session log record is not JSON data");
-    const previous = this.pending.get(name) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(async () => {
-      await mkdir(this.directory, { recursive: true });
-      await appendFile(join(this.directory, `${name}.jsonl`), `${line}\n`, { encoding: "utf8", mode: 0o600 });
-    });
+  }
+
+  private enqueue(name: string, task: () => Promise<LogWriteResult>): Promise<LogWriteResult> {
+    const next = (this.pending.get(name) ?? Promise.resolve()).then(task);
     this.pending.set(name, next);
-    try {
-      await next;
-    } finally {
-      if (this.pending.get(name) === next) this.pending.delete(name);
+    void next.finally(() => { if (this.pending.get(name) === next) this.pending.delete(name); });
+    return next;
+  }
+
+  private async tryWrite(name: string, line: string): Promise<LogWriteResult> {
+    const lost = this.lost.get(name) ?? 0;
+    const gap = lost > 0 ? `${JSON.stringify({ type: "log-gap", lost, time: new Date().toISOString() })}\n` : "";
+    // A line cut short by a failed write is ended before the next one.
+    const text = `${this.cut.has(name) ? "\n" : ""}${gap}${line}\n`;
+    const path = join(this.directory, `${name}.jsonl`);
+    let error: Error | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await sleep(this.retryDelayMs);
+      try {
+        await this.append(path, text);
+        this.lost.delete(name);
+        this.cut.delete(name);
+        return { written: true };
+      } catch (caught) {
+        error = caught instanceof Error ? caught : new Error(String(caught));
+        this.cut.add(name);
+      }
     }
+    this.lost.set(name, lost + 1);
+    if (lost === 0) this.options.onFailure?.({ name, error: error! });
+    return { written: false, error };
   }
 }

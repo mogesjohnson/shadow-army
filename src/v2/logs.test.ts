@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -177,15 +177,84 @@ describe("session logs", () => {
     await expect(logs.write(upper, {})).rejects.toThrow("invalid session log name");
   });
 
+});
 
-  it("reports a failed write and permits a later retry", async () => {
-    const dir = await directory();
-    const blocked = join(dir, "logs");
-    await writeFile(blocked, "not a directory");
-    const logs = new SessionLogs(blocked, []);
-    await expect(logs.write("post-office", { type: "start" })).rejects.toThrow();
-    await rm(blocked);
-    await logs.write("post-office", { type: "retry" });
-    expect(JSON.parse((await readFile(join(blocked, "post-office.jsonl"), "utf8")).trim())).toEqual({ type: "retry" });
+/** M1-AC4's log failure: retried once after 100 ms, then carried on with a gap line. */
+describe("a failed log write (PO-5, M1-AC4)", () => {
+  /** An in-memory log file whose appends fail while `failing` is above zero; `torn` leaves half a line behind. */
+  function fakeFile(): { text: () => string; attempts: () => number; failing: { count: number; torn: boolean }; append: (path: string, text: string) => Promise<void> } {
+    let text = "";
+    let attempts = 0;
+    const failing = { count: 0, torn: false };
+    return {
+      text: () => text,
+      attempts: () => attempts,
+      failing,
+      append: async (_path, chunk) => {
+        attempts++;
+        if (failing.count > 0) {
+          failing.count--;
+          if (failing.torn) text += chunk.slice(0, Math.floor(chunk.length / 2));
+          throw new Error("disk full");
+        }
+        text += chunk;
+      },
+    };
+  }
+  const parsed = (text: string): unknown[] => text.split("\n").flatMap((line) => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+
+  it("retries once, 100 ms later, and the line is written when the retry works", async () => {
+    vi.useFakeTimers();
+    const file = fakeFile();
+    file.failing.count = 1;
+    const onFailure = vi.fn();
+    const logs = new SessionLogs("logs", [], { append: file.append, onFailure });
+    const result = logs.write("post-office", { n: 1 });
+    await vi.advanceTimersByTimeAsync(99);
+    expect(file.attempts()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toEqual({ written: true });
+    expect(file.attempts()).toBe(2);
+    expect(parsed(file.text())).toEqual([{ n: 1 }]);
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("carries on when the retry fails too: reports once, tries every later write, and the first line after the gap counts the loss", async () => {
+    vi.useFakeTimers();
+    const file = fakeFile();
+    file.failing.count = 6;
+    const onFailure = vi.fn();
+    const logs = new SessionLogs("logs", [], { append: file.append, onFailure });
+    const results = Promise.all([1, 2, 3].map((n) => logs.write("post-office", { n })));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect((await results).map((result) => result.written)).toEqual([false, false, false]);
+    expect(file.attempts()).toBe(6);
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledWith({ name: "post-office", error: expect.objectContaining({ message: "disk full" }) });
+    expect(file.text()).toBe("");
+
+    expect((await logs.write("post-office", { n: 4 })).written).toBe(true);
+    await logs.write("post-office", { n: 5 });
+    expect(parsed(file.text())).toEqual([{ type: "log-gap", lost: 3, time: expect.any(String) }, { n: 4 }, { n: 5 }]);
+  });
+
+  it("ends a line cut short by a failed write before the next one, and a reader skips it", async () => {
+    vi.useFakeTimers();
+    const file = fakeFile();
+    const logs = new SessionLogs("logs", [], { append: file.append, retryDelayMs: 100 });
+    await logs.write("soldier-1", { n: 1 });
+    file.failing.count = 2;
+    file.failing.torn = true;
+    const lost = logs.write("soldier-1", { n: 2, padding: "x".repeat(40) });
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await lost).written).toBe(false);
+    file.failing.torn = false;
+    await logs.write("soldier-1", { n: 3 });
+    const lines = file.text().split("\n");
+    expect(lines.some((line) => line.startsWith('{"n":2') && !line.endsWith("}"))).toBe(true);
+    expect(parsed(file.text())).toEqual([{ n: 1 }, { type: "log-gap", lost: 1, time: expect.any(String) }, { n: 3 }]);
+    expect(file.text().endsWith("\n")).toBe(true);
   });
 });
