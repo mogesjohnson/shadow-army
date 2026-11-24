@@ -303,3 +303,94 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
     expect(await send("claude-sonnet --claim a go")).toContain("Shadow Army · Tank · completed (refused)\nI can't help with that.\n");
   });
 });
+
+describe("the mod's preflight (HOST-2, M1b-29)", () => {
+  beforeEach(() => { vi.restoreAllMocks(); });
+  const cases: [string, Parameters<typeof mod>[1], RegExp][] = [
+    ["host 2.1.293", { host: "2.1.293" }, /^Shadow Army needs Claude Code 2\.1\.294 or later; this is 2\.1\.293$/],
+    ["no node", { tools: { node: "missing" } }, /^Shadow Army needs Node\.js 22\.0 or later on PATH; none was found$/],
+    ["Node.js 20", { tools: { node: "v20.11.0" } }, /needs Node\.js 22\.0 or later on PATH; found 20\.11\.0$/],
+    ["git 2.33", { tools: { git: "git version 2.33.1" } }, /needs git 2\.34 or later on PATH; found 2\.33\.1$/],
+  ];
+  it.each(cases)("starts nothing with %s and shows the line naming what is needed", async (_name, env, line) => {
+    const { send, spawns, logs } = await mod(() => ({}), env);
+    expect(await send("claude-sonnet --claim a go")).toMatch(line);
+    expect(spawns).toHaveLength(0);
+    expect(logs[0]).toMatch(line);
+  });
+
+  it("ends a --version that never exits after 10 s, with its process, and says so", async () => {
+    const { send, after, killed, spawns } = await mod(() => ({}), { tools: { git: "hang" } });
+    const pending = send("claude-sonnet --claim a go");
+    await new Promise((done) => setTimeout(done, 0));
+    after.find((t) => t.ms === 10_000 && !t.cancelled)!.run();
+    expect(await pending).toMatch(/git --version gave no answer in 10 s · Shadow Army needs git 2\.34 or later on PATH; none was found$/);
+    expect(killed).toEqual(["git"]);
+    expect(spawns).toHaveLength(0);
+  });
+
+  it.each([
+    ["HTTPS_PROXY", { vars: { HTTPS_PROXY: "http://p:8080", NO_PROXY: "example.com" } }],
+    ["http_proxy", { settingsEnv: { http_proxy: "http://p:8080" } }],
+  ])("names %s and the entry to add, and starts nothing", async (name, env) => {
+    const { send, spawns } = await mod(() => ({}), env);
+    expect(await send("claude-sonnet --claim a go")).toBe(`Shadow Army: ${name} would send the army's commands through a proxy · add 127.0.0.1 to NO_PROXY · nothing started`);
+    expect(spawns).toHaveLength(0);
+  });
+
+  it("starts with 127.0.0.1 in NO_PROXY", async () => {
+    const { send, spawns } = await mod(() => ({ status: "completed", summary: "ok" }), { vars: { HTTPS_PROXY: "http://p:8080", NO_PROXY: "127.0.0.1,localhost" } });
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    expect(spawns).toHaveLength(1);
+  });
+
+  it("stops with Claude Code's words when it refuses every fetch, and sends nothing more", async () => {
+    const { send, logs, spawns, every } = await mod(() => ({}), { refuse: "your organization's policy doesn't allow web fetch" });
+    expect(await send("claude-sonnet --claim a go")).toContain("your organization's policy");
+    expect(logs).toEqual(["Shadow Army can't reach its post office: Claude Code refused the request (your organization's policy doesn't allow web fetch)"]);
+    expect(every.every((t) => t.cancelled)).toBe(true);
+    expect(spawns).toHaveLength(1);
+  });
+
+  it("ends a post office that never reports ready after 60 s, naming the step, and the next use starts a new one", async () => {
+    const { send, after, spawns, logs, $ } = await mod(() => ({ status: "completed", summary: "ok" }));
+    const spawn = $.process.spawn as (o: { argv: string[] }) => unknown;
+    let silent = true;
+    ($ as any).process.spawn = (options: { argv: string[] }) => {
+      const real = spawn(options) as any;
+      if (!silent || options.argv[1] === "--version") return real;
+      return { async *[Symbol.asyncIterator]() { await new Promise(() => {}); }, return: async () => ({ done: true }) };
+    };
+    const pending = send("claude-sonnet --claim a go");
+    await new Promise((done) => setTimeout(done, 0));
+    await new Promise((done) => setTimeout(done, 0));
+    after.find((t) => t.ms === 60_000)!.run();
+    await pending;
+    expect(logs[0]).toMatch(/did not report ready within 60 s · step: waiting for its ready event/);
+    silent = false;
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    expect(spawns).toHaveLength(2);
+  });
+
+  it("starts one post office for two uses at once, and neither sees an already-running line", async () => {
+    const { send, spawns, probes } = await mod(() => ({ status: "completed", summary: "ok" }));
+    const [a, b] = await Promise.all([send("claude-sonnet --claim a one"), send("claude-sonnet --claim b two")]);
+    expect(a).toContain("Tank");
+    expect(b).toContain("Tank");
+    expect(spawns).toHaveLength(1);
+    expect(probes).toHaveLength(2);
+  });
+
+  it("checks once, before the first start only", async () => {
+    const { send, probes } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a one");
+    await send("claude-sonnet --claim a two");
+    expect(probes).toHaveLength(2);
+  });
+
+  it("shows every Cc and Cf character in a refusal's words as a placeholder", async () => {
+    const { send, logs } = await mod(() => ({}), { refuse: "no\u001b[31m\u202e web" });
+    await send("claude-sonnet --claim a go");
+    expect(logs[0]).toContain("no\\u{1b}[31m\\u{202e} web");
+  });
+});
