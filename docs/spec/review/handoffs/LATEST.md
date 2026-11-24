@@ -1,29 +1,31 @@
-# Handoff: orchestrator 27 (`347b1d0e`) to orchestrator 28 (2026-11-24)
+# Handoff: orchestrator 28 (`ce66d8d9`) to orchestrator 29 (2026-11-24)
 
-Range on this branch: `5689724` (orch-26's handoff) and this commit. orch-26's handoff is `git show 5689724:docs/spec/review/handoffs/LATEST.md`; its For the owner and orch-25's, orch-24's and orch-21's still hold. orch-27 ran 21:15 to about 21:32 UTC and handed off at about 140k: it starts at 75k, a close costs about 3k, a launch about 10k. Hand off after two launches.
+Range on this branch: `2e2294f` (orch-27's handoff) and this commit. orch-27's handoff is `git show 2e2294f:docs/spec/review/handoffs/LATEST.md`; its For the owner and orch-26's, orch-25's, orch-24's and orch-21's still hold where not done below. orch-28 ran 21:28 to about 22:45 UTC, started at 69k and made this save point at about 150k: two launches cost about 16k, three closes about 9k, the owner's size questions about 5k.
 
 **Done.**
-- Closed the tabs of orch-26, w68 and w65. Re-pointed the w65 and w58 briefs to orch-27 (re-point w58's to yourself; w67, w69 and w70 say "the orchestrator that launched you" or orch-27).
-- **w68** (#101): `ee17065` on `claude/63-m1a-linux-git` (`src/workspace/apply.ts`, new `apply.rollback.test.ts`, +75/-3). C1 fixed (a failed rollback returns the paths left changed), C2 answered by the body. Linux 30 passed, 1 skipped.
-- **w65** (#92): `b84fc7e` on `claude/63-m1a-apply-core` (`src/v2/apply.ts`, `apply.test.ts`, `postOffice.ts`, `channel.ts`, +91/-15), after merging #90's fixes (`027d83d`). C1 to C3 fixed (the apply uses only the turn's audited start..tip by full commit ID; a log failure after an apply returns the files plus `logFailure`), C4/C5 by body and comment. Windows full `npm test` 477 passed, 4 skipped. WSL `apply.test.ts`: 14/34 failed at base, 15/38 at head; the extra one is the new C1 test, same synthetic-fixture `tool_call` wait on Linux (#90's WSL failures, queue item below). The same-file follow-up clash (w64's finding) is a build note: its check lives in `src/workspace/apply.ts`. `channel.ts` gained `WriteOutcome.start/tip` and `TurnResult.logFailure`.
-- **Codex review 4 of 12** (21:16 UTC on #63): **#105 approved** at `129c211` (3 P2s, build notes); **#109** changes requested at `915e619` (1 P0, 4 P1, 2 P2); **#110** changes requested at `96288b5` (2 P1, 2 P2). Batches 5 to 12 were not back at 21:30 UTC.
-
-**Running** (5-hour figure 60% at 21:30 UTC; it resets 00:30 UTC).
-- **w70-fix109-110** (`e16cf22d`, Opus medium, launched 21:22): #109 then #110, in worktree `w22-linux-helper`. Files: `native/linux/sa-contain.c`, `scripts/build-native.mjs`, `scripts/build-native.test.mjs`, `package.json`, `.gitignore`. Brief: `.shadow/v2-tools/tasks/w70-fix109-110.md`.
-- **w69-fix99** (`b287fd42`, Opus medium, launched 21:28): #99 in `src/v2/postOffice.ts` and `postOffice.test.ts`, worktree `w13-fix-office`.
+- Closed the tabs of orch-27, w70, w69, w67 and w58. No worker is running.
+- **Owner's V6 size exceptions** (asked in orch-28's question, 2026-11-24): #109 "Yes, approve" (about 560 lines, 1 file), #99 "Yes, approve" (441 lines, 3 files), #91 and #94 "Yes, approve both". The workers recorded #109 and #99 in their bodies; orch-28 recorded #91 and #94.
+- **w70** (#109, #110, Codex review 4): #109 `37bf42b` (`native/linux/sa-contain.c`, +128/-38: kill only through a verified /proc, keep watching during exec; C1-C5 fixed, C6/C7 recorded), #110 `326d4c3` (`scripts/build-native.mjs`, its test, `package.json`: fail the Linux build without a fresh helper for the processor; C1-C4). WSL hand checks 11/11, tests 14/14.
+- **w69** (#99, Codex review 3): `645e373` on `claude/63-m1a-fix-office` (`src/v2/postOffice.ts`, `postOffice.fixes.test.ts`, +131/-22). C1-C5 fixed with fail-first tests, C6 heartbeat test added, base merged. Windows 37/37; WSL has the same pre-existing W12-3 failure at base and head.
+- **w67** (#96, #103, Codex review 3): #96 at `0f829b1`, #103 at `50f5705` (`src/v2/claude.ts`, `claude.test.ts`, `client.ts`, `test/fakes/claude.mjs`). Bad-line quiet recovery, whole redacted record, tenth-line diagnostic, the missing-usage test gated. #96 merged the slice (#102's guard), so #103 is now 47 lines, 2 files. Linux `apply.test.ts` fails 2 at `50f5705` and 3 on the slice base `8ef9b2f` (#90's WSL queue item).
+- **w58** (M1b-28 part B, trust gate in the post office) stopped at its limit, half done: `7ca3629` (gate) and `3878436` (4 tests, failing on rerun, cause unread) on `claude/63-m1b-po-trust`, base `claude/63-m1b-base-po-trust` (#140 and #115 merged onto #142) pushed. No PR. Its `## Left` is in `.shadow/v2-tools/tasks/w58-po-trust.md`.
+- **Codex review 5 of 12** (22:36 UTC on #63): changes requested on **#106** at `30069d8` (1 P0, 3 P1, 2 P2), **#120** at `9034437` (2 P0, 5 P1, 1 P2), **#121** at `f13e3ef` (2 P0, 4 P1, 2 P2). #120 and #121 are stacked on #106.
 
 ## Next
 
-1. Close orch-27's tab once the cockpit marks it parked.
-2. When w70 or w69 reports: `git show --stat <sha>`, close its tab, then launch **w67-fix96-103** (Opus medium; brief ready; `src/v2/claude.ts`, `client.ts`, their tests, and #103's test files for gating; no overlap with w69 or w70). At most two workers at once.
-3. `postOffice.ts` queue, one at a time: w69 (#99, running), then w58-po-trust, then a worker for #90's WSL failures (the synthetic fixture's `tool_call` never arrives on Linux; it fails `postOffice.test.ts` and now `apply.test.ts` on the base too).
-4. orch-24's Next 6: write `codex-reviews/11-24-2026-codex-review-13.md` (same shape as batch 12: #141, #142, w58's PR, and the new fix heads of #90 to #97, #99, #101, #109, #110) once w58's PR is open, and add it to that folder's README.
-5. Watch Codex on each 5-minute tick: `gh api 'repos/mogesjohnson/shadow-army/issues/63/comments?since=2026-11-24T21:17:00Z'`. For each approval at the head, give the owner the merge command (auto mode refuses `gh pr merge`).
-6. Memory: at most two workers and one full vitest at a time.
+The 5-hour figure was 87% at 22:42 UTC and resets 00:30 UTC: start no worker while it is 80% or more.
+
+1. Launch, at most two at once (memory), briefs ready in `.shadow/v2-tools/tasks/`, all Opus medium:
+   - **w71-fix106** (`src/v2/git/harness.ts`, its test, `hostileRepo.testutil.ts`, `test/fakes/git-hang.mjs`, worktree `w23-harness-git`) first, beside
+   - **w74-po-trust-2** (finish w58: the failing tests, `src/v2/server.ts`'s `trust` case and `TrustNeeded` answer, the draft PR; worktree `w58-po-trust`). No file overlap with w71.
+   - After w71 pushes: **w72-fix120** (`src/v2/snapshot.ts`, its test, `w36-snapshots`) and **w73-fix121** (`src/v2/git/hold.ts`, its test, `hostileRepo.testutil.ts`, `w37-git-hold`). They merge #106's new head first. Tell each at launch that w71 has pushed.
+2. Then the queue: a worker for #90's WSL failures (the synthetic fixture's `tool_call` never arrives on Linux; it fails `postOffice.test.ts` and `apply.test.ts` on the base too, and w67 saw it again).
+3. orch-24's Next 6: write `codex-reviews/11-24-2026-codex-review-13.md` (same shape as batch 12: #141, #142, w74's PR, and the new fix heads of #90 to #97, #99, #101, #103, #109, #110, then #106, #120, #121 once fixed) and add it to that folder's README.
+4. Watch Codex on each 5-minute tick: `gh api 'repos/mogesjohnson/shadow-army/issues/63/comments?since=2026-11-24T22:37:00Z'`. For each approval at the head, give the owner the merge command (auto mode refuses `gh pr merge`).
+5. A worker over 400 lines asks before pushing; ask the owner with a question and pass on the exact words. The owner answered all four within minutes.
 
 ## For the owner
 
-- **Merge #105** (Codex approved at the head; it moves #122, stacked on it, first):
+- **Merge #105** (still waiting; Codex approved at the head; it moves #122, stacked on it, first):
   `! gh pr edit 122 --base claude/63-m1b && gh pr ready 105 && gh pr merge 105 --merge --match-head-commit 129c211ed701bca2a3907b73633559298540cab5`
-- **V6 size exceptions:** #91 (480 lines) and #94 (689 lines, 7 files).
-- **Worktree cleanup:** the cockpit worktree `AIConnections-worktrees/w65-fix92` (branch `w65-fix92`, at main, unused) may be removed; also the WSL clones question from orch-26.
+- **Worktree cleanup:** the cockpit worktree `AIConnections-worktrees/w65-fix92` (unused) and `orch-28-orchestrate-workers` (made by the cockpit, unused) may be removed; also the WSL clones question from orch-26.
