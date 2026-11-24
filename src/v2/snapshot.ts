@@ -185,3 +185,37 @@ export async function closeSnapshot(snapshot: Snapshot, start: TurnStart, root: 
   if (violation) await report(violation);
   await removeSnapshot(snapshot, root, repo, git);
 }
+
+export interface Orphan { folder: string; snapshot: string; files: string[]; head: string }
+/**
+ * Handles snapshots of another army whose folder is gone from disk or from `git worktree list`: each is reported, then removed.
+ * A subfolder whose path file can't be read, or that is this army's own, is left as it is.
+ */
+export async function sweepOrphans(options: { roots: string[]; folder: string; repo: OpenOptions["repo"]; git: GitFactory; report: (orphan: Orphan) => void | Promise<void> }) {
+  const main = runIn(options.git, options.repo);
+  const listed = (await main(["worktree", "list", "--porcelain"], "other")).stdout.split(/\r?\n/).filter((l) => l.startsWith("worktree ")).map((l) => fold(realish(l.slice(9))));
+  const mine = snapshotSubfolder("", options.folder), unreadable: string[] = [];
+  for (const root of new Set(options.roots)) {
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      const subfolder = join(root, entry.name);
+      if (!entry.isDirectory() || !/-[0-9a-f]{12}$/.test(entry.name) || entry.name === basename(mine)) continue;
+      let armyFolder: string;
+      try { armyFolder = readFileSync(join(subfolder, FOLDER_FILE), "utf8"); } catch { unreadable.push(subfolder); continue; }
+      if (existsSync(armyFolder) && listed.includes(fold(realish(armyFolder)))) continue;
+      for (const session of readdirSync(subfolder, { withFileTypes: true }).filter((e) => e.isDirectory())) {
+        const path = join(subfolder, session.name);
+        let gitDir: string;
+        try { gitDir = gitDirOf(path); } catch { continue; }
+        if (!within(realish(options.repo.commonDir), realish(gitDir))) continue; // another repository's
+        const run = runIn(options.git, { gitDir, workTree: path, commonDir: options.repo.commonDir });
+        const head = (await run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+        await options.report({ folder: armyFolder, snapshot: path, files: await changedPaths(run), head });
+        removeInside(root, path);
+      }
+      await main(["worktree", "prune"], "other");
+      dropEmptySubfolder(subfolder);
+    }
+  }
+  return { unreadable };
+}

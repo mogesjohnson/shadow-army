@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { HarnessGit } from "./git/harness.js";
 import {
   armyMark, beginTurn, closeSnapshot, discardWrites, findWrites, FOLDER_FILE, ignoredEntries, openSnapshot, removeInside,
-  snapshotSubfolder, validateSnapshotRoot, within, type FolderFacts, type GitFactory,
+  snapshotSubfolder, sweepOrphans, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type Orphan,
 } from "./snapshot.js";
 
 const folders: string[] = [];
@@ -144,5 +144,35 @@ describe("a snapshot's life", () => {
     git(r.folder, "config", "core.excludesFile", join(r.folder, ".gitignore"));
     put(join(r.folder, ".gitignore"), "dist/\n.shadow/\n");
     expect(await ignoredEntries((args, kind, cwd) => factory(r.repo).run(args, kind, cwd))).toEqual(["dist/a.js"]);
+  });
+});
+
+describe("another army's snapshots", () => {
+  it("are left while its working tree exists, and reported then removed once it is gone", async () => {
+    const r = makeRepo();
+    const other = join(temp(), "other");
+    git(r.folder, "worktree", "add", "-q", "--detach", other);
+    const otherSnap = await openSnapshot({ root: r.root, folder: other, sessionId: "o1", repo: { gitDir: git(other, "rev-parse", "--absolute-git-dir"), workTree: other, commonDir: r.repo.commonDir }, git: factory });
+    put(join(otherSnap.path, "changed.txt"), "w");
+    const mine = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "m1", repo: r.repo, git: factory });
+    const orphans: Orphan[] = [];
+    const sweep = () => sweepOrphans({ roots: [r.root], folder: r.folder, repo: r.repo, git: factory, report: (o) => void orphans.push(o) });
+    await sweep();
+    expect(existsSync(otherSnap.path) && existsSync(mine.path) && orphans.length === 0).toBe(true);
+    git(r.folder, "worktree", "remove", "--force", other);
+    await sweep();
+    expect(orphans.map((o) => [o.folder, o.files, o.head])).toEqual([[other, ["changed.txt"], git(r.folder, "rev-parse", "HEAD")]]);
+    expect(existsSync(otherSnap.subfolder)).toBe(false);
+    expect(existsSync(mine.path)).toBe(true);
+    await sweep();
+    expect(orphans).toHaveLength(1);
+  });
+  it("leave a subfolder whose path file can't be read, and say so", async () => {
+    const r = makeRepo();
+    const bad = join(r.root, "gone-0123456789ab");
+    mkdirSync(join(bad, FOLDER_FILE), { recursive: true });
+    const result = await sweepOrphans({ roots: [r.root], folder: r.folder, repo: r.repo, git: factory, report: () => {} });
+    expect(result.unreadable).toEqual([bad]);
+    expect(existsSync(bad)).toBe(true);
   });
 });
