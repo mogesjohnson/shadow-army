@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { PostOffice, type OfficeOptions } from "./postOffice.js";
+import { PostOffice, TrustNeeded, type OfficeOptions } from "./postOffice.js";
 import { redact } from "./logs.js";
 import { SessionLease, type LeaseClock, type LeaseOptions } from "./lease.js";
 import { acquireLock, lockMessages, type HeldLock, type StartTimeOf } from "./lock.js";
@@ -64,6 +64,12 @@ function turnOptions(claims: unknown): { claims?: string[] } {
   return claims.length ? { claims: claims as string[] } : {};
 }
 
+/** ARM-7: a use refused for trust answers with the card instead of an error; any other error stays one. */
+function trustAnswer(error: unknown): unknown {
+  if (error instanceof TrustNeeded) return error.answer;
+  throw error;
+}
+
 export async function startOfficeServer(options: ServerOptions): Promise<OfficeServer> {
   // PO-2: refused before any office or lock exists. `host` only exists so a test can prove the refusal.
   if (options.host !== undefined) assertLoopback(options.host);
@@ -118,10 +124,12 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
               office.leaseEnded(lease.session, "released");
               value = { ok: true }; break;
             case "army": value = office.army(); break;
-            case "open": value = await office.open(key, turnOptions(command.claims)); break;
+            // ARM-7: while a policy file is untrusted, open and send start nothing and answer with the trust card (#140's shape).
+            case "open": value = await office.open(key, turnOptions(command.claims)).catch(trustAnswer); break;
             case "send":
               if (typeof command.text !== "string") throw new Error("send requires text");
-              value = await office.send(key, command.text, turnOptions(command.claims)); break;
+              value = await office.send(key, command.text, turnOptions(command.claims)).catch(trustAnswer); break;
+            case "trust": value = await office.trust(command.hashes); break;
             case "interrupt": await office.interrupt(key); value = { ok: true }; break;
             case "approval":
               if (typeof command.requestId !== "string") throw new Error("approval requires requestId");

@@ -17,6 +17,23 @@ import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
 import { containmentFailedMessage, DownSoldiers, holdGuardOpen, readTrees, stillRunning, TreeRecord, type Identity, type Leftover, type ProcessOps } from "./contain/trees.js";
 import { sweepTrees, systemOps, type SweepOps } from "./contain/sweep.js";
+import { accept, isAccepted, mcpServers, normalizeCommonDir, readPolicyFiles, readRecord, sha256, untrustedFiles, type PolicyFile, type PolicyFileRead, type TrustRecord, type Untrusted } from "./trust.js";
+import type { TrustAnswer, TrustRow } from "./cli.js";
+
+/** ARM-7: the reason a use gets while any policy file is untrusted. */
+export const TRUST_WAIT = "the army waits for you to trust this folder's Shadow Army files";
+/** ARM-7: thrown by `open` and `send` instead of starting anything; `answer` is #140's trust answer for the command's result. */
+export class TrustNeeded extends Error {
+  constructor(readonly answer: TrustAnswer) { super(`nothing was started: ${TRUST_WAIT}`); }
+}
+/** The soldiers a folder's `shadow.config.json` sets above supervised, as the card names them. Unparseable bytes name none. */
+function aboveSupervised(bytes: Buffer): TrustRow[] {
+  let soldiers: unknown;
+  try { soldiers = (JSON.parse(bytes.toString()) as { soldiers?: unknown } | null)?.soldiers; } catch { return []; }
+  if (!soldiers || typeof soldiers !== "object") return [];
+  return Object.entries(soldiers as Record<string, { cli?: unknown; model?: unknown; autonomy?: unknown } | null>).flatMap(([key, one]) =>
+    one?.autonomy !== undefined && one.autonomy !== "supervised" ? [{ kind: "soldier" as const, name: shadowName(key), cli: String(one.cli), model: String(one.model), autonomy: String(one.autonomy) }] : []);
+}
 
 /** A channel that can list its tree's processes (PO-11). The Claude channel doesn't expose `list` yet. */
 /** PO-1: each turn's checkout baseline is kept on disk while the turn runs, so a later post office can close its guard. */
@@ -45,6 +62,8 @@ export interface OfficeOptions {
   processOps?: SweepOps | null;
   /** PO-8's session services: the commands the CLI's configuration declares for its language and MCP servers. Such a process never holds a turn's guard. */
   sessionServices?: readonly string[];
+  /** ARM-7: the home whose `.shadow-army/trust/` holds the accepted hashes. Tests pass their own. */
+  trustHome?: string;
 }
 
 /** The repository `cwd` is in, found from its `.git` as git finds it, so nothing the repository names runs to find it. */
@@ -105,6 +124,8 @@ interface Session {
   tasks: Set<string>;
   /** Wakes a guard waiting on background work. */
   settle?: () => void;
+  /** ARM-7: a restart that found a policy file untrusted; it waits for the card. */
+  trustWait?: boolean;
 }
 
 /**
@@ -128,7 +149,10 @@ function carryApply(sessions: Session[], before: RepoState, after: RepoState, pa
 /** M1 transport foundation. Routing, write claims, handoffs and background-job attribution are later milestones. */
 export class PostOffice {
   readonly root: string;
-  private readonly roster: Roster;
+  private roster: Roster;
+  /** ARM-7: the folder's one trust card as shown, until accepted, and the repository's record name. */
+  private card?: { shown: Untrusted[]; current: { name: PolicyFile; hash: string }[]; hashes: string[] };
+  private commonDir?: Promise<string>;
   private readonly logs: SessionLogs;
   private readonly sessions = new Map<string, Session>();
   /** PO-15: soldiers whose containment failed at their close; nothing restarts them by itself. */
@@ -269,6 +293,79 @@ export class PostOffice {
     });
   }
 
+  private trustDeps() {
+    return { home: this.options.trustHome ?? homedir(), log: (line: string) => this.record({ type: "trust_record", data: { line } }) };
+  }
+
+  /** ARM-7: the record is named for the common git directory as git prints it, lower-cased on Windows. */
+  private repoKey(): Promise<string> {
+    return this.commonDir ??= this.git(this.repo).run(["rev-parse", "--path-format=absolute", "--git-common-dir"]).then((out) => {
+      if (out.code !== 0) { this.commonDir = undefined; throw new Error(`the repository's common git directory can't be read: ${out.stderr.trim()}`); }
+      return normalizeCommonDir(out.stdout.trim());
+    });
+  }
+
+  /** ARM-7: the folder's policy files, each read and hashed once, against the record. Any untrusted one raises the card instead. */
+  private async trustCheck(): Promise<{ record: TrustRecord | null; files: PolicyFileRead[] }> {
+    const commonDir = await this.repoKey();
+    const files = await readPolicyFiles(this.root);
+    const record = await readRecord(this.trustDeps(), commonDir);
+    const untrusted = untrustedFiles(record, slash(this.root), files);
+    if (untrusted.length) throw this.raiseCard(record, untrusted, files);
+    return { record, files };
+  }
+
+  /** The roster from trusted files: they are hashed again after it is read, so bytes changed meanwhile are never used. */
+  private async trustedRoster(): Promise<{ record: TrustRecord | null; files: PolicyFileRead[] }> {
+    const first = await this.trustCheck();
+    if (this.options.roster) return first;
+    const roster = loadRoster(this.root);
+    const again = await this.trustCheck();
+    if (again.files.map((file) => file.hash).join() !== first.files.map((file) => file.hash).join()) return this.trustedRoster();
+    this.roster = roster;
+    return again;
+  }
+
+  /** ARM-7: a claude session connects the `.mcp.json` where it opens, which can differ from the folder's; that copy needs trust too. */
+  private async trustCwd(key: string, cwd: string, trusted: { record: TrustRecord | null; files: PolicyFileRead[] }): Promise<void> {
+    const bytes = await readFile(join(cwd, ".mcp.json")).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
+    if (!bytes || isAccepted(trusted.record, ".mcp.json", sha256(bytes))) return;
+    const status = trusted.record?.accepted[".mcp.json"]?.length ? "changed" : "new";
+    throw this.raiseCard(trusted.record, [{ name: ".mcp.json", status, hash: sha256(bytes) }], trusted.files, shadowName(key), bytes);
+  }
+
+  /** ARM-7: the folder's one card: each file with its full hash (a gone one's last trusted), the soldiers set above supervised, and the servers. */
+  private raiseCard(record: TrustRecord | null, untrusted: Untrusted[], current: PolicyFileRead[], soldier?: string, mcp?: Buffer): TrustNeeded {
+    const last = record?.worktrees[slash(this.root)] ?? {};
+    const shown = untrusted.map((file) => ({ ...file, hash: file.hash ?? last[file.name] ?? "" }));
+    const rows: TrustRow[] = shown.map((file) => ({ kind: "file", name: file.name, state: file.status, hash: file.hash, ...(soldier ? { soldier } : {}) }));
+    const bytesOf = (name: PolicyFile) => shown.some((file) => file.name === name && file.status !== "gone") ? current.find((file) => file.name === name)?.bytes : undefined;
+    const config = soldier ? undefined : bytesOf("shadow.config.json");
+    if (config) rows.push(...aboveSupervised(config));
+    const servers = mcp ?? bytesOf(".mcp.json");
+    if (servers) rows.push(...mcpServers(servers).map((server) => ({ kind: "server" as const, file: ".mcp.json", name: server.name, target: server.target })));
+    this.card = { shown, current: current.map(({ name, hash }) => ({ name, hash })), hashes: shown.map((file) => file.hash) };
+    this.record({ type: "trust_card", data: { rows, line: TRUST_WAIT } });
+    return new TrustNeeded({ trust: { rows } });
+  }
+
+  /**
+   * ARM-7: the owner typed "Trust these files". Records exactly the card's hashes for every working tree of the repository,
+   * then lets each restart waiting on the card go on. A file changed since the card stays untrusted: the next use shows a new one.
+   */
+  async trust(hashes: unknown): Promise<{ ok: true }> {
+    this.check();
+    const card = this.card;
+    if (!card) throw new Error("no trust card is waiting; nothing was accepted");
+    if (!Array.isArray(hashes) || hashes.join() !== card.hashes.join() || hashes.length !== card.hashes.length) throw new Error("the hashes are not the ones the trust card showed; nothing was accepted");
+    const result = await accept(this.trustDeps(), { commonDir: await this.repoKey(), worktree: slash(this.root), shown: card.shown, current: card.current });
+    if (!result.ok) throw new Error(result.reason);
+    if (this.card === card) this.card = undefined;
+    this.record({ type: "trust_accepted", data: { hashes: card.hashes } });
+    for (const session of this.sessions.values()) if (session.trustWait) { session.trustWait = false; this.restart(session); }
+    return { ok: true };
+  }
+
   async open(key: string, options: TurnOptions = {}): Promise<{ soldier: string; cwd: string; session: string; branch?: string }> {
     this.check();
     let existing = this.sessions.get(key);
@@ -298,6 +395,8 @@ export class PostOffice {
     const wanted = claims?.length ? [...claims].sort() : undefined;
     const existing = this.sessions.get(key);
     if (existing) {
+      // ARM-7: a restart waiting on the card starts only once the files are trusted; until then the use gets the card.
+      if (existing.trustWait) { await this.trustCheck(); existing.trustWait = false; this.restart(existing); }
       await existing.restart;
       if (existing.down) throw new Error(`channel ${key} is down; reconnect explicitly`);
       // One process has one working directory, so a session's claims are fixed when it opens.
@@ -315,6 +414,8 @@ export class PostOffice {
   }
 
   private async makeSession(key: string, claims?: string[]): Promise<Session> {
+    // ARM-7: no session opens and no snapshot or worktree is made while a policy file is untrusted; the soldier runs as the trusted files say.
+    const trusted = await this.trustedRoster();
     const spec = this.roster.soldiers.get(key);
     if (!spec) throw new Error(`unknown soldier ${key}`);
     if (spec.cli !== "claude") throw new Error(`${key}: ${spec.cli} live channels are not implemented in M1`);
@@ -331,7 +432,11 @@ export class PostOffice {
       // WSP-11: a soldier whose snapshot can't be made does not start, and never runs in the folder itself.
       if (!ws && !this.snapshots.ok) throw new Error(`${key} can't start: ${this.snapshots.reason}`);
       if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
-    } catch (error) { await tree?.remove().catch(() => {}); await ws?.release(); throw error; }
+      await this.trustCwd(key, ws ? ws.cwd : snapshot!.path, trusted);
+    } catch (error) {
+      if (snapshot && this.snapshots.ok) await removeSnapshot(snapshot, this.snapshots.root, this.repo, this.git).catch(() => {});
+      await tree?.remove().catch(() => {}); await ws?.release(); throw error;
+    }
     const cwd = ws ? ws.cwd : snapshot!.path;
     const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, tasks: new Set(), ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
@@ -452,7 +557,7 @@ export class PostOffice {
   }
 
   private restart(session: Session): void {
-    if (session.restart || this.closed || session.down || !session.restartPending) return;
+    if (session.restart || this.closed || session.down || !session.restartPending || session.trustWait) return;
     session.restart = (async () => {
       await session.channel?.close();
       if (this.closed || session.down) return;
@@ -470,13 +575,26 @@ export class PostOffice {
       session.wake = undefined;
       if (this.closed || session.down) return;
       session.restarts = session.crashes.length;
-      // WSP-11: a restart opens a fresh session, so it gets a new snapshot; the old one's writes are reported before it goes.
-      if (session.snapshot && this.snapshots.ok) {
-        await this.reportWrites(session, "before its restart");
-        await removeSnapshot(session.snapshot, this.snapshots.root, this.repo, this.git);
-        session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: session.id, repo: this.repo, git: this.git });
-        session.cwd = session.snapshot.path;
-        if (this.closed || session.down) return;
+      const key = session.spec.key;
+      try {
+        // ARM-7: a restart is a fresh session, so it reads the policy files again, and starts nothing while one is untrusted.
+        const trusted = await this.trustedRoster();
+        session.spec = this.roster.soldiers.get(key) ?? session.spec;
+        session.instructions = buildStandingInstructions(this.roster, session.spec, { readOnly: !session.write });
+        // WSP-11: a restart opens a fresh session, so it gets a new snapshot; the old one's writes are reported before it goes.
+        if (session.snapshot && this.snapshots.ok) {
+          await this.reportWrites(session, "before its restart");
+          await removeSnapshot(session.snapshot, this.snapshots.root, this.repo, this.git);
+          session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: session.id, repo: this.repo, git: this.git });
+          session.cwd = session.snapshot.path;
+          if (this.closed || session.down) return;
+        }
+        await this.trustCwd(key, session.cwd, trusted);
+      } catch (error) {
+        if (!(error instanceof TrustNeeded)) throw error;
+        session.trustWait = true;
+        this.record({ soldier: key, type: "trust_wait", data: { line: `${shadowName(key)} not restarted: ${TRUST_WAIT}` } }, session);
+        return;
       }
       this.start(session);
       this.record({ soldier: session.spec.key, type: "restarted", data: { attempt: session.restarts, replayed: false, cwd: session.cwd,
@@ -486,7 +604,7 @@ export class PostOffice {
       this.record({ soldier: session.spec.key, type: "down", data: { reason: String(error) } }, session);
     }).finally(() => {
       session.restart = undefined;
-      if (session.restartPending && !session.active && !session.down && !this.closed) this.restart(session);
+      if (session.restartPending && !session.trustWait && !session.active && !session.down && !this.closed) this.restart(session);
     });
   }
 

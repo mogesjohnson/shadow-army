@@ -1,16 +1,19 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { armyMark } from "./snapshot.js";
+import { homedir, tmpdir } from "node:os";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { armyMark, snapshotSubfolder } from "./snapshot.js";
+import { sha256 } from "./trust.js";
+import { shadowName } from "./instructions.js";
+import type { TrustRow } from "./cli.js";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
 import type { SweepOps } from "./contain/sweep.js";
-import { PostOffice, type OfficeEvent } from "./postOffice.js";
+import { PostOffice, TRUST_WAIT, TrustNeeded, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
 // WSP-11: snapshots go outside the folder; these tests keep theirs in a folder of their own in the home.
@@ -717,5 +720,137 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     await office.closeSession("scout");
     expect(lines(events, "read_violation")[1]).toMatch(/read-only snapshot had writes at its close: late.txt$/);
     expect(existsSync(cwd)).toBe(false);
+  }, 120_000);
+});
+
+describe("M1b-28 part B: sessions and restarts wait for the trust card (ARM-7, M1-AC13)", () => {
+  const config = JSON.stringify({ soldiers: {
+    "codex-astra": { cli: "codex", model: "gpt-6-astra" }, "codex-sol": { cli: "codex", model: "gpt-6.1-sol" }, "claude-opus": { cli: "claude", model: "opus", autonomy: "full" },
+    "claude-sonnet": { cli: "claude", model: "sonnet" }, grok: { cli: "grok", model: "grok-4.7" }, agy: { cli: "agy", model: "gemini-3.1-pro-high" } } });
+  const policy = { "README.md": "hello\n", "shadow.config.json": config, "agent.md": "# Rules\n\n## claude-opus\nBe brief.\n" };
+  const homes: string[] = [];
+  afterAll(() => homes.forEach((home) => rmSync(home, { recursive: true, force: true })));
+  async function trustOffice(files: Record<string, string> = policy, restartDelaysMs: readonly number[] | undefined = [0, 0, 0]) {
+    const repo = makeRepo(files); repos.push(repo);
+    const home = mkdtempSync(join(tmpdir(), "sa-trust-home-")); homes.push(home);
+    const events: OfficeEvent[] = [], channels: ChannelOptions[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, processOps: null, ...(restartDelaysMs ? { restartDelaysMs } : {}), trustHome: home, onEvent: (event) => events.push(event),
+      channelFactory: (options): NativeChannel => {
+        channels.push(options);
+        return { async send(text) { return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+      } }); offices.push(office);
+    return { repo, office, events, channels, home };
+  }
+  const card = async (use: Promise<unknown>): Promise<TrustRow[]> => {
+    const error = await use.then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TrustNeeded);
+    expect((error as Error).message).toContain(TRUST_WAIT);
+    return (error as TrustNeeded).answer.trust.rows;
+  };
+  const shown = (rows: TrustRow[]) => rows.flatMap((row) => row.kind === "file" ? [row.hash] : []);
+  const hash = (text: string) => sha256(Buffer.from(text));
+  /** Closes an office with several snapshots inside the test's own time, not the 10 s afterEach hook's. */
+  const closeHere = async (office: PostOffice) => { offices.splice(offices.indexOf(office), 1); await office.close(); };
+  /** The office's session snapshots; the subfolder goes once its last snapshot does. */
+  const sessions = (office: PostOffice) => { const at = snapshotSubfolder(snapshots, office.root); return existsSync(at) ? readdirSync(at, { withFileTypes: true }).filter((entry) => entry.isDirectory()) : []; };
+
+  it("a new repository with full in its config opens nothing and makes no snapshot until accepted, then opens at full", async () => {
+    const { office, channels, events, home } = await trustOffice();
+    const rows = await card(office.open("claude-opus"));
+    expect(rows).toEqual([
+      { kind: "file", name: "shadow.config.json", state: "new", hash: hash(config) },
+      { kind: "file", name: "agent.md", state: "new", hash: hash(policy["agent.md"]) },
+      { kind: "soldier", name: shadowName("claude-opus"), cli: "claude", model: "opus", autonomy: "full" }]);
+    await card(office.send("claude-opus", "hi"));
+    expect(channels).toEqual([]);
+    expect(sessions(office)).toEqual([]);
+    await expect(office.trust(["0".repeat(64)])).rejects.toThrow("nothing was accepted");
+    expect(existsSync(join(home, ".shadow-army", "trust"))).toBe(false);
+    expect(await office.trust(shown(rows))).toEqual({ ok: true });
+    expect(readdirSync(join(home, ".shadow-army", "trust"))).toHaveLength(1);
+    await office.open("claude-opus");
+    expect(channels.map((one) => one.autonomy)).toEqual(["full"]);
+    expect(events.filter((event) => event.type === "trust_card")).toHaveLength(2);
+  }, 60_000);
+
+  it("a file changed between the card and the answer is not accepted, and the card shows again with its new hash", async () => {
+    const { repo, office, channels } = await trustOffice();
+    const first = await card(office.open("claude-opus"));
+    repo.write("agent.md", `${policy["agent.md"]}!`);
+    await office.trust(shown(first));
+    const second = await card(office.open("claude-opus"));
+    expect(second).toEqual([{ kind: "file", name: "agent.md", state: "changed", hash: hash(`${policy["agent.md"]}!`) }]);
+    expect(channels).toEqual([]);
+    await office.trust(shown(second));
+    await office.open("claude-opus");
+    expect(channels).toHaveLength(1);
+  }, 60_000);
+
+  it("shows .mcp.json's servers, and a committed copy that differs from the accepted folder one gets the soldier's card before its session", async () => {
+    const committed = JSON.stringify({ mcpServers: { tools: { command: "node", args: ["tools.js"] } } });
+    const folderCopy = JSON.stringify({ mcpServers: { docs: { url: "https://docs.example/mcp" } } });
+    const { repo, office, channels } = await trustOffice({ "README.md": "hello\n", ".mcp.json": committed });
+    repo.write(".mcp.json", folderCopy);
+    const folder = await card(office.open("claude-opus"));
+    expect(folder).toEqual([{ kind: "file", name: ".mcp.json", state: "new", hash: hash(folderCopy) }, { kind: "server", file: ".mcp.json", name: "docs", target: "https://docs.example/mcp" }]);
+    await office.trust(shown(folder));
+    const snapshot = await card(office.open("claude-opus"));
+    expect(snapshot).toEqual([{ kind: "file", name: ".mcp.json", state: "changed", hash: hash(committed), soldier: shadowName("claude-opus") },
+      { kind: "server", file: ".mcp.json", name: "tools", target: "node tools.js" }]);
+    expect(channels).toEqual([]);
+    expect(sessions(office)).toEqual([]);
+    await office.trust(shown(snapshot));
+    await office.open("claude-opus");
+    expect(channels).toHaveLength(1);
+  }, 60_000);
+
+  it("a crash restart while a file is untrusted waits for the card, while another soldier's open session runs on", async () => {
+    const { repo, office, channels, events } = await trustOffice();
+    await office.trust(shown(await card(office.open("claude-opus"))));
+    await office.open("claude-opus");
+    await office.open("claude-sonnet");
+    repo.write("agent.md", "# Rules\n");
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await untilRestart(() => events.some((event) => event.type === "trust_wait"));
+    expect((events.find((event) => event.type === "trust_wait")!.data as { line: string }).line).toContain(TRUST_WAIT);
+    expect((await office.send("claude-sonnet", "still here")).status).toBe("completed");
+    const rows = await card(office.send("claude-opus", "hi"));
+    expect(rows).toEqual([{ kind: "file", name: "agent.md", state: "changed", hash: hash("# Rules\n") }]);
+    expect(channels).toHaveLength(2);
+    expect(events.some((event) => event.type === "restarted")).toBe(false);
+    await office.trust(shown(rows));
+    await untilRestart(() => events.some((event) => event.type === "restarted"));
+    expect(channels.map((one) => one.model)).toEqual(["opus", "sonnet", "opus"]);
+    expect((await office.send("claude-opus", "back")).status).toBe("completed");
+    await closeHere(office);
+  }, 120_000);
+
+  it("on the fake clock, a crash restart with an untrusted file waits its 1 s, then schedules nothing more until the card is accepted", async () => {
+    const { repo, office, channels, events } = await trustOffice(policy, undefined);
+    await office.trust(shown(await card(office.open("claude-opus"))));
+    await office.open("claude-opus");
+    repo.write("agent.md", "# Rules\n");
+    const tick = () => new Promise<void>((done) => setImmediate(done));
+    try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      channels[0]!.onEvent({ type: "closed", data: {} });
+      for (let i = 0; vi.getTimerCount() === 0; i++) { if (i > 10_000) throw new Error("the restart wait was never set"); await tick(); }
+      // PO-1: the first restart waits 1 s; nothing is checked or started before it ends.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(events.some((event) => event.type === "trust_wait" || event.type === "restarted")).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      await untilRestart(() => events.some((event) => event.type === "trust_wait"));
+      // ARM-7: ten minutes on, the restart has scheduled nothing and started nothing.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+    expect(channels).toHaveLength(1);
+    expect(events.some((event) => event.type === "restarted" || event.type === "down")).toBe(false);
+    await office.trust(shown(await card(office.send("claude-opus", "hi"))));
+    await untilRestart(() => events.some((event) => event.type === "restarted"));
+    expect(channels).toHaveLength(2);
+    await closeHere(office);
   }, 120_000);
 });
