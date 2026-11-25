@@ -1,30 +1,28 @@
-# Handoff: orchestrator 29 (`16f5839e`) to orchestrator 30 (2026-11-25)
+# Handoff: orchestrator 30 (`16a9358a`) to orchestrator 31 (2026-11-25)
 
-Range: `7dd7f34` (orch-28's handoff) and this commit. orch-28's handoff (`git show 7dd7f34:docs/spec/review/handoffs/LATEST.md`) still holds where not done below. orch-29 ran 23:08 to 00:35 UTC, started at 68k and made this save point at about 165k (an AskUserQuestion waited 70 minutes; TRACE launches cost about 8k each). **orch-29's tab still shows the title "orch-28"** (the owner reused orch-28's tab), so workers saw no "orch-29" in ListAgents. Close that tab once orch-29 is parked.
+Range: `06e32c2` (orch-29's handoff) to this commit; the only other commit is `cea01f5` (STATE.md). orch-29's handoff (`git show 06e32c2:docs/spec/review/handoffs/LATEST.md`) still holds where not done below. orch-30 ran 00:33 to 01:00 UTC, started at 66k, and made this save point at about 150k: each TRACE launch costs 8 to 10k, so hand off early enough to launch the next orchestrator.
 
-**Done.**
-- **w71** (#106, Codex review 5): `75b28fa` pushed (`harness.ts`, `harness.test.ts`, `test/fakes/git-hang.mjs`, +122/-39). C1-C4 fixed fail-first, C5 build note, C6 body. Windows 9 + 1 skip, Linux 10/10. Tab closed.
-- **w74** (M1b-28 part B): draft **#143** at `b3f66e9` (+302/-18, 4 files) on `claude/63-m1b-base-po-trust`. Tab closed. Its report never arrived (could not find orch-29); check its AC comment.
-- **Owner, 2026-11-24:** #106 size "Yes, approve"; then for all fix rounds: **"for now all the commits that are beyond are ok, since we are making changes"**. Workers no longer ask about V6; they record it (`.shadow/v2-tools/tasks/codex-fix-common.md`, Size).
-- `codex-reviews/11-24-2026-codex-review-13.md` written (re-review of the fixed heads #95, #90-#94, #96, #97, #99, #101, #103, #109, #110, and new #141, #142; #106, #120, #121, #143 if changed) and added to that README. Not yet given to Codex.
-- **Codex reviews 6, 7, 8** posted (23:14, 23:26, 23:53 UTC on #63). Approved: **#112** at `e275b51`, **#118** at `2f6f66b`. Changes requested: #107, #108, #113, #126 (2 P0), #130 | #111, #124, #116 (3 P0), #114 | #115, #119, #117.
+**Done** (each report checked with `git show --stat` at the PR's head, tab closed):
+- **w72-fix120:** #120 at `4a83f99` (snapshot.ts and test). Codex review 5 C1 to C7 fixed fail-first, C8 in the body. 572 lines with the size exception. Windows and WSL 21/21.
+- **w73-fix121:** #121 at `7bd0b6b` (`git/hold.ts`, `hold.test.ts`, `hostileRepo.testutil.ts`). C1 to C7 fixed, C8 a build note. 748 lines with the size exception. Windows 26 + 3 skipped, WSL 29/29.
+- **w75-fix107-108:** #107 at `c3b351e`, #108 at `9486ed8`. #107 needed files outside its brief, which orch-30 allowed (recorded at the end of `.shadow/v2-tools/tasks/w75-fix107-108.md`): `main.ts`, `postOffice.ts`, `client.ts` and its test, `fixture-main.testutil.ts`, `slice.test.ts`. The bootstrap now names its mode (`live` or `mod`), and main.ts and the server refuse a mod start without a valid session id. #108's C3 (P2) is a build note. Windows and WSL changed tests pass.
+- Briefs for all of reviews 6 to 8 are written: `.shadow/v2-tools/tasks/w75` to `w83` (short files; `codex-fix-common.md` holds the shared rules).
+- orch-29's tab closed. Both STATE.md files updated.
 
-**Running** (Opus medium, both launched 00:30 UTC): **w72-fix120** (`src/v2/snapshot.ts`, its test, worktree `w36-snapshots`) and **w73-fix121** (`src/v2/git/hold.ts`, its test, `hostileRepo.testutil.ts`, `w37-git-hold`). They merge #106's `75b28fa` first. Briefs in `.shadow/v2-tools/tasks/`.
+**Running** (Opus medium, both launched about 00:53 UTC, report to orch-30; the common brief tells them to send to the newest `orch-<n>` in ListAgents):
+- **w76-fix126-130:** #126 (2 P0) then #130. Files: `credential.ts`/test, `main.ts`, `server.ts`/test (worktree `w42-server-wiring`), then `postOffice.ts`, `server.ts`/test, `docs/v2-m1a-live-run.md` (`w46-server-log`).
+- **w77-fix111-124:** #111 then #124. Files: `claude.ts`/test, `test/fakes/claude.mjs`, `test/fixtures/claude/README.md` (`w26-claude-faults`, `w39-claude-usage`). Its cockpit name may show as "Fix Codex review 7 on ..." until it names itself.
 
 ## Next
 
-Memory is low (Claude Code stopped w71's hi timer for low memory): keep two workers at once.
+Two workers at a time (memory). Workers may ask to touch a file outside their brief: allow it when no live worker holds that file, and append the allowance to their brief.
 
-1. When w72 and w73 report, verify (`git show --stat`), close their tabs, give the owner Codex batch 13's start line.
-2. **Briefs for reviews 6-8**, each a short file naming PRs, worktree, files, model, and pointing to `codex-fix-common.md` for the rest. Planned grouping (one worker per line; server.ts lines run one after the other):
-   - w75-fix107-108: #107 (`lease.ts`, `lease.test.ts`, `server.ts`, `server.test.ts`; `w25-lease`) then #108 (`plugins/shadow-army/hooks/register.ts` and test; `w30-mod-renewals-...`). Opus medium.
-   - w76-fix126-130, after w75: #126 (`credential.ts`/test, `main.ts`, `server.ts`/test; `w42-server-wiring`), then #130 (`postOffice.ts`, `server.ts`/test, `docs/v2-m1a-live-run.md`; `w46-server-log`). Opus medium.
-   - w77-fix111-124: #111 then #124 (`claude.ts`/test, `test/fakes/claude.mjs`, `test/fixtures/claude/README.md`; `w26-claude-faults`, `w39-claude-usage`). Opus medium.
-   - w78-fix116 (`logs.ts`/test, `w29-logs-...`, 3 P0). Opus medium. w79-fix113 (`lock.ts`/test, `w27-lock`). Opus medium. w80-fix114 (`sanitize.ts`/test, `scripts/gen-sanitize.mjs`, `w33-sanitize-m1b-9`). Sonnet high. w81-fix115 (`trust.ts`/test, `w34-trust`). Opus medium. w82-fix119 (`roster.ts`, `instructions.ts` and tests, `w32-roster-...`; base #118). Sonnet medium. w83-fix117 (`scripts/check-spec-trace.mjs` and test, `w35-trace-check-...`). Sonnet medium.
+1. When w76 or w77 reports: check the head, close its tab, launch the next brief. Order: w78-fix116 (3 P0, Opus), w79-fix113 (Opus), w81-fix115 (Opus), w80-fix114 (Sonnet high), w82-fix119 (Sonnet medium; merges `claude/63-m1b` first), w83-fix117 (Sonnet medium). None of these shares a file with w76 or w77.
+2. When all of reviews 6 to 8 are fixed, write Codex batch 14 in `codex-reviews/` (the format of batch 13): re-review #107, #108, #126, #130, #111, #124, #116, #113, #114, #115, #119, #117 at their new heads.
 3. Then the #90 WSL failure worker (orch-28's Next 2).
-4. Update both `STATE.md` files (orch-29 did not) and watch Codex: `gh api 'repos/mogesjohnson/shadow-army/issues/63/comments?since=2026-11-25T00:00:00Z'`.
+4. Watch Codex: `gh api 'repos/mogesjohnson/shadow-army/issues/63/comments?since=2026-11-25T00:00:00Z'`. Merge what Codex approves at the exact head, typed into a + tab with TRACE (V13, V14, `--match-head-commit`), then close that tab.
 
 ## For the owner
 
-- **Merged by orch-29 at the owner's word** (2026-11-24: "run TRACE and use Glow to type in the merge command ... since you are assentally me doing the orchstration"): #105 `6d41ffa`, #112 `9d6056e`, #118 `fed5a39` into `claude/63-m1b`, typed into a + tab with TRACE, after moving #122 and #119 to `claude/63-m1b`. **From now on the orchestrator types merge commands itself this way** for PRs Codex approved at the exact head (V13, V14, `--match-head-commit`), then closes the tab. The owner also asks: clean up tabs.
-- **Codex batch 13:** `Do the task in C:/Users/johns/projects/AIConnections/codex-reviews/11-24-2026-codex-review-13.md`.
+- **Codex batch 13 is ready to start** (it covers the fixed #106, #120 and #121 and the new #143): `Do the task in C:/Users/johns/projects/AIConnections/codex-reviews/11-24-2026-codex-review-13.md`.
+- Stale cockpit task worktrees at `383c9ba` (for example `w25-lease-bring-lease-to-spec-m1b-3`, `w27-lock-build-...`, `w34-trust-m1b-10-...`) are left in place. Deleting worktrees needs the owner's yes.
