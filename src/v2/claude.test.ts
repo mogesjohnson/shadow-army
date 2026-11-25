@@ -45,8 +45,9 @@ async function s6Protocol() {
       if (frame.request?.subtype === "initialize") emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
     }
   });
+  const closeChild = vi.fn(async (_options?: { grace?: boolean }) => {});
   const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
-    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
+    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: closeChild,
   });
   const events: ChannelEvent[] = [];
   const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event) });
@@ -58,7 +59,7 @@ async function s6Protocol() {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send };
+  return { channel, events, emit, send, stdout, stderr, closeChild };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -385,4 +386,107 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("partial-events")).text).toBe("first second");
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["first ", "second"]);
   }, 15_000);
+
+  describe("close modes (PO-7, PO-10)", () => {
+    it("gives the CLI its exit grace on the owner's close", async () => {
+      const { channel, send, closeChild } = await s6Protocol();
+      void (await send()).pending.catch(() => {});
+      await channel.close();
+      expect(closeChild).toHaveBeenCalledTimes(1);
+      expect(closeChild).toHaveBeenCalledWith({ grace: true });
+    });
+
+    it("ends the tree at once when the connection is lost, with no exit grace", async () => {
+      const { channel, events, send, stdout, closeChild } = await s6Protocol();
+      void (await send()).pending.catch(() => {});
+      stdout.end(); // The CLI's output pipe is gone while the CLI may still be alive.
+      await until(() => events.some((event) => event.type === "closed"));
+      expect(closeChild).toHaveBeenCalledTimes(1);
+      expect(closeChild).toHaveBeenCalledWith({ grace: false });
+      await channel.close();
+      expect(closeChild).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("pause and resume (PO-7's backlog)", () => {
+    const seen = (events: ChannelEvent[]) => events.filter((event) => event.type === "raw").map((event) => (event.data as { n?: number }).n).filter((n) => n !== undefined);
+    const settle = () => new Promise((done) => setTimeout(done, 50));
+
+    it("reads nothing while paused and delivers what the pipe held, in order, on resume", async () => {
+      const { channel, events, emit, send } = await s6Protocol();
+      void (await send()).pending.catch(() => {});
+      emit({ type: "system", n: 1 });
+      await until(() => seen(events).includes(1));
+      channel.pause();
+      emit({ type: "system", n: 2 }); emit({ type: "system", n: 3 });
+      await settle();
+      expect(seen(events)).toEqual([1]);
+      channel.pause(); // idempotent
+      emit({ type: "system", n: 4 });
+      await settle();
+      expect(seen(events)).toEqual([1]);
+      channel.resume();
+      await until(() => seen(events).length === 4);
+      expect(seen(events)).toEqual([1, 2, 3, 4]);
+      channel.resume(); // idempotent
+      emit({ type: "system", n: 5 });
+      await until(() => seen(events).length === 5);
+    });
+
+    it("applies a pause requested before the handshake finishes, without starving the handshake", async () => {
+      const { channel, events, emit, send, stdout } = await s6Protocol();
+      channel.pause();
+      const { pending } = await send(); // send waits for initialize, whose reply must still be read
+      void pending.catch(() => {});
+      await until(() => stdout.isPaused());
+      emit({ type: "system", n: 1 });
+      await settle();
+      expect(seen(events)).toEqual([]);
+      channel.resume();
+      await until(() => seen(events).length === 1);
+    });
+
+    const diagnostics = (events: ChannelEvent[]) => events.filter((event) => event.type === "raw" && (event.data as { type?: string }).type === "stderr").map((event) => (event.data as { text: string }).text);
+
+    it("holds stderr with stdout, so diagnostics cannot grow the queue while paused", async () => {
+      const { channel, events, send, stderr } = await s6Protocol();
+      void (await send()).pending.catch(() => {});
+      stderr.write("one");
+      await until(() => diagnostics(events).length === 1);
+      channel.pause();
+      stderr.write("two"); stderr.write("three");
+      await settle();
+      expect(diagnostics(events)).toEqual(["one"]);
+      expect(stderr.isPaused()).toBe(true);
+      channel.resume();
+      await until(() => diagnostics(events).join("") === "onetwothree");
+    });
+
+    it("holds stderr at once for a channel paused while it opens, before the handshake answers", async () => {
+      const { channel, events, send, stderr } = await s6Protocol();
+      channel.pause();
+      stderr.write("early");
+      const { pending } = await send();
+      void pending.catch(() => {});
+      await settle();
+      expect(diagnostics(events)).toEqual([]);
+      channel.resume();
+      await until(() => diagnostics(events).join("") === "early");
+    });
+
+    it("resumes a paused stream when the channel closes, so the CLI can exit and its last frames are read", async () => {
+      const { channel, events, emit, send, stdout, stderr } = await s6Protocol();
+      void (await send()).pending.catch(() => {});
+      channel.pause();
+      expect(stdout.isPaused()).toBe(true);
+      emit({ type: "system", n: 1 });
+      await settle();
+      expect(seen(events)).toEqual([]);
+      await channel.close();
+      expect(stdout.isPaused()).toBe(false);
+      expect(stderr.isPaused()).toBe(false);
+      channel.resume(); channel.pause(); // late calls on a closed channel change nothing
+      expect(stdout.isPaused()).toBe(false);
+    });
+  });
 });
