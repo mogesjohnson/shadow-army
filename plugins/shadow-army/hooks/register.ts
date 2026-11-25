@@ -41,6 +41,9 @@ const VERSION_WAIT_MS = 10_000;
 /** PO-16: the sweep ends a tree within 10 s; the mod gives the whole one-shot process three times that. */
 const SWEEP_WAIT_MS = 30_000;
 const READY_WAIT_MS = 60_000;
+/** C5: how long a timed-out sweep's stop may take to confirm; until it does, `unconfirmedStop` refuses every restart. */
+const STOP_WAIT_MS = 10_000;
+let unconfirmedStop: string | undefined;
 const MIN_HOST = [2, 1, 294];
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 const NO_PROXY_VARIABLES = ["NO_PROXY", "no_proxy"];
@@ -192,8 +195,16 @@ async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<strin
   const outcome = await Promise.race([read, late]).finally(() => timer?.cancel());
   if (outcome === "late") {
     void read.catch(() => {});
-    void stream.return({ code: null, signal: null }).catch(() => {});
-    return `the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s and was stopped; what it left is unknown`;
+    // C5: the restart barrier holds until the stop is confirmed; a rejected or unconfirmed stop fails restarts closed.
+    const stop = stream.return({ code: null, signal: null }).then(() => "stopped" as const, () => "failed" as const);
+    let stopTimer: Timer | undefined;
+    const stopLate = new Promise<"late">((done) => { stopTimer = $.clock.after(STOP_WAIT_MS, () => done("late")); });
+    const stopped = await Promise.race([stop, stopLate]).finally(() => stopTimer?.cancel());
+    const late = `the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s`;
+    if (stopped === "stopped") return `${late} and was stopped; what it left is unknown`;
+    unconfirmedStop = `Shadow Army won't restart the army: ${late} and its stop could not be confirmed, so it may still be running`;
+    if (stopped === "late") void stop.then((how) => { if (how === "stopped") unconfirmedStop = undefined; });
+    return `${late} and ${stopped === "failed" ? "its stop failed" : `its stop was not confirmed in ${STOP_WAIT_MS / 1000} s`}; what it left is unknown, and the army won't restart until it is`;
   }
   const code = outcome.result?.code;
   const lastLine = outcome.out.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
@@ -327,6 +338,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     // The end hook only requests release. A later foreground command waits for the
     // old relay/helper to finish guard finalization and release the folder marker.
     await Promise.all([...retiring].map((old) => old.finished));
+    if (unconfirmedStop) throw new Error(unconfirmedStop);
     // Another concurrent foreground call may have opened the army while we waited.
     if (active && !active.closing && active.cwd === cwd) {
       const shared = active;

@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "off"; tail?: string; startRefusal?: string; stderr?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "hang-reject" | "hang-stall" | "off"; tail?: string; startRefusal?: string; stderr?: string } = {}) {
   vi.resetModules();
   const { register, useSweepLauncher } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -66,9 +66,13 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
         if (options.argv[1]?.endsWith("sweepMain.js")) {
           sweeps.push(options);
           if (env.sweep === "throw") throw new Error("spawn failed");
-          if (env.sweep === "hang") {
-            // An iterator whose next() never settles, not even after return().
-            return { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }), return: async () => { sweepsStopped.push(1); return { done: true }; } };
+          if (env.sweep === "hang" || env.sweep === "hang-reject" || env.sweep === "hang-stall") {
+            // An iterator whose next() never settles, not even after return(); the stop itself resolves, rejects or never settles.
+            const how = env.sweep;
+            return {
+              [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+              return: () => { sweepsStopped.push(1); return how === "hang" ? Promise.resolve({ done: true }) : how === "hang-reject" ? Promise.reject(new Error("no")) : new Promise(() => {}); },
+            };
           }
           const result = env.sweep ?? { out: "", code: 0 };
           return {
@@ -583,5 +587,19 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
     expect(m.spawns).toHaveLength(2);
     m.endRelay();
     await next.catch(() => undefined);
+  });
+
+  it("fails a restart explicitly while a timed-out sweep's stop is rejected or unconfirmed (C5)", async () => {
+    for (const [sweep, words] of [["hang-reject", /its stop failed/], ["hang-stall", /its stop was not confirmed in 10 s/]] as const) {
+      const m = await died({ sweep });
+      m.after.filter((t) => t.ms === 30_000 && !t.cancelled).forEach((t) => t.run());
+      await settle();
+      m.after.filter((t) => t.ms === 10_000 && !t.cancelled).forEach((t) => t.run());
+      await settle();
+      expect(m.sweepsStopped).toHaveLength(1);
+      expect(shadowLines(m.logs)).toEqual([expect.stringMatching(words)]);
+      expect(await m.send("claude-sonnet --claim a again")).toMatch(/won't restart the army/);
+      expect(m.spawns).toHaveLength(1);
+    }
   });
 });
