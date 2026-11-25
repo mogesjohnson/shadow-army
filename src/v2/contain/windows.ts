@@ -15,8 +15,13 @@ export interface ManagedProcess {
   readonly stderr: Readable;
   /** Root CLI exit, even while descendants remain in the session's containment. */
   readonly exited: Promise<ProcessExit>;
-  /** Session teardown, not turn teardown: persistent CLI services belong to the session. */
-  close(): Promise<void>;
+  /**
+   * Session teardown, not turn teardown: persistent CLI services belong to the session.
+   * By default (PO-7) it forwards stdin EOF and gives the CLI the exit grace, timed from when EOF
+   * actually reached it. `grace: false` (a lost connection, a failed start, a root that already
+   * exited) ends the whole tree at once, as loss of the owner does (PO-10).
+   */
+  close(options?: { grace?: boolean }): Promise<void>;
   /** PO-9: the process that holds the containment, once it has started. */
   readonly guardian?: Identity;
   /** PO-11: every live process in the containment, each with an identity a reused pid can't match. */
@@ -179,12 +184,15 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
           socket.write(`list ${id}\n`);
         });
       },
-      close() {
+      close({ grace = true }: { grace?: boolean } = {}) {
+        if (closing && !grace) control?.write("kill\n"); // Escalates a graceful close in progress.
         return closing ??= (async () => {
-          // The supervisor needs the grace plus its own tree-empty wait; this is only the last resort.
-          const killed = setTimeout(() => wrapper.kill(), exitGraceMs + 15_000);
+          // The supervisor may wait up to a grace for EOF to reach a CLI that is not reading,
+          // then the grace itself, then its tree-empty wait; this timer is only the last resort.
+          const killed = setTimeout(() => wrapper.kill(), (grace ? 2 * exitGraceMs : 0) + 15_000);
+          if (!grace) control?.write("kill\n");
           wrapper.stdin.end();
-          control?.write("close\n");
+          if (grace) control?.write("close\n");
           try { await wrapperClosed; } finally {
             clearTimeout(killed); control?.destroy(); server.close();
             await rm(directory, { recursive: true, force: true });
@@ -290,17 +298,19 @@ public static class ShadowJobSupervisor {
       var config=serializer.Deserialize<Dictionary<string,object>>(Encoding.UTF8.GetString(header.ToArray()));
       pipe=new NamedPipeClientStream(".",(string)config["pipeName"],PipeDirection.InOut,PipeOptions.Asynchronous); pipe.Connect(10000);
       events=new StreamWriter(pipe,new UTF8Encoding(false),1024,true); events.AutoFlush=true; Events=events;
-      var stop=new ManualResetEvent(false); int shutdownReason=0;
+      var stop=new ManualResetEvent(false); var eofForwarded=new ManualResetEvent(false); int shutdownReason=0;
       var control=new Thread(delegate() {
         var replies=new JavaScriptSerializer();
         try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); string line; while((line=reader.ReadLine())!=null) {
-          // "list <id>" asks for the job's processes (PO-11); any other line is the close command.
+          // "list <id>" asks for the job's processes (PO-11); "kill" (a lost connection) ends the
+          // tree at once; any other line ("close") asks for a graceful exit.
           if(line.StartsWith("list ")) {
             string reply; try { lock(Gate) { reply=replies.Serialize(new { kind="list",id=line.Substring(5),processes=JobProcesses(job) }); } }
             catch(Exception error) { reply=replies.Serialize(new { kind="list",id=line.Substring(5),message=error.Message }); }
             Emit(reply); continue;
           }
-          Interlocked.CompareExchange(ref shutdownReason,1,0); stop.Set(); } } catch {}
+          if(line=="kill") Interlocked.Exchange(ref shutdownReason,2); else Interlocked.CompareExchange(ref shutdownReason,1,0);
+          stop.Set(); } } catch {}
         // Control EOF means the owner disappeared; it must contain the job immediately.
         Interlocked.Exchange(ref shutdownReason,2); stop.Set();
       }); control.IsBackground=true; control.Start();
@@ -323,6 +333,8 @@ public static class ShadowJobSupervisor {
       var pump=new Thread(delegate() {
         bool ended=false;
         try { using(var output=new FileStream(new SafeFileHandle(inputWrite,true),FileAccess.Write,4096,false)) { var buffer=new byte[4096]; int count; while((count=input.Read(buffer,0,buffer.Length))>0) { output.Write(buffer,0,count); output.Flush(); } ended=true; } } catch {}
+        // The CLI's stdin handle is closed here either way: from now on it has been asked to exit.
+        eofForwarded.Set();
         if(ended) { Interlocked.CompareExchange(ref shutdownReason,1,0); stop.Set(); }
       }); pump.IsBackground=true; pump.Start();
       bool rootExited=false;
@@ -330,11 +342,15 @@ public static class ShadowJobSupervisor {
         if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; Emit(serializer.Serialize(new { kind="exited",code=code })); }
       }
       // Native stdin EOF runs the CLI's own shutdown hooks. Ordinary close gives that exit
-      // up to the grace (PO-10: ten seconds unless the owner injected less); loss of the
-      // owner's control pipe always bypasses the grace.
+      // up to the grace (PO-10: ten seconds unless the owner injected less), timed from when the
+      // pump has actually closed the CLI's stdin: the control command can outrun the input pipe.
+      // A CLI that never drains its stdin is asked at the latest one grace after the close.
+      // "kill" and loss of the owner's control pipe always bypass the grace.
       if(!rootExited && Interlocked.CompareExchange(ref shutdownReason,0,0)!=2) {
         uint grace=config.ContainsKey("exitGraceMs") ? Convert.ToUInt32(config["exitGraceMs"]) : 10000;
         uint began=(uint)Environment.TickCount;
+        while(!eofForwarded.WaitOne(0) && WaitForSingleObject(process.process,20)!=0 && (uint)((uint)Environment.TickCount-began)<grace && Interlocked.CompareExchange(ref shutdownReason,0,0)!=2) {}
+        began=(uint)Environment.TickCount;
         while(WaitForSingleObject(process.process,20)!=0 && (uint)((uint)Environment.TickCount-began)<grace && Interlocked.CompareExchange(ref shutdownReason,0,0)!=2) {}
       }
       if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; Emit(serializer.Serialize(new { kind="exited",code=code })); }

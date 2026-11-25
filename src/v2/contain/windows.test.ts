@@ -56,6 +56,54 @@ describe("Windows exit grace (PO-10: ten seconds after the CLI was asked to exit
     expect(alive(session.pid)).toBe(false);
   }, 30_000);
 
+  // A harmless descendant that also ignores EOF: the bound must hold for the whole tree, not just the root.
+  const stubbornTree = "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log('child:'+c.pid);process.stdin.resume();setInterval(()=>{},1000);";
+  async function descendant(session: ManagedProcess) {
+    let text = "";
+    return new Promise<number>((done, fail) => {
+      session.stdout.on("data", (chunk: Buffer) => { text += chunk.toString(); const match = /child:(\d+)/.exec(text); if (match) done(Number(match[1])); });
+      setTimeout(() => fail(new Error("the CLI did not report its child")), 15_000);
+    });
+  }
+
+  windowsOnly("ends the CLI and its descendant within PO-10's default ten seconds, not before the CLI had its grace", async () => {
+    const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", stubbornTree], cwd: await directory() });
+    sessions.push(session); session.stderr.resume();
+    const child = await descendant(session);
+    session.stdout.resume();
+    expect(alive(child)).toBe(true);
+    const began = Date.now();
+    await session.close();
+    const elapsed = Date.now() - began;
+    expect(elapsed).toBeGreaterThanOrEqual(9_800);
+    expect(elapsed).toBeLessThan(10_000 + 2_000); // The grace plus the job's teardown and the pipe round trip.
+    expect(alive(session.pid)).toBe(false);
+    expect(alive(child)).toBe(false);
+  }, 40_000);
+
+  windowsOnly("ends the tree at once, with no grace, when closed with grace: false (a lost connection)", async () => {
+    const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", stubbornTree], cwd: await directory(), exitGraceMs: 60_000 });
+    sessions.push(session); session.stderr.resume();
+    const child = await descendant(session);
+    session.stdout.resume();
+    const began = Date.now();
+    await session.close({ grace: false });
+    expect(Date.now() - began).toBeLessThan(3_000);
+    expect(alive(session.pid)).toBe(false);
+    expect(alive(child)).toBe(false);
+  }, 30_000);
+
+  windowsOnly("escalates a graceful close in progress when the connection is then lost", async () => {
+    const session = await launch("process.stdin.resume();setInterval(()=>{},1000);", 60_000);
+    const began = Date.now();
+    const graceful = session.close();
+    await new Promise((done) => setTimeout(done, 300));
+    await session.close({ grace: false });
+    await graceful;
+    expect(Date.now() - began).toBeLessThan(3_500);
+    expect(alive(session.pid)).toBe(false);
+  }, 30_000);
+
   windowsOnly("does not wait out the limit when the CLI exits on its own after EOF", async () => {
     const session = await launch("process.stdin.resume();process.stdin.once('end',()=>setTimeout(()=>process.exit(0),200));setInterval(()=>{},1000);", 20_000);
     const began = Date.now();
@@ -86,8 +134,8 @@ describe("Windows exit grace (PO-10: ten seconds after the CLI was asked to exit
       stray.push(pid);
       expect(alive(pid)).toBe(true);
       child.kill(); // The owner disappears without ever asking the session to close.
-      // The grace is 60 s; ending within 15 s shows the control-pipe loss skipped it.
-      expect(await gone(pid, 15_000)).toBe(true);
+      // The grace is 60 s; ending within 3 s of the owner's death shows the control-pipe loss skipped it.
+      expect(await gone(pid, 3_000)).toBe(true);
     } finally { child.kill(); }
   }, 60_000);
 });
