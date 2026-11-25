@@ -10,8 +10,9 @@ Range: `904b2ba` (orch-30's handoff) to this commit. orch-30's handoff (`git sho
 - w76 popped w77's stash by mistake (the stash list is shared across worktrees). Repaired by w76; w77 confirmed its commit is intact. `codex-fix-common.md` now forbids `git stash`.
 - New briefs in `.shadow/v2-tools/tasks/`: `w84-fix123`, `w85-fix125-127`, `w86-fix126-starter` (#126 C3's client half: `client.ts`, `modRelay.ts`), `w87-fix111-postoffice` (#111 C3, C5; #124 C1, C4: `postOffice.ts`, `channel.ts`, `claude.ts`).
 
-**Running** (reports to orch-31; it should send to the newest `orch-<n>` in ListAgents):
-- **w78-fix116** (Opus medium, launched 01:05 UTC): #116, `src/v2/logs.ts` and its test, worktree `w29-logs-m1b-7-redacting-logs-src-v2-logs.ts`.
+- **w78-fix116:** #116 at `5917a7a`, all of Codex review 7 (C1 to C8) fixed. orch-31 allowed it `postOffice.ts` and its test for C1, C2, C3 and C7 (appended to its brief). Windows logs + postOffice 49 and 7 dependent v2 files pass; Linux 38 pass, 11 Windows-only skipped.
+
+**Running:** none. orch-31 paused the 5-minute watch while no worker ran and the 5-hour figure was over 80%, kept the hi timer, and launched orch-32 after the reset.
 
 ## Next
 
