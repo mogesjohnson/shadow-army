@@ -10,8 +10,11 @@ const RANGE = new RegExp(`\\b(${PREFIXES})-(\\d+)(?:[ \\t]+to[ \\t]+(?:(${PREFIX
 const DEFINITION = new RegExp(`^- \\*\\*((?:${PREFIXES})-\\d+)\\*\\*(.*)$`);
 const TEST_ID = new RegExp(`\\b(?:(?:${PREFIXES})-\\d+|M\\d+-AC\\d+)\\b`, "g");
 const EVIDENCE = new Set(["U", "C", "I", "X", "F", "S", "L", "R"]);
-// Carry-overs whose existing text does not repeat the source cue on every requirement.
-const CARRY_OVERS = ["WSP-1", "WSP-2", "WSP-3", "WSP-4", "WSP-5", "WSP-6", "WSP-7", "WSP-8", "WSP-9", "CH-7", "ARM-1", "ARM-2", "ARM-3", "ARM-5", "ARM-6", "MSG-1", "VIS-1"];
+// A source marker in a requirement's own text: "(from 2.0 WS-1)", "as in 2.0's CFG-4", or "carries over v1's rule".
+const SOURCE_MARKER = /\(from\s+([^)]*)\)|as in 2\.0's\s+([A-Z]+-\d+)|carr(?:y|ies) over v1's|v1's [^.\n]*? carr(?:y|ies) over/gi;
+// Carried over from v1's design rules with no marker in their own text: Appendix A's row is their only source.
+const APPENDIX_ONLY_SOURCE = new Set(["ARM-1", "ARM-2", "ARM-5"]);
+const LEGACY_REF = /\b[A-Z]+-\d+\b|#\d+/g;
 
 export function expandReferences(text, problems = []) {
   const ids = [];
@@ -35,8 +38,9 @@ export function checkSpecTrace(source) {
   const lines = text.split("\n");
   let section = "";
   for (let n = 0; n < lines.length; n++) {
-    const heading = lines[n].match(/^#{1,6}\s+(\d+(?:\.\d+)*)\b/);
-    if (heading) section = heading[1];
+    // Any heading ends the section before it; an unnumbered one leaves none.
+    const heading = lines[n].match(/^#{1,6}\s+(.*)$/);
+    if (heading) section = heading[1].match(/^(\d+(?:\.\d+)*)\b/)?.[1] ?? "";
     const definition = lines[n].match(DEFINITION);
     if (!definition) continue;
     const [, id, rest] = definition;
@@ -62,6 +66,7 @@ export function checkSpecTrace(source) {
   const citationsByMilestone = new Map();
   const acceptance = new Set();
   const headings = [...text.matchAll(/^### (M\d+):[^\n]*\n/gm)];
+  const bodies = [];
   for (const heading of headings) {
     const milestone = heading[1];
     if (implementsByMilestone.has(milestone)) problems.push(`duplicate milestone ${milestone}`);
@@ -69,6 +74,7 @@ export function checkSpecTrace(source) {
     const tail = text.slice(start);
     const nextHeading = tail.search(/^#{1,3}\s/m);
     const body = nextHeading < 0 ? tail : tail.slice(0, nextHeading);
+    bodies.push([start, start + body.length]);
     const bodyLines = body.split("\n");
     const index = bodyLines.findIndex((line) => /^Implements:/.test(line));
     let implementation = "";
@@ -98,7 +104,7 @@ export function checkSpecTrace(source) {
     citationsByMilestone.set(milestone, cited);
   }
   for (const match of text.matchAll(/^- \*\*(M\d+-AC\d+)\*\*/gm)) {
-    if (!acceptance.has(match[1])) problems.push(`${match[1]}: acceptance criterion is outside a milestone`);
+    if (!bodies.some(([from, to]) => match.index >= from && match.index < to)) problems.push(`${match[1]}: acceptance criterion is outside a milestone`);
   }
   for (const [id, requirement] of requirements) {
     for (const milestone of requirement.milestones) {
@@ -113,17 +119,28 @@ export function checkSpecTrace(source) {
   }
 
   const appendix = text.match(/^## Appendix A[^\n]*\n([\s\S]*?)(?=^## |(?![\s\S]))/m)?.[1] ?? "";
-  const appendixIds = new Set();
+  // Rule 6: a requirement's source marker and its Appendix A row must agree.
+  const rows = new Map();
   for (const row of appendix.split("\n")) {
     const cells = row.split("|");
-    if (cells.length > 2) expandReferences(cells[1], problems).forEach((id) => appendixIds.add(id));
+    if (cells.length > 2) for (const id of expandReferences(cells[1], problems)) rows.set(id, cells[2]);
   }
-  const carried = new Set(CARRY_OVERS.filter((id) => requirements.has(id)));
-  for (const [id, { body }] of requirements) {
-    if (/\(from\s|carr(?:y|ies|ied) over|as in 2\.0's/i.test(body)) carried.add(id);
+  for (const [id, { body, withdrawn }] of requirements) {
+    if (withdrawn) continue;
+    const marked = [...body.matchAll(SOURCE_MARKER)];
+    // A marker may also name this spec's own requirements (WSP-10's config); only legacy sources must be in the row.
+    const cited = new Set(marked.flatMap((marker) => (marker[1] ?? marker[2] ?? "").match(LEGACY_REF) ?? []).filter((ref) => !requirements.has(ref)));
+    const row = rows.get(id);
+    const expected = marked.length > 0 || APPENDIX_ONLY_SOURCE.has(id);
+    if (expected && row === undefined) problems.push(`${id}: carried over but not in Appendix A`);
+    else if (!expected && row !== undefined) problems.push(`${id}: in Appendix A but its text names no source`);
+    else if (row !== undefined) {
+      const listed = new Set(row.match(LEGACY_REF) ?? []);
+      for (const ref of cited) if (!listed.has(ref)) problems.push(`${id}: cites ${ref}, which Appendix A's row doesn't`);
+      if (!/\S/.test(row)) problems.push(`${id}: Appendix A's row names no source`);
+    }
   }
-  for (const id of carried) if (!appendixIds.has(id)) problems.push(`${id}: carried over but not in Appendix A`);
-  for (const id of appendixIds) if (!requirements.has(id)) problems.push(`Appendix A names unknown requirement ${id}`);
+  for (const id of rows.keys()) if (!requirements.has(id)) problems.push(`Appendix A names unknown requirement ${id}`);
   return {
     requirements: requirements.size,
     acceptanceCriteria: acceptance.size,
@@ -149,16 +166,66 @@ export function parseImplemented(source) {
 }
 
 /**
+ * The text of a test file that can name a requirement: its comments and the titles of its it, test and
+ * describe calls. Other strings are fixtures, so an ID inside one counts for nothing.
+ */
+export function testReferenceText(source) {
+  const out = [];
+  const title = /\b(?:it|test|describe)(?:\.[A-Za-z]+)*\s*\(\s*$/;
+  let code = "";
+  for (let i = 0; i < source.length; ) {
+    const c = source[i];
+    if (c === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i);
+      out.push(source.slice(i, end < 0 ? source.length : end));
+      i = end < 0 ? source.length : end;
+    } else if (c === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2);
+      out.push(source.slice(i, end < 0 ? source.length : end));
+      i = end < 0 ? source.length : end + 2;
+    } else if (c === '"' || c === "'" || c === "`") {
+      const isTitle = title.test(code);
+      let text = "";
+      for (i++; i < source.length && source[i] !== c; i++) {
+        if (source[i] === "\\") i++;
+        else if (c === "`" && source[i] === "$" && source[i + 1] === "{") {
+          // Skip a template's substitution as code, up to its closing brace.
+          for (let depth = 0; i < source.length; i++) {
+            if (source[i] === "{") depth++;
+            else if (source[i] === "}" && --depth === 0) break;
+          }
+        } else text += source[i];
+      }
+      i++;
+      if (isTitle) out.push(text);
+      code = (code + '""').slice(-40);
+    } else if (c === "/" && /(?:^|[(,=:[!&|?{};])\s*$/.test(code)) {
+      // A regular expression literal: skip it, since it may hold a quote.
+      for (i++; i < source.length && source[i] !== "/" && source[i] !== "\n"; i++) {
+        if (source[i] === "\\") i++;
+        else if (source[i] === "[") while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
+      }
+      i++;
+      code = (code + "/r/").slice(-40);
+    } else {
+      code = (code + c).slice(-40);
+      i++;
+    }
+  }
+  return out.join("\n");
+}
+
+/**
  * Appendix B rule 9 (VER-7). `trace` is checkSpecTrace's result, `implementedSource` the text of
- * implemented.txt and `tests` a list of { path, text }. Tests name IDs in a title or a comment, so the
- * whole file text is scanned. A requirement is named only by its own ID: ranges do not count.
+ * implemented.txt and `tests` a list of { path, text }. Tests name IDs in a title or a comment; strings
+ * that are fixtures are ignored (testReferenceText). A requirement is named only by its own ID: ranges do not count.
  */
 export function checkTestReferences(trace, implementedSource, tests) {
   const implemented = parseImplemented(implementedSource);
   const problems = [...implemented.problems];
   const named = new Map();
   for (const { path, text } of tests) {
-    for (const id of new Set(text.match(TEST_ID) ?? [])) {
+    for (const id of new Set(testReferenceText(text).match(TEST_ID) ?? [])) {
       if (!trace.requirementIds.has(id) && !trace.acceptanceIds.has(id)) problems.push(`${path}: names ${id}, which this spec doesn't have`);
       else if (!named.has(id)) named.set(id, path);
     }
@@ -180,15 +247,15 @@ export function checkTestReferences(trace, implementedSource, tests) {
   return { required: required.size, named: named.size, problems };
 }
 
-/** Finds *.test.* files under the given directories, skipping this check's own test, whose fixtures use made-up IDs. */
-export function findTests(root, directories = ["src", "scripts"]) {
+/** Finds *.test.* files under the given directories: the repository's test suites, the mod's and this check's own. */
+export function findTests(root, directories = ["src", "scripts", "plugins"]) {
   const found = [];
   const walk = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
         if (entry.name !== "node_modules" && !entry.name.startsWith(".")) walk(path);
-      } else if (/\.test\.(?:[cm]?[jt]sx?)$/.test(entry.name) && entry.name !== "check-spec-trace.test.mjs") {
+      } else if (/\.test\.(?:[cm]?[jt]sx?)$/.test(entry.name)) {
         found.push({ path: relative(root, path).replaceAll("\\", "/"), text: readFileSync(path, "utf8") });
       }
     }
@@ -206,7 +273,7 @@ export function findTests(root, directories = ["src", "scripts"]) {
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
     // Usage: check-spec-trace.mjs [spec.md] [--tests]. --tests adds rule 9 (CI): it reads
-    // docs/spec/implemented.txt, or the path in --implemented=<file>, and the tests under src/ and scripts/.
+    // docs/spec/implemented.txt, or the path in --implemented=<file>, and the tests under src/, scripts/ and plugins/.
     const args = process.argv.slice(2);
     const root = fileURLToPath(new URL("..", import.meta.url));
     const path = args.find((arg) => !arg.startsWith("--")) ?? join(root, "docs/spec/v2.md");

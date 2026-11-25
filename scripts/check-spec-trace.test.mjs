@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { checkSpecTrace, checkTestReferences, expandReferences, findTests, parseImplemented } from "./check-spec-trace.mjs";
+import { checkSpecTrace, checkTestReferences, expandReferences, findTests, parseImplemented, testReferenceText } from "./check-spec-trace.mjs";
 
 const valid = `## 4. Requirements
 - **PO-1** (M1; U) First requirement, referring forward to CH-1.
@@ -53,6 +53,22 @@ describe("spec traceability", () => {
     expect(checkSpecTrace(recorded).problems).toEqual([]);
     expect(checkSpecTrace(recorded.replace("| CH-1 | v1 |", "| CH-99 | v1 |")).problems).toContain("Appendix A names unknown requirement CH-99");
   });
+  it("keeps a requirement after an unnumbered heading out of the previous section", () => {
+    const moved = valid.replace("## 6. Milestones", "## Notes\n- **PO-2** (M1; U) Stray.\n## 6. Milestones");
+    expect(checkSpecTrace(moved).problems).toContain("PO-2: requirement is outside sections 4, 5.2 and 5.3");
+  });
+  it("finds an acceptance criterion repeated outside its milestone", () => {
+    const repeated = `${valid}\n- **M1-AC1** Again (PO-1).`;
+    expect(checkSpecTrace(repeated).problems).toContain("M1-AC1: acceptance criterion is outside a milestone");
+  });
+  it("checks each source marker against its Appendix A row, in both directions", () => {
+    const carried = valid.replace("Second requirement.", "Second requirement (from 2.0 WS-7 and v1 #16).");
+    const row = (text) => carried.replace("|---|---|", `|---|---|\n| CH-1 | ${text} |`);
+    expect(checkSpecTrace(row("2.0 WS-7; v1 #16")).problems).toEqual([]);
+    expect(checkSpecTrace(row("2.0 WS-7")).problems).toContain("CH-1: cites #16, which Appendix A's row doesn't");
+    expect(checkSpecTrace(valid.replace("|---|---|", "|---|---|\n| CH-1 | v1 #16 |")).problems).toContain("CH-1: in Appendix A but its text names no source");
+    expect(checkSpecTrace(carried).problems).toContain("CH-1: carried over but not in Appendix A");
+  });
   it("rejects an acceptance criterion stranded outside the milestone section", () => {
     expect(checkSpecTrace(`${valid}\n- **M1-AC99** Orphan (PO-1).`).problems).toContain("M1-AC99: acceptance criterion is outside a milestone");
   });
@@ -65,43 +81,57 @@ describe("spec traceability", () => {
 
 describe("Appendix B rule 9: tests name the requirements", () => {
   const trace = checkSpecTrace(valid);
-  const test = (text) => [{ path: "src/v2/x.test.ts", text }];
+  const files = (text) => [{ path: "src/v2/x.test.ts", text }];
   const unnamedCh1 = ["CH-1: implemented, but no test names it"];
   it("accepts a test that names each tested requirement in a title or a comment", () => {
-    const tests = test(`it("PO-1 and M1-AC1", () => {});\n// CH-1\n`);
+    const tests = files(`it("PO-1 and M1-AC1", () => {});\n// CH-1\n`);
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", tests).problems).toEqual([]);
   });
   it("fails when an implemented requirement with U, C, I, X, F or S evidence is named by no test", () => {
-    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", test("// PO-1")).problems).toEqual(unnamedCh1);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", files("// PO-1")).problems).toEqual(unnamedCh1);
   });
   it("counts a requirement of an earlier milestone as implemented, but not one still being built", () => {
-    expect(checkTestReferences(trace, "M2\n", test("// PO-1")).problems).toEqual(unnamedCh1);
-    expect(checkTestReferences(trace, "M1\n", test("")).problems).toEqual([]);
+    expect(checkTestReferences(trace, "M2\n", files("// PO-1")).problems).toEqual(unnamedCh1);
+    expect(checkTestReferences(trace, "M1\n", files("")).problems).toEqual([]);
   });
   it("does not ask a test for R or L evidence", () => {
     const recorded = checkSpecTrace(valid.replace("(M1; U)", "(M1; R, L)"));
-    expect(checkTestReferences(recorded, "M1\nPO-1\n", test("// CH-1")).problems).toEqual([]);
+    expect(checkTestReferences(recorded, "M1\nPO-1\n", files("// CH-1")).problems).toEqual([]);
   });
   it("fails when a test names an ID the spec doesn't have, and ignores text that is no ID", () => {
-    const problems = checkTestReferences(trace, "M1\n", test(`it("PO-9 UTF-8 SHA-256 TLS-1 M1-AC9", () => {})`)).problems;
+    const problems = checkTestReferences(trace, "M1\n", files(`it("PO-9 UTF-8 SHA-256 TLS-1 M1-AC9", () => {})`)).problems;
     expect(problems).toEqual(["src/v2/x.test.ts: names PO-9, which this spec doesn't have", "src/v2/x.test.ts: names M1-AC9, which this spec doesn't have"]);
   });
   it("names a requirement only by its own ID, not by a range or an AC", () => {
-    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", test("// M1-AC1, PO-1 to 3")).problems).toEqual(unnamedCh1);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", files("// M1-AC1, PO-1 to 3")).problems).toEqual(unnamedCh1);
   });
   it("rejects a malformed or unknown implemented list", () => {
     expect(parseImplemented("PO-1\n").problems).toHaveLength(1);
     expect(parseImplemented("M1\nnonsense\n").problems).toHaveLength(1);
     expect(checkTestReferences(trace, "M1\nPO-9\n", []).problems).toEqual(["implemented list: PO-9 is not in this spec"]);
   });
+  it("credits an ID only from a title or a comment, never from a fixture string", () => {
+    const text = 'it("PO-1 title", () => { run("PO-77 CH-1 // CH-2", `x ${"CH-3"} M1-AC4`, /["'+"'"+'`]/); });\n/* block CH-1 */\n';
+    expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1", "CH-1"]);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", files('it("x", () => { run("PO-1 CH-1"); });')).problems).toEqual(["PO-1: implemented, but no test names it", ...unnamedCh1]);
+    expect(checkTestReferences(trace, "M1\n", files('it("x", () => { run("PO-9"); });')).problems).toEqual([]);
+  });
+  // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
   it("takes the repository tests as they are, and catches a planted break in them", () => {
     // docs/spec/v2.md here may trail the review branch, so compare against the baseline, not against zero.
     const spec = checkSpecTrace(readFileSync(new URL("../docs/spec/v2.md", import.meta.url), "utf8"));
     const tests = findTests(fileURLToPath(new URL("..", import.meta.url)));
-    expect(tests.length).toBeGreaterThan(0);
-    expect(tests.map((file) => file.path)).not.toContain("scripts/check-spec-trace.test.mjs");
-    const baseline = checkTestReferences(spec, "M1\n", tests).problems;
+    const paths = tests.map((file) => file.path);
+    expect(paths).toContain("scripts/check-spec-trace.test.mjs");
+    expect(paths).toContain("plugins/shadow-army/hooks/register.test.ts");
+    // This list requires VER-7 (U evidence): only this file's annotation above names it.
+    const implemented = "M1\nVER-7\n";
+    const baseline = checkTestReferences(spec, implemented, tests);
+    expect(baseline.required).toBeGreaterThanOrEqual(1);
+    expect(baseline.problems.filter((problem) => !/names \S+, which this spec doesn't have$/.test(problem))).toEqual([]);
+    const without = tests.filter((file) => file.path !== "scripts/check-spec-trace.test.mjs");
+    expect(checkTestReferences(spec, implemented, without).problems).toEqual([...baseline.problems, "VER-7: implemented, but no test names it"]);
     const broken = [...tests, { path: "src/v2/planted.test.ts", text: "// PO-99999" }];
-    expect(checkTestReferences(spec, "M1\n", broken).problems).toEqual([...baseline, "src/v2/planted.test.ts: names PO-99999, which this spec doesn't have"]);
+    expect(checkTestReferences(spec, implemented, broken).problems).toEqual([...baseline.problems, "src/v2/planted.test.ts: names PO-99999, which this spec doesn't have"]);
   });
 });
