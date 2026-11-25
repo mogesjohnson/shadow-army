@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { redact } from "../logs.js";
 import { parseStat } from "./linux.js";
-import { readTrees, treesDir, type Identity, type TreeLine } from "./trees.js";
+import { compareStart, readTrees, treesDir, type Identity, type TreeLine } from "./trees.js";
 
 const run = promisify(execFile);
 
 /** What the sweep needs from the machine: injected, so it runs on fake processes. */
 export interface SweepOps {
   platform: NodeJS.Platform;
-  /** The process's start time (creation time on Windows, in Unix milliseconds), or `undefined` when no such process runs. */
-  startTimeOf(pid: number): Promise<number | undefined>;
+  /** The process's start time (Linux's clock ticks, or Windows's exact FILETIME as a string), or `undefined` when no such process runs. */
+  startTimeOf(pid: number): Promise<number | string | undefined>;
   commandOf?(pid: number): Promise<string | undefined>;
   /** Ends a process; `tree` ends the harness git command's whole process group (`taskkill /t /f` on Windows). */
   endProcess(pid: number, tree: boolean): Promise<void>;
@@ -24,13 +24,17 @@ export interface SweepOps {
 
 export interface SweptProcess { pid: number; command?: string }
 export interface SweepReport {
-  /** Entries whose post office still runs: left alone. */
+  /** Entries whose post office still runs, or may (an old millisecond record on Windows): left alone. */
   running: number;
   /** Entries ended and removed. */
   swept: number;
   ended: SweptProcess[];
-  /** Processes still running after the limit, and entries with a job or coalition this machine can't end. */
+  /**
+   * Processes still running after the limit, and processes an old millisecond record on Windows can't tell
+   * from the recorded one (never ended on that evidence). Their entries are kept.
+   */
   left: SweptProcess[];
+  /** Entries with a job or coalition this machine can't end. */
   unhandled: number;
 }
 
@@ -48,7 +52,7 @@ export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepRepo
   for (const { id, lines } of await readTrees(root)) {
     const postOffice = lines.find((line) => line.kind === "post-office");
     if (!postOffice || !("pid" in postOffice)) continue; // A file with no post office line can't be judged.
-    if (await ops.startTimeOf(postOffice.pid) === postOffice.startTime) { report.running++; continue; }
+    if (compareStart(postOffice, await ops.startTimeOf(postOffice.pid)) !== "different") { report.running++; continue; }
     let unhandled = 0;
     for (const line of lines) {
       if (line.kind !== "job") continue;
@@ -56,19 +60,21 @@ export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepRepo
     }
     // Windows: nothing in the job is left; only a harness git command's entry runs outside it.
     const targets = lines.filter(isProcess).filter((line) => ops.platform !== "win32" || line.kind === "git")
-      .filter((line, index, all) => all.findIndex((other) => other.pid === line.pid && other.startTime === line.startTime) === index);
-    const matching = async () => (await Promise.all(targets.map(async (target) => (await ops.startTimeOf(target.pid)) === target.startTime ? target : undefined)))
-      .filter((target): target is (typeof targets)[number] => target !== undefined);
+      .filter((line, index, all) => all.findIndex((other) => other.pid === line.pid && other.startTime === line.startTime && other.creationTime === line.creationTime) === index);
+    const compared = async () => Promise.all(targets.map(async (target) => ({ target, match: compareStart(target, await ops.startTimeOf(target.pid)) })));
+    const matching = async () => (await compared()).filter(({ match }) => match === "same").map(({ target }) => target);
     const named = new Map<number, string | undefined>();
     for (let remaining = await matching(), waited = 0; remaining.length > 0 && waited <= SWEEP_LIMIT_MS; remaining = await matching(), waited += 100) {
       for (const target of remaining) {
         if (!named.has(target.pid)) named.set(target.pid, await ops.commandOf?.(target.pid).catch(() => undefined));
         // The identity is checked again just before the signal: the pid may have been reused since the listing.
-        if (await ops.startTimeOf(target.pid) === target.startTime) await ops.endProcess(target.pid, target.kind === "git").catch(() => {});
+        if (compareStart(target, await ops.startTimeOf(target.pid)) === "same") await ops.endProcess(target.pid, target.kind === "git").catch(() => {});
       }
       await ops.wait(100);
     }
-    const left = new Set((await matching()).map((target) => target.pid));
+    const last = await compared();
+    const left = new Set(last.filter(({ match }) => match !== "different").map(({ target }) => target.pid));
+    for (const { target, match } of last) if (match === "unsure" && !named.has(target.pid)) named.set(target.pid, await ops.commandOf?.(target.pid).catch(() => undefined));
     const swept = (pid: number): SweptProcess => ({ pid, ...(named.get(pid) === undefined ? {} : { command: redact(named.get(pid)) as string }) });
     for (const pid of named.keys()) (left.has(pid) ? report.left : report.ended).push(swept(pid));
     report.unhandled += unhandled;
@@ -101,8 +107,10 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
       platform, wait: pause,
       startTimeOf: async (pid) => {
         try {
-          const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `([DateTimeOffset](Get-Process -Id ${pid} -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds()`]);
-          return Number(stdout.trim());
+          // The exact FILETIME, as the supervisor's listing records it (PO-11). StartTime keeps every 100 ns tick.
+          const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`], { windowsHide: true });
+          const filetime = stdout.trim();
+          return /^[1-9]\d*$/.test(filetime) ? filetime : undefined;
         } catch { return undefined; }
       },
       endProcess: async (pid) => { await run(taskkill, ["/t", "/f", "/pid", String(pid)]); },

@@ -5,7 +5,7 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { Writable, type Readable } from "node:stream";
-import type { Identity } from "./trees.js";
+import { windowsIdentity, type Identity } from "./trees.js";
 
 export interface ProcessExit { code: number | null; signal: NodeJS.Signals | null }
 export interface ManagedProcess {
@@ -47,17 +47,19 @@ export type TreeListing =
 export function listingFrom(event: { processes?: unknown; unverified?: unknown; message?: string }, lastVerified: Identity[]): TreeListing {
   const incomplete = (reason: string): TreeListing => ({ status: "incomplete", reason, lastVerified });
   if (!Array.isArray(event.processes)) return incomplete(`Windows process listing failed: ${event.message ?? "no processes"}`);
-  if (!event.processes.every(isIdentity)) return incomplete("Windows process listing returned a malformed entry");
+  const processes = event.processes.map(identityFrom);
+  if (!processes.every((one): one is Identity => one !== undefined)) return incomplete("Windows process listing returned a malformed entry");
   if (Array.isArray(event.unverified) && event.unverified.length > 0) return incomplete(`Windows process listing could not read the identity of pid ${event.unverified.join(", ")}`);
-  return { status: "listed", processes: event.processes.map(({ pid, startTime }) => ({ pid, startTime })) };
+  return { status: "listed", processes };
 }
 
 /** How long a listing may take before it is reported incomplete. */
 const LIST_TIMEOUT_MS = 10_000;
 
-const isIdentity = (value: unknown): value is Identity => {
-  const { pid, startTime } = (value ?? {}) as Partial<Identity>;
-  return Number.isSafeInteger(pid) && pid! > 0 && Number.isSafeInteger(startTime) && startTime! > 0;
+/** The supervisor names a process by its pid and exact creation time, a FILETIME sent as a string (PO-11). */
+const identityFrom = (value: unknown): Identity | undefined => {
+  const { pid, creationTime } = (value ?? {}) as { pid?: unknown; creationTime?: unknown };
+  return windowsIdentity(pid, creationTime);
 };
 export interface ManagedProcessOptions {
   file: string;
@@ -156,7 +158,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
         }
         if (event.kind === "started" && typeof event.pid === "number") {
           rootPid = event.pid;
-          if (isIdentity(event.guardian)) guardian = { pid: event.guardian.pid, startTime: event.guardian.startTime };
+          guardian = identityFrom(event.guardian);
           started();
         } else if (event.kind === "list" && typeof event.id === "string") {
           const waiting = listings.get(event.id);
@@ -296,8 +298,9 @@ public static class ShadowJobSupervisor {
   // They are separate so that teardown's reports never wait on a listing's enumeration.
   static readonly object JobGate=new object(),WriteGate=new object(); static StreamWriter Events;
   static void Emit(string line) { lock(WriteGate) { Events.WriteLine(line); } }
-  // PO-11: creation time from GetProcessTimes on a PROCESS_QUERY_LIMITED_INFORMATION handle, as Unix
-  // milliseconds (the unit the tree record and the sweep compare). 0 when the process is known not to
+  // PO-11: the exact creation time (FILETIME) from GetProcessTimes on a PROCESS_QUERY_LIMITED_INFORMATION
+  // handle. It is sent as a string: milliseconds can't tell a reused pid from the original, and a JSON
+  // number past 2^53 loses ticks. 0 when the process is known not to
   // be a live member: it is gone (ERROR_INVALID_PARAMETER), it has ended (its exit time or exit code is
   // set) or, given a job, it is not in it (its pid was reused). -1 when a query failed, so that
   // missing evidence is never read as an absent member.
@@ -308,7 +311,7 @@ public static class ShadowJobSupervisor {
       // Termination is asynchronous: the exit code is set before the exit time, so either one means ended.
       uint code; if(!GetExitCodeProcess(handle,out code)) return -1; if(code!=259) return 0;
       long creation,exit,kernel,user; if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return -1; if(exit!=0) return 0;
-      return (creation-116444736000000000L)/10000;
+      return creation>0 ? creation : -1;
     } finally { CloseHandle(handle); }
   }
   // Every live process in the job (JobObjectBasicProcessIdList), each with its identity; a pid
@@ -322,7 +325,7 @@ public static class ShadowJobSupervisor {
         int assigned=Marshal.ReadInt32(buffer,0),listed=Marshal.ReadInt32(buffer,4);
         if(assigned>listed && capacity<65536) continue;
         if(assigned>listed) throw new Exception("the job holds more processes than one listing can read");
-        for(int i=0;i<listed;i++) { uint pid=(uint)Marshal.ReadIntPtr(buffer,8+i*IntPtr.Size).ToInt64(); long start=StartTimeOf(pid,job); if(start>0) found.Add(new { pid=pid,startTime=start }); else if(start<0) unverified.Add(pid); }
+        for(int i=0;i<listed;i++) { uint pid=(uint)Marshal.ReadIntPtr(buffer,8+i*IntPtr.Size).ToInt64(); long start=StartTimeOf(pid,job); if(start>0) found.Add(new { pid=pid,creationTime=start.ToString(System.Globalization.CultureInfo.InvariantCulture) }); else if(start<0) unverified.Add(pid); }
         return found;
       } finally { Marshal.FreeHGlobal(buffer); }
     }
@@ -381,7 +384,7 @@ public static class ShadowJobSupervisor {
       Check(ResumeThread(process.thread)!=0xFFFFFFFF); CloseHandle(process.thread); process.thread=IntPtr.Zero; CloseHandle(read); read=IntPtr.Zero;
       // The guardian is this process: it holds the job's only handle (PO-9).
       uint guardian=GetCurrentProcessId();
-      Emit(serializer.Serialize(new { token=config["token"],kind="started",pid=process.pid,guardian=new { pid=guardian,startTime=StartTimeOf(guardian,IntPtr.Zero) } }));
+      Emit(serializer.Serialize(new { token=config["token"],kind="started",pid=process.pid,guardian=new { pid=guardian,creationTime=StartTimeOf(guardian,IntPtr.Zero).ToString(System.Globalization.CultureInfo.InvariantCulture) } }));
       IntPtr inputWrite=write; write=IntPtr.Zero;
       var pump=new Thread(delegate() {
         bool ended=false;

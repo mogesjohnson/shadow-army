@@ -8,7 +8,7 @@ import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
 
 /** Fake processes by pid → start time. Ending one removes it, unless its pid is in `stuck`. */
-function fakeOps(alive: Record<number, number>, platform: NodeJS.Platform = "linux", stuck: number[] = []) {
+function fakeOps(alive: Record<number, number | string>, platform: NodeJS.Platform = "linux", stuck: number[] = []) {
   const calls: string[] = [];
   const ops: SweepOps = {
     platform,
@@ -69,6 +69,29 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(calls).toEqual(["tree 8"]);
   });
 
+  it("on Windows never takes a process created in the same millisecond for the recorded one", async () => {
+    const ms = 1_795_000_000_007;
+    const record = await TreeRecord.create(root, "w", { pid: 3, startTime: ms, creationTime: "134394736000070001" });
+    await record.add({ kind: "git", pid: 8, startTime: ms, creationTime: "134394736000070001" });
+    const { ops, calls } = fakeOps({ 3: "134394736000070002", 8: "134394736000070002" }, "win32");
+    expect(await sweepTrees(root, ops)).toMatchObject({ running: 0, swept: 1, ended: [], left: [] });
+    expect(calls).toEqual([]);
+    expect(await readTrees(root)).toEqual([]);
+  });
+
+  it("on Windows reads an old millisecond record, but never ends a process on its evidence alone", async () => {
+    const ms = 1_795_000_000_007;
+    await TreeRecord.create(root, "live", { pid: 1, startTime: ms }); // Same millisecond: maybe still running.
+    const old = await TreeRecord.create(root, "old", { pid: 3, startTime: ms });
+    await old.add({ kind: "git", pid: 8, startTime: ms });
+    await old.add({ kind: "git", pid: 9, startTime: ms });
+    const { ops, calls } = fakeOps({ 1: "134394736000070009", 3: "134394736000080000", 8: "134394736000070002" }, "win32");
+    const report = await sweepTrees(root, ops);
+    expect(report).toMatchObject({ running: 1, swept: 0, ended: [], left: [{ pid: 8 }] });
+    expect(calls).toEqual([]);
+    expect((await readTrees(root)).map((tree) => tree.id).sort()).toEqual(["live", "old"]); // Kept for the owner.
+  });
+
   it("on macOS removes the job and ends the coalition, and keeps an entry this machine can't handle", async () => {
     const record = await TreeRecord.create(root, "m", { pid: 3, startTime: 30 }, { pid: 4, startTime: 40 });
     await record.add({ kind: "job", label: "sa.job.1", coalition: "77" });
@@ -89,6 +112,12 @@ describe("the sweep (PO-16, M1-AC16)", () => {
   it("has no operations for macOS until PO-17's helper exists", () => {
     expect(() => systemOps("darwin")).toThrow(/M1b-18/);
   });
+
+  it.runIf(process.platform === "win32")("reads a Windows process's exact creation time, not milliseconds", async () => {
+    const now = await systemOps().startTimeOf(process.pid);
+    expect(now).toMatch(/^[1-9]\d{17}$/);
+    expect(await systemOps().startTimeOf(2 ** 31 - 2)).toBeUndefined();
+  }, 30_000);
 
   const linux = it.runIf(process.platform === "linux");
   linux("ends a real orphaned process on Linux by its identity, and spares one with the wrong start time", async () => {

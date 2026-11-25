@@ -141,8 +141,8 @@ describe("Windows exit grace (PO-10: ten seconds after the CLI was asked to exit
 });
 
 /** A second, independent read of a creation time: the sweep's own Windows read (Unix milliseconds). */
-const startTimeOf = (pid: number) => Number(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-  `([DateTimeOffset](Get-Process -Id ${pid} -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds()`], { encoding: "utf8", windowsHide: true }).trim());
+const creationTimeOf = (pid: number) => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+  `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`], { encoding: "utf8", windowsHide: true }).trim();
 
 describe("Windows tree listing (PO-11) and guardian identity (PO-9)", () => {
   windowsOnly("lists the CLI and its child with stable identities, names the guardian, and drops an ended process", async () => {
@@ -169,12 +169,12 @@ describe("Windows tree listing (PO-11) and guardian identity (PO-9)", () => {
     expect(byPid(session.pid)).toBeDefined();
     expect(byPid(childPid)).toBeDefined();
     expect(second).toEqual(expect.arrayContaining([byPid(session.pid), byPid(childPid)]));
-    for (const pid of [session.pid, childPid]) expect(byPid(pid)!.startTime).toBe(startTimeOf(pid));
+    for (const pid of [session.pid, childPid]) expect(byPid(pid)!.creationTime).toBe(creationTimeOf(pid));
 
     const guardian = session.guardian!;
     expect(guardian).toBeDefined();
     expect(alive(guardian.pid)).toBe(true);
-    expect(guardian.startTime).toBe(startTimeOf(guardian.pid));
+    expect(guardian.creationTime).toBe(creationTimeOf(guardian.pid));
     expect(first.some((entry) => entry.pid === guardian.pid)).toBe(false); // It holds the job; it is not in it.
 
     process.kill(childPid);
@@ -231,21 +231,26 @@ describe("Windows tree listing (PO-11) and guardian identity (PO-9)", () => {
 });
 
 describe("reading the supervisor's listing reply (PO-11)", () => {
-  const last = [{ pid: 7, startTime: 1_795_000_000_007 }];
-  it("returns a successful query, empty only when the job is", () => {
-    expect(listingFrom({ processes: [{ pid: 8, startTime: 1_795_000_000_008, extra: 1 }], unverified: [] }, last))
-      .toEqual({ status: "listed", processes: [{ pid: 8, startTime: 1_795_000_000_008 }] });
+  const last = [{ pid: 7, startTime: 1_795_000_000_007, creationTime: "134394736000070000" }];
+  it("returns a successful query with each exact creation time, empty only when the job is", () => {
+    expect(listingFrom({ processes: [{ pid: 8, creationTime: "134394736000080001", extra: 1 }, { pid: 9, creationTime: "134394736000080002" }], unverified: [] }, last))
+      .toEqual({ status: "listed", processes: [
+        { pid: 8, startTime: 1_795_000_000_008, creationTime: "134394736000080001" },
+        { pid: 9, startTime: 1_795_000_000_008, creationTime: "134394736000080002" },
+      ] });
     expect(listingFrom({ processes: [], unverified: [] }, last)).toEqual({ status: "listed", processes: [] });
   });
   it("reports a failed query as incomplete with the last verified identities", () => {
     expect(listingFrom({ message: "Access is denied" }, last)).toEqual({ status: "incomplete", reason: expect.stringContaining("Access is denied"), lastVerified: last });
   });
-  it("never strips a malformed entry from a reply", () => {
-    expect(listingFrom({ processes: [{ pid: 8, startTime: 1_795_000_000_008 }, { pid: "9" }], unverified: [] }, last))
-      .toEqual({ status: "incomplete", reason: expect.stringContaining("malformed"), lastVerified: last });
+  it("never strips a malformed entry from a reply, nor accepts a creation time that is not exact", () => {
+    for (const bad of [{ pid: "9", creationTime: "134394736000080001" }, { pid: 9, creationTime: 134394736000080001 }, { pid: 9, startTime: 1_795_000_000_008 }, { pid: 9, creationTime: "0" }]) {
+      expect(listingFrom({ processes: [{ pid: 8, creationTime: "134394736000080001" }, bad], unverified: [] }, last))
+        .toEqual({ status: "incomplete", reason: expect.stringContaining("malformed"), lastVerified: last });
+    }
   });
   it("never reads a process whose identity could not be read as absent", () => {
-    expect(listingFrom({ processes: [{ pid: 8, startTime: 1_795_000_000_008 }], unverified: [9] }, last))
+    expect(listingFrom({ processes: [{ pid: 8, creationTime: "134394736000080001" }], unverified: [9] }, last))
       .toEqual({ status: "incomplete", reason: expect.stringContaining("pid 9"), lastVerified: last });
   });
 });
