@@ -1,11 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { copyFile, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, defaultSupervisorCache, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, supervisorBinary, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -253,6 +254,105 @@ describe("reading the supervisor's listing reply (PO-11)", () => {
     expect(listingFrom({ processes: [{ pid: 8, creationTime: "134394736000080001" }], unverified: [9] }, last))
       .toEqual({ status: "incomplete", reason: expect.stringContaining("pid 9"), lastVerified: last });
   });
+});
+
+describe("Windows supervisor cache (compiled once, verified on every spawn)", () => {
+  const hashOf = async (path: string) => createHash("sha256").update(await readFile(path)).digest("hex");
+
+  const openTo = (path: string) => execFileSync("icacls", [path, "/grant", "*S-1-1-0:(M)"], { windowsHide: true }); // Everyone may modify.
+  // A cache must sit in guarded folders, and %TEMP% may be open to other accounts (a sandbox group here): beside the real one.
+  const cacheDirectory = async () => {
+    const path = await mkdtemp(join(dirname(await defaultSupervisorCache()), "test-"));
+    directories.push(path); return path;
+  };
+
+  windowsOnly("compiles once, then reuses the verified binary, leaving other versions' files alone", async () => {
+    const cache = await cacheDirectory();
+    // Another installed version's record and binary in the same profile (C2).
+    const other = ["a".repeat(32) + ".json", `${"a".repeat(32)}-${"b".repeat(64)}.exe`];
+    for (const name of other) await writeFile(join(cache, name), "another version");
+    const first = await supervisorBinary(cache);
+    expect(first.compiled).toBe(true);
+    expect(first.path.endsWith(`-${await hashOf(first.path)}.exe`)).toBe(true);
+    expect(await readdir(cache)).toEqual(expect.arrayContaining(other));
+    expect(await supervisorBinary(cache)).toEqual({ path: first.path, compiled: false });
+
+    // The same verified files, but the binary is open to everyone: refused before it runs (C1).
+    const copy = await cacheDirectory();
+    for (const name of await readdir(cache)) await copyFile(join(cache, name), join(copy, name));
+    openTo(join(copy, basename(first.path)));
+    await expect(supervisorBinary(copy)).rejects.toThrow(/someone else can change it/);
+  }, 120_000);
+
+  windowsOnly("refuses a cache outside this user's local application data, or open to others (C1)", async () => {
+    await expect(supervisorBinary(join(process.env.SystemRoot ?? "C:\\Windows", "Temp", "shadow-army-c1"))).rejects.toThrow(/is not inside/);
+    const link = join(await cacheDirectory(), "link");
+    await symlink(process.env.PUBLIC ?? "C:\\Users\\Public", link, "junction");
+    await expect(supervisorBinary(link)).rejects.toThrow(/resolves to/);
+    const open = await cacheDirectory();
+    openTo(open);
+    await expect(supervisorBinary(open)).rejects.toThrow(/someone else can change it/);
+  }, 60_000);
+
+  windowsOnly("takes the default cache from Windows, not from %LOCALAPPDATA% (C1)", async () => {
+    const saved = process.env.LOCALAPPDATA;
+    const planted = await directory();
+    process.env.LOCALAPPDATA = planted;
+    try {
+      const cache = await defaultSupervisorCache();
+      expect(cache.toLowerCase().startsWith(planted.toLowerCase())).toBe(false);
+      expect(cache.toLowerCase().endsWith(join("appdata", "local", "shadow-army", "supervisor"))).toBe(true);
+    } finally { process.env.LOCALAPPDATA = saved; }
+  }, 60_000);
+
+  windowsOnly("recompiles a tampered, missing or misrecorded binary instead of running it", async () => {
+    const cache = await cacheDirectory();
+    const first = await supervisorBinary(cache);
+    await writeFile(first.path, "MZ planted, not the supervisor");
+    const repaired = await supervisorBinary(cache);
+    expect(repaired.compiled).toBe(true);
+    expect(repaired.path).not.toBe(first.path);
+    expect(repaired.path.endsWith(`-${await hashOf(repaired.path)}.exe`)).toBe(true);
+    expect(await readdir(cache)).not.toContain(basename(first.path)); // The tampered file is gone.
+
+    await rm(repaired.path);
+    const missing = await supervisorBinary(cache);
+    expect(missing.compiled).toBe(true);
+
+    // A record that is valid JSON but not an object is a cache miss, not a throw (C3).
+    await writeFile(join(cache, (await readdir(cache)).find((name) => name.endsWith(".json"))!), "null");
+    expect((await supervisorBinary(cache)).compiled).toBe(true);
+
+    // A record for another source, or one pointing at a planted binary under a self-chosen hash, is not trusted.
+    const record = (await readdir(cache)).find((name) => name.endsWith(".json"))!;
+    const planted = join(cache, "planted.exe");
+    await writeFile(planted, "MZ planted");
+    await writeFile(join(cache, record), JSON.stringify({ source: "0".repeat(64), sha256: await hashOf(planted) }));
+    const again = await supervisorBinary(cache);
+    expect(again.compiled).toBe(true);
+    expect(await hashOf(again.path)).not.toBe(await hashOf(planted));
+  }, 240_000);
+
+  windowsOnly("runs containment from the verified cached binary, which still kills the whole tree", async () => {
+    const session = await spawnManagedProcess({
+      file: process.execPath, cwd: await directory(), exitGraceMs: 0,
+      args: ["-e", "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log('child:'+c.pid);process.stdin.resume();setInterval(()=>{},1000);"],
+    });
+    sessions.push(session); session.stderr.resume();
+    const child = await new Promise<number>((done, fail) => {
+      let text = "";
+      session.stdout.on("data", (chunk: Buffer) => { text += chunk.toString(); const match = /child:(\d+)/.exec(text); if (match) done(Number(match[1])); });
+      setTimeout(() => fail(new Error("the CLI did not start its child")), 15_000);
+    });
+    stray.push(child);
+    const guardianPath = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${session.guardian!.pid}).Path`], { encoding: "utf8", windowsHide: true }).trim();
+    const cached = await supervisorBinary();
+    expect(cached.compiled).toBe(false);
+    expect(guardianPath.toLowerCase()).toBe(cached.path.toLowerCase());
+    await session.close({ grace: false });
+    expect(await gone(session.pid, 5_000)).toBe(true);
+    expect(await gone(child, 5_000)).toBe(true);
+  }, 60_000);
 });
 
 const filetimeOf = (pid: number): string => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`], { encoding: "utf8" }).trim();

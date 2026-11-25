@@ -1,9 +1,8 @@
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { access, lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { access, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Writable, type Readable } from "node:stream";
 import { windowsIdentity, type Identity } from "./trees.js";
 
@@ -123,9 +122,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   const exitGraceMs = exitGraceFor(options);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
-  const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
-  const script = join(directory, "supervisor.ps1");
-  await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
+  const supervisor = (await supervisorBinary()).path;
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
@@ -179,8 +176,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   let child: ChildProcessWithoutNullStreams | undefined;
   try {
     await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(`\\\\.\\pipe\\${pipeName}`, done); });
-    const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    child = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
+    child = spawn(supervisor, [], {
       cwd: options.cwd, env, windowsHide: true, stdio: "pipe",
     });
     const wrapper = child;
@@ -232,7 +228,6 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
           if (grace) control?.write("close\n");
           try { await wrapperClosed; } finally {
             clearTimeout(killed); control?.destroy(); server.close();
-            await rm(directory, { recursive: true, force: true });
           }
           if (!treeClosed) throw new Error("Windows supervisor ended without confirming session process-tree cleanup");
         })();
@@ -244,16 +239,14 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       child.kill();
       await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, exitGraceMs).unref(); });
     }
-    await rm(directory, { recursive: true, force: true });
     throw error;
   }
 }
 
 // Embedded in the compiled module: published dist/ needs no source-tree script or native package.
-// Bootstrap is read from stdin and never passed to the CLI; session credentials cannot enter argv.
-const WINDOWS_SUPERVISOR = String.raw`
-$ErrorActionPreference = 'Stop'
-Add-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition @'
+// Compiled once per source version into the owner's cache (supervisorBinary). Bootstrap is read
+// from stdin and never passed to the CLI; session credentials cannot enter argv.
+const SUPERVISOR_SOURCE = String.raw`
 using System;
 using System.IO;
 using System.IO.Pipes;
@@ -293,6 +286,7 @@ public static class ShadowJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool result);
   [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
+  public static int Main() { return Run(); }
   static void Check(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
   // JobGate keeps the job handle open while a listing reads it; WriteGate keeps report lines whole.
   // They are separate so that teardown's reports never wait on a listing's enumeration.
@@ -429,9 +423,120 @@ public static class ShadowJobSupervisor {
     }
   }
 }
-'@
-exit ([ShadowJobSupervisor]::Run())
 `;
+
+const SOURCE_HASH = createHash("sha256").update(SUPERVISOR_SOURCE).digest("hex");
+/** Names this source version's files in the cache: `<key>.json` (the record) and `<key>-<sha256>.exe`. */
+const SUPERVISOR_KEY = SOURCE_HASH.slice(0, 32);
+const COMPILE_SCRIPT = "$ErrorActionPreference = 'Stop'\nAdd-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition ([IO.File]::ReadAllText($args[0])) -OutputAssembly $args[1] -OutputType ConsoleApplication\n";
+const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+/** The supervisor cache: `shadow-army\supervisor` under this user's local application data, as Windows names it. */
+export async function defaultSupervisorCache(session?: SweepSession): Promise<string> {
+  const root = await localAppData(session);
+  if (!root) throw new Error("Windows supervisor cache refused: this user's local application data folder could not be read");
+  return join(root, "shadow-army", "supervisor");
+}
+
+/**
+ * The supervisor binary for this source, verified on every call: its record must name this source's
+ * hash and its bytes must hash to the record. A missing, stale or tampered binary is recompiled;
+ * a failed compile throws, so unverified code is never run. The cache is a trust boundary (C1): it must
+ * resolve inside this user's local application data, and it, every folder above it up to that root, and
+ * the binary must be owned by this user and changeable by nobody else but SYSTEM and administrators.
+ * Otherwise this throws and nothing starts. Code running as this same user is out of scope: it could
+ * replace the CLI or node itself.
+ */
+export async function supervisorBinary(cache?: string): Promise<{ path: string; compiled: boolean }> {
+  const session = openSweepSession(); // Started only if a check below is not already settled.
+  try {
+    const folder = await guardedCache(cache, session);
+    const cached = await verifiedSupervisor(folder);
+    if (cached) return { path: await guardedBinary(cached, session), compiled: false };
+    let pending = compiling.get(folder);
+    if (!pending) {
+      pending = compileSupervisor(folder).finally(() => compiling.delete(folder));
+      compiling.set(folder, pending);
+    }
+    return { path: await guardedBinary(await pending, session), compiled: true };
+  } finally { session.close(); }
+}
+/** One compile per cache at a time in this process: parallel spawns share it. */
+const compiling = new Map<string, Promise<string>>();
+/** Caches and binaries already found guarded in this process; only this user or an administrator can loosen them. */
+const guardedCaches = new Map<string, string>();
+const guardedBinaries = new Set<string>();
+
+async function guardedCache(requested: string | undefined, session: SweepSession): Promise<string> {
+  const key = requested ?? "";
+  const known = guardedCaches.get(key);
+  if (known) return known;
+  const refuse = (why: string) => new Error(`Windows supervisor cache refused: ${why}`);
+  const rootPath = await localAppData(session);
+  if (!rootPath) throw refuse("this user's local application data folder could not be read");
+  const root = await realpath(rootPath);
+  const folder = resolve(requested ?? join(root, "shadow-army", "supervisor"));
+  const inside = (path: string) => { const rest = relative(root, path); return rest !== "" && !rest.startsWith("..") && !isAbsolute(rest) ? rest : undefined; };
+  if (!inside(folder)) throw refuse(`${folder} is not inside ${root}`);
+  await mkdir(folder, { recursive: true });
+  const real = await realpath(folder); // A junction or link out of the root is caught here.
+  const rest = inside(real);
+  if (!rest) throw refuse(`${folder} resolves to ${real}, outside ${root}`);
+  let at = root;
+  for (const path of [root, ...rest.split(sep).map((part) => (at = join(at, part)))]) {
+    if (!await guardedForCurrentUser(path, session)) throw refuse(`${path} is not owned by this user, or someone else can change it`);
+  }
+  guardedCaches.set(key, real);
+  return real;
+}
+
+async function guardedBinary(binary: string, session: SweepSession): Promise<string> {
+  if (guardedBinaries.has(binary)) return binary;
+  if (!await guardedForCurrentUser(binary, session)) throw new Error(`Windows supervisor cache refused: ${binary} is not owned by this user, or someone else can change it`);
+  guardedBinaries.add(binary);
+  return binary;
+}
+
+async function verifiedSupervisor(cache: string): Promise<string | undefined> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(await readFile(join(cache, `${SUPERVISOR_KEY}.json`), "utf8")); } catch { return undefined; }
+  // Any non-object (null included) is a cache miss, never a throw (C3).
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const record = parsed as { source?: unknown; sha256?: unknown };
+  if (record.source !== SOURCE_HASH || typeof record.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(record.sha256)) return undefined;
+  const binary = join(cache, `${SUPERVISOR_KEY}-${record.sha256}.exe`);
+  let bytes: Buffer;
+  try { bytes = await readFile(binary); } catch { return undefined; }
+  if (sha256(bytes) === record.sha256) return binary;
+  await rm(binary, { force: true }).catch(() => {}); // Tampered: never run it, and drop it if we can.
+  return undefined;
+}
+
+async function compileSupervisor(cache: string): Promise<string> {
+  await mkdir(cache, { recursive: true });
+  const work = await mkdtemp(join(cache, "build-"));
+  try {
+    const source = join(work, "supervisor.cs"), output = join(work, "supervisor.exe"), script = join(work, "compile.ps1");
+    await writeFile(source, SUPERVISOR_SOURCE, "utf8");
+    await writeFile(script, COMPILE_SCRIPT, "utf8");
+    const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    await new Promise<void>((done, fail) => execFile(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, source, output],
+      { windowsHide: true, timeout: 120_000 }, (error, _stdout, stderr) => error ? fail(new Error(`Windows supervisor did not compile: ${String(stderr).slice(-2_048) || error.message}`)) : done()));
+    const hash = sha256(await readFile(output));
+    // Content-addressed: a binary another process is running is never replaced, only added beside.
+    const binary = join(cache, `${SUPERVISOR_KEY}-${hash}.exe`);
+    await rename(output, binary);
+    const record = join(work, "record.json");
+    await writeFile(record, JSON.stringify({ source: SOURCE_HASH, sha256: hash }), "utf8");
+    await rename(record, join(cache, `${SUPERVISOR_KEY}.json`)).catch(() => {}); // A parallel compile's record is as good.
+    if (sha256(await readFile(binary)) !== hash) throw new Error("Windows supervisor changed while it was being cached");
+    // Other source versions' files stay (C2): another installed version sharing this profile may be verifying,
+    // publishing or running them, and nothing here can rule that out.
+    return binary;
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}
 
 // PO-16's sweep on Windows. Each call opens the process once and checks it, and ends it, through that one handle:
 // a pid reused between the check and the end can't receive the end (taskkill takes a bare pid). A tree also ends
@@ -474,6 +579,25 @@ public static class ShadowSweep {
     IdentityReference owner=security.GetOwner(typeof(SecurityIdentifier)); WindowsIdentity me=WindowsIdentity.GetCurrent();
     // An elevated token's files are owned by its default owner (Administrators), not its user.
     return owner!=null && (owner.Equals(me.User) || owner.Equals(me.Owner)) ? "owned" : "other";
+  }
+  // Write, append, attributes, delete, delete-child, change-permissions, take-ownership, GENERIC_ALL and GENERIC_WRITE.
+  const int Changes=0x000D0156|0x10000000|0x40000000;
+  // "guarded" when this user owns the path and only it, SYSTEM and administrators may change or replace it.
+  public static string Guarded(string path) {
+    if(Owned(path)!="owned") return "other";
+    FileSystemSecurity security=System.IO.Directory.Exists(path) ? (FileSystemSecurity)System.IO.Directory.GetAccessControl(path,AccessControlSections.Access) : System.IO.File.GetAccessControl(path,AccessControlSections.Access);
+    WindowsIdentity me=WindowsIdentity.GetCurrent();
+    foreach(FileSystemAccessRule rule in security.GetAccessRules(true,true,typeof(SecurityIdentifier))) {
+      if(rule.AccessControlType!=AccessControlType.Allow || (rule.PropagationFlags&PropagationFlags.InheritOnly)!=0 || ((int)rule.FileSystemRights&Changes)==0) continue;
+      SecurityIdentifier sid=(SecurityIdentifier)rule.IdentityReference;
+      if(sid.Equals(me.User) || sid.Equals(me.Owner) || sid.IsWellKnown(WellKnownSidType.LocalSystemSid) || sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid)) continue;
+      return "open";
+    }
+    return "guarded";
+  }
+  // This user's local application data folder as Windows names it, not as %LOCALAPPDATA% says (base64 UTF-8).
+  public static string Root() {
+    return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData,Environment.SpecialFolderOption.DoNotVerify)));
   }
   public static string Probe(uint pid) {
     IntPtr handle; long creation; string state=Open(pid,0x1000,out handle,out creation);
@@ -541,6 +665,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
       'probe' { [ShadowSweep]::Probe([uint32]$part[1]) }
       'end' { [ShadowSweep]::End([uint32]$part[1], [long]$part[2], $part[3] -eq '1') }
       'owned' { [ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part[1]))) }
+      'guarded' { [ShadowSweep]::Guarded([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part[1]))) }
+      'root' { 'root ' + [ShadowSweep]::Root() }
       default { 'unknown' }
     }
   } catch { $answer = 'unknown' }
@@ -619,6 +745,18 @@ export async function probeWindowsProcess(pid: number, session?: SweepSession): 
 /** Whether this user (or an elevated token's default owner) owns the path; a failed check is not ownership. */
 export async function ownedByCurrentUser(path: string, session?: SweepSession): Promise<boolean> {
   return await ask(session, `owned ${Buffer.from(path, "utf8").toString("base64")}`) === "owned";
+}
+
+/** Whether this user owns the path and nobody else but SYSTEM and administrators can change or replace it. */
+export async function guardedForCurrentUser(path: string, session?: SweepSession): Promise<boolean> {
+  return await ask(session, `guarded ${Buffer.from(path, "utf8").toString("base64")}`) === "guarded";
+}
+
+/** This user's local application data folder from Windows, not from %LOCALAPPDATA%; `undefined` when unread. */
+async function localAppData(session?: SweepSession): Promise<string | undefined> {
+  const answer = /^root ([A-Za-z0-9+/]+=*)$/.exec(await ask(session, "root"));
+  const path = answer && Buffer.from(answer[1]!, "base64").toString("utf8");
+  return path && isAbsolute(path) ? path : undefined;
 }
 
 export type WindowsEnd = "ended" | "incomplete" | "absent" | "different" | "unknown";
