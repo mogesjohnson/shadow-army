@@ -1,10 +1,11 @@
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, unlink, utimes, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { execa } from "execa";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  accept, gitCommonDir, isAccepted, mcpServers, normalizeCommonDir, readPolicyFiles, readRecord, recordPath, sha256, untrustedFiles,
+  accept, gitCommonDir, isAccepted, MAX_ATTEMPTS, mcpServers, normalizeCommonDir, observe, readPolicyFiles, readRecord, recordPath, sha256,
+  untrustedFiles,
   type TrustDeps,
 } from "./trust.js";
 
@@ -166,6 +167,41 @@ describe("working trees", () => {
     expect((await check(d, common, repo)).untrusted).toEqual([]);
   });
 
+  it("finds a file gone from a linked tree that showed no card, once a check there recorded what it saw", async () => {
+    const d = await deps();
+    const repo = await directory("repo");
+    const linked = join(await directory("wt"), "linked");
+    const git = (...args: string[]) => execa("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+    await git("init", "-q");
+    await writeFile(join(repo, "agent.md"), "a");
+    await writeFile(join(repo, "rules.md"), "r");
+    await git("add", ".");
+    await git("commit", "-qm", "init");
+    await git("worktree", "add", "-q", linked);
+    const common = await gitCommonDir(repo);
+    expect((await trust(d, common, repo)).ok).toBe(true);
+    const seen = await check(d, common, linked);
+    expect(seen.untrusted).toEqual([]);
+    expect((await observe(d, { commonDir: common, worktree: linked, current: seen.current })).ok).toBe(true);
+    await unlink(join(linked, "rules.md"));
+    expect((await check(d, common, linked)).untrusted).toEqual([{ name: "rules.md", status: "gone", hash: null }]);
+    // A second check while the file is gone keeps it listed, so it stays gone until a card accepts that.
+    const again = await check(d, common, linked);
+    expect((await observe(d, { commonDir: common, worktree: linked, current: again.current })).ok).toBe(true);
+    expect((await check(d, common, linked)).untrusted).toEqual([{ name: "rules.md", status: "gone", hash: null }]);
+    expect((await check(d, common, repo)).untrusted).toEqual([]);
+  });
+
+  it("records only files already accepted when it observes, and writes nothing when there is nothing to add", async () => {
+    const d = await deps();
+    const folder = await directory("folder");
+    await writeFile(join(folder, "agent.md"), "never shown");
+    const seen = await check(d, "/r/.git", folder);
+    expect(await observe(d, { commonDir: "/r/.git", worktree: folder, current: seen.current })).toEqual({ ok: true, record: null });
+    await expect(readFile(recordPath(d.home, "/r/.git"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await check(d, "/r/.git", folder)).untrusted).toHaveLength(1);
+  });
+
   it("merges two acceptances whose reads came before each other's writes, keeping both worktrees' lists", async () => {
     const d = await deps();
     const main = await directory("main");
@@ -187,5 +223,84 @@ describe("working trees", () => {
     expect((await check(d, "/r/.git", linked)).untrusted).toEqual([{ name: "shadow.config.json", status: "gone", hash: null }]);
     expect((await readdir(join(d.home, ".shadow-army", "trust"))).filter((f) => f.endsWith(".tmp"))).toEqual([]);
     expect(JSON.parse(await readFile(recordPath(d.home, "/r/.git"), "utf8")).commonDir).toBe("/r/.git");
+  });
+});
+
+describe("committing the record", () => {
+  async function oneFile(d: TrustDeps, name: string) {
+    const folder = await directory(name);
+    await writeFile(join(folder, "agent.md"), name);
+    const card = await check(d, "/r/.git", folder);
+    return { folder, input: { commonDir: "/r/.git", worktree: folder, shown: card.untrusted, current: card.current } };
+  }
+  const trustFolder = (d: TrustDeps) => join(d.home, ".shadow-army", "trust");
+  // Anything in the trust folder besides the record itself: temp files, locks, recovery guards.
+  const leftovers = async (d: TrustDeps) => (await readdir(trustFolder(d))).filter((f) => join(trustFolder(d), f) !== recordPath(d.home, "/r/.git"));
+
+  it("retries from a new read when another acceptance lands between its read and its rename", async () => {
+    const d = await deps();
+    const other = await oneFile(d, "other");
+    const mine = await oneFile(d, "mine");
+    const attempts: number[] = [];
+    const result = await accept({ ...d, beforeCommit: async (attempt) => {
+      attempts.push(attempt);
+      if (attempt === 1) expect((await accept(d, other.input)).ok).toBe(true);
+    } }, mine.input);
+    expect(result.ok).toBe(true);
+    expect(attempts).toEqual([1, 2]);
+    const record = await readRecord(d, "/r/.git");
+    expect(Object.keys(record!.worktrees).sort()).toEqual([mine.folder, other.folder].sort());
+    expect([...record!.accepted["agent.md"]!].sort()).toEqual([sha256("mine"), sha256("other")].sort());
+    expect(await leftovers(d)).toEqual([]);
+  });
+
+  it("accepts nothing after MAX_ATTEMPTS changed records, keeps the last record whole and leaves no files behind", async () => {
+    const d = await deps();
+    const mine = await oneFile(d, "mine");
+    let last = "";
+    const result = await accept({ ...d, beforeCommit: async (attempt) => {
+      last = JSON.stringify({ version: 1, commonDir: "/r/.git", accepted: { "rules.md": [sha256(String(attempt))] }, worktrees: {} });
+      await writeFile(recordPath(d.home, "/r/.git"), last);
+    } }, mine.input);
+    expect(result).toEqual({ ok: false, reason: `the trust record kept changing during ${MAX_ATTEMPTS} attempts; nothing was accepted` });
+    expect(await readFile(recordPath(d.home, "/r/.git"), "utf8")).toBe(last);
+    expect(await leftovers(d)).toEqual([]);
+  });
+
+  it("reports an acceptance whose lock can't be removed after the rename as accepted, with a warning", async () => {
+    const d = await deps();
+    const mine = await oneFile(d, "mine");
+    const failing = { ...d, io: { rm: async (path: string, options?: { force?: boolean }) => {
+      if (path.endsWith(".lock")) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      await rm(path, options);
+    } } };
+    const result = await accept(failing, mine.input);
+    expect(result).toMatchObject({ ok: true, warning: expect.stringMatching(/was written, but its lock .* can't be removed: EBUSY/) });
+    expect((await check(d, "/r/.git", mine.folder)).untrusted).toEqual([]);
+    expect(d.logs.at(-1)).toMatch(/can't be removed/);
+    // The lock left behind is this process's own and no longer held, so the next acceptance takes it over.
+    const next = await oneFile(d, "next");
+    expect((await accept({ ...d, lockWaitMs: 200 }, next.input)).ok).toBe(true);
+    expect(await leftovers(d)).toEqual([]);
+  });
+
+  it("never takes the lock from a live owner, however long it stalls, and takes it over once that owner is gone", async () => {
+    const d = await deps();
+    const mine = await oneFile(d, "mine");
+    const stalled = execa(process.execPath, ["-e", "setTimeout(() => {}, 60000)"]);
+    await mkdir(trustFolder(d), { recursive: true });
+    const lock = `${recordPath(d.home, "/r/.git")}.lock`;
+    const owner = JSON.stringify({ pid: stalled.pid, host: hostname(), token: "stalled" });
+    await writeFile(lock, owner);
+    const old = new Date(Date.now() - 3_600_000);
+    await utimes(lock, old, old);
+    const held = await accept({ ...d, lockWaitMs: 200 }, mine.input);
+    expect(held).toMatchObject({ ok: false, reason: expect.stringMatching(/is held by process \d+/) });
+    expect(await readFile(lock, "utf8")).toBe(owner);
+    expect(await readRecord(d, "/r/.git")).toBeNull();
+    stalled.kill();
+    await stalled.catch(() => undefined);
+    expect((await accept({ ...d, lockWaitMs: 200 }, mine.input)).ok).toBe(true);
+    expect(await leftovers(d)).toEqual([]);
   });
 });
