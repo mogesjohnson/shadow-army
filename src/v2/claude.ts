@@ -86,6 +86,8 @@ export class ClaudeChannel implements NativeChannel {
   private instructionDirectory?: string;
   // Set once the CLI's initialize handshake is answered: pausing earlier would starve that very reply.
   private stdout?: Readable;
+  // stderr carries no handshake, so a pause applies to it at once; both streams feed the same queue.
+  private stderr?: Readable;
   private paused = false;
 
   constructor(private readonly options: ChannelOptions) {
@@ -125,6 +127,8 @@ export class ClaudeChannel implements NativeChannel {
     child.stdout.on("error", (error: Error) => { void this.failTransport(error.message); });
     child.stdin.on("error", (error: Error) => { void this.failTransport(error.message); });
     child.stderr.on("data", (chunk: Buffer) => this.emit("raw", { type: "stderr", text: chunk.toString("utf8") }));
+    this.stderr = child.stderr;
+    if (this.paused) child.stderr.pause();
     void child.exited.then((exit) => {
       if (!this.closed) void this.failTransport(`Claude process ended (${exit.code ?? exit.signal ?? "unknown"})`, true);
     }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
@@ -133,16 +137,19 @@ export class ClaudeChannel implements NativeChannel {
     if (this.paused && !this.closed) child.stdout.pause();
   }
 
-  /** Stops reading the CLI's stdout (PO-7's backlog). The pipe fills and the CLI waits; nothing more is parsed or buffered here. */
+  /**
+   * Stops reading the CLI's stdout and stderr (PO-7's backlog). The pipes fill and the CLI waits;
+   * nothing more is parsed, emitted or buffered here.
+   */
   pause(): void {
     this.paused = true;
-    if (!this.closed) this.stdout?.pause();
+    if (!this.closed) { this.stdout?.pause(); this.stderr?.pause(); }
   }
 
-  /** Reads on; what the pipe held arrives in order. */
+  /** Reads on; what the pipes held arrives in order. */
   resume(): void {
     this.paused = false;
-    if (!this.closed) this.stdout?.resume();
+    if (!this.closed) { this.stdout?.resume(); this.stderr?.resume(); }
   }
 
   private read(chunk: string): void {
@@ -403,16 +410,22 @@ export class ClaudeChannel implements NativeChannel {
     this.reason = { kind: "transport", message };
     this.drainTerminal = drainTerminal;
     this.emit("error", this.reason);
-    await this.close();
+    // A lost connection, a failed start or a root that already exited: no exit grace (PO-10).
+    await this.shutdown(false);
   }
 
+  /** The owner's close: the CLI gets stdin EOF and its exit grace (PO-7, PO-10). */
   close(): Promise<void> {
+    return this.shutdown(true);
+  }
+
+  private shutdown(grace: boolean): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
     // A closing channel is never paused: a CLI blocked on a full pipe cannot run its own exit,
     // and its final frames still belong to the closing result.
     this.paused = false;
-    this.stdout?.resume();
+    this.stdout?.resume(); this.stderr?.resume();
     clearTimeout(this.stopTimer);
     this.approvals.clear();
     for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error(this.reason.message)); }
@@ -421,7 +434,7 @@ export class ClaudeChannel implements NativeChannel {
       const child = await this.process.catch(() => undefined);
       let containmentStopped = true;
       try {
-        if (child) { child.stdin.end(); await child.close(); }
+        if (child) { child.stdin.end(); await child.close({ grace }); }
       } catch (error) {
         containmentStopped = false;
         this.reason = { kind: "transport", message: `Claude process containment failed: ${error instanceof Error ? error.message : String(error)}` };
