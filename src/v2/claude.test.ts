@@ -502,18 +502,22 @@ describe("the Claude channel's tree (PO-9, PO-11)", () => {
     });
     const tree = [{ pid: 41, startTime: 1_795_000_000_001 }, { pid: 42, startTime: 1_795_000_000_002 }];
     const guardian = { pid: 40, startTime: 1_795_000_000_000 };
+    const incomplete = { status: "incomplete" as const, reason: "the query failed", lastVerified: tree };
+    let reply: typeof tree | typeof incomplete = tree; // The Linux driver's plain array, then Windows' typed listing.
     const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
-      pid: 41, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {}, guardian, list: async () => tree,
+      pid: 41, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {}, guardian, list: async () => reply,
     });
     const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic", instructions: "", onEvent: () => {} });
     channels.push(channel);
     injected.mockRestore();
-    expect(await channel.list()).toEqual(tree);
+    expect(await channel.list()).toEqual({ status: "listed", processes: tree });
+    reply = incomplete;
+    expect(await channel.list()).toEqual(incomplete);
     await until(() => channel.guardian !== undefined);
     expect(channel.guardian).toEqual(guardian);
   });
 
-  it("lists nothing where the driver can't list", async () => {
+  it("reports an incomplete listing, never an empty one, where the driver can't list", async () => {
     const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
     const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
       pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
@@ -521,14 +525,16 @@ describe("the Claude channel's tree (PO-9, PO-11)", () => {
     const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic", instructions: "", onEvent: () => {} });
     channels.push(channel);
     injected.mockRestore();
-    expect(await channel.list()).toEqual([]);
+    expect(await channel.list()).toEqual({ status: "incomplete", reason: expect.stringContaining("cannot list"), lastVerified: [] });
     expect(channel.guardian).toBeUndefined();
   });
 
   windowsOnly("lists the real fake CLI under a live guardian on Windows", async () => {
     const { channel } = await setup();
     const { pid } = JSON.parse((await channel.send("inspect")).text) as { pid: number };
-    const listed = await channel.list();
+    const listing = await channel.list();
+    expect(listing.status).toBe("listed");
+    const listed = listing.status === "listed" ? listing.processes : [];
     expect(listed.find((entry) => entry.pid === pid)?.startTime).toBeGreaterThan(0);
     expect(channel.guardian?.pid).toBeGreaterThan(0);
     expect(() => process.kill(channel.guardian!.pid, 0)).not.toThrow();

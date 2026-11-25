@@ -24,11 +24,35 @@ export interface ManagedProcess {
   close(options?: { grace?: boolean }): Promise<void>;
   /** PO-9: the process that holds the containment, once it has started. */
   readonly guardian?: Identity;
-  /** PO-11: every live process in the containment, each with an identity a reused pid can't match. */
-  list?(): Promise<Identity[]>;
+  /**
+   * PO-11: every live process in the containment, each with an identity a reused pid can't match.
+   * Windows returns a TreeListing; the Linux driver's /proc walk still returns a plain array.
+   */
+  list?(): Promise<TreeListing | Identity[]>;
 }
 
-/** How long a listing may take before it fails; the post office then records none for that turn. */
+/**
+ * PO-11's listing, typed so that missing evidence never reads as an empty tree. "listed" is a
+ * successful query (empty only when the job really is). "ended" only once the guardian has
+ * confirmed teardown. "incomplete" is any other outcome: a query that failed or timed out, a
+ * process whose identity could not be read, a malformed reply, or a lost control pipe. It carries
+ * the identities of the last complete listing.
+ */
+export type TreeListing =
+  | { status: "listed"; processes: Identity[] }
+  | { status: "ended" }
+  | { status: "incomplete"; reason: string; lastVerified: Identity[] };
+
+/** Reads one supervisor "list" reply. Exported for its tests. */
+export function listingFrom(event: { processes?: unknown; unverified?: unknown; message?: string }, lastVerified: Identity[]): TreeListing {
+  const incomplete = (reason: string): TreeListing => ({ status: "incomplete", reason, lastVerified });
+  if (!Array.isArray(event.processes)) return incomplete(`Windows process listing failed: ${event.message ?? "no processes"}`);
+  if (!event.processes.every(isIdentity)) return incomplete("Windows process listing returned a malformed entry");
+  if (Array.isArray(event.unverified) && event.unverified.length > 0) return incomplete(`Windows process listing could not read the identity of pid ${event.unverified.join(", ")}`);
+  return { status: "listed", processes: event.processes.map(({ pid, startTime }) => ({ pid, startTime })) };
+}
+
+/** How long a listing may take before it is reported incomplete. */
 const LIST_TIMEOUT_MS = 10_000;
 
 const isIdentity = (value: unknown): value is Identity => {
@@ -42,6 +66,8 @@ export interface ManagedProcessOptions {
   env?: NodeJS.ProcessEnv;
   /** How long the CLI gets to exit after stdin EOF before its tree is ended. Defaults to PO-10's 10 s; tests inject less. */
   exitGraceMs?: number;
+  /** Tests only: the supervisor holds each listing this long, to prove close and owner loss are not delayed by one. */
+  listDelayMs?: number;
 }
 
 /** PO-10: once the CLI has exited, or 10 seconds after it was asked to, every process still in the tree is killed. */
@@ -104,7 +130,8 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   let guardian: Identity | undefined;
   let ended = false;
   let listSequence = 0;
-  const listings = new Map<string, { done: (processes: Identity[]) => void; fail: (error: Error) => void }>();
+  const listings = new Map<string, (listing: TreeListing) => void>();
+  let lastVerified: Identity[] = [];
   let settleExit!: (exit: ProcessExit) => void;
   const exited = new Promise<ProcessExit>((done) => { settleExit = done; });
   let started!: () => void;
@@ -121,7 +148,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       if (buffer.length > (authenticated ? 4_194_304 : 16_384)) { socket.destroy(); return; }
       for (let end; (end = buffer.indexOf("\n")) >= 0;) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-        let event: { token?: string; kind?: string; pid?: number; code?: number; message?: string; id?: string; guardian?: unknown; processes?: unknown };
+        let event: { token?: string; kind?: string; pid?: number; code?: number; message?: string; id?: string; guardian?: unknown; processes?: unknown; unverified?: unknown };
         try { event = JSON.parse(line); } catch { socket.destroy(); return; }
         if (!authenticated) {
           if (control || event.token !== token) { socket.destroy(); return; }
@@ -135,8 +162,9 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
           const waiting = listings.get(event.id);
           listings.delete(event.id);
           if (!waiting) continue;
-          if (Array.isArray(event.processes)) waiting.done(event.processes.filter(isIdentity).map(({ pid, startTime }) => ({ pid, startTime })));
-          else waiting.fail(new Error(`Windows process listing failed: ${event.message ?? "no processes"}`));
+          const listing = listingFrom(event, lastVerified);
+          if (listing.status === "listed") lastVerified = listing.processes;
+          waiting(listing);
         }
         else if (event.kind === "exited") settleExit({ code: event.code ?? null, signal: null });
         else if (event.kind === "closed") treeClosed = true;
@@ -144,6 +172,8 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       }
     });
   });
+  const endedOrIncomplete = (): TreeListing => treeClosed ? { status: "ended" }
+    : { status: "incomplete", reason: "Windows supervisor stopped without confirming the tree ended", lastVerified };
   let child: ChildProcessWithoutNullStreams | undefined;
   try {
     await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(`\\\\.\\pipe\\${pipeName}`, done); });
@@ -158,15 +188,16 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     wrapper.stdin.on("error", () => {});
     wrapper.once("error", failed);
     const wrapperClosed = new Promise<void>((done) => wrapper.once("close", () => {
-      // With the guardian gone, its job's last handle has closed and Windows has ended the tree.
+      // Only a guardian that confirmed teardown ("closed") proves the tree ended; any other exit
+      // leaves the listing incomplete, with the last verified identities.
       ended = true;
-      for (const waiting of listings.values()) waiting.done([]);
+      for (const waiting of listings.values()) waiting(endedOrIncomplete());
       listings.clear();
       settleExit({ code: wrapper.exitCode, signal: wrapper.signalCode });
       failed(new Error(`Windows supervisor exited before launch${diagnostic ? `: ${diagnostic}` : ""}`));
       done();
     }));
-    wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token, exitGraceMs })}\n`);
+    wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token, exitGraceMs, ...(options.listDelayMs ? { listDelayMs: options.listDelayMs } : {}) })}\n`);
     const launchTimer = setTimeout(() => failed(new Error(`Windows supervisor did not launch within 15 seconds${diagnostic ? `: ${diagnostic}` : ""}`)), 15_000);
     try { await ready; } finally { clearTimeout(launchTimer); }
     wrapper.stderr.off("data", captureDiagnostic);
@@ -174,13 +205,17 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     return {
       pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, guardian,
       list() {
-        if (ended || treeClosed || !control || control.destroyed) return Promise.resolve([]);
+        if (ended || treeClosed) return Promise.resolve(endedOrIncomplete());
+        if (!control || control.destroyed) return Promise.resolve({ status: "incomplete", reason: "Windows supervisor control pipe is closed", lastVerified });
         const id = String(++listSequence);
         const socket = control;
-        return new Promise<Identity[]>((done, fail) => {
-          const timer = setTimeout(() => { listings.delete(id); fail(new Error(`Windows process listing took over ${LIST_TIMEOUT_MS} ms`)); }, LIST_TIMEOUT_MS);
+        return new Promise<TreeListing>((done) => {
+          const timer = setTimeout(() => {
+            listings.delete(id);
+            done({ status: "incomplete", reason: `Windows process listing took over ${LIST_TIMEOUT_MS} ms`, lastVerified });
+          }, LIST_TIMEOUT_MS);
           timer.unref();
-          listings.set(id, { done: (processes) => { clearTimeout(timer); done(processes); }, fail: (error) => { clearTimeout(timer); fail(error); } });
+          listings.set(id, (listing) => { clearTimeout(timer); done(listing); });
           socket.write(`list ${id}\n`);
         });
       },
@@ -257,32 +292,37 @@ public static class ShadowJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool result);
   [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
   static void Check(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
-  static readonly object Gate=new object(); static StreamWriter Events;
-  // Reports come from the main loop and the control thread: one line at a time.
-  static void Emit(string line) { lock(Gate) { Events.WriteLine(line); } }
+  // JobGate keeps the job handle open while a listing reads it; WriteGate keeps report lines whole.
+  // They are separate so that teardown's reports never wait on a listing's enumeration.
+  static readonly object JobGate=new object(),WriteGate=new object(); static StreamWriter Events;
+  static void Emit(string line) { lock(WriteGate) { Events.WriteLine(line); } }
   // PO-11: creation time from GetProcessTimes on a PROCESS_QUERY_LIMITED_INFORMATION handle, as Unix
-  // milliseconds (the unit the tree record and the sweep compare); 0 when the process has ended (its exit
-  // time or exit code is set) or, given a job, is not in it (its pid was reused).
+  // milliseconds (the unit the tree record and the sweep compare). 0 when the process is known not to
+  // be a live member: it is gone (ERROR_INVALID_PARAMETER), it has ended (its exit time or exit code is
+  // set) or, given a job, it is not in it (its pid was reused). -1 when a query failed, so that
+  // missing evidence is never read as an absent member.
   static long StartTimeOf(uint pid,IntPtr job) {
-    IntPtr handle=OpenProcess(0x1000,false,pid); if(handle==IntPtr.Zero) return 0;
+    IntPtr handle=OpenProcess(0x1000,false,pid); if(handle==IntPtr.Zero) return Marshal.GetLastWin32Error()==87 ? 0 : -1;
     try {
-      bool inside; if(job!=IntPtr.Zero && (!IsProcessInJob(handle,job,out inside) || !inside)) return 0;
+      bool inside; if(job!=IntPtr.Zero) { if(!IsProcessInJob(handle,job,out inside)) return -1; if(!inside) return 0; }
       // Termination is asynchronous: the exit code is set before the exit time, so either one means ended.
-      uint code; if(!GetExitCodeProcess(handle,out code) || code!=259) return 0;
-      long creation,exit,kernel,user; if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user) || exit!=0) return 0;
+      uint code; if(!GetExitCodeProcess(handle,out code)) return -1; if(code!=259) return 0;
+      long creation,exit,kernel,user; if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return -1; if(exit!=0) return 0;
       return (creation-116444736000000000L)/10000;
     } finally { CloseHandle(handle); }
   }
-  // Every live process in the job (JobObjectBasicProcessIdList), each with its identity.
-  static List<object> JobProcesses(IntPtr job) {
-    var found=new List<object>(); if(job==IntPtr.Zero) return found;
+  // Every live process in the job (JobObjectBasicProcessIdList), each with its identity; a pid
+  // whose identity could not be read goes to unverified instead of being dropped.
+  static List<object> JobProcesses(IntPtr job,List<uint> unverified) {
+    var found=new List<object>(); if(job==IntPtr.Zero) throw new Exception("the session job is closed");
     for(int capacity=64;;capacity*=4) {
       int bytes=8+capacity*IntPtr.Size; IntPtr buffer=Marshal.AllocHGlobal(bytes);
       try {
         if(!QueryInformationJobObject(job,3,buffer,(uint)bytes,IntPtr.Zero)) { int error=Marshal.GetLastWin32Error(); if(error==234 && capacity<65536) continue; throw new Win32Exception(error); }
         int assigned=Marshal.ReadInt32(buffer,0),listed=Marshal.ReadInt32(buffer,4);
         if(assigned>listed && capacity<65536) continue;
-        for(int i=0;i<listed;i++) { uint pid=(uint)Marshal.ReadIntPtr(buffer,8+i*IntPtr.Size).ToInt64(); long start=StartTimeOf(pid,job); if(start>0) found.Add(new { pid=pid,startTime=start }); }
+        if(assigned>listed) throw new Exception("the job holds more processes than one listing can read");
+        for(int i=0;i<listed;i++) { uint pid=(uint)Marshal.ReadIntPtr(buffer,8+i*IntPtr.Size).ToInt64(); long start=StartTimeOf(pid,job); if(start>0) found.Add(new { pid=pid,startTime=start }); else if(start<0) unverified.Add(pid); }
         return found;
       } finally { Marshal.FreeHGlobal(buffer); }
     }
@@ -299,15 +339,28 @@ public static class ShadowJobSupervisor {
       pipe=new NamedPipeClientStream(".",(string)config["pipeName"],PipeDirection.InOut,PipeOptions.Asynchronous); pipe.Connect(10000);
       events=new StreamWriter(pipe,new UTF8Encoding(false),1024,true); events.AutoFlush=true; Events=events;
       var stop=new ManualResetEvent(false); var eofForwarded=new ManualResetEvent(false); int shutdownReason=0;
+      int listDelay=config.ContainsKey("listDelayMs") ? Convert.ToInt32(config["listDelayMs"]) : 0;
+      int listing=0;
       var control=new Thread(delegate() {
-        var replies=new JavaScriptSerializer();
         try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); string line; while((line=reader.ReadLine())!=null) {
           // "list <id>" asks for the job's processes (PO-11); "kill" (a lost connection) ends the
           // tree at once; any other line ("close") asks for a graceful exit.
           if(line.StartsWith("list ")) {
-            string reply; try { lock(Gate) { reply=replies.Serialize(new { kind="list",id=line.Substring(5),processes=JobProcesses(job) }); } }
-            catch(Exception error) { reply=replies.Serialize(new { kind="list",id=line.Substring(5),message=error.Message }); }
-            Emit(reply); continue;
+            string id=line.Substring(5);
+            // One listing at a time, on its own thread: this thread keeps reading close, kill and owner loss.
+            if(Interlocked.CompareExchange(ref listing,1,0)!=0) { Emit(new JavaScriptSerializer().Serialize(new { kind="list",id=id,message="another listing is still running" })); continue; }
+            var lister=new Thread(delegate() {
+              var replies=new JavaScriptSerializer(); string reply;
+              try {
+                if(listDelay>0) Thread.Sleep(listDelay);
+                var unverified=new List<uint>(); List<object> found;
+                lock(JobGate) { found=JobProcesses(job,unverified); }
+                reply=replies.Serialize(new { kind="list",id=id,processes=found,unverified=unverified });
+              } catch(Exception error) { reply=replies.Serialize(new { kind="list",id=id,message=error.Message }); }
+              Interlocked.Exchange(ref listing,0);
+              try { Emit(reply); } catch {}
+            }); lister.IsBackground=true; lister.Start();
+            continue;
           }
           if(line=="kill") Interlocked.Exchange(ref shutdownReason,2); else Interlocked.CompareExchange(ref shutdownReason,1,0);
           stop.Set(); } } catch {}
@@ -365,7 +418,7 @@ public static class ShadowJobSupervisor {
       Console.Error.WriteLine("Windows process containment: "+error.Message); return 1;
     } finally {
       // Under the gate, so a listing never queries a closed (or reused) handle.
-      lock(Gate) { if(job!=IntPtr.Zero) CloseHandle(job); job=IntPtr.Zero; }
+      lock(JobGate) { if(job!=IntPtr.Zero) CloseHandle(job); job=IntPtr.Zero; }
       if(process.thread!=IntPtr.Zero) CloseHandle(process.thread); if(process.process!=IntPtr.Zero) CloseHandle(process.process);
       if(read!=IntPtr.Zero) CloseHandle(read); if(write!=IntPtr.Zero) CloseHandle(write);
       if(attributes!=IntPtr.Zero) { DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); } if(jobPointer!=IntPtr.Zero) Marshal.FreeHGlobal(jobPointer);

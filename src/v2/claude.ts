@@ -7,6 +7,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
 import type { Identity } from "./contain/trees.js";
 import { redact } from "./logs.js";
+import type { TreeListing } from "./contain/windows.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 type Frame = Record<string, unknown>;
@@ -160,10 +161,13 @@ export class ClaudeChannel implements NativeChannel {
     return this.managed?.guardian;
   }
 
-  /** PO-11: the processes in this CLI's containment, from the driver; none where the driver can't list. */
-  async list(): Promise<Identity[]> {
-    const managed = await this.process;
-    return managed.list ? managed.list() : [];
+  /** PO-11: the processes in this CLI's containment, from the driver; "incomplete" where it can't list. */
+  async list(): Promise<TreeListing> {
+    const managed = await this.process.catch(() => undefined);
+    if (!managed) return { status: "incomplete", reason: "the Claude process did not start", lastVerified: [] };
+    if (!managed.list) return { status: "incomplete", reason: "this platform's containment driver cannot list its tree", lastVerified: [] };
+    const listing = await managed.list();
+    return Array.isArray(listing) ? { status: "listed", processes: listing.map(({ pid, startTime }) => ({ pid, startTime })) } : listing;
   }
 
   private read(chunk: string): void {
