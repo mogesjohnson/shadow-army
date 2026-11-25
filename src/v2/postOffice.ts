@@ -7,7 +7,7 @@ import { applyAudited } from "./apply.js";
 import { diffState, MAX_HASHED, type RepoState } from "../workspace/guard.js";
 import { splitZ } from "../workspace/git.js";
 import { Locks } from "../workspace/locks.js";
-import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
+import { ensureShadowRoot, openWriteSession, type SessionGit, type WriteSession } from "../workspace/session.js";
 import { HarnessGit, HarnessGitHeld } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
 import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, posixInspect, realish, validateSnapshotRoot, within, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
@@ -194,6 +194,22 @@ export class PostOffice {
     if (state?.held) throw new HarnessGitHeld(state.line);
   }
 
+  /** Runs `fn`'s harness git calls between two hold checks (WSP-10). */
+  private async underHold<T>(fn: () => Promise<T>): Promise<T> {
+    await this.unheld();
+    const value = await fn();
+    await this.unheld();
+    return value;
+  }
+
+  /** Harness git for a write session: the folder's own, and each worktree's bound to the identity read as it is made. */
+  private sessionGit(): SessionGit {
+    return {
+      repo: (args, kind) => this.officeGit.run(args, kind),
+      worktree: (path) => { const git = this.git(findRepo(path)); return (args, kind) => git.run(args, kind, path); },
+    };
+  }
+
   /** The folder's checkout state for the guard, by harness git between two hold checks (WSP-10). */
   private async guardState(): Promise<RepoState> {
     await this.unheld();
@@ -240,7 +256,12 @@ export class PostOffice {
       await existing.channel?.close();
       await this.releaseWrite(existing);
       // A tainted snapshot keeps the partial work its guard line names; an untainted one goes, logged, as at close.
-      if (existing.snapshot && !existing.tainted) await this.dropSnapshot(existing);
+      // A failed removal keeps the session down and its snapshot recorded: the next reconnect or close tries again,
+      // and the logged intent lets a later start finish it (PO-1 startup).
+      if (existing.snapshot && !existing.tainted && !await this.dropSnapshot(existing)) {
+        throw new Error(`the old snapshot ${existing.snapshot.path} could not be removed; reconnect or close ${key} to try again`);
+      }
+      if (existing.snapshot && existing.tainted) this.record({ soldier: key, type: "snapshot", data: { path: existing.snapshot.path, retained: true } }, existing);
       // A fresh snapshot keeps partial work in the previous one, never silently repeats it.
       this.sessions.delete(key);
       existing = undefined;
@@ -277,7 +298,10 @@ export class PostOffice {
     // Hard rule: writes need the build role and a soldier the roster lets write. Nothing starts otherwise.
     if (claims?.length && (!spec.write || !spec.roles.includes("build"))) throw new Error(`${key} cannot write: claims need the build role and write access in the roster`);
     // Bad or overlapping claims throw here, naming the holder, before any process starts (WSP-2).
-    const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS }) : undefined;
+    // WSP-10: the worktree is made by harness git under the hold, and its identity is recorded as it is made.
+    if (claims?.length) await this.unheld();
+    const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS, git: this.sessionGit() }) : undefined;
+    if (ws) await this.unheld().catch(async (error: unknown) => { await ws.release(); throw error; });
     const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
     let snapshot: Snapshot | undefined;
@@ -508,7 +532,7 @@ export class PostOffice {
 
   /** v1's claim audit: revert edits outside the claims, commit the rest on the soldier's branch, and hand B4 the audited diff. */
   private async audit(session: Session, result: TurnResult, guardChanges: string[]): Promise<WriteOutcome> {
-    const info = await session.write!.ws.finish(`${session.spec.key}: turn`);
+    const info = await this.underHold(() => session.write!.ws.finish(`${session.spec.key}: turn`));
     // WSP-10: the worktree's git identity recorded at open, the audit's timeout policy, and the commit the audit made, not a HEAD read now.
     let diff = "";
     if (info.commit) {

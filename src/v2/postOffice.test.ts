@@ -1,9 +1,10 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { armyMark } from "./snapshot.js";
+import { armyMark, type GitFactory } from "./snapshot.js";
+import { HarnessGit } from "./git/harness.js";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
@@ -437,4 +438,59 @@ describe("M1b-26 harness git and outside snapshots", () => {
     try { await expect(PostOffice.create({ cwd: outside, credential, roster })).rejects.toThrow("the army runs only inside a git working tree"); }
     finally { rmSync(outside, { recursive: true, force: true }); }
   });
+});
+
+describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {
+  const builders = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true }, scout: { cli: "claude", model: "synthetic", roles: ["review"], write: false } });
+  /** Harness git that records each call's repository and arguments, and can fail `worktree remove`. */
+  function spyGit(dir: string, calls: string[][], failRemove: { on: boolean }): GitFactory {
+    return (repo) => {
+      const harness = new HarnessGit({ repo, hooksDir: join(dir, ".shadow", "v2", "hooks") });
+      return { run: async (args, kind, cwd) => {
+        calls.push([resolve(repo.workTree), ...args]);
+        if (failRemove.on && args[0] === "worktree" && args[1] === "remove") return { code: 1, stdout: "", stderr: "locked" };
+        return harness.run(args, kind, cwd);
+      } };
+    };
+  }
+  async function office(failRemove = { on: false }) {
+    const repo = makeRepo(); repos.push(repo);
+    const calls: string[][] = [];
+    const channels: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const created = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory: spyGit(repo.dir, calls, failRemove), onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return { async send() { await writeFile(join(options.cwd, "src", "a.ts"), "claimed\n").catch(() => {}); return { status: "completed", text: "done", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(created);
+    return { repo, office: created, calls, channels, events };
+  }
+
+  it("opens no write worktree while harness git is held, then makes, audits and commits it through harness git", async () => {
+    const { repo, office: post, calls } = await office();
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    await writeFile(hook, "#!/bin/sh\n");
+    await expect(post.open("tank", { claims: ["src/a.ts"] })).rejects.toThrow(/harness git held/);
+    expect(existsSync(join(repo.dir, ".shadow", "worktrees"))).toBe(false);
+    rmSync(hook);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.write?.applicable).toBe(true);
+    expect(calls.some((call) => call[1] === "worktree" && call[2] === "add")).toBe(true);
+    const inWorktree = calls.filter((call) => call[0] === resolve(result.write!.worktree)).map((call) => call.slice(1).find((arg) => !arg.startsWith("-") && !arg.includes("=")));
+    expect(inWorktree).toEqual(expect.arrayContaining(["diff", "ls-files", "add", "commit"]));
+  }, 60_000);
+
+  it("keeps a down session and its snapshot when reconnecting can't remove it, and the next reconnect does", async () => {
+    const failRemove = { on: true };
+    const { office: post, channels, events } = await office(failRemove);
+    const first = await post.open("scout");
+    channels[0]!.onEvent({ type: "error", data: { kind: "login_needed" } });
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "down"));
+    await expect(post.open("scout")).rejects.toThrow("could not be removed");
+    expect(existsSync(first.cwd)).toBe(true);
+    failRemove.on = false;
+    const second = await post.open("scout");
+    expect(second.cwd).not.toBe(first.cwd);
+    expect(existsSync(first.cwd)).toBe(false);
+  }, 60_000);
 });

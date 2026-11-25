@@ -83,6 +83,8 @@ describe("M1 caller subprocess contract", () => {
     const opened = await client.request<{ cwd: string }>({ action: "open", soldier: "scout" });
     // WSP-11: the read-only snapshot lives outside the folder, at <root>/<folder name>-<army mark>/session-<id>.
     expect(relative(canonicalPath(repo.dir), canonicalPath(opened.cwd))).toMatch(/^\.\.[\\/]/); expect(opened.cwd).toMatch(/[\\/][^\\/]+-[0-9a-f]{12}[\\/]session-[0-9a-f-]+$/);
+    // The suite's own root, never the caller's default one.
+    expect(relative(canonicalPath(snapshots), canonicalPath(opened.cwd))).toMatch(/^[^.][^\\/]*-[0-9a-f]{12}[\\/]session-[0-9a-f-]+$/);
     expect((await client.request<TurnResult>({ action: "send", soldier: "scout", text: "inspect" })).status).toBe("completed");
   }, 30_000);
   windowsOnly("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children while retaining partial work", async () => {

@@ -36,6 +36,12 @@ describe("the snapshots folder", () => {
     expect(validateSnapshotRoot(undefined, s.ctx)).toEqual({ ok: true, root: join(s.home, ".shadow-army", "snapshots") });
     expect(validateSnapshotRoot(join(s.outside, "snaps"), s.ctx)).toEqual({ ok: true, root: join(s.outside, "snaps") });
   });
+  it("checks the default as it checks a set value: a home inside the folder or a working tree, or a writable parent, is refused", () => {
+    const s = setup();
+    const reasons = [{ ...s.ctx, home: join(s.folder, "home") }, { ...s.ctx, home: s.tree }, { ...s.ctx, inspect: (dir: string) => (dir === s.home ? { owner: "other" as const, writableByOthers: false } : quiet(dir)) }]
+      .map((ctx) => validateSnapshotRoot(undefined, ctx)).map((r) => (r.ok ? "" : r.reason));
+    expect(reasons).toEqual([expect.stringMatching(/^the default snapshot root is inside the folder/), expect.stringContaining("working tree"), expect.stringContaining("owns")]);
+  });
   it("refuses a relative path, one inside the folder or a working tree, and a link into either", () => {
     const s = setup();
     const entry = join(s.outside, "entry");

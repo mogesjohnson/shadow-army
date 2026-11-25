@@ -33,10 +33,12 @@ export function posixInspect(dir: string): FolderFacts {
 }
 /** `SHADOW_ARMY_SNAPSHOTS` (or the default in `home`), checked as WSP-11 says. A failure starts no soldier. */
 export function validateSnapshotRoot(value: string | undefined, ctx: { home: string; folder: string; workTrees: string[]; inspect: (dir: string) => FolderFacts; exists?: (path: string) => boolean }) {
-  const bad = (reason: string) => ({ ok: false as const, reason: `SHADOW_ARMY_SNAPSHOTS ${reason}` });
-  if (value === undefined || value === "") return { ok: true as const, root: join(ctx.home, ".shadow-army", "snapshots") };
-  if (!isAbsolute(value)) return bad("must be an absolute path");
-  const root = realish(value);
+  // The default gets the same checks as a set value (WSP-11): a home inside the folder or a working tree is no exception.
+  const unset = value === undefined || value === "";
+  const bad = (reason: string) => ({ ok: false as const, reason: `${unset ? "the default snapshot root" : "SHADOW_ARMY_SNAPSHOTS"} ${reason}` });
+  const chosen = unset ? join(ctx.home, ".shadow-army", "snapshots") : value!;
+  if (!isAbsolute(chosen)) return bad("must be an absolute path");
+  const root = realish(chosen);
   if (within(realish(ctx.folder), root)) return bad("is inside the folder");
   if (ctx.workTrees.some((tree) => within(realish(tree), root))) return bad("is inside a working tree of the repository");
   const home = realish(ctx.home);
