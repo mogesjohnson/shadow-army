@@ -170,6 +170,38 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(channels[4]!.sent).toEqual([]);
   }, 30_000);
 
+  it("marks a refused start down and never restarts it (#111 C3)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const channels: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return { async send(text) { return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    await office.open("scout");
+    channels[0]!.onEvent({ type: "error", data: { kind: "other", message: "claude 2.1.276 is older than 2.1.277; update claude" } });
+    channels[0]!.onEvent({ type: "closed", data: { refusedStart: true, containmentStopped: true } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(channels).toHaveLength(1);
+    expect(events.filter((event) => event.type === "restarted")).toHaveLength(0);
+    expect(events.find((event) => event.type === "down")?.data).toMatchObject({ reason: expect.stringContaining("refused to start") });
+    expect(office.army()).toEqual([expect.objectContaining({ state: "down", restarts: 0 })]);
+    await expect(office.send("scout", "not retried")).rejects.toThrow("reconnect explicitly");
+  }, 30_000);
+
+  it("gives the owner a notice, not an error, when the CLI retries (#111 C5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const channels: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return { async send(text) { options.onEvent({ type: "retry", data: { attempt: 2, maxRetries: 10, retryDelayMs: 1200, errorStatus: 529, error: "overloaded" } }); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    expect((await office.send("scout", "hello")).status).toBe("completed");
+    expect(events.find((event) => event.type === "notice")).toEqual({ soldier: "scout", type: "notice", data: { kind: "retry", message: "scout: claude is retrying (attempt 2 of 10, in 1.2 s; 529 overloaded)" } });
+    expect(events.filter((event) => event.type === "error" || event.type === "down")).toHaveLength(0);
+  }, 30_000);
+
   it("blocks restart and owner reconnect when native descendant termination is uncertain", async () => {
     const repo = makeRepo(); repos.push(repo);
     const channels: ChannelOptions[] = [];

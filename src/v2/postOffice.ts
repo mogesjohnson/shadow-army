@@ -7,7 +7,7 @@ import { Locks } from "../workspace/locks.js";
 import { git, repoRoot } from "../workspace/git.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { createSnapshot } from "../workspace/worktree.js";
-import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
+import type { ChannelEvent, ChannelFactory, NativeChannel, RetryNotice, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
@@ -53,6 +53,15 @@ interface Session {
   restartPending: boolean;
   stopRequested?: boolean;
   containmentFailed?: boolean;
+}
+
+/** The owner's one-line notice for a CLI backing off before an API retry. */
+function retryMessage(soldier: string, cli: string, retry: RetryNotice): string {
+  const attempt = retry.attempt === undefined ? "" : `attempt ${retry.attempt}${retry.maxRetries === undefined ? "" : ` of ${retry.maxRetries}`}`;
+  const delay = retry.retryDelayMs === undefined ? "" : `in ${Math.round(retry.retryDelayMs / 100) / 10} s`;
+  const cause = [retry.errorStatus, retry.error].filter((part) => part !== undefined && part !== null && part !== "").map(String).join(" ");
+  const detail = [[attempt, delay].filter(Boolean).join(", "), cause].filter(Boolean).join("; ");
+  return `${soldier}: ${cli} is retrying${detail ? ` (${detail})` : ""}`;
 }
 
 /**
@@ -221,6 +230,7 @@ export class PostOffice {
         if (generation !== session.generation) return;
         this.record({ soldier: session.spec.key, ...event }, session);
         if (event.type === "error" && (event.data as { kind?: string } | undefined)?.kind === "login_needed") session.loginNeeded = true;
+        if (event.type === "retry") this.record({ soldier: session.spec.key, type: "notice", data: { kind: "retry", message: retryMessage(session.spec.key, session.spec.cli, event.data as RetryNotice) } }, session);
         if (event.type === "closed") {
           if ((event.data as { containmentStopped?: boolean })?.containmentStopped === false) {
             session.containmentFailed = true;
@@ -229,6 +239,12 @@ export class PostOffice {
             return;
           }
           if (this.closed || session.down) return;
+          // #111 C3: an old, silent or managed-refused CLI fails the same way every time, so it is down, never restarted.
+          if ((event.data as { refusedStart?: boolean })?.refusedStart === true) {
+            session.down = true;
+            this.record({ soldier: session.spec.key, type: "down", data: { reason: "the CLI refused to start (see its error); fix that, then reconnect" } }, session);
+            return;
+          }
           // PO-1: a login needed never restarts the channel; the soldier waits for the owner to log in and reconnect.
           if (session.loginNeeded) {
             session.down = true;
