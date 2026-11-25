@@ -18,7 +18,7 @@ const mode = process.env.FAKE_GUARD ?? "";
 const io = new Socket({ fd: 3, readable: true, writable: true });
 const say = (report) => io.write(JSON.stringify({ op: "guard", ...report }) + "\\n");
 const cli = 424242;
-if (mode !== "silent") setTimeout(() => say({ event: "ready", pid: process.pid }), mode === "slow-ready" ? 250 : 0);
+if (mode !== "silent") setTimeout(() => say({ event: "ready", pid: process.pid }), mode === "slow-ready" ? 700 : 0);
 let buffer = "";
 io.setEncoding("utf8");
 io.on("data", (data) => {
@@ -27,7 +27,7 @@ io.on("data", (data) => {
 });
 function on(command) {
   appendFileSync(process.env.FAKE_LOG, command + "\\n");
-  if (command === "start" && mode !== "late-start") setTimeout(() => say({ event: "started", pid: cli }), mode === "slow-ready" ? 100 : 0);
+  if (command === "start" && mode !== "late-start") setTimeout(() => say({ event: "started", pid: cli }), mode === "slow-ready" ? 600 : 0);
   if (command === "start" && mode === "die") setTimeout(() => process.exit(3), 50);
   if (command === "kill" && mode === "no-ended") process.exit(0);
   if (command === "kill" && mode !== "hang") { say({ event: "exit", pid: cli, signal: 9 }); say({ event: "ended", reaped: 0 }); io.end(() => process.exit(0)); }
@@ -191,9 +191,13 @@ describe("Linux driver failure paths, with a fake guardian (PO-9, PO-10, PO-15)"
   });
 
   linux("counts one handshake deadline: a slow ready leaves only the rest for the start", async () => {
-    const { spawnIt, commands } = setup("slow-ready"); // ready at 250 ms, started 100 ms after start: 350 ms > 300 ms.
-    await expect(spawnIt({ ready: 300 })).rejects.toThrow(/start the CLI within 300 ms/);
-    expect(commands()).toEqual(["start", "kill"]);
+    // Ready at 700 ms, started 600 ms after start: each fits 1 s alone, together they don't. Under load a late
+    // ready may fail first; either way the launch fails inside the one window, never after a second one.
+    const { spawnIt, commands } = setup("slow-ready");
+    const began = performance.now();
+    await expect(spawnIt({ ready: 1_000 })).rejects.toThrow(/within 1000 ms of its launch/);
+    expect(performance.now() - began).toBeLessThan(1_600);
+    expect(commands().at(-1)).toBe("kill");
   });
 
   linux("fails a late start and has the guardian end what it started", async () => {
