@@ -208,7 +208,8 @@ describe("M1 office integration with synthetic native processes", () => {
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options): NativeChannel => {
       channels.push(options);
       return {
-        async send() { await writeFile(join(options.cwd, "partial.txt"), "retained partial\n"); return { status: "completed", text: "edit completed", refusal: false }; },
+        // WSP-11: a snapshot write alone is a reported, discarded read-violation; only a change in the owner's folder fails the guard and keeps the partial work.
+        async send() { await writeFile(join(options.cwd, "partial.txt"), "retained partial\n"); await writeFile(join(repo.dir, "stray.txt"), "owner folder change\n"); return { status: "completed", text: "edit completed", refusal: false }; },
         async interrupt() {}, async respondApproval() {},
         async close() { options.onEvent({ type: "closed", data: { containmentStopped: false } }); },
       };
