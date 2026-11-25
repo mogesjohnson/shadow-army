@@ -204,7 +204,9 @@ async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<strin
   if (!report || typeof report !== "object" || !Array.isArray(report.ended) || !Array.isArray(report.left) || typeof report.unhandled !== "number") {
     return "the sweep's report could not be read";
   }
-  const parts = [report.ended.length ? `the sweep ended ${counted(report.ended.length, "process", "processes")} it left` : "the sweep found nothing it left running"];
+  // Zero ended is "found nothing" only when nothing is left either (C4).
+  const parts = [report.ended.length ? `the sweep ended ${counted(report.ended.length, "process", "processes")} it left`
+    : report.left.length ? "the sweep ended nothing" : "the sweep found nothing it left running"];
   if (report.left.length) parts.push(`${counted(report.left.length, "process is", "processes are")} still running`);
   if (report.unhandled) parts.push(`${counted(report.unhandled, "record", "records")} could not be handled`);
   if (code === 1 && parts.length === 1) parts.push("the sweep says something is left");
@@ -215,8 +217,10 @@ async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<strin
 async function sweep($: EngineInterface, runtime: Runtime, cut: boolean): Promise<void> {
   let outcome: string;
   try { outcome = await sweepOutcome($, runtime); } catch (error) { outcome = `the sweep failed: ${error instanceof Error ? error.message : error}`; }
-  const diagnostic = runtime.diagnostic.trim() ? ` · ${runtime.diagnostic.trim().slice(-300)}` : "";
-  try { $.ui.log(sanitize(safeText(`Shadow Army: the post office stopped unexpectedly${cut ? " mid-event" : ""}; ${outcome}${diagnostic}`, runtime.credential))); } catch { /* the line is best effort */ }
+  // PO-16 wants one transcript line, and SEC-6 keeps newlines, so fold every line break and its indent to one space first (C4).
+  const oneLine = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, " ").trim();
+  const diagnostic = oneLine(runtime.diagnostic) ? ` · ${oneLine(runtime.diagnostic).slice(-300)}` : "";
+  try { $.ui.log(sanitize(safeText(oneLine(`Shadow Army: the post office stopped unexpectedly${cut ? " mid-event" : ""}; ${outcome}${diagnostic}`), runtime.credential))); } catch { /* the line is best effort */ }
 }
 
 async function consume($: EngineInterface, runtime: Runtime): Promise<void> {

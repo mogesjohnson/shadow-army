@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "off"; tail?: string; startRefusal?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "off"; tail?: string; startRefusal?: string; stderr?: string } = {}) {
   vi.resetModules();
   const { register, useSweepLauncher } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -85,6 +85,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
             if (env.startRefusal) { yield { stream: "stderr", text: env.startRefusal }; return; }
             yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
             await closed;
+            if (env.stderr) yield { stream: "stderr", text: env.stderr };
             if (env.tail) yield { stream: "stdout", text: env.tail };
           },
           return: async () => { stop(); return { done: true }; },
@@ -543,6 +544,18 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
     expect(shadowLines(left.logs)).toEqual([expect.stringMatching(/the sweep ended 2 processes it left; 1 process is still running; 1 record could not be handled$/)]);
     const signalled = await died({ sweep: { out: report(2), code: null } });
     expect(shadowLines(signalled.logs)).toEqual([expect.stringMatching(/the sweep was stopped before it finished; what it left is unknown$/)]);
+  });
+
+  it("says the sweep ended nothing, not that nothing runs, when it ended none and some are still running (C4)", async () => {
+    const { logs } = await died({ sweep: { out: report(0, 2), code: 1 } });
+    expect(shadowLines(logs)).toEqual([expect.stringMatching(/stopped unexpectedly; the sweep ended nothing; 2 processes are still running$/)]);
+  });
+
+  it("folds a multiline relay diagnostic and sweep error onto the one transcript line (C4)", async () => {
+    const { logs } = await died({ stderr: "panic: lost\n  at office\r\n  at main\n", sweep: { out: `${JSON.stringify({ error: "no tree\nops here" })}\n`, code: 2 } });
+    expect(shadowLines(logs)).toHaveLength(1);
+    expect(shadowLines(logs)[0]).not.toMatch(/[\r\n]/);
+    expect(shadowLines(logs)[0]).toMatch(/\(no tree ops here\) · panic: lost at office at main$/);
   });
 
   it("says plainly that this system can't end the trees on exit 2, and does not crash", async () => {
