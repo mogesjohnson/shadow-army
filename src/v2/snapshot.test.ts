@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -175,4 +175,96 @@ describe("another army's snapshots", () => {
     expect(result.unreadable).toEqual([bad]);
     expect(existsSync(bad)).toBe(true);
   });
+});
+
+describe("Codex review 5", () => {
+  const failing = (match: (args: string[]) => boolean, runFirst = false): GitFactory => (repo) => {
+    const real = factory(repo);
+    return { run: async (args, kind, cwd) => {
+      if (!match(args)) return real.run(args, kind, cwd);
+      if (runFirst) await real.run(args, kind, cwd);
+      return { code: 128, stdout: "", stderr: "fake failure" };
+    } };
+  };
+  it("C1: checks the default folder too, and refuses a root that is a file", () => {
+    const [folder, tree] = [temp(), temp()];
+    const ctx = { home: folder, folder, workTrees: [tree], inspect: quiet };
+    expect(validateSnapshotRoot(undefined, ctx).ok).toBe(false);
+    const file = join(temp(), "snaps");
+    put(file, "x");
+    expect(validateSnapshotRoot(file, { ...ctx, home: temp() }).ok).toBe(false);
+  });
+  it("C1: refuses a linked subfolder or marker, and writes nothing outside the root", async () => {
+    const r = makeRepo(), outside = temp();
+    const subfolder = snapshotSubfolder(r.root, r.folder);
+    link(outside, subfolder);
+    await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory })).rejects.toThrow(/snapshot could not be made/);
+    expect(readdirSync(outside)).toEqual([]);
+    rmSync(subfolder); mkdirSync(subfolder);
+    put(join(outside, "marker"), "kept");
+    linkSync(join(outside, "marker"), join(subfolder, FOLDER_FILE));
+    await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory })).rejects.toThrow(/snapshot could not be made/);
+    expect(readFileSync(join(outside, "marker"), "utf8")).toBe("kept");
+  });
+  it("C2: puts no ignore rule back through a link, and reports the file", async () => {
+    const r = makeRepo();
+    put(join(r.folder, "sub", ".gitignore"), "*.log\n");
+    git(r.folder, "add", "."); git(r.folder, "commit", "-q", "-m", "sub");
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory);
+    const outside = temp();
+    put(join(outside, "sub", ".gitignore"), "outside\n"); put(join(outside, "hard"), "outside\n");
+    rmSync(join(snap.path, "sub"), { recursive: true }); link(join(outside, "sub"), join(snap.path, "sub"));
+    rmSync(join(snap.path, ".gitignore")); linkSync(join(outside, "hard"), join(snap.path, ".gitignore"));
+    const found = await findWrites(snap, start, factory);
+    expect(found?.files).toEqual(expect.arrayContaining([".gitignore", "sub/.gitignore"]));
+    expect([readFileSync(join(outside, "sub", ".gitignore"), "utf8"), readFileSync(join(outside, "hard"), "utf8")]).toEqual(["outside\n", "outside\n"]);
+  }, 60_000);
+  it("C3: a failed add leaves no folder or registration, and removal keeps another stale registration", async () => {
+    const r = makeRepo();
+    const add = failing((args) => args[0] === "worktree" && args[1] === "add", true);
+    await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: add })).rejects.toThrow(/snapshot could not be made/);
+    expect(existsSync(snapshotSubfolder(r.root, r.folder))).toBe(false);
+    expect(git(r.folder, "worktree", "list", "--porcelain")).not.toContain("s1");
+    const stale = join(temp(), "stale");
+    git(r.folder, "worktree", "add", "-q", "--detach", stale);
+    rmSync(stale, { recursive: true, force: true });
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s2", repo: r.repo, git: factory });
+    await closeSnapshot(snap, await beginTurn(snap, factory), r.root, r.repo, factory, () => {});
+    expect(git(r.folder, "worktree", "list", "--porcelain")).toContain("stale");
+    expect(git(r.folder, "worktree", "list", "--porcelain")).not.toContain("s2");
+  }, 60_000);
+  it("C4: a failed worktree listing removes nothing", async () => {
+    const r = makeRepo();
+    const other = join(temp(), "other");
+    git(r.folder, "worktree", "add", "-q", "--detach", other);
+    const otherSnap = await openSnapshot({ root: r.root, folder: other, sessionId: "o1", repo: { gitDir: git(other, "rev-parse", "--absolute-git-dir"), workTree: other, commonDir: r.repo.commonDir }, git: factory });
+    const list = failing((args) => args[0] === "worktree" && args[1] === "list");
+    await expect(sweepOrphans({ roots: [r.root], folder: r.folder, repo: r.repo, git: list, report: () => {} })).rejects.toThrow();
+    expect(existsSync(otherSnap.path)).toBe(true);
+  }, 60_000);
+  it("C5: keeps an untracked ignore file and info/exclude as the turn began", async () => {
+    const r = makeRepo();
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    put(join(snap.path, "extra", ".gitignore"), "*\n"); put(join(snap.path, "extra", "x.txt"), "x");
+    const start = await beginTurn(snap, factory);
+    expect(await findWrites(snap, start, factory)).toBeUndefined();
+    put(join(r.repo.commonDir, "info", "exclude"), "secret.txt\n"); put(join(snap.path, "secret.txt"), "w");
+    expect((await findWrites(snap, start, factory))?.files).toEqual(["secret.txt"]);
+  }, 60_000);
+  it("C6: reports the files of a commit the turn made", async () => {
+    const r = makeRepo();
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory);
+    put(join(snap.path, "committed.txt"), "w"); put(join(snap.path, "src.txt"), "two\n");
+    git(snap.path, "add", "."); git(snap.path, "commit", "-q", "-m", "soldier's");
+    expect((await findWrites(snap, start, factory))?.files).toEqual(["committed.txt", "src.txt"]);
+  }, 60_000);
+  it("C7: a failed audit command is an error, not a clean audit", async () => {
+    const r = makeRepo();
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    await expect(beginTurn(snap, failing((args) => args[0] === "rev-parse"))).rejects.toThrow(/git/);
+    const start = await beginTurn(snap, factory);
+    for (const sub of ["ls-files", "diff", "rev-parse"]) await expect(findWrites(snap, start, failing((args) => args[0] === sub))).rejects.toThrow(/git/);
+  }, 60_000);
 });
