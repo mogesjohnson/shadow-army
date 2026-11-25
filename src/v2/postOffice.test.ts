@@ -388,8 +388,15 @@ describe("the session log on the office's real path (Codex review 7 on #116)", (
   const records = async (dir: string, session: string): Promise<Array<Record<string, unknown>>> =>
     (await readFile(join(dir, ".shadow", "v2", "logs", `${session}.jsonl`), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
   const quiet = (send: NativeChannel["send"]): NativeChannel => ({ send, async interrupt() {}, async respondApproval() {}, async close() {} });
+  /** Puts a folder where the session's log file belongs, once its queued `opened` record is in, so every later append fails. */
+  const breakLog = async (path: string): Promise<void> => {
+    await until(async () => (await readFile(path, "utf8").catch(() => "")).includes('"opened"'));
+    await rm(path, { force: true });
+    await mkdir(path, { recursive: true });
+  };
 
-  it("logs streamed text and thinking as whole blocks, so a credential split across deltas from a fake CLI is redacted (C1, M1-AC2)", async () => {
+  // A real native process: session containment is Windows-only in M1a (D-34), as for the other fake-CLI tests.
+  windowsOnly("logs streamed text and thinking as whole blocks, so a credential split across deltas from a fake CLI is redacted (C1, M1-AC2)", async () => {
     const repo = makeRepo(); repos.push(repo);
     const fakeDir = await mkdtemp(join(tmpdir(), "shadow-split-fake-"));
     const fake = join(fakeDir, "split-claude.mjs");
@@ -432,10 +439,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
     offices.push(office);
     const opened = await office.open("scout");
-    // A folder where the session's log file belongs makes every append to it fail.
-    const path = join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`);
-    await rm(path, { force: true });
-    await mkdir(path, { recursive: true });
+    await breakLog(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`));
     await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent: the session log could not record the turn/);
     expect(delivered).toEqual([]);
   }, 30_000);
@@ -447,6 +451,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     let emit: ChannelOptions["onEvent"] = () => {};
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
       channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        // The turn's opening record is in; the log breaks mid-turn.
         await rm(path, { force: true });
         await mkdir(path, { recursive: true });
         for (let n = 0; n < 3; n++) emit({ type: "tool_result", data: { n } });
