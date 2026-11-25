@@ -251,34 +251,58 @@ const olderThan = (found: number[], least: number[]): boolean => {
   return false;
 };
 
+/** A path as compared: forward slashes, no trailing slash, no `\\?\` prefix, and lower case where the file system ignores case (Windows, macOS; CH-1). */
 const normal = (path: string): string => {
-  const text = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  return process.platform === "win32" ? text.toLowerCase() : text;
+  const text = path.replace(/\\/g, "/").replace(/^\/\/\?\//, "").replace(/\/+$/, "");
+  return process.platform === "win32" || process.platform === "darwin" ? text.toLowerCase() : text;
 };
 const isAbsolute = (path: string): boolean => process.platform === "win32" ? /^(?:[A-Za-z]:[\\/]|\\\\)/.test(path) : path.startsWith("/");
+
+/** Where a path really lands, with links, junctions and 8.3 names followed (`$.fs.stat` with `resolve`), or `undefined` when it leads nowhere (HOST-2, CH-1). */
+async function realPathOf($: EngineInterface, path: string): Promise<string | undefined> {
+  try {
+    const real = (await $.fs.stat(path, { resolve: true })).realPath;
+    return typeof real === "string" && real !== "" ? real : undefined;
+  } catch { return undefined; }
+}
+
+/** Whether a real path is in a barred folder or under `.shadow` (snapshots); `barred` holds `normal` forms. */
+const isBarred = (real: string, barred: string[]): boolean => {
+  const here = normal(real);
+  return /\/\.shadow(?:\/|$)/.test(here) || barred.some((root) => here === root || here.startsWith(`${root}/`));
+};
 
 /**
  * An executable by its absolute path on `PATH` alone, as CH-1 finds each CLI: never one in the folder, the repository, its worktrees or a snapshot,
  * and never through a relative or empty entry. The current folder is not searched on Windows, because only the listed entries are (HOST-2).
+ * Each entry and the executable are compared by real path, so a link, a junction, an 8.3 name or another case cannot pass a barred one off as
+ * eligible; an entry or executable that does not resolve is dropped. The result is the real path of the executable, the one that was vetted.
  */
 async function findOnPath($: EngineInterface, name: string, path: string, barred: string[]): Promise<string | undefined> {
   const file = process.platform === "win32" ? `${name}.exe` : name;
   for (const raw of path.split(process.platform === "win32" ? ";" : ":")) {
     const entry = raw.trim().replace(/^"(.*)"$/, "$1").replace(/[\\/]+$/, "");
-    if (!entry || !isAbsolute(entry)) continue;
-    const here = normal(entry);
-    if (/\/\.shadow(?:\/|$)/.test(here) || barred.some((root) => here === root || here.startsWith(`${root}/`))) continue;
-    const found = `${entry}${entry.includes("\\") ? "\\" : "/"}${file}`;
-    if (await $.fs.exists(found)) return found;
+    if (!entry || !isAbsolute(entry) || isBarred(entry, barred)) continue;
+    const folder = await realPathOf($, entry);
+    if (!folder || isBarred(folder, barred)) continue;
+    const found = await realPathOf($, `${entry}${entry.includes("\\") ? "\\" : "/"}${file}`);
+    if (found && !isBarred(found, barred)) return found;
   }
   return undefined;
+}
+
+/** The barred folders as compared: each in its own spelling and by real path, with the worktrees folder beside each repository spelling. */
+async function barredFolders($: EngineInterface, cwd: string, root: string): Promise<string[]> {
+  const [cwdReal, rootReal] = await Promise.all([realPathOf($, cwd), realPathOf($, root)]);
+  const repositories = [root, ...(rootReal ? [rootReal] : [])];
+  const folders = [cwd, ...(cwdReal ? [cwdReal] : []), ...repositories, ...repositories.map((folder) => `${folder.replace(/[\\/]+$/, "")}-worktrees`)];
+  return [...new Set(folders.map(normal))];
 }
 
 /** Node.js's and git's absolute paths, found before either is run (HOST-2), or the line to show when one is missing. */
 async function resolveTools($: EngineInterface, cwd: string): Promise<{ node: string; git: string } | { refusal: string }> {
   const path = (await $.env.get("PATH")) ?? (await $.env.get("Path")) ?? "";
-  const root = await repoRoot($, cwd);
-  const barred = [normal(cwd), normal(root), `${normal(root)}-worktrees`];
+  const barred = await barredFolders($, cwd, await repoRoot($, cwd));
   const node = await findOnPath($, "node", path, barred);
   if (!node) return { refusal: "Shadow Army needs Node.js 22.0 or later on PATH; none was found" };
   const git = await findOnPath($, "git", path, barred);

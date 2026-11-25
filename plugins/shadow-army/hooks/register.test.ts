@@ -41,6 +41,10 @@ type Env = {
   silent?: boolean;
   /** The relay reports ready only once this settles. */
   late?: Promise<void>;
+  /** Where a path really lands (a link, a junction, an 8.3 name or another case); a path not listed lands on itself. */
+  real?: Record<string, string>;
+  /** Paths that lead nowhere: `$.fs.stat` rejects them. */
+  unresolved?: string[];
 };
 async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {}) {
   vi.resetModules();
@@ -76,6 +80,12 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
         const exe = /^(.*)[\\/](node|git)(?:\.exe)?$/.exec(path);
         if (exe) return (env.dirs ?? [BIN]).includes(exe[1]!) && env.tools?.[exe[2]!] !== "missing";
         return env.git === undefined || path === `${env.git}/.git` || path.includes("/dist/");
+      },
+      stat: async (path: string, options?: { resolve?: boolean }) => {
+        const exe = /^(.*)[\\/](node|git)(?:\.exe)?$/.exec(path);
+        const there = !env.unresolved?.includes(path) && (!exe || ((env.dirs ?? [BIN]).includes(exe[1]!) && env.tools?.[exe[2]!] !== "missing"));
+        if (!there) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+        return { kind: "file", size: 0, mtimeMs: 0, isLink: false, ...(options?.resolve ? { realPath: env.real?.[path] ?? path } : {}) };
       },
     },
     clock: {
@@ -474,6 +484,69 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
     expect(await send("claude-sonnet --claim a go")).toMatch(/^Shadow Army needs git 2\.34 or later on PATH; none was found$/);
     expect(probes).toEqual([]);
     expect(spawns).toEqual([]);
+  });
+
+  describe("canonical paths (C1)", () => {
+    const where = (...parts: string[]) => parts.join(SEP);
+    const ALIAS = process.platform === "win32" ? "C:\\links\\bin" : "/links/bin";
+    const SAFE = process.platform === "win32" ? "C:\\safe\\bin" : "/safe/bin";
+    const RELEASED = process.platform === "win32" ? "C:\\real\\bin" : "/real/bin";
+    const launched = async (env: Env) => {
+      const run = await mod(OK, { cwd: ROOT, ...env });
+      const line = await run.send("claude-sonnet --claim a go");
+      return { ...run, line };
+    };
+
+    it("refuses an entry that is an alias of a folder in the repository, though its own spelling is outside it", async () => {
+      const { probes, spawns } = await launched({ dirs: [ALIAS, BIN], real: { [ALIAS]: where(ROOT, "bin") } });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+      expect(spawns[0].argv[0]).toBe(exeIn(BIN, "node"));
+    });
+
+    it("refuses an entry that is an alias of a worktree folder and of a snapshot", async () => {
+      const { probes } = await launched({
+        dirs: [ALIAS, SAFE, BIN], real: { [ALIAS]: where(`${ROOT}-worktrees`, "w1", "bin"), [SAFE]: where(ROOT, ".shadow", "snap", "bin") },
+      });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+    });
+
+    it("refuses an executable that is itself an alias of one in the repository, in a folder outside it", async () => {
+      const { probes } = await launched({ dirs: [SAFE, BIN], real: { [exeIn(SAFE, "node")]: exeIn(where(ROOT, "bin"), "node"), [exeIn(SAFE, "git")]: exeIn(where(ROOT, "bin"), "git") } });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+    });
+
+    it("compares against the repository's real path when the working folder is itself a link", async () => {
+      const real = process.platform === "win32" ? "D:\\data\\repo" : "/data/repo";
+      const { probes } = await launched({ dirs: [where(real, "bin"), BIN], real: { [ROOT]: real } });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+    });
+
+    it("drops an entry that does not resolve, though the executables are listed under it", async () => {
+      const { probes } = await launched({ dirs: [ALIAS, BIN], unresolved: [ALIAS] });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+    });
+
+    it("drops an executable that does not resolve, and starts nothing when no entry has a resolvable one", async () => {
+      const { probes, spawns, line } = await launched({ dirs: [BIN], unresolved: [exeIn(BIN, "node")] });
+      expect(line).toMatch(/^Shadow Army needs Node\.js 22\.0 or later on PATH; none was found$/);
+      expect(probes).toEqual([]);
+      expect(spawns).toEqual([]);
+    });
+
+    it("matches a differently cased real path on Windows and macOS only", async () => {
+      const upper = ROOT.toUpperCase();
+      const { probes } = await launched({ dirs: [ALIAS, BIN], real: { [ALIAS]: where(upper, "bin") } });
+      const refused = process.platform !== "linux";
+      expect(probes[0]!.argv[0]).toBe(exeIn(refused ? BIN : ALIAS, "node"));
+    });
+
+    it("probes and starts the relay with the resolved path, not the spelling found on PATH", async () => {
+      const { probes, spawns } = await launched({
+        dirs: [ALIAS], real: { [exeIn(ALIAS, "node")]: exeIn(RELEASED, "node"), [exeIn(ALIAS, "git")]: exeIn(RELEASED, "git") },
+      });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(RELEASED, "node"), exeIn(RELEASED, "git")]);
+      expect(spawns[0].argv[0]).toBe(exeIn(RELEASED, "node"));
+    });
   });
 });
 
