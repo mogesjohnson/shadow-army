@@ -2,6 +2,8 @@
 
 Read this first, then [`spec2.0_review_flow.md`](spec2.0_review_flow.md). Update it after every pass.
 
+**Orchestrators 25 to 30 (2026-11-24 to 25; orch-30 `16a9358a`): Codex reviews 3 to 8 are in; fix workers run two at a time.** Approved and merged into `claude/63-m1b` (merge commits, typed by orch-29 with TRACE at the owner's word): #105, #112 (`9d6056e`), #118 (`fed5a39`). #106's review-5 fixes are pushed (`75b28fa`); w72 (#120) and w73 (#121) run on its stack. Draft #143 (M1b-28 part B, `b3f66e9`) is up. Changes requested, briefed as w75 to w83: #107, #108, #113, #126 (2 P0), #130, #111, #124, #116 (3 P0), #114, #115, #119, #117. The owner allows over-size commits in these fix rounds (2026-11-24). Detail: `handoffs/LATEST.md`.
+
 **Orchestrators 23 (`5fbdf366`) and 24 (`90963422`), 2026-11-24: Codex batch 2's fixes are pushed; w62 and w57 run.** Codex requested changes on #91 and #90 and approved #89 at `fab6f82` (two P2 text findings). #91's C1 to C5 are fixed at `c6a2233` (w61; the PR is now 480 lines, over V6's 400, and needs the owner's size exception). #90's C1 to C6 are answered at `3c779ef` (w63; 11 of `postOffice.test.ts`'s 27 tests fail in WSL, as 10 of 24 already did at `298dbd4`). #95's C1 to C6 are fixed at `10384ef`; w62 does its runs, body and reply, and #89's P2s. Draft #141 (w60, M1b-27 PR 2) is up at `201d0d5`. w57 (guardian identity, on #141 and #138) runs; w58 waits for it on `postOffice.ts`. Detail: `handoffs/LATEST.md`.
 
 **Orchestrator 22 (2026-11-24, `4f815f96`): Codex batch 1 is back; two workers run.** #95 has 4 P1s (w59 fixes them on its branch). w55 stopped without a PR at `1cce5cb`; w60 finishes it. w57 and w58 wait on `postOffice.ts`. Detail: `handoffs/LATEST.md`.
