@@ -16,9 +16,9 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang"; tail?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "off"; tail?: string } = {}) {
   vi.resetModules();
-  const { register } = await import("./register.js");
+  const { register, useSweepLauncher } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
   const on = (name: string, optionsOrHandler: unknown, maybe?: Handler) => {
     handlers[name] = (maybe ?? optionsOrHandler) as Handler;
@@ -103,6 +103,8 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
       },
     },
   };
+  // C1/C2: the real sweep caller is off; tests inject a launcher, and "off" keeps the shipped default.
+  if (env.sweep !== "off") useSweepLauncher((cwd) => $.process.spawn({ argv: ["node", "sweepMain.js", cwd], cwd }) as never);
   const endRelay = () => stops.forEach((stop) => stop());
   const send = async (args: string): Promise<string> => (await handlers["command.run"]!($, { args })).text;
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
@@ -489,8 +491,14 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
   it("runs the sweep once for the same folder when the output ends with no shutdown event, and writes one line", async () => {
     const { sweeps, logs } = await died({ cwd: "/repo", sweep: { out: report(3), code: 0 } });
     expect(sweeps).toHaveLength(1);
-    expect(sweeps[0].argv).toEqual(["node", "/x/plugins/shadow-army/../../dist/v2/sweepMain.js", "/repo"]);
+    expect(sweeps[0]).toMatchObject({ argv: ["node", "sweepMain.js", "/repo"], cwd: "/repo" });
     expect(shadowLines(logs)).toEqual([expect.stringMatching(/stopped unexpectedly; the sweep ended 3 processes it left$/)]);
+  });
+
+  it("launches nothing by default until #128's vetted Node path and #132's safe cleanup land, and says so in one line (C1, C2)", async () => {
+    const { sweeps, logs } = await died({ sweep: "off" });
+    expect(sweeps).toHaveLength(0);
+    expect(shadowLines(logs)).toEqual([expect.stringMatching(/stopped unexpectedly; the sweep is off in this build, so nothing was ended; what it left is unknown$/)]);
   });
 
   it("decides by the office's own closed event: none after a release request still sweeps, one without a release does not", async () => {

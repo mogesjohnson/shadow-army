@@ -161,13 +161,22 @@ function retire(runtime: Runtime): void {
   if (active === runtime) active = undefined;
 }
 
+/**
+ * PO-16's sweep launcher, given the folder. Off in this build (Codex review 20, C1/C2): the real caller must run
+ * the vetted absolute Node path from the shared preflight (#128) and the sweep's safe cleanup (#132), and neither
+ * has landed in this stack. Until then a dead office is reported and nothing is launched; the integration that
+ * merges #128 and #132 sets the real launcher here, and tests inject a fake one.
+ */
+type SweepLauncher = (cwd: string) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
+let launchSweep: SweepLauncher | undefined;
+export function useSweepLauncher(launch: SweepLauncher | undefined): void { launchSweep = launch; }
+
 const counted = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
 
 /** What the one-shot sweep did, in words, from its exit and its one JSON line (the report of `src/v2/contain/sweep.ts`). */
 async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<string> {
-  const entry = `${$.plugin.root}/../../dist/v2/sweepMain.js`;
-  if (!await $.fs.exists(entry)) return "the sweep program is missing, so nothing was ended";
-  const stream = $.process.spawn({ argv: ["node", entry, runtime.cwd], cwd: runtime.cwd });
+  if (!launchSweep) return "the sweep is off in this build, so nothing was ended; what it left is unknown";
+  const stream = launchSweep(runtime.cwd);
   let timer: Timer | undefined;
   const late = new Promise<"late">((done) => { timer = $.clock.after(SWEEP_WAIT_MS, () => done("late")); });
   const read = (async () => {
