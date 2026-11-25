@@ -45,6 +45,8 @@ type Env = {
   real?: Record<string, string>;
   /** Paths that lead nowhere: `$.fs.stat` rejects them. */
   unresolved?: string[];
+  /** Paths that are there but land nowhere (a dangling link, or a real path the host withholds): `$.fs.stat` answers without `realPath`. */
+  dangling?: string[];
 };
 async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {}) {
   vi.resetModules();
@@ -85,6 +87,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
         const exe = /^(.*)[\\/](node|git)(?:\.exe)?$/.exec(path);
         const there = !env.unresolved?.includes(path) && (!exe || ((env.dirs ?? [BIN]).includes(exe[1]!) && env.tools?.[exe[2]!] !== "missing"));
         if (!there) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+        if (env.dangling?.includes(path)) return { kind: "other", size: 0, mtimeMs: 0, isLink: true };
         return { kind: "file", size: 0, mtimeMs: 0, isLink: false, ...(options?.resolve ? { realPath: env.real?.[path] ?? path } : {}) };
       },
     },
@@ -539,6 +542,26 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
       const refused = process.platform !== "linux";
       expect(probes[0]!.argv[0]).toBe(exeIn(refused ? BIN : ALIAS, "node"));
     });
+
+    it("refuses an entry in the worktrees folder's real storage when that folder is itself a link (C1, review 18)", async () => {
+      const store = process.platform === "win32" ? "E:\\store\\trees" : "/store/trees";
+      const { probes } = await launched({ dirs: [where(store, "w1", "bin"), BIN], real: { [`${ROOT}-worktrees`]: store } });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+    });
+
+    it("still starts when there is no worktrees folder", async () => {
+      const { probes, spawns } = await launched({ unresolved: [`${ROOT}-worktrees`] });
+      expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+      expect(spawns).toHaveLength(1);
+    });
+
+    it.each([["the worktrees folder is there but leads nowhere", { dangling: [`${ROOT}-worktrees`] }], ["the working folder does not resolve", { unresolved: [ROOT] }]])(
+      "starts nothing when %s", async (_case, env) => {
+        const { probes, spawns, line } = await launched(env);
+        expect(line).toMatch(/^Shadow Army: .+ does not resolve to a real path · nothing started$/);
+        expect(probes).toEqual([]);
+        expect(spawns).toEqual([]);
+      });
 
     it("probes and starts the relay with the resolved path, not the spelling found on PATH", async () => {
       const { probes, spawns } = await launched({

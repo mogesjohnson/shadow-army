@@ -291,11 +291,33 @@ async function findOnPath($: EngineInterface, name: string, path: string, barred
   return undefined;
 }
 
-/** The barred folders as compared: each in its own spelling and by real path, with the worktrees folder beside each repository spelling. */
-async function barredFolders($: EngineInterface, cwd: string, root: string): Promise<string[]> {
-  const [cwdReal, rootReal] = await Promise.all([realPathOf($, cwd), realPathOf($, root)]);
-  const repositories = [root, ...(rootReal ? [rootReal] : [])];
-  const folders = [cwd, ...(cwdReal ? [cwdReal] : []), ...repositories, ...repositories.map((folder) => `${folder.replace(/[\\/]+$/, "")}-worktrees`)];
+/** A barred folder's real path; `null` when it is not there (`stat` rejects `ENOENT`), `undefined` when it is there but cannot be resolved. */
+async function rootIdentity($: EngineInterface, path: string): Promise<string | null | undefined> {
+  let real: unknown;
+  try { real = (await $.fs.stat(path, { resolve: true })).realPath; } catch (error) {
+    const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+    return code === "ENOENT" || (code === undefined && /\bENOENT\b/.test(String(message))) ? null : undefined;
+  }
+  return typeof real === "string" && real !== "" ? real : undefined;
+}
+
+/**
+ * The barred folders as compared: the working folder, the repository and the worktrees folder beside each repository spelling, each in its own
+ * spelling and by its own real path, so a link or junction on any of them is followed (C1). The working folder and the repository must resolve;
+ * a worktrees folder may be absent, but one that is there and does not resolve stops the start, as does any other failed lookup.
+ */
+async function barredFolders($: EngineInterface, cwd: string, root: string): Promise<string[] | { refusal: string }> {
+  const refusal = (path: string) => ({ refusal: `Shadow Army: ${path} does not resolve to a real path · nothing started` });
+  const [cwdReal, rootReal] = [await rootIdentity($, cwd), await rootIdentity($, root)];
+  if (typeof cwdReal !== "string") return refusal(cwd);
+  if (typeof rootReal !== "string") return refusal(root);
+  const folders = [cwd, cwdReal, root, rootReal];
+  for (const repository of new Set([root, rootReal])) {
+    const trees = `${repository.replace(/[\\/]+$/, "")}-worktrees`;
+    const real = await rootIdentity($, trees);
+    if (real === undefined) return refusal(trees);
+    folders.push(trees, ...(real === null ? [] : [real]));
+  }
   return [...new Set(folders.map(normal))];
 }
 
@@ -303,6 +325,7 @@ async function barredFolders($: EngineInterface, cwd: string, root: string): Pro
 async function resolveTools($: EngineInterface, cwd: string): Promise<{ node: string; git: string } | { refusal: string }> {
   const path = (await $.env.get("PATH")) ?? (await $.env.get("Path")) ?? "";
   const barred = await barredFolders($, cwd, await repoRoot($, cwd));
+  if (!Array.isArray(barred)) return barred;
   const node = await findOnPath($, "node", path, barred);
   if (!node) return { refusal: "Shadow Army needs Node.js 22.0 or later on PATH; none was found" };
   const git = await findOnPath($, "git", path, barred);
