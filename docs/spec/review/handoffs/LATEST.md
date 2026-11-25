@@ -1,39 +1,35 @@
-# Handoff: orchestrator 35 (`974562bf`) to orchestrator 36 (2026-11-25)
+# Handoff: orchestrator 36 (`0ce47b59`) to orchestrator 37 (2026-11-25)
 
-Range: `1bc9655` (orch-34's handoff) to this commit. orch-34's handoff (`git show 1bc9655:docs/spec/review/handoffs/LATEST.md`) and orch-33's (`d0c2180`) still hold where not done below. orch-35 started at 79k and handed off at about 150k, early on purpose (see Lessons).
+Range: `0097e52` (orch-35's handoff) to this commit. orch-35's handoff (`git show 0097e52:docs/spec/review/handoffs/LATEST.md`) and orch-34's (`1bc9655`) still hold where not done below. orch-36 started at 81k and ran no worker: the 5-hour figure stayed between 93% and 98% (it resets at 01:20 local, 06:20 UTC).
 
-**Owner, 2026-11-25:** check Codex's reviews at every 5-minute watch tick (comments on #63 since the last tick, and the open PRs' latest reviews). Last tick: 02:20 UTC. Review 12 is landing PR by PR; its summary is not on #63 yet.
+**Owner, 2026-11-25:** check Codex's reviews at every 5-minute watch tick (comments on #63 since the last tick, and the open PRs' latest reviews and comments). orch-36's script for it: `bash C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/codex_tick.sh <since ISO>` (one GraphQL call over the open PRs plus #63 comments). Last tick: 03:20 UTC.
 
 **Lessons:**
-- **TRACE images are the context cost.** orch-35 went from 79k to 146k in 20 minutes closing four tabs and launching three workers. Use `screenshot: "none"` and `returnObservation: "none"` everywhere, except the one `scaled` check of a typed launch line.
-- The 5-hour figure was 78% at 02:18. Start no worker at 80% or more.
+- With no workers running, a tick costs about 1.5k of context. An orchestrator that waits out the 5-hour window still reaches 175k: hand off before it.
+- Workers overran 150k (w89 164k, w97 161k) while busy in long test runs. Remind them at 145k.
 
 **Done** (each report checked with `git show --stat` at the PR's head, tab closed):
-- orch-34's tab closed.
-- **w94-fix135-138:** #135 at `9398604` (C1, C2, C4 fixed, C3 answered, body and reply posted). #138: #135 merged in at `4743d90`; C2 to C5 left (now w96), C1 split out (Next 3).
-- **w92-fix136-137:** #136 partly fixed at `5279ee7` (no replies, no body); #137 untouched. The rest is w97 and Next 2.
-- **w95-fix132-linux-end:** #132 at `977117a`: C2 closed on both systems (`sa-contain end` binds the kill to a pidfd; Windows keeps its held handle), WSL runs recorded, body updated (456 lines, size exception).
-- Queued briefs now name `orch-35`: run `sed -i 's/orch-35/orch-36/g'` on w80, w82, w83, w90, w91, w93 and on any new brief, and SendMessage the running workers your name.
+- orch-35's tab closed.
+- **w96-fix138-rest:** #138 at `a14f65e`: C2, C3 and C5 fixed, C4 answered, C1 reply posted (Next 3). The owner-loss test passes on the old code too (libuv's kill-on-close job); said so in the body.
+- **w89-fix128:** #128 C1 to C5 coded at `900976f`, stopped at 164k. Left: one 60 s test timeout, the tests for C1 to C6, C6, checks, replies and body. Brief: `tasks/w99-fix128-rest.md`.
+- **w97-fix136-rest:** #136 C1 to C3 rest at `2149dfc` with fail-first tests, stopped at 161k. Left: suites on Windows and WSL, replies, body. Brief: `tasks/w100-fix136-close.md`.
+- Both `STATE.md` files brought up to date (`71ff077`; the main checkout's is uncommitted by design).
+- Queued briefs renamed to orch-36: run `sed -i 's/orch-36/orch-37/g'` on w80, w82, w83, w90, w91, w93, w99, w100, w101 and any new brief.
 
-**Decisions** (can be undone, inside the repo):
-- #136 C1: wire `src/workspace/session.ts`'s `ws.finish` and `openWriteSession` through the harness git under the hold, rather than switching writes off (which would break apply, server and slice).
-- #136 C2: the Windows ACL reader is M1b-17's work, a build note; the `snapshot.ts:37` default bypass is fixed now.
-- #136 C4's startup retry of a logged unfinished removal is fixed in #137 (PO-1 startup).
-- #138 C1 (lossless FILETIME) is its own task (Next 3).
+**Codex review 12 is complete** (summary on #63, 03:08 UTC): changes requested on all five.
+- #139 `58c0070` (C1 to C5: P0 1, P1 3, P2 1): `postOffice.ts`, also `watch.ts`, `main.ts`, `claude.ts`.
+- #140 `1807198` (C1 to C7: P1 6, P2 1): `cli.ts`, `cli.test.ts`. Brief: `tasks/w101-fix140.md`.
+- #141 `201d0d5` (C1 to C6: P0 1, P1 3, P2 2): `postOffice.ts`, `snapshot.ts`.
+- #142 `1ddfdbb` (C1 to C5: P0 1, P1 3, P2 1): `postOffice.ts`, `contain/windows.ts`, `contain/trees.ts`.
+- #143 `b3f66e9` (C1 to C8: P0 5, P1 2, P2 1): `postOffice.ts`, `trust.ts`.
 
-**Running** (three live, all launched 02:16 to 02:18):
-- **w96-fix138-rest** (`2ab83ca5`, Opus medium): #138 C2 to C5 from w94's draft. Files: `channel.ts`, `claude.ts`, `claude.test.ts`, `contain/windows.ts`, `contain/windows.test.ts`.
-- **w97-fix136-rest** (`df51e77a`, Opus medium): #136's rest. Files: `postOffice.ts`, `postOffice.test.ts`, `client.test.ts`, `src/workspace/session.ts`, `snapshot.ts`, `snapshot.test.ts`.
-- **w89-fix128** (`a6cd365e`, Sonnet high): #128. Files: `plugins/shadow-army/hooks/register.ts` and its test.
-
-**Codex review 12, seen so far:** #139 at `58c0070` changes requested (C1 [P0] `postOffice.ts:584`, `:644`: closing a session wakes the guard before the tree teardown finishes); #140 at `1807198` changes requested (C1 [P1] `cli.ts:144`, `:156`: Ctrl+C aborts the trust controller while a plain send is in flight).
+**Running:** none.
 
 ## Next
 
-1. Close each worker when it reports (check the head first). A worker that stops with a `## Left` gets a fresh task on the same files.
-2. **`postOffice.ts` queue, one at a time:** w97, then `w98-fix137` (#137 C1 to C8: merge #136's fixed head into `claude/63-m1b-po-startup` first; give it `server.ts` for C2's lock-before-recovery; C1 and C4 need `sweep.ts` and `contain/trees.ts`, so either run it apart from Next 3 or answer them as Next 3's), then `w93-fix133`, then #139 (review 12), then the PO-14 gate (#127 C2, orch-33's Next 3; #127 must not merge before it).
-3. **After w96:** the #138 C1 task (Opus medium): the exact Windows FILETIME carried losslessly (string or bigint) in `Identity` (`contain/trees.ts`, #129), the lock's identity, the tree-record parser and the sweep's compare (`contain/sweep.ts`, #132), with `windows.ts` emitting it; millisecond records count as too weak for a destructive decision. Stack it after #129 and #132.
-4. **`register.ts` queue:** w89, then w90-fix131, then w91-fix134 (also `sweep.ts`: not beside Next 3 or w98).
-5. Free to run beside the others: w80-fix114 (`sanitize.ts`, Sonnet high), w82-fix119 (roster and instructions, Sonnet medium), w83-fix117 (`scripts/check-spec-trace.mjs`, Sonnet medium), and #140 (`cli.ts`) once review 12's summary lands.
+1. **When the 5-hour figure drops below 80%,** launch these three together (no shared files): `w99-fix128-rest` (Sonnet high), `w100-fix136-close` (Sonnet high), `w101-fix140` (Sonnet high).
+2. **`postOffice.ts` queue, one at a time:** w100, then `w98-fix137` (orch-35's Next 2: #137 C1 to C8; merge #136's fixed head into `claude/63-m1b-po-startup` first; give it `server.ts`; C1 and C4 need `sweep.ts` and `contain/trees.ts`), then `w93-fix133`, then #139, #141, #142 and #143 (review 12; write their briefs from each PR's review), then the PO-14 gate (#127 C2; #127 must not merge before it).
+3. **#138 C1** (lossless FILETIME, Opus medium): orch-35's Next 3. #142 touches the same `contain/` files, so run it before #142.
+4. **`register.ts` queue:** w99, then w90-fix131, then w91-fix134 (also `sweep.ts`: not beside Next 3 or w98).
+5. Free to run beside the others: w80-fix114 (`sanitize.ts`), w82-fix119 (roster and instructions), w83-fix117 (`scripts/check-spec-trace.mjs`).
 6. orch-33's Next 6 and 7 (each tick's review check; Codex batch 14 when reviews 6 to 12 are fixed; orch-32's Next 6).
-7. Neither `STATE.md` was updated by orch-34 or orch-35: bring both up to date at the next milestone.
