@@ -20,6 +20,8 @@ interface Runtime {
   renewing?: symbol;
   diagnostic: string;
   finished?: Promise<void>;
+  /** ARM-7: the folder's one trust card while it is open; every use that meets it waits on its answer. */
+  card?: Promise<CardOutcome>;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -320,31 +322,96 @@ async function repoRoot($: EngineInterface, cwd: string): Promise<string> {
   }
 }
 
-/** ARM-7: what the post office says about the folder's policy files; `files` is empty when all are trusted. */
-interface TrustState { files: { name: string; status: "new" | "changed" | "gone"; hash: string | null }[]; details?: string[] }
+/**
+ * ARM-7: #140's trust answer. While a policy file is untrusted the post office answers `open` and `send` with it
+ * instead of their result and starts nothing (#143); `trust` with exactly the card's file hashes accepts them.
+ */
+type TrustRow =
+  | { kind: "file"; name: string; state: "new" | "changed" | "gone"; hash: string; soldier?: string }
+  | { kind: "soldier"; name: string; cli: string; model: string; autonomy: string }
+  | { kind: "server"; file: string; name: string; target: string };
+/** What the folder's card ended with: `accepted`, or the line to return with nothing started. */
+type CardOutcome = { accepted: true } | { accepted: false; reason: string; failed?: string };
+const POLICY_FILES = new Set(["shadow.config.json", "agent.md", "rules.md", ".mcp.json"]);
 const TRUST_QUESTION = "Trust this folder's Shadow Army files?";
 const TRUST_NOT_NOW = "Not now";
 const TRUST_ACCEPT = "Trust these files";
+const TRUST_WAIT = "the army waits for you to trust this folder's Shadow Army files";
+
+const isText = (value: unknown): value is string => typeof value === "string";
+function isTrustRow(value: unknown): value is TrustRow {
+  const row = value as Record<string, unknown> | null;
+  if (!row || typeof row !== "object") return false;
+  // A file row names one of the four policy files with its full hash; a gone file may have no last-trusted hash.
+  if (row.kind === "file") return isText(row.name) && POLICY_FILES.has(row.name) && isText(row.hash) && /^([a-f0-9]{64})?$/.test(row.hash)
+    && (row.state === "new" || row.state === "changed" || row.state === "gone") && (row.hash !== "" || row.state === "gone")
+    && (row.soldier === undefined || isText(row.soldier));
+  if (row.kind === "soldier") return isText(row.name) && isText(row.cli) && isText(row.model) && isText(row.autonomy);
+  return row.kind === "server" && isText(row.file) && isText(row.name) && isText(row.target);
+}
+
+/** The card's rows when `result` is a trust answer, else `undefined`. A malformed answer throws: nothing is shown or accepted on a guess. */
+function trustRows(result: unknown): TrustRow[] | undefined {
+  if (!result || typeof result !== "object" || !("trust" in result)) return undefined;
+  const rows = ((result as { trust: unknown }).trust as { rows?: unknown } | null)?.rows;
+  if (!Array.isArray(rows) || !rows.every(isTrustRow) || !rows.some((row) => row.kind === "file")) throw new Error(`the post office's trust answer is malformed; nothing was accepted and nothing started`);
+  return rows;
+}
+
+const cardKey = (rows: TrustRow[]) => rows.map((row) => row.kind === "file" ? `${row.name}:${row.hash}` : "").filter(Boolean).join();
 
 /**
- * ARM-7's card, for the owner's own use. One notice row per untrusted file, then the question with `Not now` first.
- * Only the exact answer `Trust these files` accepts, and what it accepts is the hashes shown. Not now, text typed
- * under Other, a dismissed or rejecting dialog and a failed accept each return the reason and start nothing.
- * Returns `undefined` when nothing waits on the owner or the owner accepted.
+ * ARM-7's card, for the owner's own use: one notice row per row of the answer, then the question with `Not now` first.
+ * Only the exact answer `Trust these files` accepts, and it sends exactly the file hashes shown. Not now, text typed
+ * under Other, a dismissed or rejecting dialog, an army that ended meanwhile and a refused accept each start nothing.
  */
-async function trustGate($: EngineInterface, runtime: Runtime): Promise<string | undefined> {
-  const state = await post($, runtime, { action: "trust" }) as TrustState | undefined;
-  if (!state?.files?.length) return undefined;
-  for (const file of state.files) $.ui.log(show(`Shadow Army · ${file.name} · ${file.status}${file.hash ? ` · ${file.hash.slice(0, 12)}` : ""}`));
-  for (const line of state.details ?? []) $.ui.log(show(`Shadow Army · ${line}`));
-  const waits = "the army waits for you to trust this folder's Shadow Army files";
+async function showCard($: EngineInterface, runtime: Runtime, rows: TrustRow[], refreshed: boolean): Promise<CardOutcome> {
+  if (refreshed) $.ui.log("Shadow Army · trust · the files changed while the question was open; these are their new hashes");
+  for (const row of rows) {
+    $.ui.log(show(row.kind === "file" ? `Shadow Army · trust · ${row.state} · ${row.name}${row.soldier ? ` (${row.soldier})` : ""}${row.hash ? ` · ${row.hash.slice(0, 12)}` : ""}`
+      : row.kind === "soldier" ? `Shadow Army · trust · soldier · ${[row.name, row.cli, row.model, row.autonomy].join(" · ")}`
+      : `Shadow Army · trust · ${row.file} server · ${row.name} · ${row.target}`));
+  }
   let answer: string;
   try { answer = await $.ui.ask(TRUST_QUESTION, { options: [TRUST_NOT_NOW, TRUST_ACCEPT], header: "Trust" }); }
-  catch { return `Nothing started: ${waits} (the dialog was dismissed or could not open).`; }
-  if (answer !== TRUST_ACCEPT) return `Nothing started: ${waits}.`;
-  const result = await post($, runtime, { action: "trust", accept: state.files.filter((f) => f.hash !== null).map((f) => ({ name: f.name, hash: f.hash })) }) as { ok?: boolean; reason?: string } | undefined;
-  if (!result?.ok) return show(`Nothing started: nothing was accepted${result?.reason ? `, ${result.reason}` : ""}.`);
-  return undefined;
+  catch { return { accepted: false, reason: `Nothing started: ${TRUST_WAIT} (the dialog was dismissed or could not open).` }; }
+  if (answer !== TRUST_ACCEPT) return { accepted: false, reason: `Nothing started: ${TRUST_WAIT}.` };
+  if (runtime.closing) return { accepted: false, reason: "Nothing started: the army ended while the question was open; nothing was accepted." };
+  const hashes = rows.flatMap((row) => row.kind === "file" ? [row.hash] : []);
+  let result: unknown;
+  try { result = await post($, runtime, { action: "trust", hashes }); }
+  catch (error) { return { accepted: false, failed: cardKey(rows), reason: show(`Nothing started: nothing was accepted, ${safeText(error instanceof Error ? error.message : error, runtime.credential)}.`) }; }
+  if ((result as { ok?: unknown } | null)?.ok !== true) return { accepted: false, reason: "Nothing started: the post office did not confirm the trust; nothing was accepted." };
+  return { accepted: true };
+}
+
+/**
+ * Posts `command` and answers any trust card it meets (ARM-7). One card per army: a use that meets an open card waits
+ * on its answer instead of drawing a second one. When an accept is refused because a file changed while the question
+ * was open, the command's new card, with the new hashes, is shown and asked again; the same card refused stops.
+ */
+async function gated($: EngineInterface, runtime: Runtime, command: Record<string, unknown>): Promise<{ value: unknown } | { held: string }> {
+  let refused: { key: string; reason: string } | undefined;
+  for (;;) {
+    const open = runtime.card;
+    if (open) {
+      const outcome = await open;
+      if (!outcome.accepted) return { held: outcome.reason };
+      if (runtime.closing) throw new Error("The army ended before the command could run");
+    }
+    const value = await post($, runtime, command);
+    const rows = trustRows(value);
+    if (!rows) return { value };
+    if (runtime.card) continue;
+    if (refused && refused.key === cardKey(rows)) return { held: refused.reason };
+    const card = showCard($, runtime, rows, refused !== undefined);
+    runtime.card = card;
+    let outcome: CardOutcome;
+    try { outcome = await card; } finally { if (runtime.card === card) runtime.card = undefined; }
+    if (outcome.accepted) { if (runtime.closing) throw new Error("The army ended before the command could run"); refused = undefined; continue; }
+    if (outcome.failed === undefined) return { held: outcome.reason };
+    refused = { key: outcome.failed, reason: outcome.reason };
+  }
 }
 
 async function send($: EngineInterface, args: string): Promise<string> {
@@ -352,8 +419,6 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (!name || !brief) return "Usage: /send <soldier> --claim <path-or-glob> <brief>";
   if (!claims.length) return "Nothing sent: /send needs at least one --claim <path-or-glob>, so the soldier's changes can be audited.";
   const runtime = await ensure($);
-  const held = await trustGate($, runtime);
-  if (held) return held;
   const soldiers = await post($, runtime, { action: "army" }) as Soldier[];
   if (!Array.isArray(soldiers)) throw new Error("invalid army response");
   const soldier = soldiers.find((item) => item.key.toLowerCase() === name.toLowerCase() || item.name.toLowerCase() === name.toLowerCase());
@@ -361,8 +426,13 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (!soldier.supported || !soldier.roles.includes("build")) return show(`Nothing sent: ${soldier.name} is not a claude soldier with the build role.`);
   if (runtime.closing) throw new Error("The army ended before the send could run");
   // Stand-in (S-6, B1): WSP-11 lets only `sa live` open a session in M1, so `/send` still opens one here until M1b-28/29 settle it.
-  const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
-  const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
+  // ARM-7: while a policy file is untrusted, open and send answer with the folder's trust card instead (#143).
+  const opening = await gated($, runtime, { action: "open", soldier: soldier.key, claims });
+  if ("held" in opening) return opening.held;
+  const opened = opening.value as { session?: string };
+  const sending = await gated($, runtime, { action: "send", soldier: soldier.key, text: brief, claims });
+  if ("held" in sending) return sending.held;
+  const delivery = sending.value as Delivery;
   const root = await repoRoot($, runtime.cwd);
   return card(soldier, delivery, `${root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
