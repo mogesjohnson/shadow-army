@@ -61,6 +61,8 @@ describe("standing instructions", () => {
     expect(() => buildStandingInstructions(roster, roster.soldiers.get("a")!)).toThrow(/must be below 1500/);
   });
 
+  // SI-3, builder only: this test is the proof of the byte count (3 bytes per token) and of the error text at the
+  // 1,500 boundary. The office-open evidence (log record, no leftover workspace or lease) is separate: postOffice tests.
   it("refuses at exactly 1,500 tokens, naming the count, rules.md and the agent.md section (SI-3)", () => {
     const make = (n: number) => makeRoster({ a: { cli: "claude", model: "opus", roles: ["build"] } }, undefined, { all: "x".repeat(n), perSoldier: new Map() });
     const base = estimateInstructionTokens(buildStandingInstructions(make(0), make(0).soldiers.get("a")!));
