@@ -36,7 +36,8 @@ const isOlder = (found: number[], oldest: number[]): boolean => {
 /**
  * CH-2: read `claude --version` before a session opens. Returns the line for the soldier's log and
  * Claude's transcript when claude is too old, gave no answer in time, or could not be run. Such a
- * start is not a crash (PO-1), so the caller reports it with kind "other".
+ * start is not a crash (PO-1), so the caller reports it with kind "other". Rejects, with
+ * `containmentFailed`, when the probe's processes cannot be confirmed stopped.
  */
 export async function claudeVersionProblem(command: { file: string; args?: string[] }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
   let child: ManagedProcess;
@@ -54,7 +55,9 @@ export async function claudeVersionProblem(command: { file: string; args?: strin
   ]);
   clearTimeout(timer);
   if (outcome === "exited") await new Promise((resolve) => setTimeout(resolve, 20)); // let stdout's last chunk land
-  await child.close().catch(() => {});
+  // Fail closed: no session opens until the probe's processes are confirmed stopped.
+  try { await child.close(); }
+  catch (error) { throw Object.assign(new Error(`claude --version probe containment failed: ${error instanceof Error ? error.message : String(error)}`), { containmentFailed: true }); }
   if (outcome === timedOut) return `claude --version gave no answer in ${timeoutMs / 1000} s`;
   const found = versionParts(output);
   if (!found) return `claude --version gave an answer that is not a version: ${output.trim().slice(0, 80) || "(nothing)"}`;
@@ -149,12 +152,20 @@ export class ClaudeChannel implements NativeChannel {
   private stderrText = "";
   private stderrDone: Promise<void> = Promise.resolve();
   private loginNeeded?: NativeError;
+  /** PO-1: an old, silent or managed-refused claude. The closed event says so, and it is never restarted. */
+  private refusedStart = false;
+  private probeContainmentFailed = false;
 
   constructor(private readonly options: ClaudeChannelOptions) {
     this.process = this.spawn();
     this.ready = this.open();
     // Spawn/initialization errors must remain observed even if the owner closes before sending.
-    void this.ready.catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error), false, (error as { refusedStart?: boolean })?.refusedStart ? "other" : "transport"));
+    void this.ready.catch((error: unknown) => {
+      const flags = error as { refusedStart?: boolean; containmentFailed?: boolean } | undefined;
+      if (flags?.refusedStart) this.refusedStart = true;
+      if (flags?.containmentFailed) this.probeContainmentFailed = true;
+      return this.failTransport(error instanceof Error ? error.message : String(error), false, flags?.refusedStart ? "other" : "transport");
+    });
   }
 
   private async spawn(): Promise<ManagedProcess> {
@@ -264,6 +275,11 @@ export class ClaudeChannel implements NativeChannel {
     }
     const turn = this.current;
     if (frame.type === "system" && frame.subtype === "init") { this.init(frame); return; }
+    if (frame.type === "system" && frame.subtype === "api_retry") {
+      // CH-2: the CLI is backing off. A notice, not an error; the turn goes on.
+      this.emit("raw", { type: "retry_notice", attempt: number(frame.attempt), maxRetries: number(frame.max_retries), retryDelayMs: number(frame.retry_delay_ms), errorStatus: frame.error_status, error: frame.error });
+      return;
+    }
     if (frame.type === "result") { this.result(frame); return; }
     if (!turn) return;
     if (frame.type === "rate_limit_event") {
@@ -379,8 +395,9 @@ export class ClaudeChannel implements NativeChannel {
     const turn = this.current;
     // A notification or stale result cannot change another turn's usage/cost boundary.
     // CH-2: a result ends a message's turn only when it names that message. Any other result is recorded and ends nothing.
-    const named = Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : typeof frame.user_message_uuid === "string" ? [frame.user_message_uuid] : undefined;
-    if (!turn || object(frame.origin)?.kind === "task-notification" || named !== undefined && !named.includes(turn.id)) {
+    // Either field may name it; a result that names no message ends nothing.
+    const named = [...(Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : []), ...(typeof frame.user_message_uuid === "string" ? [frame.user_message_uuid] : [])];
+    if (!turn || object(frame.origin)?.kind === "task-notification" || !named.includes(turn.id)) {
       this.emit("raw", { type: "result_ignored", user_message_uuid: frame.user_message_uuid, origin: frame.origin });
       return;
     }
@@ -461,7 +478,7 @@ export class ClaudeChannel implements NativeChannel {
       this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false, usageSteps: new Map(), resetsTotals: /^\s*\/(clear|reset|new)\s*$/i.test(text) };
       void this.ready.then(async () => {
         if (!this.current || this.current.id !== id || this.closed) return;
-        await this.write({ type: "user", uuid: id, session_id: this.sessionId ?? "", message: { role: "user", content: text }, parent_tool_use_id: null });
+        await this.write({ type: "user", uuid: id, session_id: this.sessionId ?? "", message: { role: "user", content: text }, parent_tool_use_id: null, priority: "later" });
       }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
     });
   }
@@ -509,6 +526,7 @@ export class ClaudeChannel implements NativeChannel {
     this.reason = { kind, message };
     if (drainTerminal && !this.sawFrame && MANAGED_REFUSAL.test(this.stderrText) && !SIDELOAD_REFUSAL.test(this.stderrText)) {
       // PO-1: a start managed settings refuse is not a crash and is never restarted.
+      this.refusedStart = true;
       this.reason = { kind: "other", message: `claude can't start at ${this.options.autonomy ?? "supervised"}: your organization's managed settings refuse it (${this.stderrText.trim().split(/\r?\n/)[0].slice(0, 200)}) · lower its autonomy` };
     } else if (drainTerminal && this.loginNeeded) {
       // CH-2: a login needed never restarts the channel, even when the CLI exits after it.
@@ -528,7 +546,7 @@ export class ClaudeChannel implements NativeChannel {
     this.controls.clear();
     this.closePromise = (async () => {
       const child = await this.process.catch(() => undefined);
-      let containmentStopped = true;
+      let containmentStopped = !this.probeContainmentFailed;
       try {
         if (child) { child.stdin.end(); await child.close(); }
       } catch (error) {
@@ -544,7 +562,7 @@ export class ClaudeChannel implements NativeChannel {
       // A failed containment check must unblock callers without claiming cleanup succeeded.
       // The post office keeps such a channel down and never automatically resumes its queue.
       this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: this.reason });
-      this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped });
+      this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped, refusedStart: this.refusedStart });
     })();
     return this.closePromise;
   }

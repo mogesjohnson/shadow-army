@@ -62,7 +62,7 @@ async function s6Protocol(autonomy?: "supervised" | "auto" | "full") {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send, spawned: () => injected.mock.calls.map(([options]) => options) };
+  return { channel, events, emit, send, sent, spawned: () => injected.mock.calls.map(([options]) => options) };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -489,6 +489,8 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(result.status).toBe("interrupted");
     expect(result.error).toEqual({ kind: "other", message: `claude 2.1.276 is older than ${OLDEST_CLAUDE}; update claude` });
     expect(errorsOf(events).map((error) => error.kind)).toEqual(["other"]);
+    await until(() => events.some((event) => event.type === "closed"));
+    expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ refusedStart: true, containmentStopped: true });
     const { channel: oldest } = await setup({ fakeArgs: ["--fake-version", OLDEST_CLAUDE] });
     expect((await oldest.send("hello")).status).toBe("completed");
     const { channel: newer } = await setup({ fakeArgs: ["--fake-version", "2.2.0"] });
@@ -504,7 +506,60 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(result.error?.message).toContain("disableBypassPermissionsMode");
     expect(result.error?.message).toContain("lower its autonomy");
     expect(rawOf(events, "stderr")).not.toHaveLength(0);
+    await until(() => events.some((event) => event.type === "closed"));
+    expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ refusedStart: true });
   }, 15_000);
+
+  it("ends a turn only on a result that names its message in either field (CH-2, M1-AC4)", async () => {
+    const { events, emit, send } = await s6Protocol();
+    const { pending, id } = await send("scoped");
+    emit({ type: "result", subtype: "success", result: "names nothing", total_cost_usd: 5, usage: { input_tokens: 1, output_tokens: 1 } });
+    emit({ type: "result", subtype: "success", result: "named", user_message_uuids: ["another-message"], user_message_uuid: id, total_cost_usd: 0.03, usage: { input_tokens: 3, output_tokens: 1 } });
+    const result = await pending;
+    expect(result).toMatchObject({ status: "completed", text: "named" });
+    expect(result.usage?.costUsd).toBeCloseTo(0.03);
+    expect(rawOf(events, "result_ignored")).toHaveLength(1);
+  });
+
+  it("sends each message with Claude's native priority later (CH-2)", async () => {
+    const { emit, send, sent } = await s6Protocol();
+    const { pending, id } = await send("queued");
+    expect(sent.find((frame) => frame.type === "user")).toMatchObject({ uuid: id, priority: "later" });
+    emit({ type: "result", subtype: "success", user_message_uuid: id, result: "done" });
+    expect((await pending).status).toBe("completed");
+  });
+
+  it("surfaces claude's API retry as a notice, not an error, and the turn then completes (CH-2, M1-AC4)", async () => {
+    const { events, emit, send } = await s6Protocol();
+    const { pending, id } = await send("retried");
+    emit({ type: "system", subtype: "api_retry", attempt: 2, max_retries: 10, retry_delay_ms: 1200, error_status: 529, error: "overloaded" });
+    emit({ type: "result", subtype: "success", user_message_uuid: id, result: "done", total_cost_usd: 0.01, usage: { input_tokens: 3, output_tokens: 1 } });
+    expect(await pending).toMatchObject({ status: "completed", text: "done" });
+    expect(rawOf(events, "retry_notice").map((event) => event.data)).toEqual([{ type: "retry_notice", attempt: 2, maxRetries: 10, retryDelayMs: 1200, errorStatus: 529, error: "overloaded" }]);
+    expect(errorsOf(events)).toHaveLength(0);
+  });
+
+  windowsOnly("a retry from the fake ends in its own result (CH-2)", async () => {
+    const { channel, events } = await setup();
+    expect(await channel.send("retry")).toMatchObject({ status: "completed", text: "after retry" });
+    expect(rawOf(events, "retry_notice")).toHaveLength(1);
+  }, 15_000);
+
+  it("opens no session when the version probe's processes cannot be confirmed stopped (CH-2, fail closed)", async () => {
+    const versionOutput = new PassThrough();
+    versionOutput.end("2.1.295 (Claude Code)\n");
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+      pid: 3, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => { throw new Error("descendants still running"); },
+    });
+    const events: ChannelEvent[] = [];
+    const channel = new ClaudeChannel({ cwd: tmpdir(), model: "probe", instructions: "probe", onEvent: (event) => events.push(event) });
+    channels.push(channel);
+    const result = await channel.send("hello");
+    expect(result.status).toBe("interrupted");
+    expect(result.error).toMatchObject({ kind: "transport", message: expect.stringContaining("probe containment failed: descendants still running") });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ containmentStopped: false, refusedStart: false });
+  });
 
   windowsOnly("a login needed keeps its kind whether the fake keeps running or exits after it (CH-2, M1-AC4)", async () => {
     const running = await setup();
