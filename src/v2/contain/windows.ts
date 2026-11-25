@@ -1,14 +1,11 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { Writable, type Readable } from "node:stream";
-import { promisify } from "node:util";
 import { windowsIdentity, type Identity } from "./trees.js";
-
-const runFile = promisify(execFile);
 
 export interface ProcessExit { code: number | null; signal: NodeJS.Signals | null }
 export interface ManagedProcess {
@@ -535,31 +532,100 @@ async function systemPowerShell(): Promise<string> {
   if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("PowerShell is not a plain file");
   return path;
 }
-const sweepHelper = async (call: string): Promise<string> =>
-  (await runFile(await systemPowerShell(), ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(`${SWEEP_HELPER}\n${call}`, "utf16le").toString("base64")], { windowsHide: true })).stdout.trim();
+// One line in, one answer line out: the helper is compiled once per session, never once per call (C10).
+const SWEEP_LOOP = String.raw`
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $part = $line.Split(' ')
+  try {
+    $answer = switch ($part[0]) {
+      'probe' { [ShadowSweep]::Probe([uint32]$part[1]) }
+      'end' { [ShadowSweep]::End([uint32]$part[1], [long]$part[2], $part[3] -eq '1') }
+      'owned' { [ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part[1]))) }
+      default { 'unknown' }
+    }
+  } catch { $answer = 'unknown' }
+  [Console]::Out.WriteLine([string]$answer); [Console]::Out.Flush()
+}
+`;
+/** A call's limit, the helper's start and compile included: past it the session is ended and answers "unknown". */
+export const SWEEP_CALL_LIMIT_MS = 15_000;
+
+/** One PowerShell helper for a whole sweep: calls run one at a time, each bounded; `close` ends the process. */
+export interface SweepSession {
+  call(line: string): Promise<string>;
+  /** The helper's pid once started (for tests). */
+  readonly pid: number | undefined;
+  close(): void;
+}
+
+export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS): SweepSession {
+  let child: ChildProcess | undefined;
+  let ended = false;
+  let pending: ((answer: string) => void) | undefined;
+  let buffered = "";
+  let queue: Promise<unknown> = Promise.resolve();
+  // A failure, an exit or a timeout ends the session: the pending call and every later one answer "unknown".
+  const stop = () => { ended = true; child?.kill(); const answer = pending; pending = undefined; answer?.("unknown"); };
+  const start = async (): Promise<ChildProcess | undefined> => {
+    if (child || ended) return child;
+    const script = Buffer.from(`${SWEEP_HELPER}\n${SWEEP_LOOP}`, "utf16le").toString("base64");
+    child = spawn(await systemPowerShell(), ["-NoProfile", "-NonInteractive", "-EncodedCommand", script], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    child.on("error", stop).on("exit", stop);
+    child.stdin!.on("error", stop);
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let at = buffered.indexOf("\n"); at >= 0; at = buffered.indexOf("\n")) {
+        const line = buffered.slice(0, at).trim();
+        buffered = buffered.slice(at + 1);
+        const answer = pending; pending = undefined; answer?.(line);
+      }
+    });
+    // A session left open never holds the process alive; a pending call's timer does while it waits.
+    child.unref(); (child.stdin as unknown as { unref?(): void }).unref?.(); (child.stdout as unknown as { unref?(): void }).unref?.();
+    return child;
+  };
+  const send = async (line: string): Promise<string> => {
+    const helper = await start().catch(() => { ended = true; return undefined; });
+    if (ended || !helper) return "unknown";
+    return new Promise<string>((done) => {
+      const timer = setTimeout(stop, callLimitMs);
+      pending = (answer) => { clearTimeout(timer); done(answer); };
+      helper.stdin!.write(`${line}\n`);
+    });
+  };
+  return {
+    call: (line) => { const answer = queue.then(() => send(line)); queue = answer.catch(() => {}); return answer; },
+    get pid() { return child?.pid; },
+    close: stop,
+  };
+}
+/** Through the sweep's session, or a session of its own for this one call. */
+async function ask(session: SweepSession | undefined, line: string): Promise<string> {
+  const own = session ?? openSweepSession();
+  try { return await own.call(line); } finally { if (!session) own.close(); }
+}
 
 /**
  * A process's exact creation time (a FILETIME string); `undefined` when no such process runs; `null` when the
  * probe failed. Unknown is never read as absent: the sweep keeps the record and reports it.
  */
-export async function probeWindowsProcess(pid: number): Promise<string | undefined | null> {
+export async function probeWindowsProcess(pid: number, session?: SweepSession): Promise<string | undefined | null> {
   // A pid Windows can't hold is a bad record, not a process known to have ended: unknown.
   if (!isWindowsPid(pid)) return null;
-  const result = await sweepHelper(`[ShadowSweep]::Probe(${pid})`).catch(() => "unknown");
+  const result = await ask(session, `probe ${pid}`);
   return result === "absent" ? undefined : /^[1-9]\d*$/.test(result) ? result : null;
 }
 
 /** Whether this user (or an elevated token's default owner) owns the path; a failed check is not ownership. */
-export async function ownedByCurrentUser(path: string): Promise<boolean> {
-  const encoded = Buffer.from(path, "utf8").toString("base64");
-  return await sweepHelper(`[ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))`).catch(() => "") === "owned";
+export async function ownedByCurrentUser(path: string, session?: SweepSession): Promise<boolean> {
+  return await ask(session, `owned ${Buffer.from(path, "utf8").toString("base64")}`) === "owned";
 }
 
 export type WindowsEnd = "ended" | "incomplete" | "absent" | "different" | "unknown";
 /** Ends the process only while its exact creation time (a FILETIME string) is the recorded one, through the checked handle. */
-export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean): Promise<WindowsEnd> {
+export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean, session?: SweepSession): Promise<WindowsEnd> {
   // An old millisecond record has no exact identity: nothing is ended on its evidence.
   if (!isWindowsPid(pid) || creationTime === undefined || !/^[1-9]\d{0,18}$/.test(creationTime) || BigInt(creationTime) >= 2n ** 63n) return "unknown";
-  const result = await sweepHelper(`[ShadowSweep]::End(${pid}, [long]'${creationTime}', $${tree})`).catch(() => "unknown");
+  const result = await ask(session, `end ${pid} ${creationTime} ${tree ? 1 : 0}`);
   return (["ended", "incomplete", "absent", "different"] as const).find((one) => one === result) ?? "unknown";
 }

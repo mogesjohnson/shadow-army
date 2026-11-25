@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, ownedByCurrentUser, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -285,5 +285,30 @@ describe("the sweep's owner check on Windows (PO-16)", () => {
     expect([await ownedByCurrentUser(folder), await ownedByCurrentUser(join(folder, "t.jsonl"))]).toEqual([true, true]);
     expect(await ownedByCurrentUser(join(process.env.SystemRoot ?? "C:/Windows", "System32"))).toBe(false);
     expect(await ownedByCurrentUser(join(folder, "missing' ; exit 0 ; '"))).toBe(false); // A failed check, never ownership.
+  }, 60_000);
+});
+
+describe("the sweep's one helper session on Windows (C10)", () => {
+  windowsOnly("answers several calls from one PowerShell, compiled once", async () => {
+    const session = openSweepSession();
+    try {
+      const folder = await directory();
+      const self = await probeWindowsProcess(process.pid, session);
+      expect(self).toMatch(/^[1-9]\d{17}$/);
+      const helper = session.pid!;
+      expect(await probeWindowsProcess(helper, session)).toMatch(/^[1-9]\d{17}$/); // The helper itself, still running.
+      expect(await ownedByCurrentUser(folder, session)).toBe(true);
+      expect(await Promise.all([probeWindowsProcess(process.pid, session), probeWindowsProcess(2 ** 31 - 2, session)])).toEqual([self, undefined]);
+      expect(session.pid).toBe(helper);
+    } finally { session.close(); }
+  }, 60_000);
+
+  windowsOnly("ends a call that outlives its limit, and answers unknown from then on", async () => {
+    const session = openSweepSession(1); // Too short for PowerShell to start.
+    const began = performance.now();
+    expect(await probeWindowsProcess(process.pid, session)).toBeNull();
+    expect(await ownedByCurrentUser(".", session)).toBe(false);
+    expect(performance.now() - began).toBeLessThan(5_000);
+    session.close();
   }, 60_000);
 });
