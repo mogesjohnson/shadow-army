@@ -1,8 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
 import { Writable, type Readable } from "node:stream";
 import { windowsIdentity, type Identity } from "./trees.js";
@@ -123,9 +123,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   const exitGraceMs = exitGraceFor(options);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
-  const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
-  const script = join(directory, "supervisor.ps1");
-  await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
+  const supervisor = (await supervisorBinary()).path;
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
@@ -179,8 +177,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   let child: ChildProcessWithoutNullStreams | undefined;
   try {
     await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(`\\\\.\\pipe\\${pipeName}`, done); });
-    const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    child = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
+    child = spawn(supervisor, [], {
       cwd: options.cwd, env, windowsHide: true, stdio: "pipe",
     });
     const wrapper = child;
@@ -232,7 +229,6 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
           if (grace) control?.write("close\n");
           try { await wrapperClosed; } finally {
             clearTimeout(killed); control?.destroy(); server.close();
-            await rm(directory, { recursive: true, force: true });
           }
           if (!treeClosed) throw new Error("Windows supervisor ended without confirming session process-tree cleanup");
         })();
@@ -244,16 +240,14 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       child.kill();
       await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, exitGraceMs).unref(); });
     }
-    await rm(directory, { recursive: true, force: true });
     throw error;
   }
 }
 
 // Embedded in the compiled module: published dist/ needs no source-tree script or native package.
-// Bootstrap is read from stdin and never passed to the CLI; session credentials cannot enter argv.
-const WINDOWS_SUPERVISOR = String.raw`
-$ErrorActionPreference = 'Stop'
-Add-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition @'
+// Compiled once per source version into the owner's cache (supervisorBinary). Bootstrap is read
+// from stdin and never passed to the CLI; session credentials cannot enter argv.
+const SUPERVISOR_SOURCE = String.raw`
 using System;
 using System.IO;
 using System.IO.Pipes;
@@ -293,6 +287,7 @@ public static class ShadowJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool result);
   [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
+  public static int Main() { return Run(); }
   static void Check(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
   // JobGate keeps the job handle open while a listing reads it; WriteGate keeps report lines whole.
   // They are separate so that teardown's reports never wait on a listing's enumeration.
@@ -429,6 +424,76 @@ public static class ShadowJobSupervisor {
     }
   }
 }
-'@
-exit ([ShadowJobSupervisor]::Run())
 `;
+
+const SOURCE_HASH = createHash("sha256").update(SUPERVISOR_SOURCE).digest("hex");
+/** Names this source version's files in the cache: `<key>.json` (the record) and `<key>-<sha256>.exe`. */
+const SUPERVISOR_KEY = SOURCE_HASH.slice(0, 32);
+const COMPILE_SCRIPT = "$ErrorActionPreference = 'Stop'\nAdd-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition ([IO.File]::ReadAllText($args[0])) -OutputAssembly $args[1] -OutputType ConsoleApplication\n";
+const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+/**
+ * The owner's supervisor cache. %LOCALAPPDATA% lies in the owner's profile, whose ACL admits only
+ * the owner, SYSTEM and administrators, so a stranger cannot plant a binary there.
+ */
+export function defaultSupervisorCache(): string {
+  return join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "shadow-army", "supervisor");
+}
+
+/**
+ * The supervisor binary for this source, verified on every call: its record must name this source's
+ * hash and its bytes must hash to the record. A missing, stale or tampered binary is recompiled;
+ * a failed compile throws, so unverified code is never run.
+ */
+export async function supervisorBinary(cache = defaultSupervisorCache()): Promise<{ path: string; compiled: boolean }> {
+  const cached = await verifiedSupervisor(cache);
+  if (cached) return { path: cached, compiled: false };
+  let pending = compiling.get(cache);
+  if (!pending) {
+    pending = compileSupervisor(cache).finally(() => compiling.delete(cache));
+    compiling.set(cache, pending);
+  }
+  return { path: await pending, compiled: true };
+}
+/** One compile per cache at a time in this process: parallel spawns share it. */
+const compiling = new Map<string, Promise<string>>();
+
+async function verifiedSupervisor(cache: string): Promise<string | undefined> {
+  let record: { source?: unknown; sha256?: unknown };
+  try { record = JSON.parse(await readFile(join(cache, `${SUPERVISOR_KEY}.json`), "utf8")); } catch { return undefined; }
+  if (record.source !== SOURCE_HASH || typeof record.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(record.sha256)) return undefined;
+  const binary = join(cache, `${SUPERVISOR_KEY}-${record.sha256}.exe`);
+  let bytes: Buffer;
+  try { bytes = await readFile(binary); } catch { return undefined; }
+  if (sha256(bytes) === record.sha256) return binary;
+  await rm(binary, { force: true }).catch(() => {}); // Tampered: never run it, and drop it if we can.
+  return undefined;
+}
+
+async function compileSupervisor(cache: string): Promise<string> {
+  await mkdir(cache, { recursive: true });
+  const work = await mkdtemp(join(cache, "build-"));
+  try {
+    const source = join(work, "supervisor.cs"), output = join(work, "supervisor.exe"), script = join(work, "compile.ps1");
+    await writeFile(source, SUPERVISOR_SOURCE, "utf8");
+    await writeFile(script, COMPILE_SCRIPT, "utf8");
+    const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    await new Promise<void>((done, fail) => execFile(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, source, output],
+      { windowsHide: true, timeout: 120_000 }, (error, _stdout, stderr) => error ? fail(new Error(`Windows supervisor did not compile: ${String(stderr).slice(-2_048) || error.message}`)) : done()));
+    const hash = sha256(await readFile(output));
+    // Content-addressed: a binary another process is running is never replaced, only added beside.
+    const binary = join(cache, `${SUPERVISOR_KEY}-${hash}.exe`);
+    await rename(output, binary);
+    const record = join(work, "record.json");
+    await writeFile(record, JSON.stringify({ source: SOURCE_HASH, sha256: hash }), "utf8");
+    await rename(record, join(cache, `${SUPERVISOR_KEY}.json`)).catch(() => {}); // A parallel compile's record is as good.
+    if (sha256(await readFile(binary)) !== hash) throw new Error("Windows supervisor changed while it was being cached");
+    for (const name of await readdir(cache)) {
+      // Older source versions' files; this version's binaries may be in use by other sessions.
+      if (/^[0-9a-f]{32}(-[0-9a-f]{64}\.exe|\.json)$/.test(name) && !name.startsWith(SUPERVISOR_KEY)) await rm(join(cache, name), { force: true }).catch(() => {});
+    }
+    return binary;
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+}

@@ -1,11 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, exitGraceFor, listingFrom, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, exitGraceFor, listingFrom, spawnManagedProcess, supervisorBinary, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -253,4 +254,61 @@ describe("reading the supervisor's listing reply (PO-11)", () => {
     expect(listingFrom({ processes: [{ pid: 8, creationTime: "134394736000080001" }], unverified: [9] }, last))
       .toEqual({ status: "incomplete", reason: expect.stringContaining("pid 9"), lastVerified: last });
   });
+});
+
+describe("Windows supervisor cache (compiled once, verified on every spawn)", () => {
+  const hashOf = async (path: string) => createHash("sha256").update(await readFile(path)).digest("hex");
+
+  windowsOnly("compiles once, then reuses the verified binary", async () => {
+    const cache = await directory();
+    const first = await supervisorBinary(cache);
+    expect(first.compiled).toBe(true);
+    expect(first.path.endsWith(`-${await hashOf(first.path)}.exe`)).toBe(true);
+    expect(await supervisorBinary(cache)).toEqual({ path: first.path, compiled: false });
+  }, 120_000);
+
+  windowsOnly("recompiles a tampered, missing or misrecorded binary instead of running it", async () => {
+    const cache = await directory();
+    const first = await supervisorBinary(cache);
+    await writeFile(first.path, "MZ planted, not the supervisor");
+    const repaired = await supervisorBinary(cache);
+    expect(repaired.compiled).toBe(true);
+    expect(repaired.path).not.toBe(first.path);
+    expect(repaired.path.endsWith(`-${await hashOf(repaired.path)}.exe`)).toBe(true);
+    expect(await readdir(cache)).not.toContain(basename(first.path)); // The tampered file is gone.
+
+    await rm(repaired.path);
+    const missing = await supervisorBinary(cache);
+    expect(missing.compiled).toBe(true);
+
+    // A record for another source, or one pointing at a planted binary under a self-chosen hash, is not trusted.
+    const record = (await readdir(cache)).find((name) => name.endsWith(".json"))!;
+    const planted = join(cache, "planted.exe");
+    await writeFile(planted, "MZ planted");
+    await writeFile(join(cache, record), JSON.stringify({ source: "0".repeat(64), sha256: await hashOf(planted) }));
+    const again = await supervisorBinary(cache);
+    expect(again.compiled).toBe(true);
+    expect(await hashOf(again.path)).not.toBe(await hashOf(planted));
+  }, 240_000);
+
+  windowsOnly("runs containment from the verified cached binary, which still kills the whole tree", async () => {
+    const session = await spawnManagedProcess({
+      file: process.execPath, cwd: await directory(), exitGraceMs: 0,
+      args: ["-e", "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log('child:'+c.pid);process.stdin.resume();setInterval(()=>{},1000);"],
+    });
+    sessions.push(session); session.stderr.resume();
+    const child = await new Promise<number>((done, fail) => {
+      let text = "";
+      session.stdout.on("data", (chunk: Buffer) => { text += chunk.toString(); const match = /child:(\d+)/.exec(text); if (match) done(Number(match[1])); });
+      setTimeout(() => fail(new Error("the CLI did not start its child")), 15_000);
+    });
+    stray.push(child);
+    const guardianPath = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${session.guardian!.pid}).Path`], { encoding: "utf8", windowsHide: true }).trim();
+    const cached = await supervisorBinary();
+    expect(cached.compiled).toBe(false);
+    expect(guardianPath.toLowerCase()).toBe(cached.path.toLowerCase());
+    await session.close({ grace: false });
+    expect(await gone(session.pid, 5_000)).toBe(true);
+    expect(await gone(child, 5_000)).toBe(true);
+  }, 60_000);
 });
