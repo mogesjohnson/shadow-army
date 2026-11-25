@@ -67,7 +67,8 @@ function turnOptions(claims: unknown): { claims?: string[] } {
 export async function startOfficeServer(options: ServerOptions): Promise<OfficeServer> {
   // PO-2: refused before any office or lock exists. `host` only exists so a test can prove the refusal.
   if (options.host !== undefined) assertLoopback(options.host);
-  const office = await PostOffice.create(options);
+  // PO-1: the office before its recovery, so a caller that loses the folder lock below touches nothing an earlier post office left.
+  const office = await PostOffice.prepare(options);
   // The office's own writer by default, so there is one writer on post-office.jsonl; `options.log` replaces it.
   const log = (record: Record<string, unknown>) => { void Promise.resolve(options.log ? options.log(record) : office.logRecord(record)).catch(() => {}); };
   const refusals = new RefusalReporter((count, first) => {
@@ -150,6 +151,8 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
     if (!taken.ok) throw new Error(taken.message);
     held = taken.lock;
     if (taken.replaced) log({ type: "lock", line: taken.replaced.logLine });
+    // PO-1: the lock holder runs the one recovery after it reports ready; channel opens wait for it, and a held one resumes there.
+    void office.recover().catch(() => {});
     let closing: Promise<void> | undefined;
     const bound = server;
     const host = address.family === "IPv6" ? "[::1]" : address.address;

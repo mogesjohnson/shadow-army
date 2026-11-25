@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
 import { diffState, MAX_HASHED, type RepoState } from "../workspace/guard.js";
@@ -11,7 +11,7 @@ import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type SessionGit, type WriteSession } from "../workspace/session.js";
 import { HarnessGit, HarnessGitHeld } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
-import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, posixInspect, realish, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, within, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
+import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, posixInspect, realish, removeInside, snapshotSubfolder, validateSnapshotRoot, within, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
@@ -23,6 +23,8 @@ import { sweepTrees, systemOps, type SweepOps } from "./contain/sweep.js";
 type ListedChannel = NativeChannel & { list?(): Promise<Identity[]> };
 /** PO-1: each turn's checkout baseline is kept on disk while the turn runs, so a later post office can close its guard. */
 const turnsDir = (root: string) => join(root, ".shadow", "v2", "turns");
+/** WSP-11: each snapshot's path and git folder as read when it was made, so a later start never reads them from the snapshot. */
+const snapshotsDir = (root: string) => join(root, ".shadow", "v2", "snapshots");
 const stateToJson = (state: RepoState) => ({ ...state, dirty: [...state.dirty], index: [...state.index], refs: [...state.refs] });
 const stateFromJson = (value: ReturnType<typeof stateToJson>): RepoState => ({ head: value.head, branch: value.branch, dirty: new Map(value.dirty), index: new Map(value.index), refs: new Map(value.refs) });
 const machineOps = (): SweepOps | undefined => { try { return systemOps(); } catch { return undefined; } };
@@ -187,6 +189,12 @@ export class PostOffice {
   private self?: Promise<Identity | undefined>;
   /** How many turns have their guard open (PO-8). */
   private openTurns = 0;
+  /** PO-1's recovery: running, done, and what it reads once (the last log's end, earlier offices' tree records). */
+  private recovery?: Promise<void>;
+  private recovered = false;
+  private holdStarted = false;
+  private lastLogEnd?: string;
+  private earlierTrees?: Awaited<ReturnType<typeof readTrees>>;
 
   private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
     private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
@@ -199,7 +207,15 @@ export class PostOffice {
     this.ops = options.processOps === undefined ? machineOps() : options.processOps ?? undefined;
   }
 
+  /** The office with PO-1's recovery done, for callers that hold the folder themselves. A held recovery resumes at the next open. */
   static async create(options: OfficeOptions): Promise<PostOffice> {
+    const office = await PostOffice.prepare(options);
+    await office.recover().catch(() => {});
+    return office;
+  }
+
+  /** The office before PO-1's recovery: it changes nothing an earlier post office left, so a caller that loses the folder lock touched none of it. */
+  static async prepare(options: OfficeOptions): Promise<PostOffice> {
     if (!/^[a-f0-9]{64}$/i.test(options.credential)) throw new Error("post office requires a credential of 32 random bytes");
     const found = findRepo(options.cwd);
     // WSP-10: an empty hooks folder Shadow Army keeps; PATH may not name the folder or the snapshots.
@@ -222,67 +238,117 @@ export class PostOffice {
     const repo = { ...found, workTree: root };
     await ensureShadowRoot(join(root, ".shadow"));
     const office = new PostOffice(root, repo, gitFor, snapshots, options);
-    const lastLogEnd = await stat(join(root, ".shadow", "v2", "logs", "post-office.jsonl")).then((file) => file.mtime.toISOString(), () => undefined);
+    office.lastLogEnd = await stat(join(root, ".shadow", "v2", "logs", "post-office.jsonl")).then((file) => file.mtime.toISOString(), () => undefined);
     await office.logs.write("post-office", { type: "started", time: new Date().toISOString(), pid: process.pid });
     if (!snapshots.ok) office.record({ type: "snapshot_root", data: { ok: false, reason: snapshots.reason } });
     // WSP-10: every office-side git call checks the repository's git state against the trusted one, before and after.
     office.hold = new HarnessHold({ repo, gitFor, statePath: join(root, ".shadow", "v2", "logs", "git-hold.json"), log: (event) => office.record({ type: "git_hold", data: event }) });
-    const held = await office.hold.start();
-    if (held.held) office.record({ type: "git_hold", data: { held: true, line: held.line } });
-    await office.finishLast(lastLogEnd);
     return office;
   }
 
   /**
-   * PO-1: before any channel opens, finish what earlier post offices left: their trees (PO-16), their open turns' guards and
-   * their snapshots (WSP-11). An item is logged before its file goes, so nothing is reported twice. A post office whose
-   * tree record shows it still running keeps its items.
+   * PO-1: the lock holder's one recovery of what earlier post offices left; channel opens wait for it. While harness git is
+   * held (WSP-10) the rest stays pending, and the next call resumes it once a hold check passes.
    */
-  private async finishLast(lastLogEnd: string | undefined): Promise<void> {
+  recover(): Promise<void> {
+    if (this.recovered) return Promise.resolve();
+    return this.recovery ??= (async () => {
+      try {
+        if (!this.holdStarted) {
+          const held = await this.hold!.start();
+          this.holdStarted = true;
+          if (held.held) this.record({ type: "git_hold", data: { held: true, line: held.line } });
+        }
+        await this.finishLast();
+        this.recovered = true;
+      } catch (error) {
+        this.record({ type: "startup", data: { finished: false, pending: true, reason: String(error) } });
+        throw error;
+      } finally { this.recovery = undefined; }
+    })();
+  }
+
+  /**
+   * PO-1: before any channel opens, finish what earlier post offices left: their trees (PO-16), their open turns' guards and
+   * their snapshots (WSP-11). An item is logged before its file goes, so nothing is reported twice. An item whose post office
+   * can't be identified as stopped stays, reported; one whose check is held or refused stays pending, and nothing is destroyed.
+   */
+  private async finishLast(): Promise<void> {
     const ops = this.ops;
     if (!ops) { this.record({ type: "startup", data: { finished: false, reason: `no process operations on ${process.platform}; earlier trees, turns and snapshots are left` } }); return; }
-    const trees = await readTrees(this.root);
-    const running = async (id: string) => {
-      const office = trees.find((tree) => tree.id === id)?.lines.find((line) => line.kind === "post-office");
-      return office !== undefined && "pid" in office && await ops.startTimeOf(office.pid) === office.startTime;
+    await this.unheld();
+    if (!this.earlierTrees) {
+      this.earlierTrees = await readTrees(this.root);
+      const swept = await sweepTrees(this.root, ops);
+      if (swept.swept || swept.left.length || swept.unhandled) this.record({ type: "swept", data: swept });
+    }
+    const trees = this.earlierTrees;
+    const identity = async (id: string): Promise<"running" | "stopped" | "unknown"> => {
+      const office = trees.find((tree) => tree.id === id.replace(/-r\d+$/, ""))?.lines.find((line) => line.kind === "post-office");
+      if (!office || !("pid" in office)) return "unknown";
+      const now = await ops.startTimeOf(office.pid).then((time) => time ?? "gone", () => undefined);
+      return now === undefined ? "unknown" : now === office.startTime ? "running" : "stopped";
     };
-    const swept = await sweepTrees(this.root, ops);
-    if (swept.swept || swept.left.length || swept.unhandled) this.record({ type: "swept", data: swept });
+    const unresolved = (id: string, what: string) => this.record({ type: "startup", data: { session: id, unresolved: true, line: `${what} left: the post office that ran it can't be identified as stopped` } });
+    let pending: unknown;
     for (const name of (await readdir(turnsDir(this.root)).catch(() => [] as string[])).filter((name) => name.endsWith(".json"))) {
       const id = name.slice(0, -".json".length), file = join(turnsDir(this.root), name);
-      if (await running(id)) continue;
+      const state = await identity(id);
+      if (state === "unknown") unresolved(id, `${id}'s turn`);
+      if (state !== "stopped") continue;
       let turn: { soldier?: string; time?: string; base?: ReturnType<typeof stateToJson> } = {};
       try { turn = JSON.parse(await readFile(file, "utf8")); } catch { /* reported as missing below */ }
       const who = `${turn.soldier ? shadowName(turn.soldier) : id}'s turn at ${turn.time ? new Date(turn.time).toTimeString().slice(0, 5) : "an unknown time"}`;
-      let line: string;
-      try {
-        const changes = diffState(stateFromJson(turn.base!), await this.exclusive(() => this.guardState()));
-        line = `${who} checked after its post office stopped: this compares the checkout now with the turn's start; the last post office's log ends at ${lastLogEnd ?? "an unknown time"}, and changes made since then, the owner's own included, show too: ${changes.length ? changes.join("; ") : "no change"}`;
-      } catch { line = `${who} not checked: baseline missing`; }
+      let line = `${who} not checked: baseline missing`;
+      if (turn.base) {
+        try {
+          const changes = diffState(stateFromJson(turn.base), await this.exclusive(() => this.guardState()));
+          line = `${who} checked after its post office stopped: this compares the checkout now with the turn's start; the last post office's log ends at ${this.lastLogEnd ?? "an unknown time"}, and changes made since then, the owner's own included, show too: ${changes.length ? changes.join("; ") : "no change"}`;
+        } catch (error) {
+          // WSP-10: a held or refused check keeps the baseline for the next attempt.
+          pending ??= error;
+          this.record({ ...(turn.soldier ? { soldier: turn.soldier } : {}), type: "late_guard", data: { session: id, pending: true, line: `${who} not checked yet: ${String(error)}` } });
+          continue;
+        }
+      }
       this.record({ ...(turn.soldier ? { soldier: turn.soldier } : {}), type: "late_guard", data: { session: id, line } });
       await this.logPending;
       await unlink(file).catch(() => {});
     }
-    if (!this.snapshots.ok) return;
-    const root = this.snapshots.root, subfolder = snapshotSubfolder(root, this.root);
-    for (const entry of await readdir(subfolder, { withFileTypes: true }).catch(() => [])) {
-      if (!entry.isDirectory() || await running(entry.name)) continue;
-      const path = join(subfolder, entry.name);
+    for (const name of (await readdir(snapshotsDir(this.root)).catch(() => [] as string[])).filter((name) => name.endsWith(".json"))) {
+      const id = name.slice(0, -".json".length), file = join(snapshotsDir(this.root), name);
+      const state = await identity(id);
+      if (state === "unknown") unresolved(id, `${id}'s snapshot`);
+      if (state !== "stopped") continue;
+      let recorded: { path?: string; gitDir?: string } = {};
+      try { recorded = JSON.parse(await readFile(file, "utf8")); } catch { /* reported below */ }
+      if (!recorded.path || !this.snapshots.ok) { unresolved(id, `${id}'s snapshot (no usable record)`); continue; }
+      const snapshot: Snapshot = { path: recorded.path, subfolder: dirname(recorded.path), gitDir: recorded.gitDir ?? "", commonDir: this.repo.commonDir };
       try {
-        const gitDir = resolve(path, (await readFile(join(path, ".git"), "utf8")).replace(/^gitdir:\s*/, "").trim());
+        if (!recorded.gitDir) {
+          // A snapshot started but not made: removed as one that timed out (WSP-10).
+          removeInside(this.snapshots.root, snapshot.path);
+          this.record({ type: "snapshot", data: { session: id, removed: true, made: false } });
+          await this.logPending;
+          await unlink(file).catch(() => {});
+          continue;
+        }
+        // The git identity recorded as the snapshot was made, never re-read from the snapshot (WSP-10).
         await this.unheld();
-        const status = await this.git({ gitDir, workTree: path, commonDir: this.repo.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
+        const status = await this.git({ gitDir: snapshot.gitDir, workTree: snapshot.path, commonDir: snapshot.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
+        await this.unheld();
+        if (status.code !== 0) throw new Error(`git status failed: ${status.stderr.trim() || `exit ${status.code}`}`);
         const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
-        if (files.length) this.record({ type: "read_violation", data: { session: entry.name, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
-        await this.unheld();
-        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+        if (files.length) this.record({ type: "read_violation", data: { session: id, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
       } catch (error) {
-        // A snapshot started but not made: removed as one that timed out (WSP-10).
-        removeInside(root, path);
-        this.record({ type: "snapshot", data: { session: entry.name, removed: true, made: false, reason: String(error) } });
+        pending ??= error;
+        this.record({ type: "snapshot", data: { session: id, pending: true, reason: String(error) } });
+        continue;
       }
+      if (!await this.dropSnapshot(snapshot)) pending ??= new Error(`the snapshot ${snapshot.path} could not be removed`);
     }
     await this.logPending;
+    if (pending) throw pending;
   }
 
   /** Throws while WSP-10's hold is on: nothing office-side runs git then. */
@@ -366,7 +432,7 @@ export class PostOffice {
       // A tainted snapshot keeps the partial work its guard line names; an untainted one goes, logged, as at close.
       // A failed removal keeps the session down and its snapshot recorded: the next reconnect or close tries again,
       // and the logged intent lets a later start finish it (PO-1 startup).
-      if (existing.snapshot && !existing.tainted && !await this.dropSnapshot(existing)) {
+      if (existing.snapshot && !existing.tainted && !await this.dropSnapshot(existing.snapshot, existing)) {
         throw new Error(`the old snapshot ${existing.snapshot.path} could not be removed; reconnect or close ${key} to try again`);
       }
       if (existing.snapshot && existing.tainted) this.record({ soldier: key, type: "snapshot", data: { path: existing.snapshot.path, retained: true } }, existing);
@@ -400,6 +466,8 @@ export class PostOffice {
   }
 
   private async makeSession(key: string, claims?: string[]): Promise<Session> {
+    // PO-1: no channel opens before the recovery of earlier post offices is done.
+    await this.recover();
     const spec = this.roster.soldiers.get(key);
     if (!spec) throw new Error(`unknown soldier ${key}`);
     if (spec.cli !== "claude") throw new Error(`${key}: ${spec.cli} live channels are not implemented in M1`);
@@ -422,7 +490,7 @@ export class PostOffice {
       // WSP-11: a soldier whose snapshot can't be made does not start, and never runs in the folder itself.
       if (!ws && !this.snapshots.ok) throw new Error(`${key} can't start: ${this.snapshots.reason}`);
       if (!ws && this.snapshots.ok) await this.unheld();
-      if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
+      if (!ws && this.snapshots.ok) snapshot = await this.openRecorded(this.snapshots.root, id);
     } catch (error) { await tree?.remove().catch(() => {}); await ws?.release(); throw error; }
     const cwd = ws ? ws.cwd : snapshot!.path;
     const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, repo: wsRepo!, claims: [...claims!] } } : {}) };
@@ -432,6 +500,16 @@ export class PostOffice {
     this.start(session);
     this.record({ soldier: key, type: "opened", data: { session: id, cwd, ...(ws ? { branch: ws.branch, claims: session.write!.claims } : {}) } }, session);
     return session;
+  }
+
+  /** WSP-11: a snapshot with its record: the path before it is made, its git folder once it is, for a later start. */
+  private async openRecorded(root: string, sessionId: string): Promise<Snapshot> {
+    const file = join(snapshotsDir(this.root), `${sessionId}.json`);
+    await mkdir(snapshotsDir(this.root), { recursive: true });
+    await writeFile(file, JSON.stringify({ path: join(snapshotSubfolder(root, this.root), sessionId) }), { mode: 0o600 });
+    const snapshot = await openSnapshot({ root, folder: this.root, sessionId, repo: this.repo, git: this.git });
+    await writeFile(file, JSON.stringify({ path: snapshot.path, gitDir: snapshot.gitDir }), { mode: 0o600 });
+    return snapshot;
   }
 
   private async treeRecord(key: string, id: string): Promise<TreeRecord | undefined> {
@@ -539,9 +617,9 @@ export class PostOffice {
       session.restarts = session.crashes.length;
       // WSP-11: a fresh session gets a fresh snapshot; the old one's writes were reported when its turn's guard closed.
       if (session.snapshot && this.snapshots.ok) {
-        if (!await this.dropSnapshot(session)) throw new Error(`the old snapshot ${session.snapshot.path} could not be removed; reconnect explicitly`);
+        if (!await this.dropSnapshot(session.snapshot, session)) throw new Error(`the old snapshot ${session.snapshot.path} could not be removed; reconnect explicitly`);
         await this.unheld();
-        session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: `${session.id}-r${session.restarts}`, repo: this.repo, git: this.git });
+        session.snapshot = await this.openRecorded(this.snapshots.root, `${session.id}-r${session.restarts}`);
         session.cwd = session.snapshot.path;
       }
       this.start(session);
@@ -742,7 +820,7 @@ export class PostOffice {
     await session.tree?.remove().catch((error: unknown) => this.record({ soldier: key, type: "tree_record", data: { removed: false, reason: String(error) } }, session));
     await this.releaseWrite(session);
     // WSP-11: the snapshot goes with its session. A tainted one keeps the partial work its guard line names.
-    const retained = !session.snapshot || session.tainted || !await this.dropSnapshot(session);
+    const retained = !session.snapshot || session.tainted || !await this.dropSnapshot(session.snapshot, session);
     this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained } }, session);
   }
@@ -751,11 +829,10 @@ export class PostOffice {
    * WSP-11: removes this session's snapshot alone, by `git worktree remove` on its own path (never a repository-wide prune), and
    * checks the result. The intent is logged before and the outcome after, so a later start can find an unfinished removal.
    */
-  private async dropSnapshot(session: Session): Promise<boolean> {
-    const snapshot = session.snapshot;
+  private async dropSnapshot(snapshot: Snapshot | undefined, session?: Session): Promise<boolean> {
     if (!snapshot || !this.snapshots.ok) return false;
     const root = this.snapshots.root;
-    const note = (data: Record<string, unknown>) => this.record({ soldier: session.spec.key, type: "snapshot", data: { path: snapshot.path, ...data } }, session);
+    const note = (data: Record<string, unknown>) => this.record({ ...(session ? { soldier: session.spec.key } : {}), type: "snapshot", data: { path: snapshot.path, ...data } }, session);
     try {
       const real = realish(snapshot.path);
       if (lstatSync(snapshot.path, { throwIfNoEntry: false })?.isSymbolicLink() || real === realish(root) || !within(realish(root), real)) throw new Error(`refusing to remove ${snapshot.path}: not a folder inside ${root}`);
@@ -768,6 +845,8 @@ export class PostOffice {
         if (readdirSync(snapshot.subfolder).every((name) => name === FOLDER_FILE)) { rmSync(join(snapshot.subfolder, FOLDER_FILE), { force: true }); rmdirSync(snapshot.subfolder); }
       } catch { /* not there, or not empty */ }
       note({ removed: true });
+      await this.logPending;
+      await unlink(join(snapshotsDir(this.root), `${basename(snapshot.path)}.json`)).catch(() => {});
       return true;
     } catch (error) {
       note({ removed: false, reason: String(error) });
@@ -797,6 +876,7 @@ export class PostOffice {
   close(): Promise<void> {
     return this.closePromise ??= (async () => {
       this.closed = true;
+      await this.recovery?.catch(() => {});
       await Promise.allSettled(this.opening.values());
       const ended = await Promise.allSettled([...this.sessions.keys()].map((key) => this.closeSession(key)));
       this.record({ type: "closed", data: { retained: true } });

@@ -544,6 +544,8 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     await writeFile(join(opened.cwd, "soldier.txt"), "a write\n");
     await mkdir(join(repo.dir, ".shadow", "v2", "turns"), { recursive: true });
     await writeFile(join(repo.dir, ".shadow", "v2", "turns", "session-broken.json"), "{");
+    // A dead post office ran it; one with no tree record would be unresolved and kept (PO-1).
+    await writeFile(join(repo.dir, ".shadow", "v2", "trees", "session-broken.jsonl"), `${JSON.stringify({ kind: "post-office", pid: 998, startTime: 4 })}\n`);
     await writeFile(join(repo.dir, ".shadow", "v2", "trees", "dead.jsonl"), `${JSON.stringify({ kind: "post-office", pid: 999, startTime: 5 })}\n${JSON.stringify({ kind: "process", pid: 501, startTime: 3 })}\n`);
     // The second post office runs on a machine where the first one's identity no longer matches: it died.
     const events: OfficeEvent[] = [], ended: number[] = [];
