@@ -2,12 +2,14 @@ import { readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "../logs.js";
 import { parseStat } from "./linux.js";
-import { endWindowsProcess, probeWindowsProcess } from "./windows.js";
-import { compareStart, readTrees, treesDir, type Identity, type TreeLine } from "./trees.js";
+import { endWindowsProcess, ownedByCurrentUser, probeWindowsProcess } from "./windows.js";
+import { compareStart, posixOwned, readTrees, treesDir, type Identity, type OwnerCheck, type TreeLine } from "./trees.js";
 
 /** What the sweep needs from the machine: injected, so it runs on fake processes. */
 export interface SweepOps {
   platform: NodeJS.Platform;
+  /** Whether this user owns a tree folder or file: a record that fails is never acted on, and is kept (PO-16). */
+  owned: OwnerCheck;
   /**
    * The process's start time (Linux's clock ticks, or Windows's exact FILETIME as a string), `undefined` when no
    * such process runs, or `null` when the probe failed: unknown, never read as absent.
@@ -38,8 +40,10 @@ export interface SweepReport {
    * failed. Their entries are kept.
    */
   left: SweptProcess[];
-  /** Entries with a job or coalition this machine can't end. */
+  /** Entries this machine can't handle: a job or coalition it can't end, or a record it couldn't verify. Kept. */
   unhandled: number;
+  /** Of those, the records whose folders or file couldn't be verified as this user's own: nothing was ended on them. */
+  unverified: number;
 }
 
 /** PO-10's limit for a tree to be empty. */
@@ -54,8 +58,10 @@ const isProcess = (line: TreeLine): line is Extract<TreeLine, Identity> => "pid"
  * session or process-group id alone; a pid that another process now holds is left running.
  */
 export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepReport> {
-  const report: SweepReport = { running: 0, swept: 0, ended: [], left: [], unhandled: 0 };
-  for (const { id, lines } of await readTrees(root)) {
+  const report: SweepReport = { running: 0, swept: 0, ended: [], left: [], unhandled: 0, unverified: 0 };
+  for (const { id, lines, verified } of await readTrees(root, ops.owned)) {
+    // A record anyone else could have written or swapped is no evidence to end a process on (PO-5, PO-16).
+    if (!verified) { report.unverified++; report.unhandled++; continue; }
     const postOffice = lines.find((line) => line.kind === "post-office");
     if (!postOffice || !("pid" in postOffice)) continue; // A file with no post office line can't be judged.
     const office = await ops.startTimeOf(postOffice.pid);
@@ -97,7 +103,7 @@ const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 export function systemOps(platform: NodeJS.Platform = process.platform): SweepOps {
   if (platform === "linux") {
     return {
-      platform, wait: pause,
+      platform, wait: pause, owned: posixOwned,
       startTimeOf: async (pid) => {
         try {
           const text = await readFile(`/proc/${pid}/stat`, "latin1");
@@ -112,7 +118,7 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
   }
   if (platform === "win32") {
     return {
-      platform, wait: pause,
+      platform, wait: pause, owned: ownedByCurrentUser,
       // The exact FILETIME from GetProcessTimes, as the supervisor's listing records it (PO-11).
       startTimeOf: probeWindowsProcess,
       endProcess: async ({ pid, creationTime }, tree) => { await endWindowsProcess(pid, creationTime, tree); },

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, ownedByCurrentUser, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -273,5 +273,15 @@ describe("the sweep's identity-bound end on Windows (PO-16)", () => {
     await new Promise((done) => setTimeout(done, 500));
     expect([running(parent.pid!), running(child)]).toEqual([false, false]);
     expect(await endWindowsProcess(parent.pid!, exact, true)).toBe("absent");
+  }, 60_000);
+});
+
+describe("the sweep's owner check on Windows (PO-16)", () => {
+  windowsOnly("takes this user's own file and folder as owned, and the system's folder as not", async () => {
+    const folder = await directory();
+    await writeFile(join(folder, "t.jsonl"), "{}");
+    expect([await ownedByCurrentUser(folder), await ownedByCurrentUser(join(folder, "t.jsonl"))]).toEqual([true, true]);
+    expect(await ownedByCurrentUser(join(process.env.SystemRoot ?? "C:/Windows", "System32"))).toBe(false);
+    expect(await ownedByCurrentUser(join(folder, "missing' ; exit 0 ; '"))).toBe(false); // A failed check, never ownership.
   }, 60_000);
 });

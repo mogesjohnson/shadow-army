@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -21,7 +21,8 @@ describe("tree records (PO-16, M1-AC16)", () => {
       '{"kind":"post-office","pid":10,"startTime":100}', '{"kind":"guardian","pid":11,"startTime":110}',
       '{"kind":"cli","pid":12,"startTime":120}', '{"kind":"job","label":"sa.job.1","coalition":"77"}', "",
     ].join("\n"));
-    expect(await readTrees(root)).toEqual([{ id: "iron-1", lines: parseTreeFile(readFileSync(file("iron-1"), "utf8")) }]);
+    const owned = async () => true;
+    expect(await readTrees(root, owned)).toEqual([{ id: "iron-1", lines: parseTreeFile(readFileSync(file("iron-1"), "utf8")), verified: true }]);
     await record.remove();
     await record.remove(); // Removing twice is fine.
     expect(await readTrees(root)).toEqual([]);
@@ -40,6 +41,29 @@ describe("tree records (PO-16, M1-AC16)", () => {
     writeFileSync(join(treesDir(root), "note.txt"), "x");
     mkdirSync(join(treesDir(root), "dir.jsonl")); // Unreadable as a file.
     expect(await readTrees(root)).toEqual([]);
+  });
+
+  it("verifies a record only when the opened file is this user's, has one link and is the named file (PO-16)", async () => {
+    await TreeRecord.create(root, "own", { pid: 1, startTime: 1 });
+    const verified = async (owned: () => Promise<boolean>) => Object.fromEntries((await readTrees(root, owned)).map((tree) => [tree.id, tree.verified]));
+    expect(await verified(async () => true)).toEqual({ own: true });
+    expect(await verified(async () => false)).toEqual({ own: false });
+    linkSync(file("own"), file("linked")); // A second name for the file: either may be swapped.
+    expect(await verified(async () => true)).toEqual({ own: false, linked: false });
+  });
+
+  const posix = it.runIf(process.platform !== "win32");
+  posix("on POSIX refuses a record that is a link, or that others can write, or in a folder others can write", async () => {
+    const record = await TreeRecord.create(root, "own", { pid: 1, startTime: 1 });
+    expect((await readTrees(root)).map((tree) => tree.verified)).toEqual([true]);
+    symlinkSync(file("own"), file("pointer"));
+    expect(Object.fromEntries((await readTrees(root)).map((tree) => [tree.id, tree.verified]))).toEqual({ own: true, pointer: false });
+    await record.remove(); rmSync(file("pointer"));
+    await TreeRecord.create(root, "open", { pid: 1, startTime: 1 });
+    chmodSync(file("open"), 0o666);
+    expect((await readTrees(root)).map((tree) => tree.verified)).toEqual([false]);
+    chmodSync(file("open"), 0o600); chmodSync(treesDir(root), 0o777);
+    expect((await readTrees(root)).map((tree) => tree.verified)).toEqual([false]);
   });
 
   it("refuses an id that is not a plain name, and a second entry under the same id", async () => {

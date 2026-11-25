@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
@@ -447,6 +447,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 public static class ShadowSweep {
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
@@ -466,6 +468,12 @@ public static class ShadowSweep {
     if(!GetExitCodeProcess(handle,out code)) return "unknown"; if(code!=259) return "absent";
     if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return "unknown";
     return exit!=0 ? "absent" : null;
+  }
+  public static string Owned(string path) {
+    FileSystemSecurity security=System.IO.Directory.Exists(path) ? (FileSystemSecurity)System.IO.Directory.GetAccessControl(path,AccessControlSections.Owner) : System.IO.File.GetAccessControl(path,AccessControlSections.Owner);
+    IdentityReference owner=security.GetOwner(typeof(SecurityIdentifier)); WindowsIdentity me=WindowsIdentity.GetCurrent();
+    // An elevated token's files are owned by its default owner (Administrators), not its user.
+    return owner!=null && (owner.Equals(me.User) || owner.Equals(me.Owner)) ? "owned" : "other";
   }
   public static string Probe(uint pid) {
     IntPtr handle; long creation; string state=Open(pid,0x1000,out handle,out creation);
@@ -501,8 +509,17 @@ public static class ShadowSweep {
 `;
 
 const isWindowsPid = (pid: number): boolean => Number.isSafeInteger(pid) && pid > 0 && pid <= 0xffff_ffff;
+/** PowerShell by its absolute path under the system root, never by a name the PATH resolves (PO-16). */
+async function systemPowerShell(): Promise<string> {
+  const root = process.env.SystemRoot;
+  if (!root || !/^[A-Za-z]:\\/.test(root)) throw new Error("the system root is not an absolute path");
+  const path = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const stats = await lstat(path);
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("PowerShell is not a plain file");
+  return path;
+}
 const sweepHelper = async (call: string): Promise<string> =>
-  (await runFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(`${SWEEP_HELPER}\n${call}`, "utf16le").toString("base64")], { windowsHide: true })).stdout.trim();
+  (await runFile(await systemPowerShell(), ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(`${SWEEP_HELPER}\n${call}`, "utf16le").toString("base64")], { windowsHide: true })).stdout.trim();
 
 /**
  * A process's exact creation time (a FILETIME string); `undefined` when no such process runs; `null` when the
@@ -512,6 +529,12 @@ export async function probeWindowsProcess(pid: number): Promise<string | undefin
   if (!isWindowsPid(pid)) return undefined;
   const result = await sweepHelper(`[ShadowSweep]::Probe(${pid})`).catch(() => "unknown");
   return result === "absent" ? undefined : /^[1-9]\d*$/.test(result) ? result : null;
+}
+
+/** Whether this user (or an elevated token's default owner) owns the path; a failed check is not ownership. */
+export async function ownedByCurrentUser(path: string): Promise<boolean> {
+  const encoded = Buffer.from(path, "utf8").toString("base64");
+  return await sweepHelper(`[ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))`).catch(() => "") === "owned";
 }
 
 export type WindowsEnd ="ended" | "absent" | "different" | "unknown";

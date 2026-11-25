@@ -12,6 +12,7 @@ function fakeOps(alive: Record<number, number | string | null>, platform: NodeJS
   const calls: string[] = [];
   const ops: SweepOps = {
     platform,
+    owned: async () => true,
     startTimeOf: async (pid) => alive[pid],
     commandOf: async (pid) => `cmd-${pid} Bearer abc123`,
     // Like the Windows handle: the end reaches only the process whose start time is the given identity's.
@@ -112,6 +113,16 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect((await readTrees(root)).map((tree) => tree.id).sort()).toEqual(["git", "office"]);
   });
 
+  it("never ends a process on a record it couldn't verify as the user's own, and keeps the record", async () => {
+    const record = await TreeRecord.create(root, "foreign", { pid: 3, startTime: 30 });
+    await record.add({ kind: "cli", pid: 5, startTime: 50 });
+    const { ops, calls } = fakeOps({ 5: 50 });
+    const report = await sweepTrees(root, { ...ops, owned: async () => false });
+    expect(report).toEqual({ running: 0, swept: 0, ended: [], left: [], unhandled: 1, unverified: 1 });
+    expect(calls).toEqual([]);
+    expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["foreign"]);
+  });
+
   it("on Windows reads an old millisecond record, but never ends a process on its evidence alone", async () => {
     const ms = 1_795_000_000_007;
     await TreeRecord.create(root, "live", { pid: 1, startTime: ms }); // Same millisecond: maybe still running.
@@ -178,7 +189,7 @@ describe("the one-shot entry (PO-16)", () => {
     try {
       const lines: string[] = [];
       expect(await main([root], (line) => lines.push(line), fakeOps({}).ops)).toBe(0);
-      expect(JSON.parse(lines[0]!)).toEqual({ running: 0, swept: 0, ended: [], left: [], unhandled: 0 });
+      expect(JSON.parse(lines[0]!)).toEqual({ running: 0, swept: 0, ended: [], left: [], unhandled: 0, unverified: 0 });
       await (await TreeRecord.create(root, "t", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
       expect(await main([root], (line) => lines.push(line), fakeOps({ 5: 50 }, "linux", [5]).ops)).toBe(1);
       expect(JSON.parse(lines[1]!).left).toEqual([{ pid: 5, command: "cmd-5 Bearer [REDACTED]" }]);
