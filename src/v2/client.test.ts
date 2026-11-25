@@ -141,3 +141,34 @@ describe("M1 caller subprocess contract", () => {
     expect(await readFile(join(repo.dir, "launcher-stderr.log"), "utf8")).toBe("");
   }, 30_000);
 });
+
+describe("the bootstrap's starter", () => {
+  // A stand-in post office: it reports the bootstrap line it received as an event, then waits for stdin to end.
+  const stub = `const rl = require("node:readline").createInterface({ input: process.stdin });
+    rl.once("line", (line) => {
+      console.log(JSON.stringify({ type: "bootstrap", data: JSON.parse(line) }));
+      console.log(JSON.stringify({ type: "ready", data: { url: "http://127.0.0.1:9" } }));
+    });
+    rl.once("close", () => process.exit(0));`;
+  const echo = { file: process.execPath, args: ["-e", stub, "--"] };
+  async function bootstrapOf(options: { starter?: number }): Promise<Record<string, unknown>> {
+    const events: OfficeEvent[] = [];
+    const client = new OfficeClient({ cwd: process.cwd(), command: echo, credential, lease: { session: "s1" }, onEvent: (event) => events.push(event), ...options });
+    clients.push(client);
+    await client.endpoint();
+    await until(() => events.some((event) => event.type === "bootstrap"));
+    return events.find((event) => event.type === "bootstrap")!.data as Record<string, unknown>;
+  }
+
+  it("sends Claude Code's pid as starter, after the credential and lease", async () => {
+    expect(await bootstrapOf({ starter: 4242 })).toEqual({ credential, lease: { session: "s1" }, starter: 4242 });
+  });
+
+  it("sends no starter when none is given", async () => {
+    expect(await bootstrapOf({})).toEqual({ credential, lease: { session: "s1" } });
+  });
+
+  it("refuses a starter that is not a positive safe integer", () => {
+    for (const starter of [0, -1, 1.5, Number.NaN, 2 ** 53]) expect(() => new OfficeClient({ cwd: process.cwd(), command: echo, starter })).toThrow("starter must be a positive integer pid");
+  });
+});

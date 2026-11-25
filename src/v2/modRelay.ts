@@ -37,9 +37,13 @@ export async function runModRelay(options: { cwd?: string; command?: { file: str
       typeof bootstrap.credential !== "string" || !/^[a-f0-9]{64}$/i.test(bootstrap.credential) ||
       typeof bootstrap.session !== "string" || !bootstrap.session.length || bootstrap.session.length > 128) throw new Error("mod relay requires a credential and session id");
     credential = bootstrap.credential;
+    // Claude Code's pid. A mod that doesn't send it gets the process that launched this relay, which is Claude Code
+    // itself (the mod spawns the relay), so a relay reloaded under the same Claude Code names the same starter.
+    const starter = "starter" in bootstrap ? bootstrap.starter : process.ppid;
+    if (typeof starter !== "number" || !Number.isSafeInteger(starter) || starter <= 0) throw new Error("mod relay starter must be a positive integer pid");
     const index = process.argv.indexOf("--cwd");
     const cwd = options.cwd ?? (index >= 0 ? process.argv[index + 1] ?? "" : process.cwd());
-    client = new OfficeClient({ cwd, credential, lease: { session: bootstrap.session }, command: options.command,
+    client = new OfficeClient({ cwd, credential, lease: { session: bootstrap.session }, starter, command: options.command,
       onEvent: (event) => {
         output(event);
         if (!event.soldier && event.type === "closed") void stop();
