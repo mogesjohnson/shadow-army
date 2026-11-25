@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OP_LIMIT_MS, readVerifiedTrees, sweepTrees, systemOps, SWEEP_LIMIT_MS, type Probe, type SweepOps } from "./sweep.js";
+import { endThroughHelper, OP_LIMIT_MS, readVerifiedTrees, sweepTrees, systemOps, SWEEP_LIMIT_MS, type Probe, type SweepOps } from "./sweep.js";
 import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
 
@@ -163,25 +163,48 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(() => systemOps("darwin")).toThrow(/M1b-18/);
   });
 
-  const linux = it.runIf(process.platform === "linux");
-  linux("declines to end a real orphan on Linux until the helper binds the signal, and tells absent from present", async () => {
-    const ops = systemOps();
-    // A real orphan: its shell exits at once, so `sleep` is handed to a subreaper or init, as after a dead post office.
-    const shell = spawnSync("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" });
-    const orphan = Number(shell.stdout.trim());
-    try {
-      const orphanStart = await ops.probe(orphan);
-      expect(typeof orphanStart).toBe("number");
-      const record = await TreeRecord.create(root, "real", { pid: 2 ** 22 - 1, startTime: 1 });
-      await record.add({ kind: "cli", pid: orphan, startTime: orphanStart as number });
-      const report = await sweepTrees(root, ops);
-      expect(report.left).toEqual([{ pid: orphan, command: "sleep 30" }]);
-      expect(report.kept[0]!.reason).toMatch(/couldn't be ended by identity/);
-      expect(existsSync(join(treesDir(root), "real.jsonl"))).toBe(true);
-      expect(await ops.probe(orphan)).toBe(orphanStart); // Nothing was sent.
-      expect(await ops.probe(2 ** 22 - 1)).toBe("absent");
-    } finally { try { process.kill(orphan, "SIGKILL"); } catch { /* Gone. */ } }
+  it("declines, sending nothing, when the Linux helper is missing", async () => {
+    expect(await endThroughHelper({ pid: 5, startTime: 50 }, false, join(root, "no-helper"))).toBe("declined");
+    expect(await systemOps("linux", join(root, "no-helper")).endIdentity({ pid: 5, startTime: 50 }, true)).toBe("declined");
   });
+
+  const linux = it.runIf(process.platform === "linux");
+  /** A real orphan: its shell exits at once, so `sleep` is handed to a subreaper or init, as after a dead post office. */
+  const orphan = () => Number(spawnSync("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" }).stdout.trim());
+  linux("ends a real orphan on Linux through the helper's pidfd only while its start time matches (C2)", async () => {
+    const ops = systemOps();
+    const pid = orphan();
+    try {
+      const start = await ops.probe(pid);
+      expect(typeof start).toBe("number");
+      expect(await ops.endIdentity({ pid, startTime: (start as number) + 1 }, false)).toBe("ended"); // Another process: nothing sent.
+      expect(await ops.probe(pid)).toBe(start);
+      const record = await TreeRecord.create(root, "real", { pid: 2 ** 22 - 1, startTime: 1 });
+      await record.add({ kind: "cli", pid, startTime: start as number });
+      const report = await sweepTrees(root, ops);
+      expect(report).toMatchObject({ swept: 1, ended: [{ pid, command: "sleep 30" }], left: [], kept: [] });
+      expect(existsSync(join(treesDir(root), "real.jsonl"))).toBe(false);
+      expect(await ops.probe(pid)).toBe("absent");
+      expect(await ops.probe(2 ** 22 - 1)).toBe("absent");
+    } finally { try { process.kill(pid, "SIGKILL"); } catch { /* Gone. */ } }
+  }, 20_000);
+
+  linux("ends a real git-like group leader's whole group on Linux, and declines a process that leads no group", async () => {
+    const ops = systemOps();
+    const leader = spawn("sh", ["-c", "sleep 30 & echo $!; wait"], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+    const member = Number(await new Promise<string>((done) => leader.stdout!.once("data", (data) => done(String(data)))));
+    const pid = orphan();
+    try {
+      const start = await ops.probe(leader.pid!);
+      expect(await ops.endIdentity({ pid: leader.pid!, startTime: start as number }, true)).toBe("ended");
+      await new Promise((done) => setTimeout(done, 200));
+      expect(await ops.probe(member)).toBe("absent");
+      expect(await ops.endIdentity({ pid, startTime: (await ops.probe(pid)) as number }, true)).toBe("declined"); // Not a group leader.
+      expect(typeof await ops.probe(pid)).toBe("number");
+    } finally {
+      for (const one of [pid, member, leader.pid!]) { try { process.kill(one, "SIGKILL"); } catch { /* Gone. */ } }
+    }
+  }, 20_000);
 
   const windows = it.runIf(process.platform === "win32");
   windows("ends a real process on Windows through its handle, and only while its creation time matches", async () => {

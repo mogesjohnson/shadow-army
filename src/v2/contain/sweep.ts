@@ -1,11 +1,11 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { lstat, open, readdir, readFile, unlink } from "node:fs/promises";
+import { access, lstat, open, readdir, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import { redact } from "../logs.js";
-import { parseStat } from "./linux.js";
+import { helperPath, parseStat } from "./linux.js";
 import { parseTreeFile, treesDir, type Identity, type TreeLine } from "./trees.js";
 
 const run = promisify(execFile);
@@ -201,12 +201,27 @@ export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepRepo
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
 /**
+ * Linux's bound end: `sa-contain end <pid> <starttime> [group]` checks the start time and signals through one pidfd.
+ * Its exit 0 means it signalled the process (or found it gone or replaced); any other status, or no helper, means
+ * it sent nothing, so the end is declined.
+ */
+export async function endThroughHelper(target: Identity, tree: boolean, helper: string = helperPath()): Promise<EndResult> {
+  try { await access(helper, constants.X_OK); } catch { return "declined"; }
+  const args = ["end", String(target.pid), String(target.startTime), ...(tree ? ["group"] : [])];
+  return new Promise<EndResult>((done) => {
+    const child = spawn(helper, args, { stdio: ["ignore", "ignore", "ignore", "pipe"] });
+    child.once("error", () => done("declined"));
+    child.once("close", (code) => done(code === 0 ? "ended" : "declined"));
+  });
+}
+
+/**
  * The real machine's operations. Windows binds each end to the process's handle (PO-19's process operation is not
- * built yet; this runs PowerShell by its absolute path). Linux probes through `/proc` but declines every end until
- * the helper has an identity-bound one (`sa-contain end`): a pid alone may since name another process (PO-11).
+ * built yet; this runs PowerShell by its absolute path). Linux probes through `/proc` and ends through the helper's
+ * pidfd (`endThroughHelper`); without the helper it declines, since a pid alone may since name another process (PO-11).
  * macOS needs PO-17's helper.
  */
-export function systemOps(platform: NodeJS.Platform = process.platform): SweepOps {
+export function systemOps(platform: NodeJS.Platform = process.platform, helper: string = helperPath()): SweepOps {
   if (platform === "linux") {
     return {
       platform, wait: pause,
@@ -220,7 +235,7 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
         return parseStat(pid, text)?.startTime ?? "unknown";
       },
       commandOf: async (pid) => (await readFile(`/proc/${pid}/cmdline`, "latin1")).replaceAll("\0", " ").trim(),
-      endIdentity: async () => "declined",
+      endIdentity: (target, tree) => endThroughHelper(target, tree, helper),
     };
   }
   if (platform === "win32") {
