@@ -63,7 +63,7 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     const reused = fakeOps({ 8: 81 });
     expect(await sweepTrees(root, reused.ops)).toMatchObject({ swept: 1, ended: [] });
     expect(reused.calls).toEqual([]);
-  });
+  }, 20_000); // The stuck process holds the sweep for its whole 10 s.
 
   it("on Windows ends only a git entry: what the job held ended with its last handle", async () => {
     const record = await TreeRecord.create(root, "w", { pid: 3, startTime: 30 }, { pid: 4, startTime: 40 });
