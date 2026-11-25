@@ -20,17 +20,18 @@ process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
 afterAll(() => rmSync(snapshots, { recursive: true, force: true }));
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
-async function setup() {
+async function setup(onSend?: (text: string, repo: ReturnType<typeof makeRepo>) => void) {
   const repo = makeRepo(); repos.push(repo);
   repo.write("src/a.ts", "owner's uncommitted work\n");
   const events: OfficeEvent[] = [];
   const deliveries: string[] = [];
+  const responses: unknown[] = [];
   const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options) => {
     const native = factory(options);
-    return { send(text) { deliveries.push(text); return native.send(text); }, interrupt: () => native.interrupt(), respondApproval: (id, response) => native.respondApproval(id, response), close: () => native.close() };
+    return { send(text) { deliveries.push(text); onSend?.(text, repo); return native.send(text); }, interrupt: () => native.interrupt(), respondApproval: (id, response) => { responses.push(response); return native.respondApproval(id, response); }, close: () => native.close() };
   }, onEvent: (event) => events.push(event) });
   offices.push(office);
-  return { repo, office, events, deliveries };
+  return { repo, office, events, deliveries, responses };
 }
 afterEach(async () => {
   await Promise.all(offices.splice(0).map((office) => office.close()));
@@ -86,7 +87,8 @@ describe("M1 office integration with synthetic native processes", () => {
   }, 30_000);
 
   windowsOnly("retains a successful Edit followed by provider failure and requires an explicit fresh retry without replay", async () => {
-    const { office, events, deliveries } = await setup();
+    // WSP-11: a read-only snapshot's own write is discarded, not a guard failure; the owner's change to the checkout during the turn is.
+    const { office, events, deliveries } = await setup((text, repo) => { if (text === "partial-success-fail") repo.write("src/b.ts", "owner's change during the turn\n"); });
     const opened = await office.open("scout");
     const result = await office.send("scout", "partial-success-fail");
     expect(events.filter((event) => event.type === "tool_call")).toHaveLength(1);
@@ -94,6 +96,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(events.find((event) => event.type === "error")?.data).toMatchObject({ kind: "rate_limit" });
     expect(result.status).toBe("failed");
     expect(result.error?.message).toContain("partial work is retained");
+    expect(result.error?.message).toContain("read-only snapshot: wrote partial.txt");
     // W11-1, PO-8: the CLI's own kind and words survive the guard failure.
     expect(result.error?.kind).toBe("rate_limit");
     expect(result.error?.message).toContain("API Error after successful Edit: rate limit");
@@ -131,16 +134,19 @@ describe("M1 office integration with synthetic native processes", () => {
   }, 30_000);
 
   windowsOnly("rejects a credential inside an approval response without consuming the native owner request", async () => {
-    const { office, events } = await setup();
+    const { office, events, responses } = await setup();
     const opened = await office.open("scout");
     const pending = office.send("scout", "approval");
     await until(() => events.some((event) => event.type === "approval"));
     const requestId = (events.find((event) => event.type === "approval")!.data as { request_id: string }).request_id;
     await expect(office.approval("scout", requestId, { behavior: "allow", note: credential.toUpperCase() })).rejects.toThrow("cannot be forwarded");
     await expect(readFile(join(opened.cwd, "approval-response.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(responses).toEqual([]);
     await office.approval("scout", requestId, { behavior: "deny", message: "Owner denied" });
-    await pending;
-    expect(JSON.parse(await readFile(join(opened.cwd, "approval-response.json"), "utf8"))).toEqual({ behavior: "deny", message: "Owner denied" });
+    // The fake's record of the response is a snapshot write, discarded at the turn's end (WSP-11); the forwarded response and the CLI's answer show it arrived.
+    expect((await pending).text).toBe("Explicit owner denied");
+    expect(responses).toEqual([{ behavior: "deny", message: "Owner denied" }]);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ files: ["approval-response.json"] });
   }, 30_000);
 
   it("provides a five-line delivery summary while retaining the full native answer in its audit log", async () => {
