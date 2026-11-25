@@ -246,7 +246,8 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
       }
     }
     // PO-16: the office's own closed event, not what the mod asked for, says whether it shut down; a cut-off last event is a crash too.
-    if (!runtime.shutdown && !runtime.abandoned) {
+    // Only an office this relay had ready (its `url`) can crash: an end before ready, such as a lock refusal, is a refused start.
+    if (runtime.url && !runtime.shutdown && !runtime.abandoned) {
       retire(runtime);
       await sweep($, runtime, Boolean(buffer.trim()));
       return;

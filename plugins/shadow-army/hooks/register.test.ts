@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "off"; tail?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "off"; tail?: string; startRefusal?: string } = {}) {
   vi.resetModules();
   const { register, useSweepLauncher } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -82,6 +82,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
         stops.push(() => stop());
         return {
           async *[Symbol.asyncIterator]() {
+            if (env.startRefusal) { yield { stream: "stderr", text: env.startRefusal }; return; }
             yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
             await closed;
             if (env.tail) yield { stream: "stdout", text: env.tail };
@@ -499,6 +500,14 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
     const { sweeps, logs } = await died({ sweep: "off" });
     expect(sweeps).toHaveLength(0);
     expect(shadowLines(logs)).toEqual([expect.stringMatching(/stopped unexpectedly; the sweep is off in this build, so nothing was ended; what it left is unknown$/)]);
+  });
+
+  it("treats a relay that ends before its office was ready, such as a lock refusal, as a refused start, not a crash (C3)", async () => {
+    const { send, sweeps, logs } = await mod(() => ({ status: "completed" }), { startRefusal: "another owner holds the folder lock\n", sweep: { out: report(1), code: 0 } });
+    expect(await send("claude-sonnet --claim a go")).toMatch(/post office relay ended: another owner holds the folder lock/);
+    await new Promise((done) => setTimeout(done, 0));
+    expect(sweeps).toHaveLength(0);
+    expect(logs.some((line) => /stopped unexpectedly/.test(line))).toBe(false);
   });
 
   it("decides by the office's own closed event: none after a release request still sweeps, one without a release does not", async () => {
