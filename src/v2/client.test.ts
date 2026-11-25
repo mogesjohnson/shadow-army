@@ -2,7 +2,9 @@ import { readFile, readdir } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { canonicalPath } from "../workspace/git.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
@@ -11,6 +13,10 @@ import type { OfficeEvent } from "./postOffice.js";
 import type { TurnResult } from "./channel.js";
 import { credential, until } from "./fixture-main.testutil.js";
 
+// WSP-11: the helpers inherit a suite-owned snapshot root, removed after the fixtures, never the caller's default one.
+const snapshots = mkdtempSync(join(homedir(), ".sa-test-client-snapshots-"));
+process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
+afterAll(() => rmSync(snapshots, { recursive: true, force: true, maxRetries: 3 }));
 const clients: OfficeClient[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];

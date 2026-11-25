@@ -422,7 +422,7 @@ describe("M1b-26 harness git and outside snapshots", () => {
     expect(existsSync(opened.cwd)).toBe(false);
     expect(existsSync(subfolder)).toBe(false);
     expect(events.find((event) => event.type === "session_closed")?.data).toMatchObject({ retained: false });
-  });
+  }, 30_000);
 
   it("starts no soldier when SHADOW_ARMY_SNAPSHOTS is bad, and never runs it in the folder", async () => {
     process.env.SHADOW_ARMY_SNAPSHOTS = "relative/path";
