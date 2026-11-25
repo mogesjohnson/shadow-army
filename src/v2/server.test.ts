@@ -5,7 +5,11 @@ import { makeRoster } from "../core/roster.testutil.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
-import { startOfficeServer, type OfficeServer } from "./server.js";
+import { createServer } from "node:net";
+import { PassThrough } from "node:stream";
+import { processStartTime, startOfficeServer, startTimeFrom, type OfficeServer, type ServerOptions } from "./server.js";
+import { runPostOffice } from "./main.js";
+import type { StartTimeOf } from "./lock.js";
 import type { LeaseClock } from "./lease.js";
 import type { OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
@@ -13,12 +17,20 @@ import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 const servers: OfficeServer[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 const sockets: Socket[] = [];
-async function setup(lease?: { session: string }, leaseClock?: LeaseClock) {
+/** A fake process table: this process and the one that started it exist; nothing else does. */
+const stamps: StartTimeOf = async (pid) => pid === process.pid ? "1000" : pid === process.ppid ? "50" : null;
+async function setup(lease?: { session: string }, leaseClock?: LeaseClock, extra: Partial<ServerOptions> = {}) {
   const repo = makeRepo(); repos.push(repo);
   const events: OfficeEvent[] = [];
-  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, leaseClock, onEvent: (event) => events.push(event) }); servers.push(server);
+  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, leaseClock, startTimeOf: stamps, ...extra, onEvent: (event) => events.push(event) }); servers.push(server);
   return { repo, server, events };
 }
+const freePort = () => new Promise<number>((done, fail) => {
+  const probe = createServer().once("error", fail).listen(0, "127.0.0.1", () => {
+    const { port } = probe.address() as { port: number };
+    probe.close(() => done(port));
+  });
+});
 const command = (server: OfficeServer, value: Record<string, unknown>) => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify(value) });
 afterEach(async () => {
   sockets.splice(0).forEach((socket) => socket.destroy());
@@ -96,16 +108,126 @@ describe("M1 authenticated loopback command server", () => {
     expect((await command(server, { action: "send", soldier: "tank", text: "edit", claims: [""] })).status).toBe(400);
   }, 30_000);
 
-  it("enforces a folder singleton and releases its non-secret lock on shutdown", async () => {
+  it("takes the PO-1 lock with its port and starter, refuses a second start, and releases it on shutdown", async () => {
     const { repo, server } = await setup();
-    const options = { cwd: repo.dir, credential, roster, channelFactory: factory };
-    const lock = join(repo.dir, ".shadow", "v2", "post-office.lock");
-    expect(await readFile(lock, "utf8")).not.toContain(credential);
-    await expect(startOfficeServer(options)).rejects.toThrow("lock already exists");
+    const options = { cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps };
+    const dir = join(repo.dir, ".shadow", "v2", "lock");
+    const text = await readFile(join(dir, "1.lock"), "utf8");
+    expect(text).not.toContain(credential);
+    expect(JSON.parse(text)).toEqual({ pid: process.pid, startTime: "1000", port: Number(new URL(server.url).port), starter: { pid: process.ppid, startTime: "50" } });
+    await expect(startOfficeServer(options)).rejects.toThrow("the army is still closing");
+    expect(await readFile(join(dir, "1.lock"), "utf8")).toBe(text);
     await server.close();
-    await expect(readFile(lock)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(join(dir, "1.lock"), "utf8"))).toEqual({ released: true });
     servers.push(await startOfficeServer(options));
   }, 20_000);
+
+  it("replaces a lock whose process is gone and logs it, and starts nothing without a start time", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const dir = join(repo.dir, ".shadow", "v2", "lock");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "1.lock"), JSON.stringify({ pid: 4242, startTime: "7", port: 1, starter: { pid: 4243, startTime: "8" } }));
+    const logged: Record<string, unknown>[] = [];
+    const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps, log: (record) => { logged.push(record); }, memoryProtection: "memory protection: Yama ptrace_scope 1" }); servers.push(server);
+    expect(logged).toContainEqual({ type: "memory_protection", line: "memory protection: Yama ptrace_scope 1" });
+    expect(logged.some((r) => r.type === "lock" && String(r.line).includes("no process has its pid"))).toBe(true);
+    const other = makeRepo(); repos.push(other);
+    await expect(startOfficeServer({ cwd: other.dir, credential, roster, channelFactory: factory, startTimeOf: async () => null })).rejects.toThrow("lock not written");
+  }, 20_000);
+
+  it("reads this system's creation stamp the same way twice, and none for a pid with no process", async () => {
+    const first = await processStartTime(process.pid);
+    expect(first).toMatch(/\S/);
+    expect(await processStartTime(process.pid)).toBe(first);
+    expect(await processStartTime(2_000_000_000)).toBeNull();
+  }, 20_000);
+
+  it("runs no command until the lock is held: a request during a slow identity lookup gets 503", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const port = await freePort();
+    let open!: () => void; const gate = new Promise<void>((done) => { open = done; });
+    let asked!: () => void; const lookup = new Promise<void>((done) => { asked = done; });
+    const events: OfficeEvent[] = [];
+    const starting = startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, port, onEvent: (event) => events.push(event),
+      startTimeOf: async (pid) => { asked(); await gate; return stamps(pid); } });
+    await lookup;
+    const early = await fetch(`http://127.0.0.1:${port}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}` }, body: JSON.stringify({ action: "open", soldier: "scout" }) });
+    expect(early.status).toBe(503);
+    open();
+    const server = await starting; servers.push(server);
+    expect(events.some((event) => event.soldier)).toBe(false);
+    expect((await command(server, { action: "army" })).status).toBe(200);
+  }, 20_000);
+
+  it("refuses when a holder's identity can't be read, and gives null only for a pid confirmed gone", async () => {
+    const failing = async (): Promise<string> => { throw new Error("EACCES"); };
+    await expect(startTimeFrom(process.pid, failing)).rejects.toThrow("start time of pid");
+    expect(await startTimeFrom(2_000_000_000, failing)).toBeNull();
+    const repo = makeRepo(); repos.push(repo);
+    const dir = join(repo.dir, ".shadow", "v2", "lock");
+    await mkdir(dir, { recursive: true });
+    const holder = JSON.stringify({ pid: 4242, startTime: "7", port: 1, starter: { pid: 4243, startTime: "8" } });
+    await writeFile(join(dir, "1.lock"), holder);
+    const unsure: StartTimeOf = async (pid) => { if (pid === 4242) throw new Error("the start time of pid 4242 is unavailable"); return stamps(pid); };
+    await expect(startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: unsure })).rejects.toThrow("lock not written");
+    expect(await readFile(join(dir, "1.lock"), "utf8")).toBe(holder);
+  }, 20_000);
+
+  it("records the bootstrap's Claude Code as starter: a reloaded relay is told it is closing, another host that it runs", async () => {
+    const table: StartTimeOf = async (pid) => pid === 777 ? "77" : pid === 888 ? "88" : stamps(pid);
+    const { repo, server } = await setup(undefined, undefined, { starter: 777, startTimeOf: table });
+    expect(JSON.parse(await readFile(join(repo.dir, ".shadow", "v2", "lock", "1.lock"), "utf8")).starter).toEqual({ pid: 777, startTime: "77" });
+    const again = (starter: number) => startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, starter, startTimeOf: table });
+    await expect(again(777)).rejects.toThrow("the army is still closing");
+    await expect(again(888)).rejects.toThrow(`the army is already running in this folder (pid ${process.pid})`);
+    expect(server.url).toMatch(/^http/);
+  }, 20_000);
+
+  it("takes M1a's post-office.lock too: a live M1a office refuses the start, a gone one is replaced, and close removes it", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const legacy = join(repo.dir, ".shadow", "v2", "post-office.lock");
+    await mkdir(dirname(legacy), { recursive: true });
+    await writeFile(legacy, JSON.stringify({ pid: process.ppid }));
+    const options = { cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps };
+    await expect(startOfficeServer(options)).rejects.toThrow("an older post office");
+    expect(await readFile(legacy, "utf8")).toBe(JSON.stringify({ pid: process.ppid }));
+    await writeFile(legacy, JSON.stringify({ pid: 2_000_000_000 }));
+    const server = await startOfficeServer(options);
+    expect(await readFile(legacy, "utf8")).toBe(JSON.stringify({ pid: process.pid }));
+    await server.close();
+    await expect(readFile(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+  }, 20_000);
+
+  it("reads stdin only after an asynchronous protection check, so a bootstrap written and closed at once still starts", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const stdin = new PassThrough();
+    stdin.end(`${JSON.stringify({ credential })}\n`);
+    const office = await runPostOffice({ cwd: repo.dir, roster, channelFactory: factory, startTimeOf: stamps, onShutdown: () => {} },
+      { stdin, protect: () => new Promise((done) => setTimeout(() => done("memory protection: Yama ptrace_scope 1"), 50)) });
+    expect(office).toBeDefined();
+    servers.push(office!);
+  }, 20_000);
+
+  it("reports 1,000 refused requests once in full, then once a minute with the count, on a fake clock", async () => {
+    const timers: (() => void)[] = [];
+    const logged: Record<string, unknown>[] = [];
+    const { server, events } = await setup(undefined, undefined, { log: (record) => { logged.push(record); }, refusalTimer: (fn) => { timers.push(fn); return () => {}; } });
+    const refuse = (n: number) => Promise.all(Array.from({ length: n }, () => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${"cd".repeat(32)}` }, body: "{}" }).then((r) => r.status)));
+    const counts = () => logged.filter((r) => r.type === "command_refused").map((r) => (r.data as { count: number }).count);
+    for (let i = 0; i < 20; i++) expect((await refuse(50)).every((status) => status === 401)).toBe(true);
+    expect(events.filter((event) => event.type === "command_refused")).toHaveLength(1);
+    expect(counts()).toEqual([]);
+    timers.shift()!();
+    expect(counts()).toEqual([999]);
+    await refuse(2);
+    timers.shift()!();
+    expect(counts()).toEqual([999, 2]);
+    timers.shift()!();
+    expect(counts()).toEqual([999, 2]);
+    await refuse(1);
+    expect(events.filter((event) => event.type === "command_refused")).toHaveLength(2);
+    expect(JSON.stringify([events, logged])).not.toContain(credential);
+  }, 60_000);
 
   windowsOnly("shutdown settles an active native turn, retains its edit and closes stalled request bodies", async () => {
     const { repo, server, events } = await setup();
