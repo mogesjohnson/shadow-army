@@ -4,6 +4,24 @@ Big changes and architecture questions. Only the orchestrator writes this file (
 
 The owner pre-approved the orchestrator's recommendations on 2026-11-23. Each entry says whether the work went ahead on its recommendation or waits for the owner. Newest first.
 
+## S-9 The v2.1 Ink UI: which design, where Ink runs, and when (2026-11-25, w125 for orch-44)
+
+From the brief `ui-v21-start.md`. v2.0's spec lists "a full-screen Ink shell" as a non-goal (section 1). That binds v2.0, not v2.1, but v2.1 still needs a D-number for each spec change below.
+
+- **What the evidence says:**
+  - **Margin is already v2.0.** Appendix C marks Margin "adopted in v0.5, as the default". Its parts are VIS-1, HOST-3, HOST-11 and HOST-15, so none of them is new. Margin lives in Claude's transcript, which only the mod can draw. An Ink app can't show it.
+  - **Ink can't run inside the mod.** In Claude Code's mod API (checked on 2.1.332), the hooks module runs "with no DOM and no Node". It draws only the host's own `Box`, `Text` and `Button` from `$.ui.resolve(e)`. Ink needs Node's stdout and its own layout. If Ink's output were pasted into a `Text`, the host would no longer reflow it, give it focus or handle its buttons' hotkeys (HOST-5).
+  - **Only the mod can read the post office's events.** Its events go out only over its standard output, to the mod that started it (section 3). `OfficeEvent` is `{ soldier?, type: string, data: unknown }`, so its payloads are untyped. The PO-1 lock refuses a second post office, such as `sa live`'s, while the mod's army runs.
+- **1. Which design. Recommendation: War Table, built from the parts every design shares.** War Table is "held, until a pane can take the whole width, which only Claude Code can give". A standalone app has the whole terminal, so it can show War Table. Timeline comes next, once there is one ordered event log (Appendix C). The first slice, the strip (HOST-6) and the pane header (HOST-4), is the same in Margin and War Table, so it doesn't wait on this answer. Its fixtures and snapshots follow `d5.txt`'s strip and header.
+- **2. Where Ink runs. Recommendation: (b) a standalone full-screen Ink app.** Option (a) is ruled out above. The view model and its plain-text layout stay free of Ink and the mod. That way the mod (M5) and the Ink app draw from one model, and the two can't drift apart.
+- **3. When. Recommendation: build with fixtures now, and connect after M1b.** The connection needs three things:
+  - the M1b stack merged, which brings the post office's server and its events;
+  - a spec change: a read-only event feed for a local viewer, with its own credential that allows nothing else. Without it the app sees no events while the mod runs;
+  - typed event payloads (PO-5) and usage (OBS-3).
+  Until then the app takes typed fixtures only. It makes no post office calls and spawns no process.
+- **Can be undone:** yes. The new files under `src/v21/ui/` can be deleted without touching anything else, and the spec doesn't change until the owner gives a D-number.
+- **Status:** waiting for the owner's answers to 1 to 3.
+
 ## S-8 Refusals in the minute a shutdown cuts short (2026-11-25, orch-31)
 
 From w76's fix of #126 C5 and #130 C2. The server counts refused commands and writes one count per minute. Codex asked that shutdown not write an early count, so the refusals in the last, partial minute are now never written.
