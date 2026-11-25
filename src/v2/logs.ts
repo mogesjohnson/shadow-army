@@ -1,7 +1,8 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-export const REDACTED = "[REDACTED]";
+/** WSP-8's marker, in logs and in forwarded events alike. */
+export const REDACTED = "[redacted]";
 
 const SECRET_KEYS = new Set([
   "secret", "secrets", "credential", "credentials", "password", "passwd", "apikey",
@@ -179,10 +180,11 @@ export class SessionLogs {
     this.fragments.set(name, open);
   }
 
-  /** Ends a message: its fragments are joined, redacted as one text, and written whole as `text`. */
+  /** Ends a message: its fragments are joined, redacted as one text, and written whole as `text`. No fragments, no line. */
   async endMessage(name: string, key: string, record: Record<string, unknown> = {}): Promise<LogWriteResult> {
     this.assertName(name);
-    const parts = this.fragments.get(name)?.get(key) ?? [];
+    const parts = this.fragments.get(name)?.get(key);
+    if (!parts) return { written: true };
     this.fragments.get(name)?.delete(key);
     return this.write(name, { ...record, text: parts.join("") });
   }

@@ -10,7 +10,20 @@ import { createSnapshot } from "../workspace/worktree.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
-import { redact, SessionLogs } from "./logs.js";
+import { redact, REDACTED, SessionLogs } from "./logs.js";
+
+/** Streamed fragments the log holds until their block ends (C1): thinking first, as the CLI streams it. */
+const FRAGMENT_KINDS = ["thinking", "text"] as const;
+const frameOf = (event: ChannelEvent): { type?: unknown; event?: { type?: unknown; delta?: unknown } } | undefined =>
+  event.type === "raw" && event.data && typeof event.data === "object" ? event.data as { type?: unknown; event?: { type?: unknown; delta?: unknown } } : undefined;
+/** A raw stream delta: its text reaches the log only inside the assembled block. */
+const isDelta = (event: ChannelEvent): boolean => frameOf(event)?.type === "stream_event" && frameOf(event)?.event?.delta !== undefined;
+/** Events that end a streamed block: the block's stop, the whole assistant message, the turn's end or the process's. */
+const endsBlock = (event: ChannelEvent): boolean => {
+  const frame = frameOf(event);
+  return event.type === "turn_end" || event.type === "closed" || frame?.type === "assistant"
+    || (frame?.type === "stream_event" && (frame.event?.type === "content_block_stop" || frame.event?.type === "message_stop"));
+};
 
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
@@ -94,7 +107,36 @@ export class PostOffice {
     this.roster = options.roster ?? loadRoster(root);
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
-    this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets);
+    this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets, { onFailure: ({ name, error }) => this.logFailed(name, error) });
+  }
+
+  /** C3 (PO-5, M1-AC4): one notice per gap, outside the failing log; the turn carries on. */
+  private logFailed(name: string, error: Error): void {
+    const soldier = [...this.sessions.values()].find((session) => session.id === name)?.spec.key;
+    const notice = redact({ ...(soldier ? { soldier } : {}), type: "log_failed",
+      data: { log: name, reason: `the log ${name} could not be written; later lines are retried and the gap is counted: ${error.message}` } }, this.secrets) as OfficeEvent;
+    try { this.options.onEvent?.(notice); } catch { /* the owner's handler cannot stop the turn */ }
+    if (name !== "post-office") void this.logs.write("post-office", { ...notice, time: new Date().toISOString() });
+  }
+
+  /** A native event: a streamed fragment is forwarded now and logged whole when its block ends (C1, M1-AC2). */
+  private recordNative(session: Session, event: ChannelEvent): void {
+    const soldier = session.spec.key;
+    const kind = FRAGMENT_KINDS.find((name) => name === event.type);
+    if ((kind && typeof event.data === "string") || isDelta(event)) {
+      this.options.onEvent?.(redact({ soldier, ...event }, this.secrets) as OfficeEvent);
+      if (kind) { const text = event.data as string; this.logPending = this.logPending.then(() => this.logs.fragment(session.id, kind, text)); }
+      return;
+    }
+    if (endsBlock(event)) this.flushBlocks(session);
+    this.record({ soldier, ...event }, session);
+  }
+
+  /** Writes each held block whole, redacted as one text. */
+  private flushBlocks(session: Session): void {
+    this.logPending = this.logPending.then(async () => {
+      for (const kind of FRAGMENT_KINDS) await this.logs.endMessage(session.id, kind, { soldier: session.spec.key, type: kind, time: new Date().toISOString() });
+    }).catch(() => {});
   }
 
   static async create(options: OfficeOptions): Promise<PostOffice> {
@@ -219,7 +261,7 @@ export class PostOffice {
     session.channel = this.factory({ cwd: session.cwd, model: session.spec.model, autonomy: session.spec.autonomy, instructions: session.instructions,
       onEvent: (event: ChannelEvent) => {
         if (generation !== session.generation) return;
-        this.record({ soldier: session.spec.key, ...event }, session);
+        this.recordNative(session, event);
         if (event.type === "error" && (event.data as { kind?: string } | undefined)?.kind === "login_needed") session.loginNeeded = true;
         if (event.type === "closed") {
           if ((event.data as { containmentStopped?: boolean })?.containmentStopped === false) {
@@ -286,7 +328,7 @@ export class PostOffice {
     if (session.active) throw new Error(`${key} already has a running turn`);
     session.stopRequested = false;
     // A copied credential in a brief must never enter a soldier's stdin/context either.
-    const nativeText = text.replace(new RegExp(this.secrets[0]!, "gi"), "[REDACTED]");
+    const nativeText = text.replace(new RegExp(this.secrets[0]!, "gi"), REDACTED);
     const next = this.run(session, nativeText);
     session.active = next;
     try { return await next; } finally {
@@ -296,6 +338,12 @@ export class PostOffice {
   }
 
   private async run(session: Session, text: string): Promise<TurnResult> {
+    // C2 (PO-5, M1-AC4): the turn's opening record is written, after everything before it, before the soldier gets the message.
+    await this.logPending;
+    const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() });
+    if (!opened.written) {
+      throw new Error(`message not sent: the session log could not record the turn's start (${String(redact(opened.error?.message ?? "unknown error", this.secrets))})`);
+    }
     // Both checks run even after transport failure/cancellation. M2 extends this native result
     // boundary to actual background jobs; persistent session services must survive ordinary turns.
     // A write session has no read-only snapshot to guard: the claim audit takes its place.
@@ -310,6 +358,8 @@ export class PostOffice {
     } catch (error) {
       result = { status: "failed", text: "", refusal: false, error: { kind: "transport", message: String(error) } };
     }
+    // A stream that ended without closing its block still has its fragments logged whole.
+    this.flushBlocks(session);
     if (result.status === "completed") session.loginNeeded = false;
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
     let changes: string[];

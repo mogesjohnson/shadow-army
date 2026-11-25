@@ -1,5 +1,7 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { ClaudeChannel } from "./claude.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
@@ -37,14 +39,14 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(JSON.parse(second.text).history).toEqual(["inspect", "inspect"]);
     expect(JSON.parse(second.text).args.join(" ")).not.toContain(credential);
     const secret = await office.send("scout", `echo ${credential}`);
-    expect(secret.text).toContain("[REDACTED]");
+    expect(secret.text).toContain("[redacted]");
     await office.send("scout", `echo ${credential.toUpperCase()}`);
     const inspected = JSON.parse((await office.send("scout", "inspect")).text);
-    expect(inspected.history).toContain("echo [REDACTED]");
+    expect(inspected.history).toContain("echo [redacted]");
     expect(inspected.history.join(" ").toLowerCase()).not.toContain(credential);
     // Inspecting only office replies could hide an input leak because replies are redacted too.
     expect(deliveries.join(" ").toLowerCase()).not.toContain(credential);
-    expect(deliveries.filter((text) => text === "echo [REDACTED]")).toHaveLength(2);
+    expect(deliveries.filter((text) => text === "echo [redacted]")).toHaveLength(2);
     expect(JSON.stringify(events)).not.toContain(credential);
     await office.close();
     const logs = join(repo.dir, ".shadow", "v2", "logs");
@@ -379,5 +381,86 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(result.write?.inScope).toEqual(["partial.txt"]);
     expect(result.write?.worktree).toBe(opened.cwd);
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+  }, 30_000);
+});
+
+describe("the session log on the office's real path (Codex review 7 on #116)", () => {
+  const records = async (dir: string, session: string): Promise<Array<Record<string, unknown>>> =>
+    (await readFile(join(dir, ".shadow", "v2", "logs", `${session}.jsonl`), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const quiet = (send: NativeChannel["send"]): NativeChannel => ({ send, async interrupt() {}, async respondApproval() {}, async close() {} });
+
+  it("logs streamed text and thinking as whole blocks, so a credential split across deltas from a fake CLI is redacted (C1, M1-AC2)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const fakeDir = await mkdtemp(join(tmpdir(), "shadow-split-fake-"));
+    const fake = join(fakeDir, "split-claude.mjs");
+    const [a, b, c] = [credential.slice(0, 20), credential.slice(20, 44), credential.slice(44)];
+    await writeFile(fake, `import { createInterface } from "node:readline";
+const emit = (frame) => process.stdout.write(JSON.stringify({ session_id: "split", ...frame }) + "\\n");
+const delta = (delta) => emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta } });
+for await (const line of createInterface({ input: process.stdin })) {
+  const frame = JSON.parse(line);
+  if (frame.type === "control_request") { emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } }); continue; }
+  for (const part of ["think ${a}", "${b}", "${c} done"]) delta({ type: "thinking_delta", thinking: part });
+  emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_stop" } });
+  for (const part of ["key ${a}", "${b}", "${c} end"]) delta({ type: "text_delta", text: part });
+  emit({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "key ${credential} end" }], usage: { input_tokens: 1 } } });
+  emit({ type: "result", subtype: "success", is_error: false, result: "key ${credential} end", terminal_reason: "completed", stop_reason: "end_turn" });
+}
+`);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: (options) => new ClaudeChannel({ ...options, interruptTimeoutMs: 500, command: { file: process.execPath, args: [fake] } }) });
+    offices.push(office);
+    try {
+      const opened = await office.open("scout");
+      expect((await office.send("scout", "split it")).status).toBe("completed");
+      await office.close();
+      const file = await readFile(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`), "utf8");
+      for (const part of [a, b, c]) expect(file).not.toContain(part);
+      const logged = await records(repo.dir, opened.session);
+      expect(logged).toContainEqual(expect.objectContaining({ soldier: "scout", type: "thinking", text: "think [redacted] done" }));
+      expect(logged).toContainEqual(expect.objectContaining({ soldier: "scout", type: "text", text: "key [redacted] end" }));
+      expect(logged.findIndex((record) => record.type === "text")).toBeLessThan(logged.findIndex((record) => record.type === "turn_end"));
+    } finally {
+      await rm(fakeDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("refuses to send when the turn's opening record cannot be written, with one reason, and the soldier never gets it (C2, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    const opened = await office.open("scout");
+    // A folder where the session's log file belongs makes every append to it fail.
+    const path = join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`);
+    await rm(path, { force: true });
+    await mkdir(path, { recursive: true });
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent: the session log could not record the turn/);
+    expect(delivered).toEqual([]);
+  }, 30_000);
+
+  it("reports a log that fails mid-turn once in the event stream and the office log, and the turn carries on (C3, M1-AC4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    let path = "";
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        await rm(path, { force: true });
+        await mkdir(path, { recursive: true });
+        for (let n = 0; n < 3; n++) emit({ type: "tool_result", data: { n } });
+        return { status: "completed", text: "done", refusal: false };
+      }); } });
+    offices.push(office);
+    const opened = await office.open("scout");
+    path = join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`);
+    const result = await office.send("scout", "work");
+    expect(result.status).toBe("completed");
+    const notices = events.filter((event) => event.type === "log_failed");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ soldier: "scout", data: { log: opened.session } });
+    await office.close();
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
   }, 30_000);
 });

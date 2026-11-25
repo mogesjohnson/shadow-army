@@ -32,14 +32,14 @@ describe("redaction", () => {
     for (const secret of ["unknown-key", "opaque-key", "client-private", "aaa.bbb.ccc", "abcdefgh1", "xyz-long-value", "ghp_1234567890123456", "sk-ant-1234567890123456", '"refresh"']) {
       expect(safe).not.toContain(secret);
     }
-    expect(safe).toContain("[REDACTED]");
+    expect(safe).toContain("[redacted]");
   });
 
   it("handles cycles and repeated references without omitting secrets", () => {
     const child = { text: "private" };
     const cycle: Record<string, unknown> = { a: child, b: child };
     cycle.self = cycle;
-    expect(redact(cycle, ["private"])).toEqual({ a: { text: "[REDACTED]" }, b: { text: "[REDACTED]" }, self: "[Circular]" });
+    expect(redact(cycle, ["private"])).toEqual({ a: { text: "[redacted]" }, b: { text: "[redacted]" }, self: "[Circular]" });
   });
 
   it("removes every hex case spelling of a known 32-byte credential from output and errors", () => {
