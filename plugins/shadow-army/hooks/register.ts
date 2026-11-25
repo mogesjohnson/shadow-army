@@ -20,6 +20,10 @@ interface Runtime {
   renewing?: symbol;
   diagnostic: string;
   finished?: Promise<void>;
+  /** PO-16: the post office's own `closed` event reached the relay, so it shut down and the sweep is not needed. */
+  shutdown?: boolean;
+  /** The mod ended the relay itself (`fail`); the post office may still run, so its end is no sign of a crash. */
+  abandoned?: boolean;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -103,6 +107,7 @@ function fail($: EngineInterface, runtime: Runtime, error: unknown): void {
   runtime.reject(new Error(message));
   if (active === runtime) active = undefined;
   if (!wasClosing) $.ui.log(sanitize(prefixed(message)));
+  runtime.abandoned = true;
   // The native stream owns only the relay. Returning it cannot skip the
   // detached post office's independent expiry/containment/finalization path.
   if (runtime.stream) void runtime.stream.return({ code: null, signal: null }).catch(() => {});
@@ -139,6 +144,7 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     runtime.accept();
     return;
   }
+  if (value.type === "closed" && !value.soldier) runtime.shutdown = true;
   // M1 observes the event stream without adding another model turn/context.
   // The richer pane and transcript cards belong to the later mod milestones.
   if (!runtime.closing && ["error", "channel_down", "containment_uncertain"].includes(value.type)) {
@@ -146,37 +152,62 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
   }
 }
 
-/** PO-16: the post office's output ended with no shutdown event, so run the one-shot sweep for its folder and write one transcript line. It never throws. */
-async function sweep($: EngineInterface, runtime: Runtime): Promise<void> {
-  const say = (text: string) => $.ui.log(sanitize(safeText(text, runtime.credential)));
-  try {
-    const entry = `${$.plugin.root}/../../dist/v2/sweepMain.js`;
-    if (!await $.fs.exists(entry)) return say("Shadow Army: the post office stopped unexpectedly; the sweep program is missing, so nothing was ended");
-    const stream = $.process.spawn({ argv: ["node", entry, runtime.cwd], cwd: runtime.cwd });
-    const limit = $.clock.after(SWEEP_WAIT_MS, () => { void stream.return({ code: null, signal: null }).catch(() => {}); });
+/** PO-16: a dead post office's army takes no renewal or command, and a restart waits (in `ensure`) until its sweep settles. */
+function retire(runtime: Runtime): void {
+  runtime.closing = true;
+  cancelTimers(runtime);
+  runtime.reject(new Error("the post office stopped unexpectedly"));
+  retiring.add(runtime);
+  if (active === runtime) active = undefined;
+}
+
+const counted = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
+
+/** What the one-shot sweep did, in words, from its exit and its one JSON line (the report of `src/v2/contain/sweep.ts`). */
+async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<string> {
+  const entry = `${$.plugin.root}/../../dist/v2/sweepMain.js`;
+  if (!await $.fs.exists(entry)) return "the sweep program is missing, so nothing was ended";
+  const stream = $.process.spawn({ argv: ["node", entry, runtime.cwd], cwd: runtime.cwd });
+  let timer: Timer | undefined;
+  const late = new Promise<"late">((done) => { timer = $.clock.after(SWEEP_WAIT_MS, () => done("late")); });
+  const read = (async () => {
     let out = "";
-    let code: number | null | undefined;
-    try {
-      const chunks = stream[Symbol.asyncIterator]();
-      for (let next = await chunks.next(); ; next = await chunks.next()) {
-        if (next.done) { code = (next.value as ProcessSpawnResult | undefined)?.code; break; }
-        if (next.value.stream === "stdout") out += next.value.text;
-      }
-    } finally { limit.cancel(); }
-    const lastLine = out.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
-    let report: { ended?: unknown[]; error?: unknown } | undefined;
-    try { report = JSON.parse(lastLine); } catch { report = undefined; }
-    if (code === 2) {
-      return say(`Shadow Army: the post office stopped unexpectedly; this system can't end what it left${typeof report?.error === "string" ? ` (${report.error})` : ""}`);
+    const chunks = stream[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await chunks.next();
+      if (next.done) return { out, result: next.value as ProcessSpawnResult | undefined };
+      if (next.value.stream === "stdout") out += next.value.text;
     }
-    if (!report || typeof report !== "object" || !Array.isArray(report.ended)) {
-      return say("Shadow Army: the post office stopped unexpectedly; the sweep's report could not be read");
-    }
-    const count = report.ended.length;
-    say(`Shadow Army: the post office stopped unexpectedly; ${count} ${count === 1 ? "tree" : "trees"} it left ${count === 1 ? "was" : "were"} ended`);
-  } catch (error) {
-    try { $.ui.log(sanitize(safeText(`Shadow Army: the post office stopped unexpectedly; the sweep failed: ${error instanceof Error ? error.message : error}`, runtime.credential))); } catch { /* the line is best effort */ }
+  })();
+  // The deadline settles this wait even when the iterator can't settle `next()` after `return()`.
+  const outcome = await Promise.race([read, late]).finally(() => timer?.cancel());
+  if (outcome === "late") {
+    void read.catch(() => {});
+    void stream.return({ code: null, signal: null }).catch(() => {});
+    return `the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s and was stopped; what it left is unknown`;
   }
+  const code = outcome.result?.code;
+  const lastLine = outcome.out.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
+  let report: { ended?: unknown; left?: unknown; unhandled?: unknown; error?: unknown } | undefined;
+  try { report = JSON.parse(lastLine); } catch { report = undefined; }
+  if (code === 2) return `this system can't end what it left${typeof report?.error === "string" ? ` (${report.error})` : ""}`;
+  if (code !== 0 && code !== 1) return code == null ? "the sweep was stopped before it finished; what it left is unknown" : `the sweep exited with code ${code}; what it left is unknown`;
+  if (!report || typeof report !== "object" || !Array.isArray(report.ended) || !Array.isArray(report.left) || typeof report.unhandled !== "number") {
+    return "the sweep's report could not be read";
+  }
+  const parts = [report.ended.length ? `the sweep ended ${counted(report.ended.length, "process", "processes")} it left` : "the sweep found nothing it left running"];
+  if (report.left.length) parts.push(`${counted(report.left.length, "process is", "processes are")} still running`);
+  if (report.unhandled) parts.push(`${counted(report.unhandled, "record", "records")} could not be handled`);
+  if (code === 1 && parts.length === 1) parts.push("the sweep says something is left");
+  return parts.join("; ");
+}
+
+/** PO-16: the post office's output ended with no shutdown event, so run the one-shot sweep for its folder and write exactly one transcript line. It never throws. */
+async function sweep($: EngineInterface, runtime: Runtime, cut: boolean): Promise<void> {
+  let outcome: string;
+  try { outcome = await sweepOutcome($, runtime); } catch (error) { outcome = `the sweep failed: ${error instanceof Error ? error.message : error}`; }
+  const diagnostic = runtime.diagnostic.trim() ? ` · ${runtime.diagnostic.trim().slice(-300)}` : "";
+  try { $.ui.log(sanitize(safeText(`Shadow Army: the post office stopped unexpectedly${cut ? " mid-event" : ""}; ${outcome}${diagnostic}`, runtime.credential))); } catch { /* the line is best effort */ }
 }
 
 async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
@@ -205,11 +236,14 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
         if (line.trim()) event($, runtime, line);
       }
     }
-    if (buffer.trim()) throw new Error("post office ended with an incomplete event");
-    if (!runtime.closing) {
-      await sweep($, runtime);
-      throw new Error(`post office relay ended${runtime.diagnostic ? `: ${runtime.diagnostic}` : ""}`);
+    // PO-16: the office's own closed event, not what the mod asked for, says whether it shut down; a cut-off last event is a crash too.
+    if (!runtime.shutdown && !runtime.abandoned) {
+      retire(runtime);
+      await sweep($, runtime, Boolean(buffer.trim()));
+      return;
     }
+    if (buffer.trim()) throw new Error("post office ended with an incomplete event");
+    if (!runtime.closing) throw new Error(`post office relay ended${runtime.diagnostic ? `: ${runtime.diagnostic}` : ""}`);
   } finally {
     cancelTimers(runtime);
   }

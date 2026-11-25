@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number } | "throw" } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang"; tail?: string } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -27,6 +27,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   register(on as never);
   const spawns: any[] = [];
   const sweeps: any[] = [];
+  const sweepsStopped: number[] = [];
   const stops: (() => void)[] = [];
   const probes: any[] = [];
   const killed: string[] = [];
@@ -65,9 +66,13 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
         if (options.argv[1]?.endsWith("sweepMain.js")) {
           sweeps.push(options);
           if (env.sweep === "throw") throw new Error("spawn failed");
+          if (env.sweep === "hang") {
+            // An iterator whose next() never settles, not even after return().
+            return { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }), return: async () => { sweepsStopped.push(1); return { done: true }; } };
+          }
           const result = env.sweep ?? { out: "", code: 0 };
           return {
-            async *[Symbol.asyncIterator]() { if (result.out) yield { stream: "stdout", text: result.out }; return { code: result.code, signal: null }; },
+            async *[Symbol.asyncIterator]() { if (result.out) yield { stream: "stdout", text: result.out }; return { code: result.code, signal: result.code === null ? "SIGKILL" : null }; },
             return: async () => ({ done: true }),
           };
         }
@@ -79,6 +84,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
           async *[Symbol.asyncIterator]() {
             yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
             await closed;
+            if (env.tail) yield { stream: "stdout", text: env.tail };
           },
           return: async () => { stop(); return { done: true }; },
         };
@@ -102,7 +108,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, sweeps, endRelay, probes, killed, commands, logs, registered, asks, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, sweeps, sweepsStopped, endRelay, probes, killed, commands, logs, registered, asks, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {
@@ -468,7 +474,9 @@ describe("the mod's trust dialog (ARM-7, M1-AC13)", () => {
 });
 
 describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
-  const settle = async () => { for (let i = 0; i < 6; i++) await new Promise((done) => setTimeout(done, 0)); };
+  const settle = async () => { for (let i = 0; i < 8; i++) await new Promise((done) => setTimeout(done, 0)); };
+  const CLOSED = `${JSON.stringify({ type: "closed", data: { retained: true } })}\n`;
+  const report = (ended: number, left = 0, unhandled = 0) => `${JSON.stringify({ running: 0, swept: 1, ended: Array.from({ length: ended }, (_, pid) => ({ pid })), left: Array.from({ length: left }, (_, pid) => ({ pid })), unhandled })}\n`;
   const died = async (env: Parameters<typeof mod>[1]) => {
     const m = await mod(() => ({ status: "completed" }), env);
     await m.send("claude-sonnet --claim a go");
@@ -476,16 +484,29 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
     await settle();
     return m;
   };
+  const shadowLines = (logs: string[]) => logs.filter((line) => /Shadow Army|post office/.test(line));
 
-  it("runs the sweep once for the same folder when the output ends with no shutdown event, and writes its line", async () => {
-    const { sweeps, logs } = await died({ cwd: "/repo", sweep: { out: `${JSON.stringify({ running: 0, swept: 2, ended: [{}, {}, {}], left: [], unhandled: 0 })}\n`, code: 0 } });
+  it("runs the sweep once for the same folder when the output ends with no shutdown event, and writes one line", async () => {
+    const { sweeps, logs } = await died({ cwd: "/repo", sweep: { out: report(3), code: 0 } });
     expect(sweeps).toHaveLength(1);
     expect(sweeps[0].argv).toEqual(["node", "/x/plugins/shadow-army/../../dist/v2/sweepMain.js", "/repo"]);
-    expect(logs.some((line) => /stopped unexpectedly; 3 trees it left were ended/.test(line))).toBe(true);
+    expect(shadowLines(logs)).toEqual([expect.stringMatching(/stopped unexpectedly; the sweep ended 3 processes it left$/)]);
   });
 
-  it("does not sweep after a clean shutdown", async () => {
-    const { $, handlers, send, endRelay, sweeps, logs } = await mod(() => ({ status: "completed" }));
+  it("decides by the office's own closed event: none after a release request still sweeps, one without a release does not", async () => {
+    const released = await mod(() => ({ status: "completed" }), { sweep: { out: report(1), code: 0 } });
+    await released.send("claude-sonnet --claim a go");
+    await released.handlers["session.end"]!(released.$, { sessionId: "session-1" }, async () => undefined);
+    released.endRelay();
+    await settle();
+    expect(released.sweeps).toHaveLength(1);
+    const elsewhere = await died({ tail: CLOSED });
+    expect(elsewhere.sweeps).toHaveLength(0);
+    expect(elsewhere.logs.some((line) => /stopped unexpectedly/.test(line))).toBe(false);
+  });
+
+  it("does not sweep after a clean shutdown that delivers the closed event", async () => {
+    const { $, handlers, send, endRelay, sweeps, logs } = await mod(() => ({ status: "completed" }), { tail: CLOSED });
     await send("claude-sonnet --claim a go");
     await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
     endRelay();
@@ -494,15 +515,43 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
     expect(logs.some((line) => /stopped unexpectedly/.test(line))).toBe(false);
   });
 
+  it("still sweeps, with one line, when the output ends mid-event", async () => {
+    const { sweeps, logs } = await died({ tail: '{"type":"tur', sweep: { out: report(0), code: 0 } });
+    expect(sweeps).toHaveLength(1);
+    expect(shadowLines(logs)).toEqual([expect.stringMatching(/stopped unexpectedly mid-event; the sweep found nothing it left running/)]);
+  });
+
+  it("reports what is still running on exit 1, and an unfinished run on a signal, each as one line", async () => {
+    const left = await died({ sweep: { out: report(2, 1, 1), code: 1 } });
+    expect(shadowLines(left.logs)).toEqual([expect.stringMatching(/the sweep ended 2 processes it left; 1 process is still running; 1 record could not be handled$/)]);
+    const signalled = await died({ sweep: { out: report(2), code: null } });
+    expect(shadowLines(signalled.logs)).toEqual([expect.stringMatching(/the sweep was stopped before it finished; what it left is unknown$/)]);
+  });
+
   it("says plainly that this system can't end the trees on exit 2, and does not crash", async () => {
     const { logs } = await died({ sweep: { out: `${JSON.stringify({ error: "no containment operations on darwin" })}\n`, code: 2 } });
-    expect(logs.some((line) => /this system can't end what it left \(no containment operations on darwin\)/.test(line))).toBe(true);
+    expect(shadowLines(logs)).toEqual([expect.stringMatching(/this system can't end what it left \(no containment operations on darwin\)/)]);
   });
 
   it("gives one line for a report that is not JSON, and for a sweep that cannot start", async () => {
     const bad = await died({ sweep: { out: "not json\n", code: 0 } });
-    expect(bad.logs.filter((line) => /sweep's report could not be read/.test(line))).toHaveLength(1);
+    expect(shadowLines(bad.logs)).toEqual([expect.stringMatching(/sweep's report could not be read/)]);
     const broken = await died({ sweep: "throw" });
-    expect(broken.logs.filter((line) => /the sweep failed: spawn failed/.test(line))).toHaveLength(1);
+    expect(shadowLines(broken.logs)).toEqual([expect.stringMatching(/the sweep failed: spawn failed/)]);
+  });
+
+  it("retires the dead army before the sweep, holds a restart until the sweep settles, and settles a sweep that never answers", async () => {
+    const m = await died({ sweep: "hang" });
+    expect(m.every.every((t) => t.cancelled)).toBe(true);
+    const next = m.send("claude-sonnet --claim a again");
+    await settle();
+    expect(m.spawns).toHaveLength(1);
+    m.after.filter((t) => t.ms === 30_000 && !t.cancelled).forEach((t) => t.run());
+    await settle();
+    expect(m.sweepsStopped).toHaveLength(1);
+    expect(shadowLines(m.logs)).toEqual([expect.stringMatching(/the sweep gave no answer in 30 s and was stopped; what it left is unknown$/)]);
+    expect(m.spawns).toHaveLength(2);
+    m.endRelay();
+    await next.catch(() => undefined);
   });
 });
