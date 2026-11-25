@@ -561,6 +561,64 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     // Two offices in one folder close one after the other, so their git calls don't race the folder's removal.
     await first.close().catch(() => {}); await second.close();
   }, 30_000);
+
+  /** A post office stopped mid-turn: its open turn file and its read-only snapshot stay for the next one. */
+  async function stoppedMidTurn() {
+    const repo = makeRepo(); repos.push(repo);
+    let release!: () => void;
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), send: (text) => new Promise((done) => { release = () => done({ status: "completed", text, refusal: false }); }) }) }); offices.push(first);
+    const opened = await first.open("scout");
+    const pending = first.send("scout", "hang");
+    const turn = join(repo.dir, ".shadow", "v2", "turns", `${opened.session}.json`);
+    await until(() => existsSync(turn));
+    await writeFile(join(opened.cwd, "soldier.txt"), "a write\n");
+    const record = join(repo.dir, ".shadow", "v2", "snapshots", `${opened.session}.json`);
+    const finish = async () => { release(); await pending.catch(() => {}); await first.close().catch(() => {}); };
+    return { repo, opened, turn, record, finish };
+  }
+
+  it("keeps the turn baseline and snapshot pending while harness git is held, and resumes once a hold check passes (WSP-10)", async () => {
+    const { repo, opened, turn, record, finish } = await stoppedMidTurn();
+    expect(existsSync(record)).toBe(true);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    await writeFile(hook, "#!/bin/sh\n");
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(events.some((event) => event.type === "git_hold" && (event.data as { held?: boolean }).held)).toBe(true);
+    expect(events.some((event) => event.type === "startup" && (event.data as { pending?: boolean }).pending)).toBe(true);
+    expect([existsSync(turn), existsSync(opened.cwd), existsSync(record)]).toEqual([true, true, true]);
+    await expect(second.open("scout")).rejects.toThrow(/harness git held/);
+    expect([existsSync(turn), existsSync(opened.cwd)]).toEqual([true, true]);
+    rmSync(hook);
+    await second.open("scout");
+    expect([existsSync(turn), existsSync(opened.cwd), existsSync(record)]).toEqual([false, false, false]);
+    expect(events.some((event) => event.type === "late_guard" && /checked after its post office stopped/.test((event.data as { line: string }).line))).toBe(true);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ session: opened.session, files: ["soldier.txt"] });
+    await finish(); await second.close();
+  }, 60_000);
+
+  it("keeps a snapshot pending when its status check is refused, checking it with the recorded git identity (WSP-10, WSP-11)", async () => {
+    const { repo, opened, turn, record, finish } = await stoppedMidTurn();
+    const recorded = JSON.parse(await readFile(record, "utf8")) as { path: string; gitDir: string };
+    const seen: string[] = [];
+    const refusing: GitFactory = (target) => {
+      const harness = new HarnessGit({ repo: target, hooksDir: join(repo.dir, ".shadow", "v2", "hooks") });
+      return { run: async (args, kind, cwd) => {
+        if (args[0] !== "status" || resolve(target.workTree) !== resolve(recorded.path)) return harness.run(args, kind, cwd);
+        seen.push(target.gitDir);
+        return { code: 128, stdout: "", stderr: "refused" };
+      } };
+    };
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, gitFactory: refusing, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(seen).toEqual([recorded.gitDir]);
+    expect(existsSync(turn)).toBe(false);
+    expect([existsSync(opened.cwd), existsSync(record)]).toEqual([true, true]);
+    expect(events.find((event) => event.type === "snapshot" && (event.data as { pending?: boolean }).pending)?.data).toMatchObject({ session: opened.session, reason: expect.stringContaining("refused") });
+    expect(events.some((event) => event.type === "read_violation")).toBe(false);
+    await finish(); await second.close();
+  }, 60_000);
 });
 
 describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {
