@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { sweepTrees, systemOps, type SweepOps } from "./sweep.js";
+import { startTimeFromStat, sweepTrees, systemOps, type SweepOps } from "./sweep.js";
+import { probeWindowsProcess } from "./windows.js";
 import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
 
@@ -151,6 +152,13 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     await TreeRecord.create(root, "torn", { pid: 3, startTime: 30 });
     rmSync(join(treesDir(root), "torn.jsonl"));
     expect(await sweepTrees(root, fakeOps({}).ops)).toMatchObject({ swept: 0 });
+  });
+
+  it("reads an unreadable identity as unknown, never as an ended process (C7)", async () => {
+    const stat = (state: string) => `42 (a b) ${state} 1 42 42 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 777 0 0`;
+    expect([startTimeFromStat(42, stat("S")), startTimeFromStat(42, stat("Z")), startTimeFromStat(42, stat("X"))]).toEqual([777, undefined, undefined]);
+    for (const bad of ["", "42 (no end", "42 (a) S 1", "42 (a) Z"]) expect(startTimeFromStat(42, bad)).toBeNull();
+    for (const pid of [0, -1, 2 ** 32, 1.5]) expect(await probeWindowsProcess(pid)).toBeNull();
   });
 
   it("has no operations for macOS until PO-17's helper exists", () => {

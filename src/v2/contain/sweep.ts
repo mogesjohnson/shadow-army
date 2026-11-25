@@ -97,6 +97,17 @@ export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepRepo
   return report;
 }
 
+/**
+ * A Linux process's start time from its `/proc/<pid>/stat` text: `undefined` once it has ended (a zombie or dead
+ * process, which only its parent has yet to collect), `null` when the text can't be read as a stat line (unknown).
+ */
+export function startTimeFromStat(pid: number, text: string): number | undefined | null {
+  const stat = parseStat(pid, text);
+  if (!stat) return null;
+  const state = text[text.lastIndexOf(")") + 2];
+  return state === "Z" || state === "X" ? undefined : stat.startTime;
+}
+
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
 /** The real machine's operations: Linux through `/proc`, Windows through PowerShell and one process handle per end. macOS needs PO-17's helper. */
@@ -105,11 +116,7 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
     return {
       platform, wait: pause, owned: posixOwned,
       startTimeOf: async (pid) => {
-        try {
-          const text = await readFile(`/proc/${pid}/stat`, "latin1");
-          // A zombie (Z) or dead (X) process has ended: only its parent has yet to collect it.
-          return "ZX".includes(text[text.lastIndexOf(")") + 2] ?? "?") ? undefined : parseStat(pid, text)?.startTime;
-        } catch (error) { return ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "") ? undefined : null; }
+        try { return startTimeFromStat(pid, await readFile(`/proc/${pid}/stat`, "latin1")); } catch (error) { return ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "") ? undefined : null; }
       },
       commandOf: async (pid) => (await readFile(`/proc/${pid}/cmdline`, "latin1")).replaceAll("\0", " ").trim(),
       // Node has no pidfd: the identity is checked just before the signal (above), not on a handle.

@@ -526,7 +526,8 @@ const sweepHelper = async (call: string): Promise<string> =>
  * probe failed. Unknown is never read as absent: the sweep keeps the record and reports it.
  */
 export async function probeWindowsProcess(pid: number): Promise<string | undefined | null> {
-  if (!isWindowsPid(pid)) return undefined;
+  // A pid Windows can't hold is a bad record, not a process known to have ended: unknown.
+  if (!isWindowsPid(pid)) return null;
   const result = await sweepHelper(`[ShadowSweep]::Probe(${pid})`).catch(() => "unknown");
   return result === "absent" ? undefined : /^[1-9]\d*$/.test(result) ? result : null;
 }
