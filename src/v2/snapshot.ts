@@ -31,23 +31,25 @@ export function posixInspect(dir: string): FolderFacts {
   const info = lstatSync(dir);
   return { owner: info.uid === process.getuid?.() ? "owner" : info.uid === 0 ? "trusted" : "other", writableByOthers: (info.mode & 0o022) !== 0 };
 }
-/** `SHADOW_ARMY_SNAPSHOTS` (or the default in `home`), checked as WSP-11 says. A failure starts no soldier. */
+/** `SHADOW_ARMY_SNAPSHOTS`, or the default in `home`, checked as WSP-11 says: the default gets every check too. A failure starts no soldier. */
 export function validateSnapshotRoot(value: string | undefined, ctx: { home: string; folder: string; workTrees: string[]; inspect: (dir: string) => FolderFacts; exists?: (path: string) => boolean }) {
-  const bad = (reason: string) => ({ ok: false as const, reason: `SHADOW_ARMY_SNAPSHOTS ${reason}` });
-  if (value === undefined || value === "") return { ok: true as const, root: join(ctx.home, ".shadow-army", "snapshots") };
-  if (!isAbsolute(value)) return bad("must be an absolute path");
-  const root = realish(value);
+  const name = value ? "SHADOW_ARMY_SNAPSHOTS" : "the default snapshots folder";
+  const bad = (reason: string) => ({ ok: false as const, reason: `${name} ${reason}` });
+  if (value && !isAbsolute(value)) return bad("must be an absolute path");
+  const root = realish(value || join(ctx.home, ".shadow-army", "snapshots"));
   if (within(realish(ctx.folder), root)) return bad("is inside the folder");
   if (ctx.workTrees.some((tree) => within(realish(tree), root))) return bad("is inside a working tree of the repository");
   const home = realish(ctx.home);
   for (let dir = root, past = ""; dir !== past; past = dir, dir = dirname(dir)) {
-    if (existsSync(dir)) {
+    const info = lstatSync(dir, { throwIfNoEntry: false });
+    if (info) {
+      if (!info.isDirectory()) return bad(`has ${dir}, which is not a folder`);
       const facts = ctx.inspect(dir);
       if (facts.owner === "other") return bad(`has ${dir}, which another user owns`);
       if (facts.writableByOthers) return bad(`has ${dir}, which another user can write`);
     }
     if (dir !== root && !within(home, dir)) {
-      const found = GUIDANCE.find((name) => (ctx.exists ?? existsSync)(join(dir, name)));
+      const found = GUIDANCE.find((guide) => (ctx.exists ?? existsSync)(join(dir, guide)));
       if (found) return bad(`has ${join(dir, found)} above it, which soldiers' CLIs would load`);
     }
   }
@@ -61,31 +63,78 @@ export function removeInside(root: string, path: string) {
   if (link || real === realish(root) || !within(realish(root), real)) throw new SnapshotError(`refusing to remove ${path}: not a folder inside ${root}`);
   rmSync(real, { recursive: true, force: true, maxRetries: 3 });
 }
+/** True when `path` is a real folder (no link) directly inside the real folder `parent`. */
+function plainChild(parent: string, path: string) {
+  const info = lstatSync(path, { throwIfNoEntry: false });
+  return !!info && info.isDirectory() && !info.isSymbolicLink() && fold(dirname(realpathSync(path))) === fold(realpathSync(parent));
+}
 export interface Snapshot { path: string; subfolder: string; gitDir: string; commonDir: string }
 export interface OpenOptions { root: string; folder: string; sessionId: string; repo: { gitDir: string; workTree: string; commonDir: string }; git: GitFactory; ref?: string }
 const gitDirOf = (path: string) => resolve(path, readFileSync(join(path, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim());
-/** Opens a session's snapshot of `ref` (HEAD) under `root`. A failure means the soldier does not start. */
+/** The registrations under `<commonDir>/worktrees` whose `gitdir` file names `path`'s `.git`. */
+function registrationsOf(commonDir: string, path: string) {
+  const base = join(commonDir, "worktrees"), want = fold(realish(join(path, ".git")));
+  let names: string[] = [];
+  try { names = readdirSync(base); } catch { return []; }
+  return names.map((n) => join(base, n)).filter((admin) => {
+    try { return fold(realish(readFileSync(join(admin, "gitdir"), "utf8").trim())) === want; } catch { return false; }
+  });
+}
+/** Removes one worktree: its folder inside `root` and its own registration, then checks git no longer lists it. Nothing else is pruned. */
+async function dropWorktree(root: string, repo: OpenOptions["repo"], git: GitFactory, path: string) {
+  removeInside(root, path);
+  for (const admin of registrationsOf(repo.commonDir, path)) removeInside(join(repo.commonDir, "worktrees"), admin);
+  if ((await listWorktrees(runIn(git, repo))).includes(fold(realish(path)))) throw new SnapshotError(`snapshot ${path} is still registered`);
+}
+/** Opens a session's snapshot of `ref` (HEAD) under `root`. A failure means the soldier does not start, and leaves nothing behind. */
 export async function openSnapshot(options: OpenOptions): Promise<Snapshot> {
   if (!/^[\w][\w.-]*$/.test(options.sessionId)) throw new SnapshotError(`snapshot could not be made: bad session id ${options.sessionId}`);
   const subfolder = snapshotSubfolder(options.root, options.folder), path = join(subfolder, options.sessionId);
+  let made = false;
   try {
     mkdirSync(subfolder, { recursive: true });
-    writeFileSync(join(subfolder, FOLDER_FILE), options.folder);
-    const made = await runIn(options.git, options.repo)(["worktree", "add", "-q", "--detach", path, options.ref ?? "HEAD"], "snapshot");
-    if (made.code !== 0) throw new Error(made.stderr.trim() || `git exited with ${made.code}`);
+    if (!plainChild(options.root, subfolder)) throw new Error(`${subfolder} is not a folder inside ${options.root}`);
+    const marker = join(subfolder, FOLDER_FILE), info = lstatSync(marker, { throwIfNoEntry: false });
+    if (info && (!info.isFile() || info.nlink !== 1 || readFileSync(marker, "utf8") !== options.folder)) throw new Error(`${marker} is not this army's`);
+    if (!info) writeFileSync(marker, options.folder, { flag: "wx" });
+    if (lstatSync(path, { throwIfNoEntry: false })) throw new Error(`${path} already exists`);
+    made = true;
+    const added = await runIn(options.git, options.repo)(["worktree", "add", "-q", "--detach", path, options.ref ?? "HEAD"], "snapshot");
+    if (added.code !== 0) throw new Error(added.stderr.trim() || `git exited with ${added.code}`);
+    if (!plainChild(subfolder, path)) throw new Error(`${path} is not a folder inside ${subfolder}`);
+    const gitDir = gitDirOf(path);
+    if (!registrationsOf(options.repo.commonDir, path).some((admin) => fold(realish(admin)) === fold(realish(gitDir)))) throw new Error(`${path} is not registered`);
+    return { path, subfolder, gitDir, commonDir: options.repo.commonDir };
   } catch (error) {
-    throw new SnapshotError(`snapshot could not be made: ${error instanceof Error ? error.message : String(error)}`);
+    let message = error instanceof Error ? error.message : String(error);
+    if (made) await dropWorktree(options.root, options.repo, options.git, path).catch((undo) => { message += `; cleanup failed: ${undo instanceof Error ? undo.message : String(undo)}`; });
+    if (made || !lstatSync(subfolder, { throwIfNoEntry: false })?.isSymbolicLink()) dropEmptySubfolder(subfolder);
+    throw new SnapshotError(`snapshot could not be made: ${message}`);
   }
-  return { path, subfolder, gitDir: gitDirOf(path), commonDir: options.repo.commonDir };
 }
 const runIn = (git: GitFactory, repo: OpenOptions["repo"]): RunGit => { const handle = git(repo); return (args, kind, cwd) => handle.run(args, kind, cwd); };
 const own = (snapshot: Snapshot, git: GitFactory) => runIn(git, { gitDir: snapshot.gitDir, workTree: snapshot.path, commonDir: snapshot.commonDir });
+/** A git command's output; a nonzero exit is an error, never empty data. */
+async function must(run: RunGit, args: string[], kind: HarnessKind = "guard") {
+  const result = await run(args, kind);
+  if (result.code !== 0) throw new SnapshotError(`git ${args.slice(0, 2).join(" ")} failed: ${result.stderr.trim() || `exit ${result.code}`}`);
+  return result.stdout;
+}
+const entries = (out: string) => out.split("\0").filter(Boolean);
+async function headOf(run: RunGit) {
+  const head = (await must(run, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(head)) throw new SnapshotError(`git rev-parse gave no commit: ${head}`);
+  return head;
+}
+async function listWorktrees(run: RunGit) {
+  return entries(await must(run, ["worktree", "list", "--porcelain", "-z"], "other")).filter((l) => l.startsWith("worktree ")).map((l) => fold(realish(l.slice(9))));
+}
 const hashOf = (file: string) => {
   const info = lstatSync(file);
   return info.isSymbolicLink() ? `link:${readlinkSync(file)}` : createHash("sha256").update(readFileSync(file)).digest("hex");
 };
 async function changedPaths(run: RunGit) {
-  const out = (await run(["status", "--porcelain=v1", "-z", "--untracked-files=all"], "guard")).stdout.split("\0");
+  const out = (await must(run, ["status", "--porcelain=v1", "-z", "--untracked-files=all"])).split("\0");
   const paths: string[] = [];
   for (let i = 0; i < out.length; i++) {
     if (out[i].length < 4) continue;
@@ -93,6 +142,12 @@ async function changedPaths(run: RunGit) {
     if (/[RC]/.test(out[i].slice(0, 2))) i++; // the original name of a rename
   }
   return paths;
+}
+/** Paths changed against HEAD, and untracked files not ignored by the `.gitignore` files on disk and `exclude` (no other ignore source). */
+async function auditPaths(run: RunGit, exclude: string[]) {
+  const tracked = entries(await must(run, ["diff", "--name-only", "-z", "--no-renames", "HEAD"]));
+  const others = entries(await must(run, ["ls-files", "-z", "--others", "--exclude-per-directory=.gitignore", ...exclude.map((p) => `--exclude=${p}`)]));
+  return [...tracked, ...others];
 }
 /** What `git status --ignored` lists as ignored, less `.shadow/` (W12-4: the guard compares these too). */
 export async function ignoredEntries(run: RunGit) {
@@ -113,47 +168,74 @@ function hashedPaths(root: string) {
   }
   return found;
 }
-async function fingerprint(snapshot: Snapshot, run: RunGit) {
+async function fingerprint(snapshot: Snapshot, run: RunGit, exclude: string[]) {
   const prints: Record<string, string> = {};
-  for (const path of new Set([...await changedPaths(run), ...hashedPaths(snapshot.path)])) {
+  for (const path of new Set([...await auditPaths(run, exclude), ...hashedPaths(snapshot.path)])) {
     const file = join(snapshot.path, path);
     prints[path] = lstatSync(file, { throwIfNoEntry: false }) ? hashOf(file) : "gone";
   }
   return prints;
 }
+/**
+ * `rel` inside the snapshot, made safe to replace: every folder above it is a real folder (made if missing), and whatever
+ * is at `rel` is unlinked, so a link or hard link there is never written through. Undefined when a folder above it is a link.
+ */
+function replaceable(snapshot: Snapshot, rel: string) {
+  let dir = snapshot.path;
+  for (const part of rel.split("/").slice(0, -1)) {
+    dir = join(dir, part);
+    const info = lstatSync(dir, { throwIfNoEntry: false });
+    if (!info) mkdirSync(dir);
+    else if (!info.isDirectory() || info.isSymbolicLink()) return undefined;
+  }
+  const file = join(dir, basename(rel));
+  if (!within(realpathSync(snapshot.path), realish(dir))) return undefined;
+  const info = lstatSync(file, { throwIfNoEntry: false });
+  if (info?.isDirectory() && !info.isSymbolicLink()) return undefined;
+  if (info) rmSync(file, { force: true });
+  return file;
+}
 
-/** What a turn began with: the HEAD, the `.gitignore` files it saw (base64) and every audited file's hash. */
-export interface TurnStart { head: string; ignores: Record<string, string>; prints: Record<string, string> }
+/** What a turn began with: the HEAD, its ignore rules (every `.gitignore` on disk, base64, and info/exclude's patterns) and every audited file's hash. */
+export interface TurnStart { head: string; ignores: Record<string, string>; exclude: string[]; prints: Record<string, string> }
 export interface ReadViolation { files: string[]; head?: { from: string; to: string } }
 
 export async function beginTurn(snapshot: Snapshot, git: GitFactory): Promise<TurnStart> {
   const run = own(snapshot, git);
-  const head = (await run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+  const head = await headOf(run);
   const ignores: Record<string, string> = {};
-  for (const path of (await run(["ls-files", "-z", "--cached"], "guard")).stdout.split("\0").filter((p) => basename(p) === ".gitignore")) {
-    ignores[path] = readFileSync(join(snapshot.path, path)).toString("base64");
+  for (const path of entries(await must(run, ["ls-files", "-z", "--cached", "--others"])).filter((p) => basename(p) === ".gitignore")) {
+    const file = join(snapshot.path, path);
+    if (lstatSync(file, { throwIfNoEntry: false })?.isFile()) ignores[path] = readFileSync(file).toString("base64");
   }
-  return { head, ignores, prints: await fingerprint(snapshot, run) };
+  let exclude: string[] = [];
+  try { exclude = readFileSync(join(snapshot.commonDir, "info", "exclude"), "utf8").split(/\r?\n/).filter((l) => l.trim() !== "" && !l.startsWith("#")); } catch { /* none */ }
+  return { head, ignores, exclude, prints: await fingerprint(snapshot, run, exclude) };
 }
 
 /**
- * The turn's writes: files git doesn't ignore by the rules the turn began with, ARM-6's paths even where
- * git ignores them, and a moved HEAD. Rules the turn changed or added are put back first, so they hide nothing.
- * Other ignored output is not a write.
+ * The turn's writes: files git doesn't ignore by the rules the turn began with, ARM-6's paths even where git ignores them,
+ * the files of commits the turn made, and a moved HEAD. `.gitignore` files the turn changed or added are put back first,
+ * so they hide nothing; one behind a linked folder is reported and left. Other ignored output is not a write.
  */
 export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitFactory): Promise<ReadViolation | undefined> {
   const run = own(snapshot, git);
   const files = new Set<string>();
-  for (const path of (await run(["ls-files", "-z", "--others"], "guard")).stdout.split("\0")) {
-    if (basename(path) === ".gitignore" && !(path in start.ignores)) { files.add(path); rmSync(join(snapshot.path, path), { force: true }); }
+  for (const path of entries(await must(run, ["ls-files", "-z", "--others"]))) {
+    if (basename(path) === ".gitignore" && !(path in start.ignores)) { files.add(path); replaceable(snapshot, path); }
   }
   for (const [path, data] of Object.entries(start.ignores)) {
     const file = join(snapshot.path, path), bytes = Buffer.from(data, "base64");
-    if (!existsSync(file) || !readFileSync(file).equals(bytes)) { files.add(path); writeFileSync(file, bytes); }
+    const info = lstatSync(file, { throwIfNoEntry: false });
+    if (info?.isFile() && !info.isSymbolicLink() && info.nlink === 1 && within(realpathSync(snapshot.path), realpathSync(file)) && readFileSync(file).equals(bytes)) continue;
+    files.add(path);
+    const target = replaceable(snapshot, path);
+    if (target) writeFileSync(target, bytes, { flag: "wx" });
   }
-  const now = await fingerprint(snapshot, run);
+  const now = await fingerprint(snapshot, run, start.exclude);
   for (const path of new Set([...Object.keys(now), ...Object.keys(start.prints)])) if (now[path] !== start.prints[path]) files.add(path);
-  const head = (await run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+  const head = await headOf(run);
+  if (head !== start.head) for (const path of entries(await must(run, ["diff", "--name-only", "-z", "--no-renames", start.head, head]))) files.add(path);
   if (files.size === 0 && head === start.head) return undefined;
   return { files: [...files].sort(), ...(head === start.head ? {} : { head: { from: start.head, to: head } }) };
 }
@@ -167,10 +249,9 @@ export async function discardWrites(snapshot: Snapshot, start: TurnStart, git: G
   }
 }
 
-/** Removes the snapshot, and its subfolder once nothing but the path file is left. */
+/** Removes the snapshot and its own registration, and its subfolder once nothing but the path file is left. */
 export async function removeSnapshot(snapshot: Snapshot, root: string, repo: OpenOptions["repo"], git: GitFactory) {
-  removeInside(root, snapshot.path);
-  await runIn(git, repo)(["worktree", "prune"], "other");
+  await dropWorktree(root, repo, git, snapshot.path);
   dropEmptySubfolder(snapshot.subfolder);
 }
 function dropEmptySubfolder(subfolder: string) {
@@ -189,11 +270,11 @@ export async function closeSnapshot(snapshot: Snapshot, start: TurnStart, root: 
 export interface Orphan { folder: string; snapshot: string; files: string[]; head: string }
 /**
  * Handles snapshots of another army whose folder is gone from disk or from `git worktree list`: each is reported, then removed.
- * A subfolder whose path file can't be read, or that is this army's own, is left as it is.
+ * The listing must succeed. A subfolder whose path file can't be read or doesn't match its name, or that is this army's own,
+ * is left as it is; so is a session that isn't a registered worktree of this repository.
  */
 export async function sweepOrphans(options: { roots: string[]; folder: string; repo: OpenOptions["repo"]; git: GitFactory; report: (orphan: Orphan) => void | Promise<void> }) {
-  const main = runIn(options.git, options.repo);
-  const listed = (await main(["worktree", "list", "--porcelain"], "other")).stdout.split(/\r?\n/).filter((l) => l.startsWith("worktree ")).map((l) => fold(realish(l.slice(9))));
+  const listed = await listWorktrees(runIn(options.git, options.repo));
   const mine = snapshotSubfolder("", options.folder), unreadable: string[] = [];
   for (const root of new Set(options.roots)) {
     if (!existsSync(root)) continue;
@@ -202,18 +283,18 @@ export async function sweepOrphans(options: { roots: string[]; folder: string; r
       if (!entry.isDirectory() || !/-[0-9a-f]{12}$/.test(entry.name) || entry.name === basename(mine)) continue;
       let armyFolder: string;
       try { armyFolder = readFileSync(join(subfolder, FOLDER_FILE), "utf8"); } catch { unreadable.push(subfolder); continue; }
+      if (basename(snapshotSubfolder("", armyFolder)) !== entry.name) { unreadable.push(subfolder); continue; }
       if (existsSync(armyFolder) && listed.includes(fold(realish(armyFolder)))) continue;
       for (const session of readdirSync(subfolder, { withFileTypes: true }).filter((e) => e.isDirectory())) {
         const path = join(subfolder, session.name);
         let gitDir: string;
         try { gitDir = gitDirOf(path); } catch { continue; }
-        if (!within(realish(options.repo.commonDir), realish(gitDir))) continue; // another repository's
+        if (!registrationsOf(options.repo.commonDir, path).some((admin) => fold(realish(admin)) === fold(realish(gitDir)))) continue; // not this repository's
         const run = runIn(options.git, { gitDir, workTree: path, commonDir: options.repo.commonDir });
-        const head = (await run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+        const head = await headOf(run);
         await options.report({ folder: armyFolder, snapshot: path, files: await changedPaths(run), head });
-        removeInside(root, path);
+        await dropWorktree(root, options.repo, options.git, path);
       }
-      await main(["worktree", "prune"], "other");
       dropEmptySubfolder(subfolder);
     }
   }
