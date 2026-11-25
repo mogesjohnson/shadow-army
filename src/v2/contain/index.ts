@@ -1,8 +1,15 @@
+import { helperPath, spawnManagedProcess as spawnLinux } from "./linux.js";
 import { spawnManagedProcess as spawnWindows, type ManagedProcess, type ManagedProcessOptions } from "./windows.js";
 
 export type { ManagedProcess, ManagedProcessOptions, ProcessExit } from "./windows.js";
 
-type Driver = (options: ManagedProcessOptions) => Promise<ManagedProcess>;
+type Driver = ((options: ManagedProcessOptions) => Promise<ManagedProcess>) & { readonly helper?: string };
+
+/** The Linux guardian driver bound to the helper the table names for this processor, not to the ambient `process.arch`. */
+function linuxFor(arch: string): Driver {
+  const helper = helperPath(arch);
+  return Object.assign((options: ManagedProcessOptions) => spawnLinux(options, helper), { helper });
+}
 
 /**
  * PO-12's table, keyed `<process.platform>-<process.arch>`. `null` is a pair the spec lists whose
@@ -10,8 +17,8 @@ type Driver = (options: ManagedProcessOptions) => Promise<ManagedProcess>;
  * Both get PO-14's "no helper" message.
  */
 export const containmentTable: Readonly<Record<string, Driver | null>> = {
-  "linux-x64": null,
-  "linux-arm64": null,
+  "linux-x64": linuxFor("x64"),
+  "linux-arm64": linuxFor("arm64"),
   "darwin-arm64": null,
   "darwin-x64": null,
   "win32-x64": spawnWindows,

@@ -1,4 +1,9 @@
 import { it } from "vitest";
+import { containmentTable } from "./contain/index.js";
 
-/** M1a is Windows-only (D-39); POSIX containment is M1b. Tests that start a native session run only on Windows. */
-export const windowsOnly = it.runIf(process.platform === "win32");
+/**
+ * Tests that start a native session run only where this system and processor have containment (PO-12):
+ * Windows since M1a, Linux since M1b-15. macOS has none yet, so they skip there.
+ */
+export const hasContainment = Boolean(containmentTable[`${process.platform}-${process.arch}`]);
+export const windowsOnly = it.runIf(hasContainment);
