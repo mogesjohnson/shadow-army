@@ -66,6 +66,50 @@ describe("tree records (PO-16, M1-AC16)", () => {
     await record.listing([{ pid: 8, startTime: 80 }]);
     expect(errors).toHaveLength(1);
   });
+
+  it("tries a listing line again 100 ms later, so a passing fault loses nothing (PO-5)", async () => {
+    const errors: unknown[] = [];
+    const waits: number[] = [];
+    const record = await TreeRecord.create(root, "t", { pid: 1, startTime: 1 }, undefined, (error) => errors.push(error), async (ms) => {
+      waits.push(ms);
+      rmSync(file("t"), { recursive: true });
+      writeFileSync(file("t"), '{"kind":"post-office","pid":1,"startTime":1}\n'); // The disk is writable again.
+    });
+    rmSync(file("t"));
+    mkdirSync(file("t"));
+    await record.listing([{ pid: 5, startTime: 50 }]);
+    expect(waits).toEqual([100]);
+    expect(errors).toEqual([]);
+    expect(parseTreeFile(readFileSync(file("t"), "utf8"))).toContainEqual({ kind: "process", pid: 5, startTime: 50 });
+  });
+
+  it("keeps a line that failed twice for the next listing, and ends a line cut short before the next one", async () => {
+    const errors: unknown[] = [];
+    const record = await TreeRecord.create(root, "t", { pid: 1, startTime: 1 }, undefined, (error) => errors.push(error), async () => {});
+    rmSync(file("t"));
+    mkdirSync(file("t"));
+    await record.listing([{ pid: 5, startTime: 50 }]);
+    await record.listing([{ pid: 6, startTime: 60 }]);
+    expect(errors).toHaveLength(1); // Reported once.
+    rmSync(file("t"), { recursive: true });
+    writeFileSync(file("t"), '{"kind":"post-office","pid":1,"startTime":1}\n{"kind":"process","pid":5,"sta'); // A write cut short.
+    await record.listing([]); // Both processes have left the listing; their identities are still recorded.
+    expect(parseTreeFile(readFileSync(file("t"), "utf8"))).toEqual([
+      { kind: "post-office", pid: 1, startTime: 1 }, { kind: "process", pid: 5, startTime: 50 }, { kind: "process", pid: 6, startTime: 60 },
+    ]);
+  });
+
+  it("writes only the record's own fields, whatever else the caller's identity carries (PO-16)", async () => {
+    const extra = { pid: 10, startTime: 100, nonce: "n-123", env: { TOKEN: "sk-ant-secret" } };
+    const record = await TreeRecord.create(root, "x", extra, extra);
+    await record.add({ ...extra, kind: "cli" } as never);
+    await record.add({ kind: "job", label: "sa.job.1", coalition: "77", secret: "s" } as never);
+    await record.listing([extra]);
+    const text = readFileSync(file("x"), "utf8");
+    expect(text).not.toMatch(/nonce|TOKEN|secret/);
+    expect(text.split("\n").filter(Boolean).every((line) => JSON.stringify(parseTreeLine(line)) === line)).toBe(true);
+    await expect(record.add({ kind: "cli", pid: 0, startTime: 1 })).rejects.toThrow("invalid tree line");
+  });
 });
 
 describe("the failure path (PO-15, M1-AC19)", () => {
@@ -109,6 +153,27 @@ describe("the failure path (PO-15, M1-AC19)", () => {
     expect(down.isDown("Iron")).toBe(false);
     down.fail("Igris"); // Nothing is named (unknown leftovers): the next reconnect runs the check and starts.
     expect(await down.mayStart("Igris", ops)).toBe(true);
+  });
+
+  it("keeps the soldier down when a newer failure is recorded while a reconnect's check runs", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    const ops: ProcessOps = { startTimeOf: async () => { await gate; return undefined; }, end: async () => {} };
+    const down = new DownSoldiers();
+    down.fail("Iron", [sudo]);
+    const reconnect = down.mayStart("Iron", ops); // The old named process is gone, but the probe is still pending.
+    down.fail("Iron", [{ ...sudo, pid: 5151 }]); // A newer containment failure.
+    release();
+    expect(await reconnect).toBe(false);
+    expect(down.isDown("Iron")).toBe(true);
+  });
+
+  it("says, for a running turn cut short, that what unknown processes change won't be on its attribution card", () => {
+    const warning = "What those processes change won't be on the turn's attribution card.";
+    expect(containmentFailedMessage("Iron", { leftovers: "unknown", turnCutShort: true })).toBe(
+      `Containment failed for Iron: processes the CLI started may still be running. Iron is down and won't restart by itself. ${warning}`);
+    expect(containmentFailedMessage("Iron", { leftovers: "unknown" })).not.toContain("attribution");
+    expect(containmentFailedMessage("Iron", { leftovers: [sudo], turnCutShort: true })).not.toContain("attribution");
   });
 
   it("holds the guard open, ending the named processes again every 10 s, until they have all ended", async () => {

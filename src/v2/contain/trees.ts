@@ -37,6 +37,19 @@ export function parseTreeLine(text: string): TreeLine | undefined {
     ? { kind, pid: line.pid, startTime: line.startTime } : undefined;
 }
 
+/**
+ * The line exactly as written: only the record's own fields, whatever else the caller's object carries, so no
+ * secret or nonce reaches the file (PO-16). A line of the wrong shape throws.
+ */
+function serializeTreeLine(line: TreeLine): string {
+  const own = line.kind === "job"
+    ? { kind: line.kind, label: line.label, coalition: line.coalition }
+    : { kind: line.kind, pid: line.pid, startTime: line.startTime };
+  const text = JSON.stringify(own);
+  if (parseTreeLine(text) === undefined) throw new Error("invalid tree line");
+  return text;
+}
+
 /** A reader skips a line that doesn't parse, as for logs (PO-5). */
 export function parseTreeFile(text: string): TreeLine[] {
   return text.split("\n").flatMap((line) => parseTreeLine(line) ?? []);
@@ -58,9 +71,16 @@ const sameIdentity = (a: Identity, b: Identity): boolean => a.pid === b.pid && a
 /** One tree's entry under `.shadow/v2/trees/`: one JSON Lines file, each line flushed as it is written (PO-16). */
 export class TreeRecord {
   private readonly listed: Identity[] = [];
+  /** Listed processes whose line couldn't be written yet: kept, so one that leaves the listing isn't lost. */
+  private readonly pending: Identity[] = [];
   private reported = false;
+  /** A write failed, so the file may end in a line cut short: the next write ends it first (PO-5). */
+  private torn = false;
 
-  private constructor(private readonly file: string, private readonly onListingFailure: (error: unknown) => void) {}
+  private constructor(
+    private readonly file: string, private readonly onListingFailure: (error: unknown) => void,
+    private readonly wait: (ms: number) => Promise<void>,
+  ) {}
 
   /**
    * Writes the post office's identity, and the guardian's if known, before the CLI starts. A failure
@@ -69,41 +89,56 @@ export class TreeRecord {
   static async create(
     root: string, id: string, postOffice: Identity, guardian?: Identity,
     onListingFailure: (error: unknown) => void = () => {},
+    wait: (ms: number) => Promise<void> = (ms) => new Promise<void>((done) => setTimeout(done, ms)),
   ): Promise<TreeRecord> {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(id)) throw new Error("invalid tree id");
     await mkdir(treesDir(root), { recursive: true });
-    const record = new TreeRecord(join(treesDir(root), `${id}.jsonl`), onListingFailure);
-    await record.append({ kind: "post-office", ...postOffice }, "wx");
-    if (guardian) await record.add({ kind: "guardian", ...guardian });
+    const record = new TreeRecord(join(treesDir(root), `${id}.jsonl`), onListingFailure, wait);
+    await record.append({ kind: "post-office", pid: postOffice.pid, startTime: postOffice.startTime }, "wx");
+    if (guardian) await record.add({ kind: "guardian", pid: guardian.pid, startTime: guardian.startTime });
     return record;
   }
 
   private async append(line: TreeLine, flag: "a" | "wx" = "a"): Promise<void> {
-    const handle = await open(this.file, flag, 0o600);
+    const text = `${this.torn ? "\n" : ""}${serializeTreeLine(line)}\n`;
     try {
-      await handle.appendFile(`${JSON.stringify(line)}\n`, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
+      const handle = await open(this.file, flag, 0o600);
+      try {
+        await handle.appendFile(text, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      this.torn = true;
+      throw error;
     }
+    this.torn = false;
   }
 
   /** Adds a line, such as the CLI's identity once it has started, or a macOS job. A failure throws. */
   add(line: TreeLine): Promise<void> { return this.append(line); }
 
   /**
-   * Adds each process of a listing that is not yet recorded (PO-11). A line that can't be added is reported
-   * once, as PO-5 says for a log write that fails; it does not stop the session.
+   * Adds each process of a listing that is not yet recorded (PO-11). As PO-5 says for a log write, a line that
+   * fails is tried once more 100 ms later; if that fails too it is reported once, kept, and tried again at each
+   * later listing, whether or not the process is still listed. It does not stop the session.
    */
   async listing(processes: readonly Identity[]): Promise<void> {
     for (const process of processes) {
-      if (this.listed.some((known) => sameIdentity(known, process))) continue;
+      const identity = { pid: process.pid, startTime: process.startTime };
+      if (![...this.listed, ...this.pending].some((known) => sameIdentity(known, identity))) this.pending.push(identity);
+    }
+    while (this.pending.length > 0) {
+      const next = this.pending[0]!;
+      const line: TreeLine = { kind: "process", ...next };
       try {
-        await this.append({ kind: "process", pid: process.pid, startTime: process.startTime });
-        this.listed.push({ pid: process.pid, startTime: process.startTime });
+        try { await this.append(line); } catch { await this.wait(100); await this.append(line); }
       } catch (error) {
         if (!this.reported) { this.reported = true; this.onListingFailure(error); }
+        return; // The disk is failing: the rest wait for the next listing.
       }
+      this.listed.push(this.pending.shift()!);
     }
   }
 
@@ -134,31 +169,41 @@ const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim().slice
 
 /**
  * PO-15's line for the log and Claude's transcript. Each command line goes through `redact()` (WSP-8). Where the
- * post office can't tell which processes remain (`"unknown"`), it says processes the CLI started may still run.
+ * post office can't tell which processes remain (`"unknown"`), it says processes the CLI started may still run,
+ * and, with `turnCutShort` for a turn that was running and is cut short, that what they change won't be on the
+ * turn's attribution card.
  */
 export function containmentFailedMessage(
-  soldier: string, what: { reason: string } | { leftovers: readonly Leftover[] | "unknown" }, redactText: (text: string) => string = (text) => redact(text) as string,
+  soldier: string, what: { reason: string } | { leftovers: readonly Leftover[] | "unknown"; turnCutShort?: boolean },
+  redactText: (text: string) => string = (text) => redact(text) as string,
 ): string {
   const named = "reason" in what ? undefined : what.leftovers;
   const detail = "reason" in what ? oneLine(redactText(what.reason))
     : named === "unknown" || named?.length === 0 ? "processes the CLI started may still be running"
       : `${named!.length} process${named!.length === 1 ? "" : "es"} couldn't be ended (${named!.map((one) => `${one.pid} ${oneLine(redactText(one.command))}`).join(", ")})`;
-  return `Containment failed for ${soldier}: ${detail}. ${soldier} is down and won't restart by itself.`;
+  const unknown = !("reason" in what) && (named === "unknown" || named?.length === 0);
+  const card = unknown && "turnCutShort" in what && what.turnCutShort ? " What those processes change won't be on the turn's attribution card." : "";
+  return `Containment failed for ${soldier}: ${detail}. ${soldier} is down and won't restart by itself.${card}`;
 }
 
 /** Soldiers whose containment failed. PO-1's crash count does not restart them (PO-15). */
 export class DownSoldiers {
-  private readonly down = new Map<string, readonly Leftover[]>();
+  /** Each failure is its own object, so a reconnect can tell whether a newer one came while it checked. */
+  private readonly down = new Map<string, { leftovers: readonly Leftover[] }>();
 
   /** Marks the soldier down, naming the processes still running. Nothing restarts it by itself. */
-  fail(soldier: string, leftovers: readonly Leftover[] = []): void { this.down.set(soldier, leftovers); }
+  fail(soldier: string, leftovers: readonly Leftover[] = []): void { this.down.set(soldier, { leftovers }); }
   isDown(soldier: string): boolean { return this.down.has(soldier); }
 
-  /** A reconnect starts the CLI only once no process the error named still runs (PO-15). */
+  /**
+   * A reconnect starts the CLI only once no process the error named still runs (PO-15). A failure recorded while
+   * the check ran keeps the soldier down: that newer failure's processes weren't checked.
+   */
   async mayStart(soldier: string, ops: ProcessOps): Promise<boolean> {
-    const named = this.down.get(soldier);
-    if (!named) return true;
-    if ((await stillRunning(ops, named)).length > 0) return false;
+    const failure = this.down.get(soldier);
+    if (!failure) return true;
+    if ((await stillRunning(ops, failure.leftovers)).length > 0) return false;
+    if (this.down.get(soldier) !== failure) return false;
     this.down.delete(soldier);
     return true;
   }
