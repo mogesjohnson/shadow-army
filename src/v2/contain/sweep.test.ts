@@ -144,6 +144,41 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(closed).toBe(1);
   });
 
+  it("keeps a tree left incomplete across sweeps, until nothing it may have left still runs (C9)", async () => {
+    const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
+    await record.add({ kind: "git", pid: 8, startTime: 80 });
+    const { ops } = fakeOps({ 8: 80 });
+    expect(await sweepTrees(root, { ...ops, endProcess: async (target, tree) => { await ops.endProcess(target, tree); return "incomplete"; } }))
+      .toMatchObject({ swept: 0, left: [{ pid: 8 }] });
+    // Later sweeps find the parent gone: that alone resolves nothing.
+    const later = fakeOps({}).ops;
+    const asked: unknown[] = [];
+    for (const leftOf of [undefined, async () => 1, async () => null, async () => { throw new Error("no listing"); }]) {
+      expect(await sweepTrees(root, { ...later, leftOf: leftOf && (async (target) => { asked.push(target); return leftOf(); }) })).toMatchObject({ swept: 0, left: [{ pid: 8 }] });
+    }
+    expect(asked).toEqual(Array(3).fill({ kind: "git", pid: 8, startTime: 80 }));
+    expect(await sweepTrees(root, { ...later, leftOf: async () => 0 })).toMatchObject({ swept: 1, left: [] });
+    expect([existsSync(join(treesDir(root), "git.incomplete")), (await readTrees(root)).length]).toEqual([false, 0]);
+  });
+
+  it("starts no operation past its deadline, and gives each one the deadline it must stop by (C10)", async () => {
+    const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
+    await record.add({ kind: "git", pid: 8, startTime: 80 });
+    const { ops } = fakeOps({ 8: 80 });
+    const started: string[] = [];
+    const watched: SweepOps = {
+      ...ops,
+      owned: async (_path, _stats, until) => { started.push(`owned ${until}`); return true; },
+      startTimeOf: async (pid, until) => { started.push(`probe ${pid} ${until}`); return ops.startTimeOf(pid); },
+      endProcess: async (target, tree, until) => { started.push(`end ${target.pid} ${until}`); return ops.endProcess(target, tree); },
+    };
+    // An exhausted budget starts nothing, the owner checks included: the record stays, unverified.
+    expect(await sweepTrees(root, watched, 0)).toMatchObject({ swept: 0, unverified: 1 });
+    expect(started).toEqual([]);
+    expect(await sweepTrees(root, watched, 1_000)).toMatchObject({ swept: 1, ended: [{ pid: 8 }] });
+    expect(started).toEqual(["owned 1000", "owned 1000", "owned 1000", "owned 1000", "probe 4 1000", "probe 8 1000", "probe 8 1000", "end 8 1000", "probe 8 1000", "probe 8 1200"]);
+  });
+
   it("never ends a process on a record it couldn't verify as the user's own, and keeps the record", async () => {
     const record = await TreeRecord.create(root, "foreign", { pid: 3, startTime: 30 });
     await record.add({ kind: "cli", pid: 5, startTime: 50 });

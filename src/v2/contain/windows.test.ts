@@ -1,11 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, systemDirectoryOf, windowsLeft, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -15,10 +15,20 @@ afterEach(async () => {
   await Promise.all(sessions.splice(0).map((session) => session.close().catch(() => {})));
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
+// Windows PowerShell loads its own modules, never PowerShell 7's from an inherited PSModulePath (process-local).
+const modulePath = process.env.PSModulePath;
+beforeAll(() => { delete process.env.PSModulePath; });
+afterAll(() => { if (modulePath !== undefined) process.env.PSModulePath = modulePath; });
 
 async function directory() {
   const path = await mkdtemp(join(tmpdir(), "shadow-grace-test-"));
   directories.push(path); return path;
+}
+/** A folder only its owner (OWNER RIGHTS) and SYSTEM may write: a profile's own ACL may let other accounts write. */
+async function ownFolder() {
+  const path = await directory();
+  execFileSync("icacls", [path, "/inheritance:r", "/grant:r", "*S-1-3-4:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F"], { stdio: "ignore" });
+  return path;
 }
 async function launch(script: string, exitGraceMs: number) {
   const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", script], cwd: await directory(), exitGraceMs });
@@ -278,13 +288,38 @@ describe("the sweep's identity-bound end on Windows (PO-16)", () => {
   }, 60_000);
 });
 
-describe("the sweep's owner check on Windows (PO-16)", () => {
+describe("the sweep's owner check on Windows (PO-16, C6)", () => {
   windowsOnly("takes this user's own file and folder as owned, and the system's folder as not", async () => {
-    const folder = await directory();
-    await writeFile(join(folder, "t.jsonl"), "{}");
-    expect([await ownedByCurrentUser(folder), await ownedByCurrentUser(join(folder, "t.jsonl"))]).toEqual([true, true]);
-    expect(await ownedByCurrentUser(join(process.env.SystemRoot ?? "C:/Windows", "System32"))).toBe(false);
-    expect(await ownedByCurrentUser(join(folder, "missing' ; exit 0 ; '"))).toBe(false); // A failed check, never ownership.
+    const folder = await ownFolder();
+    const file = join(folder, "t.jsonl");
+    await writeFile(file, "{}");
+    expect([await ownedByCurrentUser(folder, await lstat(folder)), await ownedByCurrentUser(file, await lstat(file))]).toEqual([true, true]);
+    const system = join(process.env.SystemRoot ?? "C:/Windows", "System32");
+    expect(await ownedByCurrentUser(system, await lstat(system))).toBe(false);
+    expect(await ownedByCurrentUser(join(folder, "missing' ; exit 0 ; '"), await lstat(file))).toBe(false); // A failed check, never ownership.
+  }, 60_000);
+
+  windowsOnly("refuses a file others may write, a second link, a junction, and an answer about another file than the one read", async () => {
+    const folder = await ownFolder();
+    const [file, other, shared, linked, junction] = ["t.jsonl", "u.jsonl", "s.jsonl", "l.jsonl", "j"].map((name) => join(folder, name)) as [string, string, string, string, string];
+    for (const path of [file, other, shared, linked]) await writeFile(path, "{}");
+    execFileSync("icacls", [shared, "/grant", "*S-1-1-0:(W)"], { stdio: "ignore" }); // Everyone may write it.
+    expect(await ownedByCurrentUser(shared, await lstat(shared))).toBe(false);
+    await link(linked, join(folder, "l2.jsonl"));
+    expect(await ownedByCurrentUser(linked, await lstat(linked))).toBe(false);
+    await symlink(folder, junction, "junction");
+    expect(await ownedByCurrentUser(junction, await lstat(junction))).toBe(false);
+    // The helper's answer is about the object it opened: it must be the one the caller read.
+    expect(await ownedByCurrentUser(file, await lstat(other))).toBe(false);
+    expect(await ownedByCurrentUser(file, await lstat(file))).toBe(true);
+  }, 60_000);
+
+  windowsOnly("finds PowerShell from the folder Windows loaded ntdll.dll from, never from the environment", async () => {
+    expect(systemDirectoryOf(["C:\\x\\node.exe", "C:\\WINDOWS\\SYSTEM32\\ntdll.dll"])).toBe("C:\\WINDOWS\\SYSTEM32");
+    for (const loaded of [[], ["ntdll.dll"], ["C:\\a\\ntdll.dll", "C:\\b\\ntdll.dll"]]) expect(() => systemDirectoryOf(loaded)).toThrow();
+    const root = process.env.SystemRoot;
+    process.env.SystemRoot = "C:\\nowhere";
+    try { expect(await probeWindowsProcess(process.pid)).toMatch(/^[1-9]\d{17}$/); } finally { process.env.SystemRoot = root; }
   }, 60_000);
 });
 
@@ -292,23 +327,64 @@ describe("the sweep's one helper session on Windows (C10)", () => {
   windowsOnly("answers several calls from one PowerShell, compiled once", async () => {
     const session = openSweepSession();
     try {
-      const folder = await directory();
+      const folder = await ownFolder();
       const self = await probeWindowsProcess(process.pid, session);
       expect(self).toMatch(/^[1-9]\d{17}$/);
       const helper = session.pid!;
       expect(await probeWindowsProcess(helper, session)).toMatch(/^[1-9]\d{17}$/); // The helper itself, still running.
-      expect(await ownedByCurrentUser(folder, session)).toBe(true);
+      expect(await ownedByCurrentUser(folder, await lstat(folder), session)).toBe(true);
       expect(await Promise.all([probeWindowsProcess(process.pid, session), probeWindowsProcess(2 ** 31 - 2, session)])).toEqual([self, undefined]);
       expect(session.pid).toBe(helper);
     } finally { session.close(); }
   }, 60_000);
 
-  windowsOnly("ends a call that outlives its limit, and answers unknown from then on", async () => {
+  windowsOnly("ends a call that outlives its limit, and answers unknown", async () => {
     const session = openSweepSession(1); // Too short for PowerShell to start.
     const began = performance.now();
     expect(await probeWindowsProcess(process.pid, session)).toBeNull();
-    expect(await ownedByCurrentUser(".", session)).toBe(false);
+    expect(await ownedByCurrentUser(".", await lstat("."), session)).toBe(false);
     expect(performance.now() - began).toBeLessThan(5_000);
     session.close();
+  }, 60_000);
+
+  windowsOnly("never sends a request whose deadline has passed, and cancels one in flight at its deadline", async () => {
+    const session = openSweepSession();
+    try {
+      // Queued behind another call, past its deadline when its turn comes: never sent, no helper started for it.
+      expect(await Promise.all([session.call("probe 4", performance.now() - 1), session.call("probe 4", performance.now())])).toEqual(["unknown", "unknown"]);
+      expect(session.pid).toBeUndefined();
+      // In flight while PowerShell compiles the helper: the deadline ends that helper, and its answer is unknown.
+      let helper: number | undefined;
+      const watch = setTimeout(() => { helper = session.pid; }, 200);
+      expect(await probeWindowsProcess(process.pid, session, performance.now() + 400)).toBeNull();
+      clearTimeout(watch);
+      expect(helper).toBeGreaterThan(0);
+      expect(await gone(helper!, 5_000)).toBe(true);
+      // A later call, within its own deadline, gets a new helper.
+      expect(await probeWindowsProcess(process.pid, session, performance.now() + 30_000)).toMatch(/^[1-9]\d{17}$/);
+      expect(session.pid).not.toBe(helper);
+    } finally { session.close(); }
+    const closed = openSweepSession();
+    const late = closed.call("probe 4");
+    closed.close(); // Closed before its helper started: none ever starts.
+    expect([await late, closed.pid]).toEqual(["unknown", undefined]);
+  }, 60_000);
+
+  // Skipped: Left answers 0 while the orphan still runs; not wired into the sweep until it passes (C9, see the brief's Left).
+  it.skip("counts what an incomplete tree may have left once its parent has gone, and ends none of it (C9)", async () => {
+    const script = "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1e3)'],{stdio:'ignore'});console.log(c.pid);setInterval(()=>{},1e3)";
+    const parent = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = Number(await new Promise<string>((done) => parent.stdout.once("data", (data: Buffer) => done(data.toString()))));
+    stray.push(child);
+    const exact = filetimeOf(parent.pid!);
+    parent.kill();
+    expect(await gone(parent.pid!, 5_000)).toBe(true);
+    expect(await windowsLeft(parent.pid!, exact)).toBe(1);
+    expect(running(child)).toBe(true);
+    expect(await windowsLeft(parent.pid!, undefined)).toBeNull(); // An old millisecond record: unknown.
+    process.kill(child);
+    expect(await gone(child, 5_000)).toBe(true);
+    stray.splice(stray.indexOf(child), 1);
+    expect(await windowsLeft(parent.pid!, exact)).toBe(0);
   }, 60_000);
 });

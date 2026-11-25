@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import type { Stats } from "node:fs";
 import { access, lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, extname, isAbsolute, join, resolve, win32 } from "node:path";
 import { Writable, type Readable } from "node:stream";
 import { windowsIdentity, type Identity } from "./trees.js";
 
@@ -469,11 +470,37 @@ public static class ShadowSweep {
     if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return "unknown";
     return exit!=0 ? "absent" : null;
   }
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateFileW(string name,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr file,out FILEINFO info);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr handle,int type,uint info,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl,out IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+  [StructLayout(LayoutKind.Sequential)] struct FILEINFO { public uint attributes,c1,c2,a1,a2,w1,w2,volume,sizeHigh,sizeLow,links,indexHigh,indexLow; }
+  // Write data, append, write EA, delete child, write attributes, DELETE, WRITE_DAC, WRITE_OWNER, MAXIMUM_ALLOWED, GENERIC_ALL, GENERIC_WRITE.
+  const int WriteRights=0x520D0156;
+  // PO-5 on the opened object itself, never on a second lookup by name (C6): no reparse point, one link for a file,
+  // this user as owner (an elevated token's default owner is a group: not enough), and a DACL that lets no one but
+  // this user, SYSTEM and Administrators write. Answers the volume serial and file index, which the caller matches
+  // with the handle it read. Any failure is "other": an unverified record.
   public static string Owned(string path) {
-    FileSystemSecurity security=System.IO.Directory.Exists(path) ? (FileSystemSecurity)System.IO.Directory.GetAccessControl(path,AccessControlSections.Owner) : System.IO.File.GetAccessControl(path,AccessControlSections.Owner);
-    IdentityReference owner=security.GetOwner(typeof(SecurityIdentifier)); WindowsIdentity me=WindowsIdentity.GetCurrent();
-    // An elevated token's files are owned by its default owner (Administrators), not its user.
-    return owner!=null && (owner.Equals(me.User) || owner.Equals(me.Owner)) ? "owned" : "other";
+    // READ_CONTROL and FILE_READ_ATTRIBUTES; backup semantics open a folder; a reparse point is opened, never followed.
+    IntPtr file=CreateFileW(path,0x20080,7,IntPtr.Zero,3,0x02200000,IntPtr.Zero); if(file==new IntPtr(-1)) return "other";
+    IntPtr descriptor=IntPtr.Zero;
+    try {
+      FILEINFO info; if(!GetFileInformationByHandle(file,out info)) return "other";
+      if((info.attributes&0x400)!=0 || ((info.attributes&0x10)==0 && info.links!=1)) return "other";
+      if(GetSecurityInfo(file,1,0x5,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,out descriptor)!=0) return "other";
+      byte[] bytes=new byte[GetSecurityDescriptorLength(descriptor)]; Marshal.Copy(descriptor,bytes,0,bytes.Length);
+      RawSecurityDescriptor security=new RawSecurityDescriptor(bytes,0); SecurityIdentifier me=WindowsIdentity.GetCurrent().User;
+      if(security.Owner==null || !security.Owner.Equals(me) || security.DiscretionaryAcl==null) return "other";
+      foreach(GenericAce ace in security.DiscretionaryAcl) {
+        if((ace.AceFlags&AceFlags.InheritOnly)!=0) continue; QualifiedAce rule=ace as QualifiedAce; if(rule==null) return "other";
+        if(rule.AceQualifier!=AceQualifier.AccessAllowed || (rule.AccessMask&WriteRights)==0) continue;
+        string sid=rule.SecurityIdentifier.Value;
+        if(!rule.SecurityIdentifier.Equals(me) && sid!="S-1-5-18" && sid!="S-1-5-32-544" && sid!="S-1-3-4") return "other";
+      }
+      return "owned "+info.volume.ToString(CultureInfo.InvariantCulture)+" "+(((ulong)info.indexHigh<<32)|info.indexLow).ToString(CultureInfo.InvariantCulture);
+    } finally { if(descriptor!=IntPtr.Zero) LocalFree(descriptor); CloseHandle(file); }
   }
   public static string Probe(uint pid) {
     IntPtr handle; long creation; string state=Open(pid,0x1000,out handle,out creation);
@@ -508,29 +535,55 @@ public static class ShadowSweep {
       return Terminated(handle) && complete;
     } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
-  // Every pid whose parent is this one; null when the processes could not be listed.
+  // Every pid whose parent is this one; null when the processes could not be listed. The listing is complete
+  // only when Process32NextW stops with ERROR_NO_MORE_FILES (C9): any other failure leaves it unknown.
   static List<uint> Children(uint parent) {
     List<uint> found=new List<uint>(); IntPtr snapshot=CreateToolhelp32Snapshot(2,0); if(snapshot==new IntPtr(-1)) return null;
     try {
       ENTRY entry=new ENTRY(); entry.size=(uint)Marshal.SizeOf(typeof(ENTRY));
       bool more=Process32FirstW(snapshot,ref entry); if(!more) return null;
       for(;more;more=Process32NextW(snapshot,ref entry)) if(entry.parent==parent && entry.pid!=parent) found.Add(entry.pid);
+      if(Marshal.GetLastWin32Error()!=18) return null;
     } finally { CloseHandle(snapshot); }
     return found;
+  }
+  // A later sweep's check on a tree an earlier one left incomplete (C9): how many processes still name the recorded
+  // parent, created after it and before any process now holding its pid. It ends nothing: once the parent has
+  // gone, a parent pid alone can't prove a process was its child. "unknown" when the listing failed.
+  public static string Left(uint pid,long after) {
+    IntPtr handle; long holder; string state=Open(pid,0x1000,out handle,out holder); if(handle!=IntPtr.Zero) CloseHandle(handle);
+    if(state=="unknown") return "unknown"; long before=state==null && holder!=after ? holder : long.MaxValue;
+    List<uint> children=Children(pid); if(children==null) return "unknown";
+    int count=0;
+    foreach(uint child in children) {
+      IntPtr one; long creation; string seen=Open(child,0x1000,out one,out creation); if(one!=IntPtr.Zero) CloseHandle(one);
+      if(seen=="absent") continue; if(seen!=null) return "unknown"; if(creation>=after && creation<before) count++;
+    }
+    return count.ToString(CultureInfo.InvariantCulture);
   }
 }
 '@
 `;
 
 const isWindowsPid = (pid: number): boolean => Number.isSafeInteger(pid) && pid > 0 && pid <= 0xffff_ffff;
-/** PowerShell by its absolute path under the system root, never by a name the PATH resolves (PO-16). */
-async function systemPowerShell(): Promise<string> {
-  const root = process.env.SystemRoot;
-  if (!root || !/^[A-Za-z]:\\/.test(root)) throw new Error("the system root is not an absolute path");
-  const path = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+/**
+ * Windows's system directory: the folder Windows loaded this process's ntdll.dll from. The loader takes ntdll from
+ * the system's own known DLLs, never from this process's environment or PATH, which anyone starting it may set (C6).
+ */
+export function systemDirectoryOf(sharedObjects: readonly string[]): string {
+  const ntdll = sharedObjects.filter((path) => /^[A-Za-z]:\\(?:[^\\/:*?"<>|]+\\)+ntdll\.dll$/i.test(path));
+  if (ntdll.length !== 1) throw new Error("Windows's system directory is unknown");
+  return win32.dirname(ntdll[0]!);
+}
+/** PowerShell by its absolute path in the system directory, never by a name the PATH resolves (PO-16, C6). */
+async function systemPowerShell(): Promise<{ path: string; root: string }> {
+  const report = process.report.getReport() as { sharedObjects?: unknown };
+  const loaded = Array.isArray(report.sharedObjects) ? report.sharedObjects.filter((one): one is string => typeof one === "string") : [];
+  const system = systemDirectoryOf(loaded);
+  const path = win32.join(system, "WindowsPowerShell", "v1.0", "powershell.exe");
   const stats = await lstat(path);
   if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("PowerShell is not a plain file");
-  return path;
+  return { path, root: win32.dirname(system) };
 }
 // One line in, one answer line out: the helper is compiled once per session, never once per call (C10).
 const SWEEP_LOOP = String.raw`
@@ -541,6 +594,7 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
       'probe' { [ShadowSweep]::Probe([uint32]$part[1]) }
       'end' { [ShadowSweep]::End([uint32]$part[1], [long]$part[2], $part[3] -eq '1') }
       'owned' { [ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part[1]))) }
+      'left' { [ShadowSweep]::Left([uint32]$part[1], [long]$part[2]) }
       default { 'unknown' }
     }
   } catch { $answer = 'unknown' }
@@ -552,27 +606,48 @@ export const SWEEP_CALL_LIMIT_MS = 15_000;
 
 /** One PowerShell helper for a whole sweep: calls run one at a time, each bounded; `close` ends the process. */
 export interface SweepSession {
-  call(line: string): Promise<string>;
+  /**
+   * `until` is the caller's deadline on `performance.now()` (C10): a call whose turn comes after it is never sent,
+   * and one still running then is cancelled by ending the helper, so no work outlives its tree. Both answer "unknown".
+   */
+  call(line: string, until?: number): Promise<string>;
   /** The helper's pid once started (for tests). */
   readonly pid: number | undefined;
   close(): void;
 }
 
 export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS): SweepSession {
+  const now = () => performance.now();
   let child: ChildProcess | undefined;
-  let ended = false;
+  let exit: Promise<void> = Promise.resolve(); // The running helper's exit.
+  let stopped: Promise<void> = Promise.resolve(); // The last ended helper's exit.
+  let closed = false;
   let pending: ((answer: string) => void) | undefined;
   let buffered = "";
   let queue: Promise<unknown> = Promise.resolve();
-  // A failure, an exit or a timeout ends the session: the pending call and every later one answer "unknown".
-  const stop = () => { ended = true; child?.kill(); const answer = pending; pending = undefined; answer?.("unknown"); };
+  // A failure, an exit or a timeout ends the helper and the pending call answers "unknown". A later call waits for
+  // that exit before starting a new helper, so cancelled work never runs beside the next call's.
+  const stop = () => {
+    const helper = child; child = undefined; buffered = "";
+    if (helper) { stopped = exit; helper.kill(); }
+    const answer = pending; pending = undefined; answer?.("unknown");
+  };
   const start = async (): Promise<ChildProcess | undefined> => {
-    if (child || ended) return child;
+    if (child) return child;
     const script = Buffer.from(`${SWEEP_HELPER}\n${SWEEP_LOOP}`, "utf16le").toString("base64");
-    child = spawn(await systemPowerShell(), ["-NoProfile", "-NonInteractive", "-EncodedCommand", script], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
-    child.on("error", stop).on("exit", stop);
-    child.stdin!.on("error", stop);
-    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+    const { path, root } = await systemPowerShell();
+    if (closed) return undefined; // A start that resolves after the session closed creates no child (C10).
+    // The system root it was found under, not the inherited one; and Windows PowerShell's own modules, not an
+    // inherited PSModulePath (PowerShell 7's, when the sweep starts from it).
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:systemroot|windir|psmodulepath)$/i.test(key))), SystemRoot: root, windir: root };
+    const helper = spawn(path, ["-NoProfile", "-NonInteractive", "-EncodedCommand", script], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"], env });
+    child = helper;
+    exit = new Promise((done) => { helper.once("exit", () => done()).once("error", () => done()); });
+    const end = () => { if (child === helper) stop(); };
+    helper.on("error", end).on("exit", end);
+    helper.stdin!.on("error", end);
+    helper.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+      if (child !== helper) return;
       buffered += chunk;
       for (let at = buffered.indexOf("\n"); at >= 0; at = buffered.indexOf("\n")) {
         const line = buffered.slice(0, at).trim();
@@ -581,51 +656,73 @@ export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS): SweepSessio
       }
     });
     // A session left open never holds the process alive; a pending call's timer does while it waits.
-    child.unref(); (child.stdin as unknown as { unref?(): void }).unref?.(); (child.stdout as unknown as { unref?(): void }).unref?.();
-    return child;
+    helper.unref(); (helper.stdin as unknown as { unref?(): void }).unref?.(); (helper.stdout as unknown as { unref?(): void }).unref?.();
+    return helper;
   };
-  const send = async (line: string): Promise<string> => {
-    const helper = await start().catch(() => { ended = true; return undefined; });
-    if (ended || !helper) return "unknown";
+  const send = (line: string, until: number): Promise<string> => {
+    const limit = Math.min(until, now() + callLimitMs);
+    if (closed || !(now() < limit)) return Promise.resolve("unknown"); // Past the deadline: never sent.
     return new Promise<string>((done) => {
-      const timer = setTimeout(stop, callLimitMs);
-      pending = (answer) => { clearTimeout(timer); done(answer); };
-      helper.stdin!.write(`${line}\n`);
+      let finished = false;
+      const finish = (answer: string) => { if (finished) return; finished = true; clearTimeout(timer); done(answer); };
+      // The limit covers the helper's lookup and start too; past it, work in flight is cancelled with the helper.
+      const timer = setTimeout(() => { if (pending === finish) stop(); finish("unknown"); }, limit - now());
+      void (async () => {
+        await stopped;
+        const helper = await start().catch(() => undefined);
+        if (finished || closed || !helper || !(now() < limit)) { finish("unknown"); return; }
+        pending = finish;
+        helper.stdin!.write(`${line}\n`);
+      })();
     });
   };
   return {
-    call: (line) => { const answer = queue.then(() => send(line)); queue = answer.catch(() => {}); return answer; },
+    call: (line, until = Infinity) => { const answer = queue.then(() => send(line, until)); queue = answer.catch(() => {}); return answer; },
     get pid() { return child?.pid; },
-    close: stop,
+    close: () => { closed = true; stop(); },
   };
 }
 /** Through the sweep's session, or a session of its own for this one call. */
-async function ask(session: SweepSession | undefined, line: string): Promise<string> {
+async function ask(session: SweepSession | undefined, line: string, until?: number): Promise<string> {
   const own = session ?? openSweepSession();
-  try { return await own.call(line); } finally { if (!session) own.close(); }
+  try { return await own.call(line, until); } finally { if (!session) own.close(); }
 }
 
 /**
  * A process's exact creation time (a FILETIME string); `undefined` when no such process runs; `null` when the
  * probe failed. Unknown is never read as absent: the sweep keeps the record and reports it.
  */
-export async function probeWindowsProcess(pid: number, session?: SweepSession): Promise<string | undefined | null> {
+export async function probeWindowsProcess(pid: number, session?: SweepSession, until?: number): Promise<string | undefined | null> {
   // A pid Windows can't hold is a bad record, not a process known to have ended: unknown.
   if (!isWindowsPid(pid)) return null;
-  const result = await ask(session, `probe ${pid}`);
+  const result = await ask(session, `probe ${pid}`, until);
   return result === "absent" ? undefined : /^[1-9]\d*$/.test(result) ? result : null;
 }
 
-/** Whether this user (or an elevated token's default owner) owns the path; a failed check is not ownership. */
-export async function ownedByCurrentUser(path: string, session?: SweepSession): Promise<boolean> {
-  return await ask(session, `owned ${Buffer.from(path, "utf8").toString("base64")}`) === "owned";
+/**
+ * Whether this user owns the path and no one else can write it (C6). The helper checks the object it opened, and
+ * answers that object's volume and file index: they must be `opened`'s, the handle the caller read, or it is no proof.
+ */
+export async function ownedByCurrentUser(path: string, opened: Pick<Stats, "dev" | "ino">, session?: SweepSession, until?: number): Promise<boolean> {
+  const answer = /^owned (\d{1,10}) (\d{1,20})$/.exec(await ask(session, `owned ${Buffer.from(path, "utf8").toString("base64")}`, until));
+  // Node reads a 64-bit file index as the nearest double: the helper's is rounded the same way.
+  return answer !== null && Number(answer[1]) === opened.dev && Number(BigInt(answer[2]!)) === opened.ino;
 }
+
+const isFiletimeText = (value: string | undefined): value is string => value !== undefined && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) < 2n ** 63n;
 
 export type WindowsEnd = "ended" | "incomplete" | "absent" | "different" | "unknown";
 /** Ends the process only while its exact creation time (a FILETIME string) is the recorded one, through the checked handle. */
-export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean, session?: SweepSession): Promise<WindowsEnd> {
+export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean, session?: SweepSession, until?: number): Promise<WindowsEnd> {
   // An old millisecond record has no exact identity: nothing is ended on its evidence.
-  if (!isWindowsPid(pid) || creationTime === undefined || !/^[1-9]\d{0,18}$/.test(creationTime) || BigInt(creationTime) >= 2n ** 63n) return "unknown";
-  const result = await ask(session, `end ${pid} ${creationTime} ${tree ? 1 : 0}`);
+  if (!isWindowsPid(pid) || !isFiletimeText(creationTime)) return "unknown";
+  const result = await ask(session, `end ${pid} ${creationTime} ${tree ? 1 : 0}`, until);
   return (["ended", "incomplete", "absent", "different"] as const).find((one) => one === result) ?? "unknown";
+}
+
+/** How many processes an earlier, incomplete end may have left of this tree (see `Left` above), or `null` when unknown (C9). */
+export async function windowsLeft(pid: number, creationTime: string | undefined, session?: SweepSession, until?: number): Promise<number | null> {
+  if (!isWindowsPid(pid) || !isFiletimeText(creationTime)) return null;
+  const result = await ask(session, `left ${pid} ${creationTime}`, until);
+  return /^\d{1,10}$/.test(result) ? Number(result) : null;
 }
