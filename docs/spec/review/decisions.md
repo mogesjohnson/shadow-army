@@ -579,6 +579,22 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Choice:** B. The owner asked "how should we change the rules so the spec can be a working prototype? one round of reviews?", then answered "lets do that" (2026-11-23).
 - **Applied:** flow section 0, RUNBOOK section 0 (the orchestrator model) and `handoffs/LATEST.md`.
 
+## D-40 v2.1 has a standalone full-screen Ink app (the owner, 2026-11-25)
+
+- **Question:** §1 lists "a full-screen Ink shell" as a non-goal. The owner chose a standalone full-screen Ink app, `shadow`, for v2.1, showing the War Table design (S-9).
+- **Kind:** big. It changes the scope for v2.1. v2.0 keeps its screens in the mod (M5), and the non-goal still binds v2.0.
+- **Options:** A, keep the non-goal for v2.1 too; B, say the non-goal is v2.0's only and v2.1 adds the standalone app.
+- **Choice:** B. The owner answered S-9's three questions with the recommendations (War Table, a standalone app, fixtures now and connecting after M1b), then "yes to both" to D-40 and D-41 (2026-11-25).
+- **Applied:** not yet. A spec task edits §1's non-goal line and Appendix C's War Table row, then runs both spec checkers.
+
+## D-41 A read-only event feed for a local viewer (the owner, 2026-11-25)
+
+- **Question:** the post office sends its events only over its standard output, to the mod that started it (§3), and PO-1's lock refuses a second post office. A standalone viewer (D-40) would see no events while the mod's army runs.
+- **Kind:** big. It adds a new reader of the post office.
+- **Options:** A, no feed: the app shows fixtures or nothing while the mod runs; B, a read-only event feed for a local viewer, with its own credential that allows nothing else (no commands, no records written).
+- **Choice:** B ("yes to both", 2026-11-25). Typed event payloads (PO-5) and usage (OBS-3) are needed for the app to read the feed.
+- **Applied:** not yet. A spec task writes the feed's requirement beside PO-5. Building it waits for the M1b stack to merge.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
