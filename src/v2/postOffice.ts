@@ -433,6 +433,8 @@ export class PostOffice {
       // WSP-11: a fresh session gets a fresh snapshot; the old one's writes were reported when its turn's guard closed.
       if (session.snapshot && this.snapshots.ok) {
         if (!await this.dropSnapshot(session)) throw new Error(`the old snapshot ${session.snapshot.path} could not be removed; reconnect explicitly`);
+        // Removed, so no longer this session's: a failed open below leaves nothing for reconnect to remove again.
+        session.snapshot = undefined;
         await this.unheld();
         session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: `${session.id}-r${session.restarts}`, repo: this.repo, git: this.git });
         session.cwd = session.snapshot.path;
@@ -488,14 +490,17 @@ export class PostOffice {
     if (result.status === "completed") session.loginNeeded = false;
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
     const changes: string[] = startFailure ? [`checkout guard could not start: ${startFailure}`] : [];
-    const base = session.guardBase;
-    session.guardBase = undefined;
     const start = session.turnStart;
     session.turnStart = undefined;
     const snapshotTurn = Boolean(session.snapshot && start);
     try {
       // A snapshot turn's hold check before findWrites, next, also closes this guard read (one check, not two back to back).
-      if (base) changes.push(...await this.exclusive(async () => diffState(base, await this.guardState(!snapshotTurn))));
+      // The baseline is read and cleared under the lock, so an apply queued ahead of this guard still carries into it (W12-3).
+      if (session.guardBase) changes.push(...await this.exclusive(async () => {
+        const base = session.guardBase;
+        session.guardBase = undefined;
+        return base ? diffState(base, await this.guardState(!snapshotTurn)) : [];
+      }));
     } catch (error) { changes.push(`checkout guard could not complete: ${String(error)}`); }
     // WSP-11: the snapshot's writes are a read-violation, reported, then discarded before its next turn.
     // A failed guard keeps them instead, as the partial work its line names.

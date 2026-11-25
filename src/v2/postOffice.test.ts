@@ -370,6 +370,39 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(second.write?.applicable).toBe(true);
   }, 30_000);
 
+  it("carries an apply queued ahead of a finishing turn's guard into that turn's baseline (review 15 C7)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let releaseMedic!: () => void;
+    const medicGate = new Promise<void>((done) => { releaseMedic = done; });
+    let medicSending = false;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, channelFactory: (options): NativeChannel => {
+      return { async send(text) {
+        if (text.includes("edit b")) { medicSending = true; await medicGate; await writeFile(join(options.cwd, "src", "b.ts"), "medic\n"); }
+        else await writeFile(join(options.cwd, "src", "a.ts"), "tank\n");
+        return { status: "completed", text: "done", refusal: false };
+      }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    // Opening a write session can outlast `until`'s 6 s on a loaded Windows machine; the test's own timeout bounds this wait.
+    const settle = async (check: () => boolean) => { while (!check()) await new Promise((done) => setTimeout(done, 10)); };
+    // Exclusive calls: medic's start (1), tank's start (2), tank's guard (3), tank's apply (4), medic's guard (5).
+    // Tank's apply waits until medic's turn has returned and queued its guard, so medic's guard runs after the apply.
+    const inner = office as unknown as { exclusive: <T>(fn: () => Promise<T>) => Promise<T> };
+    const exclusive = inner.exclusive.bind(office);
+    let calls = 0;
+    inner.exclusive = (fn) => {
+      const call = ++calls;
+      return exclusive(async () => { if (call === 4) { releaseMedic(); await settle(() => calls >= 5); } return fn(); });
+    };
+    const medic = office.send("medic", "edit b", { claims: ["src/b.ts"] });
+    await settle(() => medicSending);
+    const tank = await office.send("tank", "edit a", { claims: ["src/a.ts"] }).finally(releaseMedic);
+    expect(tank.write?.apply?.applied).toBe(true);
+    const result = await medic;
+    expect(result.error?.message ?? "").not.toContain("src/a.ts");
+    expect(result.status).toBe("completed");
+    expect(result.write?.applicable).toBe(true);
+  }, 120_000);
+
   it("refuses overlapping claims naming the holder, and claims for a soldier that cannot write, starting nothing", async () => {
     const { office, started } = await writer({ "src/a.ts": "x\n" });
     await office.open("tank", { claims: ["src/**"] });
@@ -470,13 +503,14 @@ describe("M1b-26 harness git and outside snapshots", () => {
 
 describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {
   const builders = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true }, scout: { cli: "claude", model: "synthetic", roles: ["review"], write: false } });
-  /** Harness git that records each call's repository and arguments, and can fail `worktree remove`. */
-  function spyGit(dir: string, calls: string[][], failRemove: { on: boolean }): GitFactory {
+  /** Harness git that records each call's repository and arguments, and can fail `worktree remove` or `worktree add`. */
+  function spyGit(dir: string, calls: string[][], failRemove: { on: boolean; add?: boolean }): GitFactory {
     return (repo) => {
       const harness = new HarnessGit({ repo, hooksDir: join(dir, ".shadow", "v2", "hooks") });
       return { run: async (args, kind, cwd) => {
         calls.push([resolve(repo.workTree), ...args]);
         if (failRemove.on && args[0] === "worktree" && args[1] === "remove") return { code: 1, stdout: "", stderr: "locked" };
+        if (failRemove.add && args[0] === "worktree" && args[1] === "add") return { code: 1, stdout: "", stderr: "add failed" };
         return harness.run(args, kind, cwd);
       } };
     };
@@ -520,5 +554,19 @@ describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup
     const second = await post.open("scout");
     expect(second.cwd).not.toBe(first.cwd);
     expect(existsSync(first.cwd)).toBe(false);
+  }, 60_000);
+
+  it("lets reconnect start fresh after a restart removed the old snapshot but could not open a new one (review 15 C8)", async () => {
+    const failRemove = { on: false, add: false };
+    const { office: post, channels, events } = await office(failRemove);
+    const first = await post.open("scout");
+    failRemove.add = true;
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "down"));
+    expect(existsSync(first.cwd)).toBe(false);
+    failRemove.add = false;
+    const second = await post.open("scout");
+    expect(second.cwd).not.toBe(first.cwd);
+    expect(existsSync(second.cwd)).toBe(true);
   }, 60_000);
 });
