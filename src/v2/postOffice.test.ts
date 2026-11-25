@@ -552,6 +552,50 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     await expect(office.close()).rejects.toThrow("could not be closed");
   });
 
+  const v2 = (dir: string, ...parts: string[]) => join(dir, ".shadow", "v2", ...parts);
+  const completions = async (dir: string) => (await readFile(v2(dir, "completed-turns.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { turn: string; late?: boolean });
+
+  it("sends nothing when the turn's baseline can't be written, and records each finished turn by its ID before its baseline goes (PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let sent = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({ ...idle()(options), async send(text) { sent++; return { status: "completed", text, refusal: false }; } }) }); offices.push(office);
+    await office.send("scout", "first");
+    expect(sent).toBe(1);
+    expect(readdirSync(v2(repo.dir, "turns"))).toEqual([]);
+    const [first] = await completions(repo.dir);
+    expect(first!.turn).toMatch(/^[0-9a-f-]{36}$/);
+    rmSync(v2(repo.dir, "turns"), { recursive: true });
+    await writeFile(v2(repo.dir, "turns"), "a file where the folder goes");
+    const blocked = await office.send("scout", "second");
+    expect(sent).toBe(1);
+    expect(blocked.status).toBe("failed");
+    expect(blocked.error?.message).toMatch(/baseline could not be written/);
+  });
+
+  it("at startup removes a baseline whose completion is on disk without reporting it again, and keeps one whose completion can't be written (PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await mkdir(v2(repo.dir, "turns"), { recursive: true }); await mkdir(v2(repo.dir, "trees"), { recursive: true });
+    const base = { head: "", branch: "", dirty: [], index: [], refs: [] };
+    for (const [session, turn] of [["s-done", "t-done"], ["s-open", "t-open"]]) {
+      await writeFile(v2(repo.dir, "turns", `${session}.json`), JSON.stringify({ turn, soldier: "scout", time: new Date().toISOString(), base }));
+      await writeFile(v2(repo.dir, "trees", `${session}.jsonl`), `${JSON.stringify({ kind: "post-office", pid: 998, startTime: 4 })}\n`);
+    }
+    // s-done's turn finished but its post office stopped before the baseline went; s-open's completion file can't be appended to.
+    await mkdir(v2(repo.dir, "completed-turns.jsonl"));
+    const events: OfficeEvent[] = [];
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(first);
+    expect(readdirSync(v2(repo.dir, "turns")).sort()).toEqual(["s-done.json", "s-open.json"]);
+    expect(events.some((event) => event.type === "startup" && (event.data as { pending?: boolean }).pending)).toBe(true);
+    rmSync(v2(repo.dir, "completed-turns.jsonl"), { recursive: true });
+    await writeFile(v2(repo.dir, "completed-turns.jsonl"), `${JSON.stringify({ turn: "t-done" })}\n`);
+    events.length = 0;
+    await first.open("scout");
+    expect(readdirSync(v2(repo.dir, "turns"))).toEqual([]);
+    const reported = events.filter((event) => event.type === "late_guard").map((event) => (event.data as { session: string }).session);
+    expect(reported).toEqual(["s-open"]);
+    expect((await completions(repo.dir)).map((line) => line.turn)).toEqual(["t-done", "t-open"]);
+  });
+
   it("at startup sweeps dead trees, checks the open turn against its baseline and reports and removes the snapshot it left", async () => {
     const repo = makeRepo(); repos.push(repo);
     let release!: () => void;

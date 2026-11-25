@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from "node:fs";
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
@@ -28,6 +28,30 @@ const snapshotsDir = (root: string) => join(root, ".shadow", "v2", "snapshots");
 const stateToJson = (state: RepoState) => ({ ...state, dirty: [...state.dirty], index: [...state.index], refs: [...state.refs] });
 const stateFromJson = (value: ReturnType<typeof stateToJson>): RepoState => ({ head: value.head, branch: value.branch, dirty: new Map(value.dirty), index: new Map(value.index), refs: new Map(value.refs) });
 const machineOps = (): SweepOps | undefined => { try { return systemOps(); } catch { return undefined; } };
+/** PO-1: one line per finished turn, by turn ID, flushed before its baseline goes; a later start never reports it twice. */
+const completedFile = (root: string) => join(root, ".shadow", "v2", "completed-turns.jsonl");
+/** Writes a whole file or none of it: a flushed temporary file renamed over the target. */
+async function writeAtomic(file: string, text: string): Promise<void> {
+  await mkdir(dirname(file), { recursive: true });
+  const temp = `${file}.${randomUUID()}.tmp`;
+  const handle = await open(temp, "w", 0o600);
+  try { await handle.writeFile(text); await handle.sync(); } finally { await handle.close(); }
+  await rename(temp, file).catch(async (error: unknown) => { await unlink(temp).catch(() => {}); throw error; });
+}
+/** The turn IDs whose completion is on disk; a line that doesn't parse is skipped (PO-5). */
+async function completedTurns(root: string): Promise<Set<string>> {
+  const text = await readFile(completedFile(root), "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return ""; throw error; });
+  const done = new Set<string>();
+  for (const line of text.split(/\r?\n/)) { try { const turn = (JSON.parse(line) as { turn?: unknown }).turn; if (typeof turn === "string") done.add(turn); } catch { /* skipped */ } }
+  return done;
+}
+/** Appends a turn's completion, flushed, and reads it back: only a completion found on disk lets the baseline go. */
+async function completeTurn(root: string, entry: { turn: string } & Record<string, unknown>): Promise<void> {
+  await mkdir(dirname(completedFile(root)), { recursive: true });
+  const handle = await open(completedFile(root), "a", 0o600);
+  try { await handle.appendFile(`${JSON.stringify(entry)}\n`); await handle.sync(); } finally { await handle.close(); }
+  if (!(await completedTurns(root)).has(entry.turn)) throw new Error(`turn ${entry.turn}'s completion is not on disk`);
+}
 
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
@@ -290,14 +314,17 @@ export class PostOffice {
       return now === undefined ? "unknown" : now === office.startTime ? "running" : "stopped";
     };
     const unresolved = (id: string, what: string) => this.record({ type: "startup", data: { session: id, unresolved: true, line: `${what} left: the post office that ran it can't be identified as stopped` } });
-    let pending: unknown;
+    let pending: unknown, done: Set<string> | undefined;
     for (const name of (await readdir(turnsDir(this.root)).catch(() => [] as string[])).filter((name) => name.endsWith(".json"))) {
       const id = name.slice(0, -".json".length), file = join(turnsDir(this.root), name);
       const state = await identity(id);
       if (state === "unknown") unresolved(id, `${id}'s turn`);
       if (state !== "stopped") continue;
-      let turn: { soldier?: string; time?: string; base?: ReturnType<typeof stateToJson> } = {};
+      let turn: { turn?: string; soldier?: string; time?: string; base?: ReturnType<typeof stateToJson> } = {};
       try { turn = JSON.parse(await readFile(file, "utf8")); } catch { /* reported as missing below */ }
+      // A turn whose completion is already on disk was reported; only its baseline is left to remove.
+      const turnId = turn.turn ?? `${id}:unreadable`;
+      if ((done ??= await completedTurns(this.root)).has(turnId)) { await unlink(file).catch(() => {}); continue; }
       const who = `${turn.soldier ? shadowName(turn.soldier) : id}'s turn at ${turn.time ? new Date(turn.time).toTimeString().slice(0, 5) : "an unknown time"}`;
       let line = `${who} not checked: baseline missing`;
       if (turn.base) {
@@ -313,6 +340,15 @@ export class PostOffice {
       }
       this.record({ ...(turn.soldier ? { soldier: turn.soldier } : {}), type: "late_guard", data: { session: id, line } });
       await this.logPending;
+      try {
+        if (this.logFailure) throw this.logFailure;
+        await completeTurn(this.root, { turn: turnId, session: id, late: true, line });
+        done.add(turnId);
+      } catch (error) {
+        // The baseline stays as evidence; the next attempt reports the turn again rather than lose it.
+        pending ??= error;
+        continue;
+      }
       await unlink(file).catch(() => {});
     }
     for (const name of (await readdir(snapshotsDir(this.root)).catch(() => [] as string[])).filter((name) => name.endsWith(".json"))) {
@@ -659,14 +695,19 @@ export class PostOffice {
       session.turnStart = await this.unheld().then(() => beginTurn(session.snapshot!, this.git)).catch((error: unknown) => { startFailure = String(error); return undefined; });
     }
     session.guardBase = await this.exclusive(() => this.guardState()).catch((error: unknown) => { startFailure ??= String(error); return undefined; });
-    // Nothing is sent without both baselines: a turn the guard can't cover never runs.
-    if (startFailure) session.stopRequested = true;
-    const turnFile = join(turnsDir(this.root), `${session.id}.json`);
+    // PO-1: the baseline, with the turn's ID as its open marker, is on disk whole before anything is sent.
+    const turnFile = join(turnsDir(this.root), `${session.id}.json`), turnId = randomUUID();
+    let baselineWritten = false;
     if (session.guardBase) {
-      await mkdir(turnsDir(this.root), { recursive: true })
-        .then(() => writeFile(turnFile, JSON.stringify({ soldier: session.spec.key, time: new Date().toISOString(), base: stateToJson(session.guardBase!) }), { mode: 0o600 }))
-        .catch((error: unknown) => this.record({ soldier: session.spec.key, type: "turn_baseline", data: { written: false, reason: String(error) } }, session));
+      await writeAtomic(turnFile, JSON.stringify({ turn: turnId, soldier: session.spec.key, time: new Date().toISOString(), base: stateToJson(session.guardBase) }))
+        .then(() => { baselineWritten = true; })
+        .catch((error: unknown) => {
+          startFailure ??= `the turn's baseline could not be written: ${String(error)}`;
+          this.record({ soldier: session.spec.key, type: "turn_baseline", data: { written: false, reason: String(error) } }, session);
+        });
     }
+    // Nothing is sent without both baselines on hand and on disk: a turn the guard can't cover never runs.
+    if (startFailure) session.stopRequested = true;
     // WSP-10: a post office that stops with a turn open leaves the next one the state trusted before it, not the state it finds.
     this.hold?.setTurnOpen(++this.openTurns > 0);
     // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
@@ -719,7 +760,14 @@ export class PostOffice {
         }
       } catch (error) { changes.push(`read-only snapshot could not be checked or put back: ${String(error)}`); }
     }
-    await unlink(turnFile).catch(() => {});
+    // PO-1: the baseline goes only once the turn's guard outcome is on disk under its ID. If it can't be, the baseline stays
+    // as evidence for the next start, and the session goes down so no later turn writes over it.
+    if (baselineWritten) {
+      try {
+        await completeTurn(this.root, { turn: turnId, session: session.id, soldier: session.spec.key, changes });
+        await unlink(turnFile).catch(() => {});
+      } catch (error) { changes.push(`the turn's completion could not be recorded, so its baseline is kept at ${turnFile}: ${String(error)}`); }
+    }
     this.hold?.setTurnOpen(--this.openTurns > 0);
     await this.renewLease(session);
     // The audit runs once, after the turn and the guard, also for a failed or cut-short turn (WSP-2).
