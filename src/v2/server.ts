@@ -16,7 +16,7 @@ export interface ServerOptions extends OfficeOptions {
   host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; leaseClock?: LeaseClock;
   /** The creation stamp of a process, for PO-1's lock. Defaults to the system's own (see processStartTime). */
   startTimeOf?: StartTimeOf;
-  /** Appends one record to the post office's log. Passed in by the caller so the log has one writer; no-op by default. */
+  /** Appends one record to the post office's log. Defaults to the office's own writer on post-office.jsonl, so the log has one writer. */
   log?: (record: Record<string, unknown>) => void | Promise<void>;
   /** The `memory protection:` line (PO-3), taken by the caller before it read the secret; logged first. */
   memoryProtection?: string;
@@ -106,7 +106,8 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
   // PO-2: refused before any office or lock exists. `host` only exists so a test can prove the refusal.
   if (options.host !== undefined) assertLoopback(options.host);
   const office = await PostOffice.create(options);
-  const log = (record: Record<string, unknown>) => { void Promise.resolve(options.log?.(record)).catch(() => {}); };
+  // The office's own writer by default, so there is one writer on post-office.jsonl; `options.log` replaces it.
+  const log = (record: Record<string, unknown>) => { void Promise.resolve(options.log ? options.log(record) : office.logRecord(record)).catch(() => {}); };
   const refusals = new RefusalReporter((count, first) => {
     // The first refusal is the office's own full event and log line; later ones are counts since the last report.
     if (first) office.refused();

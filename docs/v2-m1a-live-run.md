@@ -79,9 +79,9 @@ If the soldier does not touch README.md, rerun the brief and say plainly "you mu
 
 ## 5. Stop the post office
 
-Exit Claude Code with `/exit` (or close the window). The mod releases the lease at the session's end and the post office closes by itself. If the mod is killed, the lease runs out after 20 seconds and it closes anyway.
+Exit Claude Code with `/exit` (or close the window). The mod releases the lease at the session's end and the post office closes by itself. If the mod is killed, the lease runs out after 30 seconds of counted time and it closes anyway.
 
-Check: `.shadow\v2\post-office.lock` is gone, and there is no leftover `node` process running `modRelay.js` or the post office (Task Manager, Details tab). If the lock stays after 30 seconds, end that node process, then delete the lock file. That clean-up is not tested live.
+Check: the newest lock file in `.shadow\v2\lock\` (named `<n>.lock`) now holds `{"released":true}`, `.shadow\v2\post-office.lock` is gone, and there is no leftover `node` process running `modRelay.js` or the post office (Task Manager, Details tab). The released `<n>.lock` stays on purpose: the next start replaces it. Do not delete lock files. If the lock does not say released after 30 seconds, end that node process; the next start replaces a lock whose process is gone. That clean-up is not tested live.
 
 ## 6. What to paste on the build PR
 
@@ -91,7 +91,7 @@ Paste these, in this order:
 2. The two cards, copied as text.
 3. The output of `git status --short` and `git log -1 --oneline` in your folder after each brief.
 4. The `git diff` of `notes/live-run-1.md` and `notes/live-run-2.md`, and `git diff README.md` (it should be empty).
-5. Whether the post office stopped on `/exit` (lock file gone, no node process).
+5. Whether the post office stopped on `/exit` (newest lock file says released, no node process).
 6. Anything odd: a long wait, a wrong card, a prompt from claude you had to answer. If a step failed, paste the card or error text as it is and the last 20 lines of the session log.
 
 ## Known not to work

@@ -142,6 +142,39 @@ describe("M1 authenticated loopback command server", () => {
     expect(await processStartTime(2_000_000_000)).toBeNull();
   }, 20_000);
 
+  it("writes the refusal reports and the memory-protection line to post-office.jsonl through the office's own writer", async () => {
+    const timers: (() => void)[] = [];
+    const { repo, server } = await setup(undefined, undefined, { memoryProtection: "memory protection: Yama ptrace_scope 1", refusalTimer: (fn) => { timers.push(fn); return () => {}; } });
+    const refuse = (n: number) => Promise.all(Array.from({ length: n }, () => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${"cd".repeat(32)}` }, body: "{}" })));
+    await refuse(3);
+    timers.shift()!();
+    await server.close();
+    const lines = (await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.filter((r) => r.type === "command_refused").map((r) => (r.data as { count?: number }).count)).toEqual([undefined, 2]);
+    expect(lines).toContainEqual(expect.objectContaining({ type: "memory_protection", data: { line: "memory protection: Yama ptrace_scope 1" } }));
+    expect(JSON.stringify(lines)).not.toContain(credential);
+  }, 30_000);
+
+  it("writes no early count to post-office.jsonl when shutdown falls inside a refusal minute", async () => {
+    const { repo, server } = await setup(undefined, undefined, { refusalTimer: () => () => {} });
+    await Promise.all(Array.from({ length: 5 }, () => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${"cd".repeat(32)}` }, body: "{}" })));
+    await server.close();
+    const lines = (await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { type: string; data?: { count?: number } });
+    expect(lines.filter((r) => r.type === "command_refused").map((r) => r.data?.count)).toEqual([undefined]);
+  }, 30_000);
+
+  it("the normal entry point writes its memory-protection line to post-office.jsonl", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const stdin = new PassThrough();
+    stdin.end(`${JSON.stringify({ credential })}\n`);
+    const office = await runPostOffice({ cwd: repo.dir, roster, channelFactory: factory, startTimeOf: stamps, onShutdown: () => {} },
+      { stdin, protect: async () => "memory protection: Yama ptrace_scope 2" });
+    await office!.close();
+    const text = await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8");
+    expect(text).toContain("memory protection: Yama ptrace_scope 2");
+    expect(text).not.toContain(credential);
+  }, 20_000);
+
   it("runs no command until the lock is held: a request during a slow identity lookup gets 503", async () => {
     const repo = makeRepo(); repos.push(repo);
     const port = await freePort();
