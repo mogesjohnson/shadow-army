@@ -25,29 +25,33 @@ export interface TrustIo {
   /** Where the typed answer comes from when something else already owns `input`. */
   readLine?: () => Promise<string | undefined>;
   signal?: AbortSignal;
+  /** Called with true while the card waits for the typed answer, and false once it has it (or gives up). */
+  onWait?: (waiting: boolean) => void;
 }
 
 export const TRUST_QUESTION = "Trust this folder's Shadow Army files?";
 export const TRUST_ANSWER = "Trust these files";
 const MAX_TRUST_ROUNDS = 5;
-// Control, bidirectional and invisible format characters (SEC-6) become visible placeholders.
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u{61c}\u{200b}-\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2060}-\u{2069}\u{feff}]/gu;
-const escaped = (text: string): string => text.replace(UNSAFE, (c) => `<U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}>`);
+// SEC-6: every Unicode control (Cc) and format (Cf) character shows as a placeholder such as \u{1b} or \u{202e}.
+// A row is one line, so newline and tab are escaped here too, and so are the line and paragraph separators.
+const UNSAFE = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
+export const escaped = (text: string): string => text.replace(UNSAFE, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
 
-const isText = (value: unknown): value is string => typeof value === "string";
+const isText = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+const isHash = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 function isTrustRow(value: unknown): value is TrustRow {
   const row = value as Record<string, unknown> | null;
   if (!row || typeof row !== "object") return false;
-  if (row.kind === "file") return isText(row.name) && isText(row.hash) && (row.state === "new" || row.state === "changed" || row.state === "gone") && (row.soldier === undefined || isText(row.soldier));
+  if (row.kind === "file") return isText(row.name) && isHash(row.hash) && (row.state === "new" || row.state === "changed" || row.state === "gone") && (row.soldier === undefined || isText(row.soldier));
   if (row.kind === "soldier") return isText(row.name) && isText(row.cli) && isText(row.model) && isText(row.autonomy);
   return row.kind === "server" && isText(row.file) && isText(row.name) && isText(row.target);
 }
-/** The post office's trust answer, or undefined for any other result. A trust answer with a bad row throws: nothing is shown or accepted on a guess. */
+/** The post office's trust answer, or undefined for any other result. A trust answer with a bad row, a hash that is not a full SHA-256, or no file row at all throws: nothing is shown or accepted on a guess. */
 export function readTrustAnswer(result: unknown): TrustAnswer | undefined {
   const trust = (result as { trust?: unknown } | null | undefined)?.trust;
   if (trust === undefined) return undefined;
   const rows = (trust as { rows?: unknown } | null)?.rows;
-  if (!Array.isArray(rows) || !rows.length || !rows.every(isTrustRow)) throw new Error("the post office's trust answer is malformed; nothing was accepted");
+  if (!Array.isArray(rows) || !rows.length || !rows.every(isTrustRow) || !rows.some((row: TrustRow) => row.kind === "file")) throw new Error("the post office's trust answer is malformed; nothing was accepted");
   return { trust: { rows } };
 }
 
@@ -60,6 +64,9 @@ export function renderTrustRows(rows: TrustRow[]): string {
 /** One typed line from `input`, read without readline so lines after it stay in the stream. Only a newline-terminated line counts; end of input gives undefined. */
 function readTypedLine(input: NodeJS.ReadableStream, signal?: AbortSignal): Promise<string | undefined> {
   return new Promise((resolve) => {
+    // Input that already ended or closed will not say so again: no listener added now could hear it.
+    const stream = input as Readable;
+    if (stream.readableEnded || stream.destroyed || stream.closed) return resolve(undefined);
     let held = Buffer.alloc(0);
     const finish = (line?: string, rest?: Buffer): void => {
       input.off("data", onData); input.off("end", onEnd); input.off("close", onEnd); input.off("error", onEnd);
@@ -85,9 +92,12 @@ function readTypedLine(input: NodeJS.ReadableStream, signal?: AbortSignal): Prom
 
 /** Prints the card and asks. Only the exact typed line "Trust these files" sends the TrustRequest; anything else accepts nothing and says why. */
 export async function askTrust(answer: TrustAnswer, io: TrustIo): Promise<TrustDecision> {
-  const { rows } = answer.trust;
+  const { rows } = readTrustAnswer(answer)!.trust;
   io.output.write(`${renderTrustRows(rows)}\n${TRUST_QUESTION}\n  1. Not now\n  2. ${TRUST_ANSWER}\nType "${TRUST_ANSWER}" exactly to accept. Anything else accepts nothing.\n> `);
-  const line = await (io.readLine ? io.readLine() : readTypedLine(io.input, io.signal));
+  io.onWait?.(true);
+  let line: string | undefined;
+  try { line = await (io.readLine ? io.readLine() : readTypedLine(io.input, io.signal)); }
+  finally { io.onWait?.(false); }
   if (line === TRUST_ANSWER && !io.signal?.aborted) {
     const request: TrustRequest = { action: "trust", hashes: rows.flatMap((row) => row.kind === "file" ? [row.hash] : []) };
     await io.client.request(request as unknown as Record<string, unknown>);
@@ -98,16 +108,18 @@ export async function askTrust(answer: TrustAnswer, io: TrustIo): Promise<TrustD
     : line === undefined ? "input ended before an answer"
     : line === "" ? "an empty line accepts nothing"
     : line === "Not now" ? "you chose Not now"
-    : `${JSON.stringify(escaped(line))} is not exactly "${TRUST_ANSWER}"`;
+    : `"${escaped(line)}" is not exactly "${TRUST_ANSWER}"`;
   return { accepted: false, reason: `Nothing was started: ${why}. The army waits for you to trust this folder's Shadow Army files.` };
 }
 
-/** Sends `command`; while the post office answers with a trust card, asks, and repeats the command once the owner accepts. */
+/** Sends `command`; while the post office answers with a trust card, asks, and repeats the command once the owner accepts. After the last card's accepted answer the command is repeated too; a card after that is not shown, because nothing could follow it. */
 export async function requestWithTrust<T>(command: Record<string, unknown>, io: TrustIo): Promise<{ done: true; result: T } | { done: false; reason: string }> {
-  for (let round = 0; round < MAX_TRUST_ROUNDS; round++) {
+  for (let round = 0; round <= MAX_TRUST_ROUNDS; round++) {
+    if (io.signal?.aborted) return { done: false, reason: "Nothing was started: it was interrupted. The army waits for you to trust this folder's Shadow Army files." };
     const result = await io.client.request(command);
     const answer = readTrustAnswer(result);
     if (!answer) return { done: true, result: result as T };
+    if (round === MAX_TRUST_ROUNDS) break;
     const decision = await askTrust(answer, io);
     if (!decision.accepted) return { done: false, reason: decision.reason };
   }
@@ -138,13 +150,18 @@ export function registerLiveCommand(program: Command): void {
       let cancelled = false;
       let closeInput: (() => void) | undefined;
       // The trust question may be waiting on the terminal while Ctrl+C arrives; both ways of waiting end then.
+      // `asking` is the command's whole exchange (it may be a dispatched turn); `waiting` is only the time the card waits for an answer.
       let asking: AbortController | undefined;
+      let waiting = false;
+      let inputEnded = false;
       let lineTaker: ((line: string | undefined) => void) | undefined;
       const stopAsking = () => { asking?.abort(); const take = lineTaker; lineTaker = undefined; take?.(undefined); };
+      // With --json, stdout holds only the result: the card and its question go to stderr.
+      const promptOutput = options.json ? process.stderr : process.stdout;
       const ask = async <T>(command: Record<string, unknown>, readLine?: () => Promise<string | undefined>) => {
         asking = new AbortController();
-        try { return await requestWithTrust<T>(command, { input: process.stdin, output: process.stdout, client, readLine, signal: asking.signal }); }
-        finally { asking = undefined; }
+        try { return await requestWithTrust<T>(command, { input: process.stdin, output: promptOutput, client, readLine, signal: asking.signal, onWait: (on) => { waiting = on; } }); }
+        finally { asking = undefined; waiting = false; }
       };
       const onStop = () => {
         if (!turnRequested) {
@@ -153,7 +170,7 @@ export function registerLiveCommand(program: Command): void {
           stopAsking();
           closeInput?.();
           void client.close().catch(() => {});
-        } else if (asking) stopAsking();
+        } else if (waiting) stopAsking();
         else void client.request({ action: "interrupt", soldier }).catch(() => {});
       };
       process.on("SIGINT", onStop);
@@ -182,7 +199,8 @@ export function registerLiveCommand(program: Command): void {
             if (process.stdin.isTTY) { console.log("/stop interrupts the turn; /exit closes the session."); input.setPrompt(`${soldier}> `); input.prompt(); }
             let active: Promise<void> | undefined;
             // While the trust question waits, the next typed line is its answer, not a task.
-            const takeLine = () => new Promise<string | undefined>((resolve) => { lineTaker = resolve; });
+            // A card that arrives once the input has ended (or Ctrl+C came) gets no answer, instead of waiting for a line that cannot come.
+            const takeLine = () => new Promise<string | undefined>((resolve) => { if (inputEnded || cancelled) resolve(undefined); else lineTaker = resolve; });
             for await (const text of input) {
               if (lineTaker) { const take = lineTaker; lineTaker = undefined; take(text); continue; }
               if (text.trim() === "/exit") break;
@@ -202,6 +220,7 @@ export function registerLiveCommand(program: Command): void {
               active = ask<TurnResult>({ action: "send", soldier, text }, takeLine).then((sent) => { if (sent.done) show(sent.result); else declined(sent.reason); }).catch((error: unknown) => { console.error(String(error)); process.exitCode = 1; }).finally(() => { active = undefined; turnRequested = false; if (process.stdin.isTTY) input.prompt(); });
             }
             // Closing the caller ends pending work, instead of waiting indefinitely for another turn.
+            inputEnded = true;
             stopAsking();
             await client.close();
             await active;
