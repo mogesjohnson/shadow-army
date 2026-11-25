@@ -1,41 +1,51 @@
-# Handoff: orchestrator 41 (`7d53aaff`) to orchestrator 42 (2026-11-25)
+# Handoff: orchestrator 42 (`7d53aaff`, same tab as orch-41 after `/clear`) to orchestrator 43 (2026-11-25 ~21:05 UTC)
 
-Self-contained: do not read older handoffs. Range `25e7677` to this commit.
+Self-contained: do not read older handoffs. Range `f9ee37d` to this commit.
 
 ## Owner's instructions in force
 
-- **No new worker sessions** (the owner, 2026-11-25 ~16:25 UTC: "stop making new sessions after them"). Both have finished. Launch nothing until the owner says so; the queues below wait.
-- **A Codex file for everything new** (2026-11-25): after verifying a report, add the PR to the next `codex-reviews/11-25-2026-codex-review-<n>.md` in the main checkout (copy review 17's layout) and tell the owner it is ready.
-- Every tick: `codex_tick.sh <last ISO>` AND each review file's `## Result`. Codex verdicts start "Codex review <n>:".
-- **Memory is low.** Claude Code killed orch-41's hi and watch timers (and w110's) for low memory around 16:00. Its note says: restart them only when the owner asks. Ask the owner at start; workers' reports arrive as messages anyway.
+- **Workers allowed again** (the owner, ~20:45 UTC: "keep normal workers working too... progress in parallel so codex can review and then we could push forward"). At most three at once.
+- **Timers:** the owner said yes to both (hi 50 min, watch 5 min) at ~19:45 UTC.
+- **A Codex file for every pushed fix:** after verifying a report, write the next `codex-reviews/11-25-2026-codex-review-<n>.md` in the main checkout (copy review 24's layout) and tell the owner. Every tick: `codex_tick.sh <last ISO>` and each file's `## Result`. Last tick: `2026-11-25T21:04:09Z`.
+- **Merges are blocked by auto mode** (`gh pr merge` denied at 21:00). Do not route around it; give the owner the exact `! gh pr merge <n> --merge --match-head-commit <sha>` command.
+- The owner asked about the CLI's visuals (~20:55): orch-42 showed the Margin design (canvas `https://claude.ai/artifact/D75uVeeX9HGrvf43BdyVxB`, `.shadow/v2-tools/v21/out/d5.txt`) and asked whether `shadow` should be a launcher for `claude` with the mod (the spec has no `shadow` command) or a standalone app. **Awaiting the owner's answer.** Screen work (M5, `plugins/shadow-army/`) touches no running worker's files but should wait for the `register.ts` PRs.
+
+## Waiting on the owner
+
+1. **Merge #114** at `bd826eb` (Codex review 20: approval recommended; C4 checkbox fixed by orch-42; nothing stacked on it).
+2. **Cockpit holds:** w115 and w117 are stopped until the owner types `/cockpit task go` in their tabs. Cause: the cockpit credits writes to `codex-reviews/` (main checkout) to running sessions. Asked the owner whether to move `codex-reviews/` out of the shared checkout.
 
 ## Running workers
 
-None. w110 and w111 finished after this handoff was first written (below); their tabs are closed.
+| Name | Session | PR | Task | Files |
+|---|---|---|---|---|
+| w115-fix136-guardbase | `2670decf` | #136 | review 15 C7, C8 (held) | `postOffice.ts` + test |
+| w117-fix120-snapshot | `b2717b74` | #120 | review 14 C9, C10 + #136 C9's path check (held) | `snapshot.ts` + test |
+| w119-fix138-c10 | `0afc8bb3` | #138 | review 19 C10 (from w113's `## Left`) | `contain/sweep.ts`, `windows.ts` + tests |
 
-## Done by orch-41 (verified, tabs closed)
+Briefs: `.shadow/v2-tools/tasks/<name>.md`. When each reports: `git show --stat`, close its tab, write the next Codex file.
 
-- #137 at `8d819d2`: w102 C5 to C7 (`dff7192`, `fb08174`, `a8a8f79`, after merging #136 at `a908b45`); w103 C1, C4 (`48c9973`); w112 checks, replies (issuecomment-7167851286), body, fix `8d819d2`. All of review 11 answered. Windows full postOffice file: 39 pass, 11 known synthetic-native 30 s spawn timeouts.
-- #128 at `59048fa` (w111): review 15 C1 [P0] fixed, real-path comparison, 8 new tests, 70 pass on Windows and WSL. C5 still open.
-- #138 at `80ee335` (w110): review 15 C6 (`ad0a667`), C7 (`80ee335`), C8 noted. Tests pass on Windows and WSL.
-- **Reviews 17 (#137), 18 (#128) and 19 (#138)** written, waiting for the owner to hand to Codex. Review 16 is done (below).
+## Done by orch-42 (verified, tabs closed)
 
-## Codex results not yet briefed
+- #128 `b752002` (w114, review 18 C1), then `e15d222` (w118, review 21 C9, C10: all checkouts and WSP-11 snapshot roots barred). C5 (P1, review 15) still open.
+- #138 `4fe4de2` (w113, review 19 C6, C7, C9, C11).
+- #119 `8ef4d0b` (w116, review 16 C2; C5 note).
 
-- **Review 16:** #119 `64fa048` changes requested (C2, C5: P1 1, P2 1); #144 `db2a90e` changes requested (C1 to C5: P0 1, P1 2, P2 2). #144 touches `windows.ts`: only after w110.
-- **Review 15** (still open): #123 C2, C4, C8, C9 · #125 C9, C10 · #127 C2 (PO-14 gate) · #129 C5 · #132 C1, C2, C5, C8, C9 (2 P0) · #128 C5 · #135 C5 · #140 C8 · #136 C1, C2, C9 (P0), C7, C8.
-- Read each with `gh api repos/mogesjohnson/shadow-army/pulls/<n>/reviews --jq '.[-1].body'`.
+## Codex
 
-## Queues (when the owner allows workers again; one worker per file)
+- Done: 20 (#114 approve; #117 C1, C4 P1; #131 C3, C5, C8, C9 P1; #134 C1 to C5, 2 P0) and 21 (#128 C9, C10, fixed since).
+- Written, waiting: **22** (#119 `8ef4d0b`), **23** (#138 `4fe4de2`, C10 noted as in progress), **24** (#128 `e15d222`).
+- Older open: review 15 (#123 C2, C4, C8, C9 · #125 C9, C10 · #127 C2 · #129 C5 · #132 C1, C2, C5, C8, C9 · #135 C5 · #140 C8 · #136 C1, C2, C9), review 16 (#144 C1 to C5), review 17 (#137: P0 1, P1 5, P2 1).
 
-1. **`postOffice.ts`:** #136 review 15 (C1, C2, C7 to C9; also `snapshot.ts`); `w93-fix133`; #139, #141 to #143 from their last reviews; the PO-14 gate.
-2. **`contain/*`:** #144 merges #138's new head and fixes review 16 C1 to C5; #132, #129, #125, #135.
-3. Others: #119 review 16, #123 (`contain/check.ts`), #128 C5 (Opus medium: process lifecycle), #140.
-4. **#137 and #144 clash:** a scratch merge fails tsc in `postOffice.ts` (tree identity, channel list), also before review 11's fixes. Whoever merges #138 into #144 or works #137 next must resolve it.
-5. Merge only with Codex's approval at the exact head (V13, V14).
+## Queues (one worker per file)
+
+1. `register.ts` (free now): #134 review 20 (2 P0), then #131 review 20, then #128 C5 (Opus medium).
+2. `postOffice.ts` (after w115): #136 C1, C2 (design P0s), C9 once #120 is fixed; then #137 review 17.
+3. `contain/*` (after w119): #144 merges #138's head and fixes review 16; #132, #129, #125, #135.
+4. Others: #117 review 20 (`scripts/check-spec-trace.mjs`), #123, #140.
 
 ## Lessons
 
-- The cockpit credits Codex's writes to `codex-reviews/` (in the main checkout) to whichever sessions are running, and holds them. Consider asking the owner to move `codex-reviews/` out of the shared checkout.
-- `git pull --rebase=merges origin <other branch>` in the review worktree rebases the review branch onto it (orch-41 did it by mistake and aborted): pull only `claude/63-ultimate-spec-review` there.
-- Workers start near 95k and reach 150k fast: one finding group per brief; a finisher worker picks up `## Left`.
+- Workers reach 150k after about four findings; one finding group per brief.
+- Close a TRACE session before opening the next (`desktop_busy`).
+- The window's first tab, titled "orch-41", is the orchestrator itself (orch-41's tab reused via `/clear`): never close it as a worker.
