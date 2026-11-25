@@ -6,14 +6,14 @@ Self-contained: do not read older handoffs. Range `32d1e47` to this commit. The 
 
 - Workers: at most three; none new at 5h 80%+. **Memory is tight: run one active worker at a time.**
 - Timers: hi 50 min, watch 5 min. Claude Code killed orch-43's timers for low memory (~21:50); start yours, and if they are killed again, do not restart them until the owner asks.
-- A Codex file for every pushed fix: `codex-reviews/11-25-2026-codex-review-<n>.md` in the main checkout (copy review 31's layout; next is **33**); tell the owner. Tick: `codex_tick.sh <last ISO>`; last tick `2026-11-25T21:46:44Z`.
+- A Codex file for every pushed fix: `C:/Users/johns/codex-reviews/shadow-army/11-25-2026-codex-review-<n>.md` (moved out of the main checkout by orch-44 at the owner's request, 2026-11-25) (copy review 31's layout; next is **33**); tell the owner. Tick: `codex_tick.sh <last ISO>`; last tick `2026-11-25T21:46:44Z`.
 - Merges: auto mode refuses them unless the owner asks in the session. When the owner asks, check `gh pr list --base <branch>` (V14), `gh pr ready <n>`, then `gh pr merge <n> --merge --match-head-commit <full 40-char sha>` (short SHAs are rejected).
 - **New task from the owner: the v2.1 Ink UI**, brief `.shadow/v2-tools/tasks/ui-v21-start.md`. v2.0 keeps its screens in the mod (M5; the Ink non-goal binds v2.0 only). The brief's step 1 is a decision note and owner questions (which v2.1 design, Ink inside the mod or a standalone `shadow` app, which v2.0 pieces first), then a first Ink slice in new files (`src/v21/ui/`), based on `main`. It touches no running worker's files, so it can run beside the fixes. Opus, high.
 
 ## Waiting on the owner
 
-1. **Merge #119** at `8ef4d0bd79da0bca39fa0681f2bac91325125ad1` (Codex review 22: approval recommended, one P2 note). Check for stacked PRs first.
-2. **Cockpit holds** hit w115 three times. Cause each time: Codex writes results into `codex-reviews/` in the main checkout, and the cockpit credits them to running sessions. Ask again whether to move `codex-reviews/` out of the main checkout.
+1. Done by orch-44: **#119 merged** into `claude/63-m1b` (`22fd08d`, 23:29 UTC, at the owner's request); branch kept.
+2. Done by orch-44: `codex-reviews/` moved to `C:/Users/johns/codex-reviews/shadow-army/` (33 files, hashes verified), at the owner's request.
 3. The UI decision (above).
 
 Done: **#114 merged** into `claude/63-m1b` (`7d2ec3a`, at the owner's request); its branch `claude/63-m1b-sanitize` is kept until the owner agrees to delete it.
