@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
-import { delimiter, isAbsolute, join, relative } from "node:path";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { Writable } from "node:stream";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { spawnManagedProcess, type ManagedProcess, type ManagedProcessOptions, type ProcessExit } from "../processTree.js";
 
 /** WSP-10 harness git: git that runs nothing a repository names, on a limit, from a trusted PATH entry. */
@@ -42,24 +43,42 @@ export interface HarnessGitOptions {
   trees?: { add(entry: { pid: number; startedAt: number }): Promise<void>; remove(): Promise<void> };
 }
 
-/** The first absolute PATH entry that has git. Relative, empty, missing and untrusted entries are dropped, and named. */
+/**
+ * The first fully qualified PATH entry with a git whose canonical file is outside every untrusted folder.
+ * Folders are compared by canonical path, component by component. Dropped entries are named.
+ */
 export function resolveGit(pathValue: string, untrusted: string[] = [], platform: NodeJS.Platform = process.platform) {
-  const fold = (value: string) => (platform === "linux" ? value : value.toLowerCase());
-  const real = (value: string) => { try { return fold(realpathSync(value)); } catch { return undefined; } };
-  const roots = untrusted.map(real).filter((root): root is string => root !== undefined);
+  const split = (value: string) => (platform === "linux" ? value : value.toLowerCase()).split(platform === "win32" ? /[\\/]+/ : /\/+/).filter(Boolean);
+  const real = (value: string) => { try { return realpathSync.native(value); } catch { return undefined; } };
+  const roots = untrusted.map((root) => split(real(root) ?? resolve(root)));
+  const inside = (value: string) => { const parts = split(value); return roots.some((root) => root.length <= parts.length && root.every((part, i) => part === parts[i])); };
+  const qualified = (entry: string) => (platform === "win32" ? /^([a-z]:[\\/]|[\\/]{2}[^\\/])/i.test(entry) : entry.startsWith("/"));
+  const name = platform === "win32" ? "git.exe" : "git";
   const dropped: { entry: string; reason: string }[] = [];
   const kept: string[] = [];
+  let git: string | undefined;
   for (const entry of pathValue.split(delimiter)) {
-    const resolved = isAbsolute(entry) ? real(entry) : undefined;
-    const inside = resolved !== undefined && roots.some((root) => { const rel = relative(root, resolved); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); });
-    if (!isAbsolute(entry)) dropped.push({ entry, reason: "relative or empty" });
-    else if (resolved === undefined) dropped.push({ entry, reason: "missing" });
-    else if (inside) dropped.push({ entry, reason: "inside the folder, a worktree or a snapshot" });
-    else kept.push(entry);
+    const resolved = qualified(entry) ? real(entry) : undefined;
+    if (!qualified(entry)) { dropped.push({ entry, reason: "not fully qualified" }); continue; }
+    if (resolved === undefined) { dropped.push({ entry, reason: "missing" }); continue; }
+    if (inside(resolved)) { dropped.push({ entry, reason: "inside the folder, a worktree or a snapshot" }); continue; }
+    const target = real(join(entry, name));
+    if (target && inside(target)) { dropped.push({ entry, reason: "its git resolves inside the folder, a worktree or a snapshot" }); continue; }
+    kept.push(entry);
+    if (!git && target && statSync(target).isFile()) git = target;
   }
-  const name = platform === "win32" ? "git.exe" : "git";
-  const git = kept.map((entry) => join(entry, name)).find((file) => { try { return statSync(file).isFile(); } catch { return false; } });
   return { git, path: kept.join(delimiter), dropped };
+}
+
+/** The checkout's own folders and the worktrees its common folder lists, always untrusted. */
+function repoFolders(repo: HarnessGitOptions["repo"]) {
+  const folders = [repo.workTree, repo.gitDir, repo.commonDir];
+  try {
+    for (const name of readdirSync(join(repo.commonDir, "worktrees"))) {
+      try { folders.push(dirname(readFileSync(join(repo.commonDir, "worktrees", name, "gitdir"), "utf8").trim())); } catch { /* not a worktree */ }
+    }
+  } catch { /* no worktrees */ }
+  return folders;
 }
 
 const HOOK_EVENTS = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg",
@@ -70,6 +89,7 @@ const HOOK_EVENTS = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre
 export function buildGitArgs(args: string[], options: { hooksDir: string; hookNames?: string[]; kind: HarnessKind }) {
   const env: Record<string, string> = {};
   const head = ["--no-pager", "--no-optional-locks"];
+  // core.fsmonitor is empty, not false: Git 2.34 reads it as a hook path and runs "false"; empty is off in every version.
   // A name holding "=" would be split by -c, so it goes through --config-env.
   const set = (key: string, value: string) => {
     if (!key.includes("=")) { head.push("-c", `${key}=${value}`); return; }
@@ -79,7 +99,7 @@ export function buildGitArgs(args: string[], options: { hooksDir: string; hookNa
   set("core.hooksPath", options.hooksDir);
   for (const event of HOOK_EVENTS) set(`hook.${event}.enabled`, "false");
   for (const name of options.hookNames ?? []) set(`hook.${name}.enabled`, "false");
-  for (const [key, value] of [["core.fsmonitor", "false"], ["core.useReplaceRefs", "false"], ["commit.gpgSign", "false"], ["tag.gpgSign", "false"],
+  for (const [key, value] of [["core.fsmonitor", ""], ["core.useReplaceRefs", "false"], ["commit.gpgSign", "false"], ["tag.gpgSign", "false"],
     ["push.gpgSign", "false"], ["log.showSignature", "false"], ["credential.interactive", "false"], ["worktree.useRelativePaths", "false"]] as const) set(key, value);
   const [subcommand = "", ...rest] = args;
   const extra: string[] = [];
@@ -90,12 +110,12 @@ export function buildGitArgs(args: string[], options: { hooksDir: string; hookNa
 }
 
 async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  const child = spawn(options.file, options.args ?? [], { cwd: options.cwd, env: options.env, detached: true, stdio: "pipe" });
+  const child = spawn(options.file, options.args ?? [], { cwd: options.cwd, env: options.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   await new Promise<void>((done, fail) => { child.once("spawn", done); child.once("error", fail); });
   const exited = new Promise<ProcessExit>((done) => child.once("exit", (code, signal) => done({ code, signal })));
   // The process group is the tree; killing it ends git and everything it started.
   const close = async () => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ } };
-  return { pid: child.pid!, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exited, close };
+  return { pid: child.pid!, stdin: new Writable({ write: (_chunk, _encoding, done) => done() }), stdout: child.stdout, stderr: child.stderr, exited, close };
 }
 
 const collect = async (stream: AsyncIterable<Buffer | string>) => {
@@ -108,18 +128,18 @@ export class HarnessGit {
   /** Set after a guard or audit command timed out twice; every run throws until `retryHold()`. */
   held: string | undefined;
   readonly dropped: { entry: string; reason: string }[];
-  private readonly file: string;
+  readonly file: string;
   private readonly prefix: string[];
   private readonly path: string;
 
   constructor(private readonly options: HarnessGitOptions) {
     const env = options.env ?? process.env;
     const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path");
-    const found = resolveGit(pathKey ? env[pathKey] ?? "" : "", options.untrusted);
+    const found = resolveGit(pathKey ? env[pathKey] ?? "" : "", [...repoFolders(options.repo), ...options.untrusted ?? []]);
     this.dropped = found.dropped;
     this.path = found.path;
     const file = options.git?.file ?? found.git;
-    if (!file) throw new Error("git was not found in any absolute PATH entry outside the repository");
+    if (!file) throw new Error("git was not found in any fully qualified PATH entry outside the repository");
     this.file = file;
     this.prefix = options.git?.prefix ?? [];
   }
@@ -148,25 +168,30 @@ export class HarnessGit {
     if (process.platform === "win32") env.NoDefaultCurrentDirectoryInExePath = "1";
     const spawnTree = this.options.spawn ?? (process.platform === "win32" ? spawnManagedProcess : spawnPosix);
     const proc = await spawnTree({ file: this.file, args: [...this.prefix, ...built.args], cwd, env });
-    proc.stdin.end();
+    // stdin stays open until teardown: on Windows its EOF starts the supervisor's two-second shutdown.
+    // Harness git sends no input, so a command that waits for some runs to its limit.
     const stdout = collect(proc.stdout), stderr = collect(proc.stderr);
-    await this.options.trees?.add({ pid: proc.pid, startedAt: Date.now() });
-    const started = clock.now();
-    let cancel = () => {};
-    const limit = new Promise<"timeout">((expired) => {
-      const arm = (ms: number) => {
-        cancel = clock.after(ms, () => { const left = LIMIT_MS[kind] - (clock.now() - started); if (left > 0) arm(left); else expired("timeout"); });
-      };
-      arm(LIMIT_MS[kind]);
-    });
+    let registered = false, closed = false, cancel = () => {};
+    const close = async () => { if (!closed) { await proc.close(); closed = true; } }; // ends git's whole tree, filters included
     try {
+      await this.options.trees?.add({ pid: proc.pid, startedAt: Date.now() });
+      registered = true;
+      const started = clock.now();
+      const limit = new Promise<"timeout">((expired) => {
+        const arm = (ms: number) => {
+          cancel = clock.after(ms, () => { const left = LIMIT_MS[kind] - (clock.now() - started); if (left > 0) arm(left); else expired("timeout"); });
+        };
+        arm(LIMIT_MS[kind]);
+      });
       const outcome = await Promise.race([proc.exited, limit]);
-      await proc.close(); // ends git's whole tree, filters included
+      await close();
       if (outcome === "timeout") return "timeout";
       return { code: outcome.code, stdout: await stdout, stderr: await stderr };
     } finally {
       cancel();
-      await this.options.trees?.remove();
+      await close().catch(() => {}); // a failed path still ends the tree; its error is the one thrown
+      // PO-16's sweep record stays until teardown is confirmed.
+      if (registered && closed) await this.options.trees?.remove();
     }
   }
 }
