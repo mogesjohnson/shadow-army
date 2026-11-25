@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGitArgs, HarnessGit, HarnessGitHeld, HarnessGitTimeout, LIMIT_MS, resolveGit } from "./harness.js";
 import { createFakeClock, createHostileRepo } from "./hostileRepo.testutil.js";
 
@@ -20,18 +21,38 @@ describe("harness git PATH and overrides", () => {
     const [snapshot, first, second] = [temp(), temp(), temp()];
     for (const folder of [snapshot, first, second]) writeFileSync(join(folder, gitName), "");
     const found = resolveGit(["", ".", "node_modules/.bin", join(first, "missing"), snapshot, first, second].join(delimiter), [snapshot]);
-    expect(found.git).toBe(join(first, gitName));
+    expect(found.git).toBe(realpathSync.native(join(first, gitName)));
     expect(found.path).toBe([first, second].join(delimiter));
-    expect(found.dropped.map((drop) => drop.reason)).toEqual(["relative or empty", "relative or empty", "relative or empty", "missing", "inside the folder, a worktree or a snapshot"]);
+    expect(found.dropped.map((drop) => drop.reason)).toEqual(["not fully qualified", "not fully qualified", "not fully qualified", "missing", "inside the folder, a worktree or a snapshot"]);
+  });
+
+  it("drops entries inside the checkout and its worktrees, compared by whole components, and unqualified entries", () => {
+    const base = temp(), work = join(base, "work"), tree = join(base, "tree"), dotted = join(work, "..bin"), outside = temp();
+    for (const folder of [join(work, ".git", "worktrees", "t"), dotted, tree, outside]) mkdirSync(folder, { recursive: true });
+    writeFileSync(join(work, ".git", "worktrees", "t", "gitdir"), `${join(tree, ".git")}\n`);
+    for (const folder of [dotted, tree, outside]) writeFileSync(join(folder, gitName), "");
+    const env = { PATH: [dotted, tree, outside].join(delimiter) };
+    const harness = new HarnessGit({ repo: { gitDir: join(work, ".git"), workTree: work, commonDir: join(work, ".git") }, hooksDir: base, env });
+    expect(harness.file).toBe(realpathSync.native(join(outside, gitName)));
+    expect(harness.dropped.map((drop) => drop.entry)).toEqual([dotted, tree]);
+    if (process.platform === "win32") expect(resolveGit(`\\${outside.slice(3)}`, []).dropped[0]?.reason).toBe("not fully qualified");
+  });
+
+  it("drops an entry whose git is a link into the checkout (needs symlink rights; skipped on Windows without them)", (ctx) => {
+    const work = temp(), link = join(temp(), gitName);
+    writeFileSync(join(work, gitName), "");
+    try { symlinkSync(join(work, gitName), link); } catch { ctx.skip(); }
+    expect(resolveGit(join(link, ".."), [work]).git).toBeUndefined();
   });
 
   it("overrides hooks, fsmonitor, signing and credentials, and adds per-command flags", () => {
     const base = { hooksDir: "/empty", hookNames: ["fmt", "a=b"] };
     const diff = buildGitArgs(["diff", "HEAD"], { ...base, kind: "guard" });
     expect(diff.args).toEqual(expect.arrayContaining(["--no-pager", "--no-optional-locks", "core.hooksPath=/empty", "hook.fmt.enabled=false", "hook.pre-commit.enabled=false",
-      "core.fsmonitor=false", "commit.gpgSign=false", "credential.interactive=false", "core.useReplaceRefs=false"].map((v) => (v.includes("=") ? expect.stringContaining(v) : v))));
+      "commit.gpgSign=false", "credential.interactive=false", "core.useReplaceRefs=false"].map((v) => (v.includes("=") ? expect.stringContaining(v) : v))));
     expect(diff.args.slice(diff.args.indexOf("diff"))).toEqual(["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "HEAD"]);
     expect(buildGitArgs(["commit", "-m", "x"], { ...base, kind: "other" }).args.slice(-4)).toEqual(["commit", "--no-verify", "-m", "x"]);
+    expect(diff.args).toContain("core.fsmonitor="); // empty: off on Git 2.34 (a hook path there) and later (a boolean)
     expect(diff.args).toContain("--config-env=hook.a=b.enabled=SA_GIT_CONFIG_0");
     expect(diff.env).toEqual({ SA_GIT_CONFIG_0: "false" });
   });
@@ -58,6 +79,32 @@ describe("a hostile repository", () => {
   }, 60_000);
 });
 
+const fakeProcess = (close: () => Promise<void>) => {
+  const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+  stdout.end(); stderr.end();
+  return { pid: 1, stdin, stdout, stderr, exited: new Promise<never>(() => {}), close: vi.fn(close) };
+};
+
+describe("process tree registration", () => {
+  const repo = { gitDir: "/g", workTree: tmpdir(), commonDir: "/c" };
+  it("ends git when registration fails, and keeps the sweep record when teardown is unconfirmed", async () => {
+    const proc = fakeProcess(async () => {});
+    const trees = { add: vi.fn(async () => { throw new Error("store down"); }), remove: vi.fn(async () => {}) };
+    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, git: { file: "git" }, spawn: async () => proc });
+    await expect(harness.run(["status"])).rejects.toThrow("store down");
+    expect(proc.close).toHaveBeenCalled();
+    const stuck = fakeProcess(async () => { throw new Error("tree still running"); });
+    const kept = { add: vi.fn(async () => {}), remove: vi.fn(async () => {}) };
+    const clock = createFakeClock();
+    const second = new HarnessGit({ repo, hooksDir: repo.workTree, trees: kept, clock, git: { file: "git" }, spawn: async () => stuck });
+    const result = second.run(["status"]).catch((error: unknown) => error);
+    await until(() => kept.add.mock.calls.length === 1);
+    clock.advance(LIMIT_MS.other);
+    expect(String(await result)).toContain("tree still running");
+    expect(kept.remove).not.toHaveBeenCalled();
+  });
+});
+
 describe("limits on a monotonic clock", () => {
   const setup = () => {
     const base = temp(), pids = join(base, "pids.jsonl"), clock = createFakeClock();
@@ -82,6 +129,12 @@ describe("limits on a monotonic clock", () => {
     expect(lines()[0]).toMatchObject({ term: "0", dir: "/g" });
     await until(() => lines().every((line) => !alive(line.pid)));
   }, 60_000);
+
+  it("lets git that runs past the stdin grace finish with its output", async () => {
+    const base = temp();
+    const harness = new HarnessGit({ repo: { gitDir: "/g", workTree: base, commonDir: "/c" }, hooksDir: base, env: { ...process.env, GIT_HANG_EXIT_MS: "3500" }, git: { file: process.execPath, prefix: [hang] } });
+    expect(await harness.run(["status"])).toMatchObject({ code: 0, stdout: "finished\n" });
+  }, 30_000);
 
   it("tries a guard command once more, then holds harness git until the next use retries", async () => {
     const { harness, clock, lines } = setup();
