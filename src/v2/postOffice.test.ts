@@ -1,9 +1,10 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { armyMark } from "./snapshot.js";
+import { armyMark, type GitFactory } from "./snapshot.js";
+import { HarnessGit } from "./git/harness.js";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
@@ -208,7 +209,8 @@ describe("M1 office integration with synthetic native processes", () => {
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options): NativeChannel => {
       channels.push(options);
       return {
-        async send() { await writeFile(join(options.cwd, "partial.txt"), "retained partial\n"); return { status: "completed", text: "edit completed", refusal: false }; },
+        // WSP-11: a snapshot write alone is a reported, discarded read-violation; only a change in the owner's folder fails the guard and keeps the partial work.
+        async send() { await writeFile(join(options.cwd, "partial.txt"), "retained partial\n"); await writeFile(join(repo.dir, "stray.txt"), "owner folder change\n"); return { status: "completed", text: "edit completed", refusal: false }; },
         async interrupt() {}, async respondApproval() {},
         async close() { options.onEvent({ type: "closed", data: { containmentStopped: false } }); },
       };
@@ -423,7 +425,7 @@ describe("M1b-26 harness git and outside snapshots", () => {
     expect(existsSync(opened.cwd)).toBe(false);
     expect(existsSync(subfolder)).toBe(false);
     expect(events.find((event) => event.type === "session_closed")?.data).toMatchObject({ retained: false });
-  });
+  }, 30_000);
 
   it("starts no soldier when SHADOW_ARMY_SNAPSHOTS is bad, and never runs it in the folder", async () => {
     process.env.SHADOW_ARMY_SNAPSHOTS = "relative/path";
@@ -441,12 +443,33 @@ describe("M1b-26 harness git and outside snapshots", () => {
     await office.close();
     // The restart keeps the state the held post office trusted, so the hook still holds harness git.
     const restarted = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: factory, onEvent: (event) => events.push(event) }); offices.push(restarted);
-    expect(events.find((event) => event.type === "harness_git_held")?.data).toMatchObject({ line: expect.stringContaining(".git/hooks/post-checkout differs from what the last post office trusted") });
+    expect(events.find((event) => event.type === "git_hold" && (event.data as { held?: boolean }).held)?.data).toMatchObject({ line: expect.stringContaining(".git/hooks/post-checkout differs from what the last post office trusted") });
     rmSync(hook);
     expect((await restarted.open("scout")).cwd.startsWith(repo.dir)).toBe(false);
     const log = (await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    expect(log.filter((record) => record.type === "harness_hold").map((record) => record.data.event)).toEqual(["trusted", "held", "held", "released"]);
+    expect(log.filter((record) => record.type === "git_hold" && record.data.event).map((record) => record.data.event)).toEqual(["trusted", "held", "held", "released"]);
   });
+
+  it("keeps a read-only turn's harness git calls, hold checks included, to a fixed count (each costs ~440 ms on Windows)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    for (const name of ["a", "b", "c"]) repo.write(`src/${name}.ts`, "owner's uncommitted work\n");
+    const calls: string[][] = [];
+    const counting: GitFactory = (target) => {
+      const harness = new HarnessGit({ repo: target, hooksDir: join(repo.dir, ".shadow", "v2", "hooks") });
+      return { run: (args, kind, cwd) => { calls.push(args); return harness.run(args, kind, cwd); } };
+    };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, gitFactory: counting,
+      channelFactory: (): NativeChannel => ({ async send() { return { status: "completed", text: "ok", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(office);
+    await office.open("scout");
+    calls.length = 0;
+    expect((await office.send("scout", "look")).status).toBe("completed");
+    console.log(`read-only turn: ${calls.length} harness git calls: ${calls.map((args) => args[0]).join(" ")}`);
+    // Three dirty files are hashed in one call per guard read, not one call each.
+    expect(calls.filter((args) => args[0] === "hash-object")).toHaveLength(2);
+    // Was 34 (one hash-object per dirty file per read, and a hold check twice in a row after the turn).
+    expect(calls.length).toBeLessThanOrEqual(28);
+  }, 60_000);
 
   it("refuses a folder outside any git working tree", async () => {
     const outside = mkdtempSync(join(homedir(), ".sa-test-nogit-"));
@@ -536,4 +559,59 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     // Two offices in one folder close one after the other, so their git calls don't race the folder's removal.
     await first.close().catch(() => {}); await second.close();
   }, 30_000);
+});
+
+describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {
+  const builders = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true }, scout: { cli: "claude", model: "synthetic", roles: ["review"], write: false } });
+  /** Harness git that records each call's repository and arguments, and can fail `worktree remove`. */
+  function spyGit(dir: string, calls: string[][], failRemove: { on: boolean }): GitFactory {
+    return (repo) => {
+      const harness = new HarnessGit({ repo, hooksDir: join(dir, ".shadow", "v2", "hooks") });
+      return { run: async (args, kind, cwd) => {
+        calls.push([resolve(repo.workTree), ...args]);
+        if (failRemove.on && args[0] === "worktree" && args[1] === "remove") return { code: 1, stdout: "", stderr: "locked" };
+        return harness.run(args, kind, cwd);
+      } };
+    };
+  }
+  async function office(failRemove = { on: false }) {
+    const repo = makeRepo(); repos.push(repo);
+    const calls: string[][] = [];
+    const channels: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const created = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory: spyGit(repo.dir, calls, failRemove), onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return { async send() { await writeFile(join(options.cwd, "src", "a.ts"), "claimed\n").catch(() => {}); return { status: "completed", text: "done", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(created);
+    return { repo, office: created, calls, channels, events };
+  }
+
+  it("opens no write worktree while harness git is held, then makes, audits and commits it through harness git", async () => {
+    const { repo, office: post, calls } = await office();
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    await writeFile(hook, "#!/bin/sh\n");
+    await expect(post.open("tank", { claims: ["src/a.ts"] })).rejects.toThrow(/harness git held/);
+    expect(existsSync(join(repo.dir, ".shadow", "worktrees"))).toBe(false);
+    rmSync(hook);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.write?.applicable).toBe(true);
+    expect(calls.some((call) => call[1] === "worktree" && call[2] === "add")).toBe(true);
+    const inWorktree = calls.filter((call) => call[0] === resolve(result.write!.worktree)).map((call) => call.slice(1).find((arg) => !arg.startsWith("-") && !arg.includes("=")));
+    expect(inWorktree).toEqual(expect.arrayContaining(["diff", "ls-files", "add", "commit"]));
+  }, 60_000);
+
+  it("keeps a down session and its snapshot when reconnecting can't remove it, and the next reconnect does", async () => {
+    const failRemove = { on: true };
+    const { office: post, channels, events } = await office(failRemove);
+    const first = await post.open("scout");
+    channels[0]!.onEvent({ type: "error", data: { kind: "login_needed" } });
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "down"));
+    await expect(post.open("scout")).rejects.toThrow("could not be removed");
+    expect(existsSync(first.cwd)).toBe(true);
+    failRemove.on = false;
+    const second = await post.open("scout");
+    expect(second.cwd).not.toBe(first.cwd);
+    expect(existsSync(first.cwd)).toBe(false);
+  }, 60_000);
 });

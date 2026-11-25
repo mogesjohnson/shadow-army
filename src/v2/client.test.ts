@@ -2,7 +2,9 @@ import { readFile, readdir } from "node:fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { canonicalPath } from "../workspace/git.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
@@ -11,6 +13,10 @@ import type { OfficeEvent } from "./postOffice.js";
 import type { TurnResult } from "./channel.js";
 import { credential, until } from "./fixture-main.testutil.js";
 
+// WSP-11: the helpers inherit a suite-owned snapshot root, removed after the fixtures, never the caller's default one.
+const snapshots = mkdtempSync(join(homedir(), ".sa-test-client-snapshots-"));
+process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
+afterAll(() => rmSync(snapshots, { recursive: true, force: true, maxRetries: 3 }));
 const clients: OfficeClient[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
@@ -77,6 +83,8 @@ describe("M1 caller subprocess contract", () => {
     const opened = await client.request<{ cwd: string }>({ action: "open", soldier: "scout" });
     // WSP-11: the read-only snapshot lives outside the folder, at <root>/<folder name>-<army mark>/session-<id>.
     expect(relative(canonicalPath(repo.dir), canonicalPath(opened.cwd))).toMatch(/^\.\.[\\/]/); expect(opened.cwd).toMatch(/[\\/][^\\/]+-[0-9a-f]{12}[\\/]session-[0-9a-f-]+$/);
+    // The suite's own root, never the caller's default one.
+    expect(relative(canonicalPath(snapshots), canonicalPath(opened.cwd))).toMatch(/^[^.][^\\/]*-[0-9a-f]{12}[\\/]session-[0-9a-f-]+$/);
     expect((await client.request<TurnResult>({ action: "send", soldier: "scout", text: "inspect" })).status).toBe("completed");
   }, 30_000);
   windowsOnly("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children while retaining partial work", async () => {
