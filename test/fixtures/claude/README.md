@@ -23,3 +23,7 @@ The file records its date, the claude version and the model. It was recorded in 
 ## Not covered by this fixture
 
 A `/clear` turn, a stopped turn and a zero-cost result come from the unit tests. Add each to the recording only if the owner records them.
+
+## The replay (not built yet)
+
+There is no replay runner at this head: it is built with the fixture, once the owner has recorded and read it. It feeds the recorded stdout through `ClaudeChannel` and checks the appended instructions, the permission mode `system/init` reports, that a subagent's messages leave the context size unchanged, and that the three turns' `usage.raw.models` and `costUsd` add up to the last result's `modelUsage` and `total_cost_usd`. Until then the M1-AC3 replay and the M1-AC14 live run are `not_run`; `claude.test.ts` checks the same sums on hand-written frames.

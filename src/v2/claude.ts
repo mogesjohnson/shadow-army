@@ -27,6 +27,12 @@ export interface ClaudeChannelOptions extends ChannelOptions {
   versionTimeoutMs?: number;
 }
 
+/** CH-2: auto memory stays off, in the process environment and in `--settings`, which outranks the user's, project and local settings. */
+const AUTO_MEMORY_VARIABLE = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+const AUTO_MEMORY_SETTINGS = JSON.stringify({ env: { [AUTO_MEMORY_VARIABLE]: "1" } });
+/** M1-AC14: every claude process the adapter starts, the version probe included, over an inherited value. */
+const claudeEnvironment = (): NodeJS.ProcessEnv => ({ ...process.env, [AUTO_MEMORY_VARIABLE]: "1" });
+
 const versionParts = (text: string): number[] | undefined => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.slice(1).map(Number);
 const isOlder = (found: number[], oldest: number[]): boolean => {
   for (let i = 0; i < 3; i++) if (found[i] !== oldest[i]) return found[i] < oldest[i];
@@ -41,7 +47,7 @@ const isOlder = (found: number[], oldest: number[]): boolean => {
  */
 export async function claudeVersionProblem(command: { file: string; args?: string[] }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
   let child: ManagedProcess;
-  try { child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), "--version"], cwd }); }
+  try { child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), "--settings", AUTO_MEMORY_SETTINGS, "--version"], cwd, env: claudeEnvironment() }); }
   catch (error) { return `claude --version could not run: ${error instanceof Error ? error.message : String(error)}`; }
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
@@ -88,10 +94,6 @@ interface PendingTurn {
   resetsTotals: boolean;
 }
 
-/** CH-2: auto memory stays off, in the process environment and in `--settings`, which outranks the user's, project and local settings. */
-const AUTO_MEMORY_VARIABLE = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
-const AUTO_MEMORY_SETTINGS = JSON.stringify({ env: { [AUTO_MEMORY_VARIABLE]: "1" } });
-
 /** Native Claude flags only: preserve its prompt, tools, permissions and session persistence. */
 export function claudeChannelArgs(options: ChannelOptions, instructionPath?: string): string[] {
   const permission = permissionModeFor(options.autonomy);
@@ -127,6 +129,23 @@ export function claudeNativeError(frame: Frame, message: string): NativeError {
  * Background frames are retained verbatim. PO-8's job/continuation quiescence and claim audit
  * belong to M2/M6; persistent LSP and MCP processes are never classified as turn-owned jobs here.
  */
+/** CH-2: the running counters in each `modelUsage` entry. `contextWindow` and the like are settings, not counters. */
+const MODEL_COUNTERS = ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests", "costUSD"] as const;
+function modelCounters(modelUsage: Frame | undefined): Record<string, Record<string, number>> | undefined {
+  if (!modelUsage) return undefined;
+  const models: Record<string, Record<string, number>> = {};
+  for (const [model, value] of Object.entries(modelUsage)) {
+    const entry = object(value);
+    if (!entry) continue;
+    models[model] = Object.fromEntries(MODEL_COUNTERS.flatMap((key) => number(entry[key]) === undefined ? [] : [[key, number(entry[key])!]]));
+  }
+  return models;
+}
+/** A turn's own per-model figures: these totals less the baseline's, a model absent from the baseline counting from zero. */
+function modelDeltas(current: Record<string, Record<string, number>>, baseline: Record<string, Record<string, number>> | undefined): Record<string, Record<string, number>> {
+  return Object.fromEntries(Object.entries(current).map(([model, counters]) => [model, Object.fromEntries(Object.entries(counters).map(([key, value]) => [key, value - (baseline?.[model]?.[key] ?? 0)]))]));
+}
+
 export class ClaudeChannel implements NativeChannel {
   private readonly process: Promise<ManagedProcess>;
   private readonly ready: Promise<void>;
@@ -138,6 +157,8 @@ export class ClaudeChannel implements NativeChannel {
   private sessionId?: string;
   private cumulativeCost?: number;
   private missingCostBoundary = false;
+  /** The last usable result's `modelUsage` counters: the per-model baseline (CH-2). */
+  private modelBaseline?: Record<string, Record<string, number>>;
   private closePromise?: Promise<void>;
   private closed = false;
   private acceptFrames = true;
@@ -181,7 +202,7 @@ export class ClaudeChannel implements NativeChannel {
       instructionPath = join(this.instructionDirectory, "instructions.txt");
       await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
     }
-    return spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: { ...process.env, [AUTO_MEMORY_VARIABLE]: "1" } });
+    return spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: claudeEnvironment() });
   }
 
   private emit(type: ChannelEvent["type"], data: unknown): void {
@@ -418,18 +439,24 @@ export class ClaudeChannel implements NativeChannel {
     const modelUsage = object(frame.modelUsage);
     const zeroFields = nativeUsage !== undefined && ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].every((key) => number(nativeUsage[key]) === 0);
     // CH-2: a result whose usage, total_cost_usd and modelUsage are all zero (as after a crash) reports nothing.
-    const zeroResult = zeroFields && cumulative === 0 && (modelUsage === undefined || Object.keys(modelUsage).length === 0);
+    const counters = modelCounters(modelUsage);
+    const zeroModels = counters === undefined || Object.values(counters).every((entry) => Object.values(entry).every((value) => value === 0));
+    const zeroResult = zeroFields && cumulative === 0 && zeroModels;
     const zeroExecutionResult = frame.subtype === "error_during_execution" && zeroFields;
     // CH-2: a result that ends a turn the adapter stopped leaves out what the stop cut short.
     const stoppedTurn = interrupted || nativeInterrupted;
     const recoverUsage = stoppedTurn || zeroExecutionResult || zeroResult;
     // CH-2: claude starts its totals over after /clear, /reset or /new, and a total above zero but below the baseline has started over too.
-    const startedOver = cumulative !== undefined && cumulative > 0 && (turn.resetsTotals || previous !== undefined && cumulative < previous);
+    const noBaseline = this.missingCostBoundary;
+    const startedOver = cumulative !== undefined && cumulative > 0 && (turn.resetsTotals || !noBaseline && previous !== undefined && cumulative < previous);
     let costUsd: number | undefined;
+    let models: Record<string, Record<string, number>> | undefined;
     // CH-2: a zero total is never a baseline, so the next result has none either.
     if (cumulative === undefined || cumulative === 0) this.missingCostBoundary = true;
     else {
-      costUsd = stoppedTurn ? undefined : startedOver ? cumulative : this.missingCostBoundary ? undefined : cumulative - (previous ?? 0);
+      costUsd = stoppedTurn ? undefined : startedOver ? cumulative : noBaseline ? undefined : cumulative - (previous ?? 0);
+      if (counters && !stoppedTurn && (startedOver || !noBaseline)) models = modelDeltas(counters, startedOver ? undefined : this.modelBaseline);
+      this.modelBaseline = counters;
       this.cumulativeCost = cumulative;
       this.missingCostBoundary = false;
     }
@@ -443,9 +470,15 @@ export class ClaudeChannel implements NativeChannel {
       // The native dollar estimate is distinct from the interrupted result's unusable
       // token counters. Retain it only when its cumulative boundary is actually usable.
       if (observed || costUsage) usage = { ...observed, ...costUsage, raw: observed?.raw ?? { source: "assistant_and_stream", terminal } };
+    } else if (noBaseline && !startedOver && cumulative !== undefined && cumulative > 0) {
+      // CH-2: with no result before it, input and cache are summed over the main-loop messages and output comes from `usage`.
+      const summed = this.eventUsage(turn, terminal);
+      usage = { inputTokens: summed?.inputTokens, cachedInputTokens: summed?.cachedInputTokens, outputTokens: number(nativeUsage?.output_tokens), raw: summed?.raw ?? terminal };
     } else if (nativeUsage || cumulative !== undefined) usage = {
       inputTokens: number(nativeUsage?.input_tokens), cachedInputTokens: number(nativeUsage?.cache_read_input_tokens), outputTokens: number(nativeUsage?.output_tokens), ...costUsage, raw: terminal,
     };
+    // CH-2, OBS-3: the turn's own figures by model, subagents included. Absent where CH-2 gives only main-loop figures.
+    if (usage && models) usage = { ...usage, raw: { ...usage.raw, models } };
     if (usage && turn.model) usage = { ...usage, raw: { ...usage.raw, model: turn.model } };
     if (usage) this.emit("usage", { scope: "turn", ...usage });
     const error = failure && !interrupted ? terminalError ?? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
@@ -457,6 +490,12 @@ export class ClaudeChannel implements NativeChannel {
     // while containment closes, then decide whether this turn had already completed.
     if (this.closed) { if (this.drainTerminal) this.closingResult = result; }
     else this.finish(result);
+  }
+
+  /** CH-2: a turn the adapter stopped reports no output, even when its stream closes before a result. */
+  private closingUsage(): TurnUsage | undefined {
+    const usage = this.eventUsage(this.current);
+    return usage && this.current?.stopped ? { ...usage, outputTokens: undefined } : usage;
   }
 
   private finish(result: TurnResult): void {
@@ -561,7 +600,7 @@ export class ClaudeChannel implements NativeChannel {
       }
       // A failed containment check must unblock callers without claiming cleanup succeeded.
       // The post office keeps such a channel down and never automatically resumes its queue.
-      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: this.reason });
+      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.closingUsage(), error: this.reason });
       this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped, refusedStart: this.refusedStart });
     })();
     return this.closePromise;
