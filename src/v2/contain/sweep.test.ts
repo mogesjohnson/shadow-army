@@ -8,7 +8,7 @@ import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
 
 /** Fake processes by pid → start time. Ending one removes it, unless its pid is in `stuck`. */
-function fakeOps(alive: Record<number, number | string>, platform: NodeJS.Platform = "linux", stuck: number[] = []) {
+function fakeOps(alive: Record<number, number | string | null>, platform: NodeJS.Platform = "linux", stuck: number[] = []) {
   const calls: string[] = [];
   const ops: SweepOps = {
     platform,
@@ -98,6 +98,18 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     await sweepTrees(root, racing);
     expect(ended).toEqual([{ kind: "git", pid: 8, startTime: 80, creationTime: "134394736000080000" }]);
     expect(alive[8]).toBe("134394736000090000");
+  });
+
+  it("keeps and reports a tree whose post office or process could not be probed, never reading it as absent", async () => {
+    await TreeRecord.create(root, "office", { pid: 3, startTime: 30, creationTime: "134394736000030000" });
+    const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40, creationTime: "134394736000040000" });
+    await record.add({ kind: "git", pid: 8, startTime: 80, creationTime: "134394736000080000" });
+    const { ops, calls } = fakeOps({ 3: null, 8: null }, "win32");
+    const report = await sweepTrees(root, ops);
+    expect(report).toMatchObject({ running: 0, swept: 0, ended: [] });
+    expect(report.left.map((one) => one.pid).sort()).toEqual([3, 8]);
+    expect(calls).toEqual([]);
+    expect((await readTrees(root)).map((tree) => tree.id).sort()).toEqual(["git", "office"]);
   });
 
   it("on Windows reads an old millisecond record, but never ends a process on its evidence alone", async () => {

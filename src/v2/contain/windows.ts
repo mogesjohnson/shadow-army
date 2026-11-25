@@ -467,6 +467,10 @@ public static class ShadowSweep {
     if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return "unknown";
     return exit!=0 ? "absent" : null;
   }
+  public static string Probe(uint pid) {
+    IntPtr handle; long creation; string state=Open(pid,0x1000,out handle,out creation);
+    try { return state ?? creation.ToString(CultureInfo.InvariantCulture); } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
   public static string End(uint pid,long expected,bool tree) {
     IntPtr handle; long creation; string state=Open(pid,0x1001,out handle,out creation);
     try {
@@ -500,7 +504,17 @@ const isWindowsPid = (pid: number): boolean => Number.isSafeInteger(pid) && pid 
 const sweepHelper = async (call: string): Promise<string> =>
   (await runFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(`${SWEEP_HELPER}\n${call}`, "utf16le").toString("base64")], { windowsHide: true })).stdout.trim();
 
-export type WindowsEnd = "ended" | "absent" | "different" | "unknown";
+/**
+ * A process's exact creation time (a FILETIME string); `undefined` when no such process runs; `null` when the
+ * probe failed. Unknown is never read as absent: the sweep keeps the record and reports it.
+ */
+export async function probeWindowsProcess(pid: number): Promise<string | undefined | null> {
+  if (!isWindowsPid(pid)) return undefined;
+  const result = await sweepHelper(`[ShadowSweep]::Probe(${pid})`).catch(() => "unknown");
+  return result === "absent" ? undefined : /^[1-9]\d*$/.test(result) ? result : null;
+}
+
+export type WindowsEnd ="ended" | "absent" | "different" | "unknown";
 /** Ends the process only while its exact creation time (a FILETIME string) is the recorded one, through the checked handle. */
 export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean): Promise<WindowsEnd> {
   // An old millisecond record has no exact identity: nothing is ended on its evidence.
