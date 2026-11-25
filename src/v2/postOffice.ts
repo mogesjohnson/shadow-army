@@ -748,7 +748,8 @@ export class PostOffice {
       const key = session.spec.key, line = containmentFailedMessage(shadowName(key), { reason: `tree record not written: ${String(error)}` });
       session.down = true;
       this.downSoldiers.fail(key);
-      this.record({ soldier: key, type: "containment_failed", data: { down: true, message: line } }, session);
+      // The owner line goes to post-office.jsonl, as treeRecord's does, not to the session's own log.
+      this.record({ soldier: key, type: "containment_failed", data: { down: true, message: line } });
       await this.logPending;
       throw new Error(line);
     }
