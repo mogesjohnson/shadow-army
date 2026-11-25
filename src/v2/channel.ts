@@ -81,7 +81,8 @@ export interface NativeChannel {
   /** PO-9: the guardian holding the CLI's containment, once it has started. Optional: not every channel is contained. */
   readonly guardian?: Identity;
   /**
-   * PO-11: the processes in the CLI's containment, each with its identity. The post office calls it
+   * PO-11: the processes in the CLI's containment, each with its identity (on Windows, with the exact
+   * FILETIME creation time as a string, never milliseconds alone). The post office calls it
    * as `channel.list?.()`. Missing evidence is "incomplete", never an empty list.
    */
   list?(): Promise<TreeListing>;
