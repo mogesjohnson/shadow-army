@@ -20,7 +20,7 @@ From the brief `ui-v21-start.md`. v2.0's spec lists "a full-screen Ink shell" as
   - typed event payloads (PO-5) and usage (OBS-3).
   Until then the app takes typed fixtures only. It makes no post office calls and spawns no process.
 - **Can be undone:** yes. The new files under `src/v21/ui/` can be deleted without touching anything else, and the spec doesn't change until the owner gives a D-number.
-- **Status:** waiting for the owner's answers to 1 to 3.
+- **Status:** the owner answered all three on 2026-11-25, each with the recommendation: 1, War Table; 2, a standalone full-screen Ink app; 3, fixtures now, connecting after M1b. The spec changes still need D-numbers: v2.1 lifting the "full-screen Ink shell" non-goal, and the read-only viewer feed. The first slice, the view model, the strip and the pane header, goes to a fresh worker (the brief's `## Left`).
 
 ## S-8 Refusals in the minute a shutdown cuts short (2026-11-25, orch-31)
 
