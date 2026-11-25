@@ -1,6 +1,6 @@
 # Handoff: orchestrator 36 (`0ce47b59`) to orchestrator 37 (2026-11-25)
 
-Range: `0097e52` (orch-35's handoff) to this commit. orch-35's handoff (`git show 0097e52:docs/spec/review/handoffs/LATEST.md`) and orch-34's (`1bc9655`) still hold where not done below. orch-36 started at 81k and ran no worker: the 5-hour figure stayed between 93% and 98% (it resets at 01:20 local, 06:20 UTC).
+Range: `0097e52` (orch-35's handoff) to this commit. orch-35's handoff (`git show 0097e52:docs/spec/review/handoffs/LATEST.md`) and orch-34's (`1bc9655`) still hold where not done below. orch-36 started at 81k. The 5-hour figure climbed from 93% to 99%. At 03:26 UTC the owner logged in on another account (5-hour figure 15%), and orch-36 launched w99, w100 and w101.
 
 **Owner, 2026-11-25:** check Codex's reviews at every 5-minute watch tick (comments on #63 since the last tick, and the open PRs' latest reviews and comments). orch-36's script for it: `bash C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/codex_tick.sh <since ISO>` (one GraphQL call over the open PRs plus #63 comments). Last tick: 03:20 UTC.
 
@@ -23,11 +23,14 @@ Range: `0097e52` (orch-35's handoff) to this commit. orch-35's handoff (`git sho
 - #142 `1ddfdbb` (C1 to C5: P0 1, P1 3, P2 1): `postOffice.ts`, `contain/windows.ts`, `contain/trees.ts`.
 - #143 `b3f66e9` (C1 to C8: P0 5, P1 2, P2 1): `postOffice.ts`, `trust.ts`.
 
-**Running:** none.
+**Running** (launched 03:27 to 03:28 UTC with the `wt.exe` fallback to save orch-36's context; workers are black and white either way):
+- **w99-fix128-rest** (`792a510a`, Sonnet high): #128's rest. Files: `plugins/shadow-army/hooks/register.ts` and its test.
+- **w100-fix136-close** (`1b861682`, Sonnet high): #136's checks, replies and body. Files: `postOffice.ts`, `postOffice.test.ts`, `client.test.ts`, `src/workspace/session.ts`, `snapshot.ts`, `snapshot.test.ts`.
+- **w101-fix140** (Sonnet high): #140, review 12. Files: `src/v2/cli.ts`, `cli.test.ts`. Check with `check_workers.py` that it started (it had no name yet at 03:29).
 
 ## Next
 
-1. **When the 5-hour figure drops below 80%,** launch these three together (no shared files): `w99-fix128-rest` (Sonnet high), `w100-fix136-close` (Sonnet high), `w101-fix140` (Sonnet high).
+1. Close each worker when it reports (check the head first). Their briefs name orch-36: SendMessage each your name. A worker that stops with a `## Left` gets a fresh task on the same files.
 2. **`postOffice.ts` queue, one at a time:** w100, then `w98-fix137` (orch-35's Next 2: #137 C1 to C8; merge #136's fixed head into `claude/63-m1b-po-startup` first; give it `server.ts`; C1 and C4 need `sweep.ts` and `contain/trees.ts`), then `w93-fix133`, then #139, #141, #142 and #143 (review 12; write their briefs from each PR's review), then the PO-14 gate (#127 C2; #127 must not merge before it).
 3. **#138 C1** (lossless FILETIME, Opus medium): orch-35's Next 3. #142 touches the same `contain/` files, so run it before #142.
 4. **`register.ts` queue:** w99, then w90-fix131, then w91-fix134 (also `sweep.ts`: not beside Next 3 or w98).
