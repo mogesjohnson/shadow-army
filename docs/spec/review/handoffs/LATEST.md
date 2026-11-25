@@ -1,52 +1,53 @@
-# Handoff: orchestrator 43 (`95501e2c`) to orchestrator 44 (2026-11-25 ~23:00 UTC)
+# Handoff: orchestrator 44 (`53a1b611`) to orchestrator 45 (2026-11-25 ~23:55 UTC)
 
-Self-contained: do not read older handoffs. Range `32d1e47` to this commit. The owner stopped new sessions here ("stop new session after this latest"); orch-44 is started by the owner, not by orch-43.
+Self-contained: do not read older handoffs. Range `31531c3` to this commit. The owner said "yes launch your self": orch-44 launched orch-45.
 
 ## Owner's instructions in force
 
-- Workers: at most three; none new at 5h 80%+. **Memory is tight: run one active worker at a time.**
-- Timers: hi 50 min, watch 5 min. Claude Code killed orch-43's timers for low memory (~21:50); start yours, and if they are killed again, do not restart them until the owner asks.
-- A Codex file for every pushed fix: `C:/Users/johns/codex-reviews/shadow-army/11-25-2026-codex-review-<n>.md` (moved out of the main checkout by orch-44 at the owner's request, 2026-11-25) (copy review 31's layout; next is **33**); tell the owner. Tick: `codex_tick.sh <last ISO>`; last tick `2026-11-25T21:46:44Z`.
-- Merges: auto mode refuses them unless the owner asks in the session. When the owner asks, check `gh pr list --base <branch>` (V14), `gh pr ready <n>`, then `gh pr merge <n> --merge --match-head-commit <full 40-char sha>` (short SHAs are rejected).
-- **New task from the owner: the v2.1 Ink UI**, brief `.shadow/v2-tools/tasks/ui-v21-start.md`. v2.0 keeps its screens in the mod (M5; the Ink non-goal binds v2.0 only). The brief's step 1 is a decision note and owner questions (which v2.1 design, Ink inside the mod or a standalone `shadow` app, which v2.0 pieces first), then a first Ink slice in new files (`src/v21/ui/`), based on `main`. It touches no running worker's files, so it can run beside the fixes. Opus, high.
+- **Two active workers: one Ink (v2.1) and one main (fix or spec), side by side** (the owner asked "can we have both ink and main work at the same time?", orch-44 said yes, 2026-11-25). Memory is tight: check free memory before each launch; no second worker below 1.5 GB free. A worker waiting on the owner does not count. At most three workers; none new at 5h 80%+.
+- Timers: hi 50 min, watch 5 min.
+- A Codex file for every pushed fix, now in **`C:/Users/johns/codex-reviews/shadow-army/`** (moved out of the main checkout at the owner's request, 33 files verified; the owner points Codex there). Next is **34**; copy review 33's layout; tell the owner. Tick: `codex_tick.sh <last ISO>`; last tick `2026-11-25T23:46:41Z`.
+- Merges only when the owner asks in the session: `gh pr list --base <branch>` (V14), `gh pr ready <n>`, `gh pr merge <n> --merge --match-head-commit <40-char sha>`.
+- Workers overshoot 150k fast (w126: 120k to 169k in five minutes). Brief at most two findings per worker.
+
+## Done this session
+
+- **#119 merged** into `claude/63-m1b` (`22fd08d`), owner's request; branch kept.
+- **v2.1 UI decided** (S-9): War Table, a standalone full-screen Ink app `shadow`, fixtures now, connect after M1b. Owner approved **D-40** (v2.1 lifts the Ink non-goal) and **D-41** (a read-only viewer feed) in `decisions.md` (`fbe9b76`). Owner's view: build the Ink screens on fixtures, alternating with the fix queues; connect after M1b (first option: the app starts its own post office, as `sa live` does).
+- **w126:** #138 at `d11dbd9`: C6, C10 fixed; C9 partly (Windows `leftOf` unwired, its live test skipped). Codex file 33 written. PR body `Validation:`/`Size:` not updated; Linux not run. `## Left` in `w126-fix138-review25.md`.
 
 ## Waiting on the owner
 
-1. Done by orch-44: **#119 merged** into `claude/63-m1b` (`22fd08d`, 23:29 UTC, at the owner's request); branch kept.
-2. Done by orch-44: `codex-reviews/` moved to `C:/Users/johns/codex-reviews/shadow-army/` (33 files, hashes verified), at the owner's request.
-3. The UI decision (above).
-
-Done: **#114 merged** into `claude/63-m1b` (`7d2ec3a`, at the owner's request); its branch `claude/63-m1b-sanitize` is kept until the owner agrees to delete it.
+1. Tell Codex about review 33 (and the new folder).
+2. This machine's profile ACL grants Modify to `CodexSandboxUsers`, so #138's new C6 check marks every `.shadow` record unverified. Ask whether the ACL or the check should change (owner's setting: do not change it yourself).
 
 ## Running workers
 
-None. w115 finished: #136 at `4f8737c` (review 15 C7, C8; Codex file 32). Windows full file: 22 pass, 12 timeouts on a loaded machine; Linux not run.
+- **w127-ui-v21-slice** (Opus medium), launched 23:55: the first v2.1 slice, brief `.shadow/v2-tools/tasks/w127-ui-v21-slice.md`, worktree `AIConnections-worktrees/ui-v21-start`, new files `src/v21/ui/` only, one draft PR off `main`. Reports to orch-45. SendMessage it your name.
+
+## Queues (one worker per file; one Ink lane and one main lane)
+
+1. `w128-spec-d40-d41.md` (Sonnet medium): D-40 and D-41 into `docs/spec/v2.md` in the review worktree; do not edit that worktree while it runs.
+2. `contain/sweep.ts`, `windows.ts`: #138 rest of C9 + PR body (`## Left` in w126's brief) → #144 C1, C6 → #132 C1, C5, C10 to C12 (align identity units with #138's FILETIME) → #129, #125, #135.
+3. `register.ts`: #128 C5, C9, C10 → #134 C5 → #131 C3, C9.
+4. `postOffice.ts`: #136 C1, C2 (design P0s); then #137 review 17.
+5. `snapshot.ts`: #120 C9 to C11 (review 31).
+6. Others: #117 review 20, #123, #140. Then the next v2.1 slices (screens on fixtures).
 
 ## Codex results (all "changes requested" unless said)
 
-| PR | Head | Review | Still open |
+| PR | Head | Review | Open |
 |---|---|---|---|
-| #119 | `8ef4d0b` | 22 | **approval recommended** |
-| #138 | `543157c` | 23, 25 | C6, C9, C10 (P0 1, P1 2): deadline ends the wait while work stays active; ownership checks and helper lookup outside the timeout |
-| #128 | `6b0ad4e` | 24, 28 | C5 (stream end does not prove the relay saw the post office exit; a stream failure before the stall misses the barrier); C9, C10 (P0) |
-| #134 | `cb7d79a` | 26 | C5 (restart decision lacks terminal process-exit evidence) |
-| #131 | `eb3a3b6` | 27 | C3 (a newer card replacing an overlapped one loses the decline), C9 (stale-card retry after an independent refusal); C5 plan must keep the roster response `/send` reads |
-| #144 | `f251dc1` | 29 | C1 (permissions on compiler inputs and cache record; executable's resolved identity), C6 (PO-19 packaged guardian departure) |
-| #132 | `3aa0c22` | 30 | C1 (Windows checks a path apart from the opened file), C5, C10 (Security module load failure; `PSModulePath`), C11 (unreported unreadable records), C12 (body). #132 and #138 must agree on identity units (#138 uses exact FILETIME) |
-| #120 | `9d43b69` | 31 | C9 (unreadable registration), C10 (newly indexed ignore files), C11 (removal limit 30 min vs WSP-10's 5); #136 C9 open until #136 takes #120's fixes |
-| #136 | `4f8737c` | 32 | pending; C1, C2, C9 open |
-
-## Queues (one worker per file; one finding group per brief)
-
-1. `postOffice.ts`: #136 C1, C2 (design P0s); then #137 review 17.
-2. `contain/sweep.ts`, `windows.ts`: #138 C6, C9, C10 → #144 C1, C6 → #132 C1, C5, C10 to C12 (align identity units with #138) → #129, #125, #135.
-3. `register.ts`: #128 C5, C9, C10 → #134 C5 → #131 C3, C9 (C5 after `/army` exists).
-4. `snapshot.ts`: #120 C9 to C11 (review 31).
-5. Others: #117 review 20 (`scripts/check-spec-trace.mjs`), #123, #140.
-6. v2.1 UI: `ui-v21-start.md` (new files only; parallel).
+| #138 | `d11dbd9` | 33 pending | C9 open |
+| #128 | `6b0ad4e` | 24, 28 | C5, C9, C10 (P0) |
+| #134 | `cb7d79a` | 26 | C5 |
+| #131 | `eb3a3b6` | 27 | C3, C9 (C5 after `/army`) |
+| #144 | `f251dc1` | 29 | C1 (P0), C6 |
+| #132 | `3aa0c22` | 30 | C1 (P0), C5, C10 to C12 |
+| #120 | `9d43b69` | 31 | C9 to C11 |
+| #136 | `4f8737c` | 32 pending | C1, C2, C9 |
 
 ## Lessons
 
-- A WSL command whose clone fails can fall back to `/mnt/c` and run `npm ci` in the main checkout (w122 did; restored). Briefs: abort if the WSL clone fails.
-- Codex runs Windows tests with PowerShell 7's `PSModulePath`; clear it process-locally in tests that load Windows PowerShell modules.
-- Workers reach 150k after about four findings.
+- This tab was orch-43's, reused with `/clear`; `/rename orch-44` fixed the name other sessions see. Launch each orchestrator with `-n`.
+- A WSL clone that fails must not fall back to `/mnt/c`. Codex runs Windows tests with PowerShell 7's `PSModulePath`; clear it process-locally in such tests.
