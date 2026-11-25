@@ -1,47 +1,45 @@
-# Handoff: orchestrator 37 (`df8b84a6`) to orchestrator 38 (2026-11-25), updated by orch-38
+# Handoff: orchestrator 38 (`a1eb4681`) to orchestrator 39 (2026-11-25)
 
-Self-contained: do not read older handoffs. Range `013be2e` to this commit.
+Self-contained: do not read older handoffs. Range `1d612c9` to this commit.
 
 ## Owner's instructions in force
 
-- HOLD (03:40 UTC) lifted by the owner at 05:20 UTC.
+- The owner put a HOLD on new workers at 03:40 UTC and lifted it at 05:20 UTC. Normal queue running applies: at most three workers.
 - **The 5-hour limit: 80% at most.** Stop all new work at 80% on the cockpit line.
-- At every 5-minute tick, check Codex's reviews: `bash C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/codex_tick.sh <last tick ISO>`. Last tick: 04:07 UTC.
-- Keep startup context small (2026-11-25): orch-37 cut RUNBOOK.md to section 0 and both STATE.md files to short current states (old logs: `git show 013be2e:docs/spec/review/STATE.md` and `.shadow/v2-tools/STATE-log-to-2026-11-25.md`). Keep LATEST.md under 5 KB.
+- At every 5-minute tick, check Codex's reviews: `bash C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/codex_tick.sh <last tick ISO>`. Last tick: 05:22 UTC.
+- Keep LATEST.md under 5 KB, and both STATE.md files short.
 
-## Running workers
+## Running workers (they report to orch-38; SendMessage them your name)
 
-The owner lifted the HOLD at 05:20 UTC ("Hold lifted, launch w104"). orch-38 launched:
+| Worker | Session | PR | Files |
+|---|---|---|---|
+| w104-fix136-wincalls (Opus medium) | `90fa6ba9` | #136: Windows timeouts, cut harness git calls per turn | `src/v2/postOffice.ts`, `postOffice.test.ts` |
+| w106-fix138-filetime (Opus medium) | `85066789` | #138 C1: exact FILETIME through listing and sweep | `contain/windows.ts`, `channel.ts`, `contain/trees.ts`, `contain/sweep.ts` and their tests |
 
-| Worker | PR | Files |
-|---|---|---|
-| w104-fix136-wincalls (Opus medium) | #136 Windows timeouts | `postOffice.ts`, `postOffice.test.ts` |
-| w91-fix134 (Opus medium) | #134, review 10 | `register.ts`, `sweep.ts` per brief (not beside #138 C1) |
-| w83-fix117 (Sonnet medium) | #117, review 8 | `scripts/check-spec-trace.mjs` per brief |
+At 05:30 w104 had WSL green and was waiting on its Windows runs. Per its brief, if any file is still over 30 s after the cut, it stops and reports the numbers. A longer test timeout or a faster managed spawn in `processTree.ts` is then **the owner's call**: ask the owner, do not decide it yourself.
 
-w82 (#119) finished at `785f86f` (C4, plus the merge of `claude/63-m1b`); its tab is closed. Its C1 to C3 need `postOffice.ts` and `delegate.ts`, so they went to a new brief, `w105-fix119-office`.
+## Done by orch-38 (checked with `git show --stat` against each PR's head, tabs closed)
 
-## Done by orch-38 (`a1eb4681`)
-
-- orch-37's tab is closed, and the briefs now say orch-38.
-- **w90:** #131 at `6045a15`, 2 files, within its brief; tab closed. C2, C3, C4 and C6 are fixed, and C1 is fixed on the mod side. Still open are build notes for the #143+#131 integration: C1's dispatcher test (needs #143's `server.ts`) and C5's `/army` card. For C7, old commit `7166886` kept its subject (no rewrite).
-- **w100:** #136 at `4ef57e4` (one fixture fix to `postOffice.test.ts`); C1 to C6 replied, body posted; tab closed. **#136 is red on Windows:** 5 test files time out (cause: about 30 harness git calls per turn at about 440 ms each, from `5279ee7`). WSL passes. The next brief is written: `w104-fix136-wincalls` (`postOffice.ts` and its test; Opus medium).
-
-## Done by orch-37
-
-- orch-36's tab closed. w99 (#128 at `b48a5fd`, C1 to C7, 62 tests on Windows and Linux) and w101 (#140 at `846e5ea`, C1 to C6 fixed, C7 answered) checked and closed. w80 (#114 at `bd826eb`, C1 fixed, C2 answered, files within its brief) checked.
-- #137 split into three briefs, run in order after w100: `w98-fix137-start` (C2, C3, C8; merges #136's fixed head first), `w102-fix137-turns` (C5 to C7), `w103-fix137-records` (C1, C4). All Opus medium.
-- Codex prompts for the unreviewed fixes: `codex-reviews/11-25-2026-codex-review-14.md` (12 M1b-1 PRs) and `-15.md` (10 containment and post office PRs). Review 13 (M1a re-review) was never run; it now drops #141, #142 (reviewed in 12) and #106/#120/#121 (in 14). **Tell the owner 13, 14 and 15 are ready to give to Codex.**
+- **w90:** #131 at `6045a15`. Still open are build notes for the #143+#131 integration: C1's dispatcher test and C5's `/army` card.
+- **w100:** #136 at `4ef57e4`, C1 to C6 replied. It left #136 red on Windows, which w104 is fixing.
+- **w82:** #119 at `785f86f`: C4 fixed and `claude/63-m1b` merged in. C1 to C3 need `postOffice.ts` and `delegate.ts`, so they are in the brief `w105-fix119-office`.
+- **w91:** #134 at `abf5926`: C3 to C5 fixed. C1 was answered as #128's `runtime.node` (the sweep spawn must switch to it at integration), C2 as #132, and C6's real-process sweep test is a build note.
+- **w83:** #117 at `e5fd1ca`: C1 to C6 fixed, 19 tests pass on Windows and in WSL.
+- orch-37's tab is closed, and the briefs name orch-38.
 
 ## Queues (one worker per file at a time; three workers at most)
 
-1. **`postOffice.ts`:** `w104-fix136-wincalls` (#136 Windows timeouts), then `w105-fix119-office` (#119 C1 to C3; also `delegate.ts`, `roster.ts`; Sonnet high), then w98, w102, w103 (#137), then `w93-fix133`, then #139, #141, #142, #143 (review 12; write their briefs from each PR's last review: `gh api repos/mogesjohnson/shadow-army/pulls/<n>/reviews --jq '.[-1].body'`), then the PO-14 gate (#127 C2; #127 must not merge before it).
-2. **#138 C1** (lossless FILETIME through `contain/trees.ts`, `sweep.ts`, `windows.ts`; Opus medium; brief not yet written): before #142, and not beside w91.
-3. **`register.ts`:** `w91-fix134` is running (it also has `sweep.ts`, so #138 C1 must not run beside it).
-4. **Free to run beside the others:** none left (w83 is running).
-5. When Codex approves a PR at its exact head, merge per RUNBOOK 0.2 (V13, V14).
+1. **`postOffice.ts`:** after w104, run `w105-fix119-office` (#119 C1 to C3; also `delegate.ts` and `roster.ts`; Sonnet high; brief written). Then w98, w102 and w103 for #137 (briefs written; Opus medium; w98 first merges #136's fixed head). Then `w93-fix133`. Then #139, #141, #142 and #143 (review 12): write their briefs from each PR's last review with `gh api repos/mogesjohnson/shadow-army/pulls/<n>/reviews --jq '.[-1].body'`. Then the PO-14 gate (#127 C2; #127 must not merge before it).
+2. **`sweep.ts`/`contain`:** w106 is running. #142 runs after it.
+3. **Free slot now:** nothing else is free of the running workers' files. Fill the third slot from queue 1 once w104 finishes.
+4. When Codex approves a PR at its exact head, merge per RUNBOOK 0.2 (V13, V14).
+
+## Codex
+
+Reviews 13 to 15 (`codex-reviews/` in the main checkout) are written and wait for the owner to give them to Codex. orch-38 has told the owner.
 
 ## Lessons
 
-- Launch with the `wt.exe` line in RUNBOOK 0.2: it costs far less context than the TRACE + button route.
-- TRACE and `gh` output is large: pipe through `cut -c1-200` and `head`. orch-37 reached 150k in about 15 minutes of reading.
+- Launch with the `wt.exe` line in RUNBOOK 0.2.
+- Pipe TRACE and `gh` output through `cut -c1-200 | head`. Reuse an open TRACE session: opening a second one fails with `desktop_busy`.
+- A worker's `## Left` items that need other files become a new brief in the queue of the file they need. w105 and w106 were made this way.
