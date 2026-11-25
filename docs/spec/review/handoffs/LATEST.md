@@ -17,7 +17,9 @@ The owner lifted the HOLD at 05:20 UTC ("Hold lifted, launch w104"). orch-38 lau
 |---|---|---|
 | w104-fix136-wincalls (Opus medium) | #136 Windows timeouts | `postOffice.ts`, `postOffice.test.ts` |
 | w91-fix134 (Opus medium) | #134, review 10 | `register.ts`, `sweep.ts` per brief (not beside #138 C1) |
-| w82-fix119 (Sonnet medium) | #119, review 8 | roster and instructions per brief |
+| w83-fix117 (Sonnet medium) | #117, review 8 | `scripts/check-spec-trace.mjs` per brief |
+
+w82 (#119) finished at `785f86f` (C4, plus the merge of `claude/63-m1b`); its tab is closed. Its C1 to C3 need `postOffice.ts` and `delegate.ts`, so they went to a new brief, `w105-fix119-office`.
 
 ## Done by orch-38 (`a1eb4681`)
 
@@ -33,10 +35,10 @@ The owner lifted the HOLD at 05:20 UTC ("Hold lifted, launch w104"). orch-38 lau
 
 ## Queues (one worker per file at a time; three workers at most)
 
-1. **`postOffice.ts`:** `w104-fix136-wincalls` (#136 Windows timeouts), then w98, w102, w103 (#137), then `w93-fix133`, then #139, #141, #142, #143 (review 12; write their briefs from each PR's last review: `gh api repos/mogesjohnson/shadow-army/pulls/<n>/reviews --jq '.[-1].body'`), then the PO-14 gate (#127 C2; #127 must not merge before it).
+1. **`postOffice.ts`:** `w104-fix136-wincalls` (#136 Windows timeouts), then `w105-fix119-office` (#119 C1 to C3; also `delegate.ts`, `roster.ts`; Sonnet high), then w98, w102, w103 (#137), then `w93-fix133`, then #139, #141, #142, #143 (review 12; write their briefs from each PR's last review: `gh api repos/mogesjohnson/shadow-army/pulls/<n>/reviews --jq '.[-1].body'`), then the PO-14 gate (#127 C2; #127 must not merge before it).
 2. **#138 C1** (lossless FILETIME through `contain/trees.ts`, `sweep.ts`, `windows.ts`; Opus medium; brief not yet written): before #142, and not beside w91.
-3. **`register.ts`:** w90, then `w91-fix134` (also `sweep.ts`: not beside #138 C1).
-4. **Free to run beside the others:** `w82-fix119` (roster and instructions, Sonnet medium), `w83-fix117` (`scripts/check-spec-trace.mjs`, Sonnet medium).
+3. **`register.ts`:** `w91-fix134` is running (it also has `sweep.ts`, so #138 C1 must not run beside it).
+4. **Free to run beside the others:** none left (w83 is running).
 5. When Codex approves a PR at its exact head, merge per RUNBOOK 0.2 (V13, V14).
 
 ## Lessons
