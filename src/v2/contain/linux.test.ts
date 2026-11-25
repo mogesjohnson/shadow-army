@@ -212,7 +212,7 @@ describe("Linux driver failure paths, with a fake guardian (PO-9, PO-10, PO-15)"
   linux("reports an unexpected guardian exit as a containment failure, not as the CLI's exit", async () => {
     const { spawnIt } = setup("die");
     const managed = await spawnIt();
-    await expect(managed.exited).rejects.toThrow(/containment failed: the guardian (ended \(status 3\)|'s control channel closed)/);
+    await expect(managed.exited).rejects.toThrow(/containment failed: the guardian( ended \(status 3\)|'s control channel closed)/);
   });
 
   linux("keeps a guardian whose tree is not reported empty in time, and fails close (PO-15)", async () => {
