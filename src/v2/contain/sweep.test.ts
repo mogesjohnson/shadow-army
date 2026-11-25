@@ -1,20 +1,24 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { sweepTrees, systemOps, type SweepOps } from "./sweep.js";
+import { OP_LIMIT_MS, readVerifiedTrees, sweepTrees, systemOps, SWEEP_LIMIT_MS, type Probe, type SweepOps } from "./sweep.js";
 import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
 
 /** Fake processes by pid → start time. Ending one removes it, unless its pid is in `stuck`. */
-function fakeOps(alive: Record<number, number>, platform: NodeJS.Platform = "linux", stuck: number[] = []) {
+function fakeOps(alive: Record<number, number | "unknown">, platform: NodeJS.Platform = "linux", stuck: number[] = []) {
   const calls: string[] = [];
   const ops: SweepOps = {
     platform,
-    startTimeOf: async (pid) => alive[pid],
+    probe: async (pid): Promise<Probe> => alive[pid] ?? "absent",
     commandOf: async (pid) => `cmd-${pid} Bearer abc123`,
-    endProcess: async (pid, tree) => { calls.push(`${tree ? "tree" : "end"} ${pid}`); if (!stuck.includes(pid)) delete alive[pid]; },
+    endIdentity: async (target, tree) => {
+      calls.push(`${tree ? "tree" : "end"} ${target.pid}`);
+      if (alive[target.pid] === target.startTime && !stuck.includes(target.pid)) delete alive[target.pid];
+      return "ended";
+    },
     removeJob: async (label) => { calls.push(`job ${label}`); },
     endCoalition: async (id) => { calls.push(`coalition ${id}`); },
     wait: async () => {},
@@ -34,7 +38,7 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     await dead.listing([{ pid: 6, startTime: 60 }]);
     const { ops, calls } = fakeOps({ 1: 10, 2: 20, 4: 40, 5: 50, 6: 60 });
     const report = await sweepTrees(root, ops);
-    expect(report).toMatchObject({ running: 1, swept: 1, left: [], unhandled: 0 });
+    expect(report).toMatchObject({ running: 1, swept: 1, left: [], unhandled: 0, kept: [] });
     expect(report.ended.map((one) => one.pid).sort()).toEqual([4, 5, 6]);
     expect(report.ended[0]!.command).toBe(`cmd-${report.ended[0]!.pid} Bearer [REDACTED]`);
     expect(calls.sort()).toEqual(["end 4", "end 5", "end 6"]);
@@ -53,7 +57,7 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     const record = await TreeRecord.create(root, "git", { pid: 3, startTime: 30 });
     await record.add({ kind: "git", pid: 8, startTime: 80 });
     const stuck = fakeOps({ 8: 80 }, "linux", [8]);
-    expect(await sweepTrees(root, stuck.ops)).toMatchObject({ swept: 0, left: [{ pid: 8 }] });
+    expect(await sweepTrees(root, stuck.ops)).toMatchObject({ swept: 0, left: [{ pid: 8 }], kept: [{ id: "git" }] });
     expect(stuck.calls[0]).toBe("tree 8");
     expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["git"]); // Kept for the next sweep.
     const reused = fakeOps({ 8: 81 });
@@ -76,14 +80,83 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(await sweepTrees(root, ops)).toMatchObject({ swept: 1 });
     expect(calls).toEqual(["job sa.job.1", "coalition 77"]);
     await (await TreeRecord.create(root, "n", { pid: 3, startTime: 30 })).add({ kind: "job", label: "sa.job.2", coalition: "78" });
-    expect(await sweepTrees(root, { ...ops, removeJob: undefined })).toMatchObject({ swept: 0, unhandled: 1 });
+    expect(await sweepTrees(root, { ...ops, removeJob: undefined })).toMatchObject({ swept: 0, unhandled: 1, kept: [{ id: "n" }] });
   });
 
-  it("skips a file with no post office line, and reports nothing when there are no trees", async () => {
-    expect(await sweepTrees(root, fakeOps({}).ops)).toMatchObject({ running: 0, swept: 0 });
-    await TreeRecord.create(root, "torn", { pid: 3, startTime: 30 });
-    rmSync(join(treesDir(root), "torn.jsonl"));
-    expect(await sweepTrees(root, fakeOps({}).ops)).toMatchObject({ swept: 0 });
+  it("keeps an entry whose job or coalition operation fails, and one whose removal fails (C4)", async () => {
+    await (await TreeRecord.create(root, "m", { pid: 3, startTime: 30 })).add({ kind: "job", label: "sa.job.1", coalition: "77" });
+    const { ops } = fakeOps({}, "darwin");
+    const report = await sweepTrees(root, { ...ops, endCoalition: async () => { throw new Error("EPERM"); } });
+    expect(report).toMatchObject({ swept: 0, kept: [{ id: "m", reason: "coalition 77 couldn't be ended" }] });
+    expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["m"]);
+  });
+
+  it("keeps an entry whose post office or process can't be told apart from a gone one (C3)", async () => {
+    await TreeRecord.create(root, "po", { pid: 3, startTime: 30 }, { pid: 4, startTime: 40 });
+    const unsure = fakeOps({ 3: "unknown", 4: 40 });
+    expect(await sweepTrees(root, unsure.ops)).toMatchObject({ swept: 0, running: 0, kept: [{ id: "po", reason: "the post office's state couldn't be told" }] });
+    expect(unsure.calls).toEqual([]);
+    const child = fakeOps({ 4: "unknown" });
+    expect(await sweepTrees(root, child.ops)).toMatchObject({ swept: 0, kept: [{ id: "po", reason: "1 process whose state couldn't be told" }] });
+    const throwing = { ...fakeOps({}).ops, probe: async (): Promise<Probe> => { throw new Error("EIO"); } };
+    expect(await sweepTrees(root, throwing)).toMatchObject({ swept: 0, kept: [{ id: "po" }] });
+    expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["po"]);
+  });
+
+  it("keeps the entry and sends nothing where this machine can't bind the end to the identity (C2)", async () => {
+    await (await TreeRecord.create(root, "t", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    const { ops } = fakeOps({ 5: 50 });
+    let calls = 0;
+    const report = await sweepTrees(root, { ...ops, endIdentity: async () => { calls++; return "declined"; } });
+    expect(calls).toBe(1); // Declined once, not retried for the rest of the limit.
+    expect(report).toMatchObject({ swept: 0, left: [{ pid: 5 }], kept: [{ id: "t", reason: "1 process couldn't be ended by identity on this machine; left running" }] });
+  });
+
+  it("keeps to 10 s on a monotonic clock, gives every entry its first attempt, and bounds an operation that hangs (C5)", async () => {
+    await (await TreeRecord.create(root, "a", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    await (await TreeRecord.create(root, "b", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 6, startTime: 60 });
+    let clock = 0;
+    const tried: number[] = [];
+    const { ops } = fakeOps({ 5: 50, 6: 60 });
+    const report = await sweepTrees(root, {
+      ...ops, now: () => clock, wait: async (ms) => { clock += ms; },
+      endIdentity: async (target) => { tried.push(target.pid); clock += 700; return "ended"; }, // Slow, and never ends either.
+    });
+    expect(tried.slice(0, 2).sort()).toEqual([5, 6]);
+    expect(clock).toBeLessThan(SWEEP_LIMIT_MS + 2 * 700 + 100);
+    expect(report).toMatchObject({ swept: 0, kept: [{ id: "a" }, { id: "b" }] });
+    const hang = fakeOps({ 5: 50 });
+    const started = Date.now();
+    await sweepTrees(root, { ...hang.ops, endIdentity: () => new Promise(() => {}), commandOf: () => new Promise(() => {}), wait: async () => { throw new Error("stop"); } }).catch(() => {});
+    expect(Date.now() - started).toBeLessThan(3 * OP_LIMIT_MS);
+  }, 20_000);
+
+  it("keeps a file with no post office line, and reports nothing when there are no trees (C7)", async () => {
+    expect(await sweepTrees(root, fakeOps({}).ops)).toMatchObject({ running: 0, swept: 0, kept: [] });
+    mkdirSync(treesDir(root), { recursive: true });
+    writeFileSync(join(treesDir(root), "torn.jsonl"), '{"kind":"cli","pid":5,"startTime":50}\n{"kind":"post-off');
+    const { ops, calls } = fakeOps({ 5: 50 });
+    expect(await sweepTrees(root, ops)).toMatchObject({ swept: 0, kept: [{ id: "torn", reason: "no post office line" }] });
+    expect(calls).toEqual([]);
+  });
+
+  const posixOnly = it.runIf(process.platform !== "win32");
+  posixOnly("reads entries only through checked folders: a linked folder fails, a linked or foreign entry is skipped (C1)", async () => {
+    const other = mkdtempSync(join(tmpdir(), "sa-sweep-other-"));
+    try {
+      await TreeRecord.create(other, "elsewhere", { pid: 3, startTime: 30 });
+      await TreeRecord.create(root, "mine", { pid: 3, startTime: 30 });
+      symlinkSync(join(treesDir(other), "elsewhere.jsonl"), join(treesDir(root), "linked.jsonl"));
+      expect((await readVerifiedTrees(root)).map((tree) => tree.id)).toEqual(["mine"]);
+      rmSync(join(root, ".shadow"), { recursive: true });
+      mkdirSync(join(root, ".shadow"));
+      symlinkSync(join(other, ".shadow", "v2"), join(root, ".shadow", "v2"));
+      await expect(readVerifiedTrees(root)).rejects.toThrow(/is a link/);
+      rmSync(join(root, ".shadow"), { recursive: true });
+      mkdirSync(join(root, ".shadow", "v2", "trees"), { recursive: true, mode: 0o777 });
+      spawnSync("chmod", ["777", join(root, ".shadow", "v2")]);
+      await expect(readVerifiedTrees(root)).rejects.toThrow(/owner's alone/);
+    } finally { rmSync(other, { recursive: true, force: true }); }
   });
 
   it("has no operations for macOS until PO-17's helper exists", () => {
@@ -91,23 +164,40 @@ describe("the sweep (PO-16, M1-AC16)", () => {
   });
 
   const linux = it.runIf(process.platform === "linux");
-  linux("ends a real orphaned process on Linux by its identity, and spares one with the wrong start time", async () => {
+  linux("declines to end a real orphan on Linux until the helper binds the signal, and tells absent from present", async () => {
     const ops = systemOps();
-    const orphan = spawn("sleep", ["30"], { stdio: "ignore" });
-    const bystander = spawn("sleep", ["30"], { stdio: "ignore" });
+    // A real orphan: its shell exits at once, so `sleep` is handed to a subreaper or init, as after a dead post office.
+    const shell = spawnSync("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" });
+    const orphan = Number(shell.stdout.trim());
     try {
-      const orphanStart = (await ops.startTimeOf(orphan.pid!))!;
+      const orphanStart = await ops.probe(orphan);
+      expect(typeof orphanStart).toBe("number");
       const record = await TreeRecord.create(root, "real", { pid: 2 ** 22 - 1, startTime: 1 });
-      await record.add({ kind: "cli", pid: orphan.pid!, startTime: orphanStart });
-      await record.add({ kind: "cli", pid: bystander.pid!, startTime: 1 });
+      await record.add({ kind: "cli", pid: orphan, startTime: orphanStart as number });
       const report = await sweepTrees(root, ops);
-      expect(report.ended.map((one) => one.pid)).toEqual([orphan.pid]);
-      expect(report.ended[0]!.command).toContain("sleep 30");
-      expect(existsSync(join(treesDir(root), "real.jsonl"))).toBe(false);
-      expect(await ops.startTimeOf(orphan.pid!)).toBeUndefined();
-      expect(await ops.startTimeOf(bystander.pid!)).toBeDefined();
-    } finally { orphan.kill("SIGKILL"); bystander.kill("SIGKILL"); }
+      expect(report.left).toEqual([{ pid: orphan, command: "sleep 30" }]);
+      expect(report.kept[0]!.reason).toMatch(/couldn't be ended by identity/);
+      expect(existsSync(join(treesDir(root), "real.jsonl"))).toBe(true);
+      expect(await ops.probe(orphan)).toBe(orphanStart); // Nothing was sent.
+      expect(await ops.probe(2 ** 22 - 1)).toBe("absent");
+    } finally { try { process.kill(orphan, "SIGKILL"); } catch { /* Gone. */ } }
   });
+
+  const windows = it.runIf(process.platform === "win32");
+  windows("ends a real process on Windows through its handle, and only while its creation time matches", async () => {
+    const ops = systemOps();
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+    const exited = new Promise((done) => child.once("exit", done));
+    try {
+      const start = await ops.probe(child.pid!);
+      expect(typeof start).toBe("number");
+      expect(await ops.endIdentity({ pid: child.pid!, startTime: (start as number) + 1 }, false)).toBe("ended"); // Not the same process.
+      expect(await ops.probe(child.pid!)).toBe(start);
+      expect(await ops.endIdentity({ pid: child.pid!, startTime: start as number }, false)).toBe("ended");
+      await exited;
+      expect(await ops.probe(child.pid!)).toBe("absent");
+    } finally { child.kill(); }
+  }, 30_000);
 });
 
 describe("the one-shot entry (PO-16)", () => {
@@ -116,24 +206,27 @@ describe("the one-shot entry (PO-16)", () => {
     try {
       const lines: string[] = [];
       expect(await main([root], (line) => lines.push(line), fakeOps({}).ops)).toBe(0);
-      expect(JSON.parse(lines[0]!)).toEqual({ running: 0, swept: 0, ended: [], left: [], unhandled: 0 });
+      expect(JSON.parse(lines[0]!)).toEqual({ running: 0, swept: 0, ended: [], left: [], unhandled: 0, kept: [] });
       await (await TreeRecord.create(root, "t", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
       expect(await main([root], (line) => lines.push(line), fakeOps({ 5: 50 }, "linux", [5]).ops)).toBe(1);
       expect(JSON.parse(lines[1]!).left).toEqual([{ pid: 5, command: "cmd-5 Bearer [REDACTED]" }]);
     } finally { rmSync(root, { recursive: true, force: true }); }
-  });
+  }, 20_000);
 
-  it("refuses a wrong number of arguments, and reports a machine it has no operations for", async () => {
+  it("refuses a wrong number of arguments, and makes no process call when the folder check fails (C6)", async () => {
     const lines: string[] = [];
     expect(await main([], (line) => lines.push(line))).toBe(2);
     expect(await main(["a", "b"], (line) => lines.push(line))).toBe(2);
     expect(JSON.parse(lines[0]!).error).toMatch(/usage/);
-    const failing = { ...fakeOps({}).ops, startTimeOf: async () => { throw new Error("no /proc"); } };
     const root = mkdtempSync(join(tmpdir(), "sa-sweepmain-"));
     try {
-      await TreeRecord.create(root, "t", { pid: 3, startTime: 30 });
-      expect(await main([root], (line) => lines.push(line), failing)).toBe(2);
-      expect(JSON.parse(lines[2]!)).toEqual({ error: "no /proc" });
+      mkdirSync(join(root, ".shadow"));
+      writeFileSync(join(root, ".shadow", "v2"), "a file where the folder should be");
+      const { ops, calls } = fakeOps({ 3: 31 });
+      let probes = 0;
+      expect(await main([root], (line) => lines.push(line), { ...ops, probe: async (pid) => { probes++; return ops.probe(pid); } })).toBe(2);
+      expect(JSON.parse(lines[2]!).error).toMatch(/not a folder/);
+      expect([probes, calls]).toEqual([0, []]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
