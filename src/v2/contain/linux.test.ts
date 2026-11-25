@@ -1,14 +1,39 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { helperPath, parseStat, spawnManagedProcess, treeOf, type LinuxManagedProcess } from "./linux.js";
+import { helperPath, listTree, parseStat, resolveCommand, spawnManagedProcess, treeOf, type LinuxManagedProcess } from "./linux.js";
 
 const fake = fileURLToPath(new URL("../../../test/fakes/tree-writer.mjs", import.meta.url));
-// The helper exists only on Linux after `npm run build`; elsewhere these tests skip (D-34: Not tested off Linux).
-const linux = it.runIf(process.platform === "linux" && existsSync(helperPath()));
+// Linux only (D-34: Not tested off Linux). On Linux a missing helper fails its own test below rather than skipping the suite.
+const linux = it.runIf(process.platform === "linux");
+
+/** A fake guardian speaking the fd 3 protocol, for the failure paths the real helper can't be made to take. */
+const fakeGuardian = `
+import { appendFileSync } from "node:fs";
+import { Socket } from "node:net";
+const mode = process.env.FAKE_GUARD ?? "";
+const io = new Socket({ fd: 3, readable: true, writable: true });
+const say = (report) => io.write(JSON.stringify({ op: "guard", ...report }) + "\\n");
+const cli = 424242;
+if (mode !== "silent") setTimeout(() => say({ event: "ready", pid: process.pid }), mode === "slow-ready" ? 250 : 0);
+let buffer = "";
+io.setEncoding("utf8");
+io.on("data", (data) => {
+  buffer += data;
+  for (let end; (end = buffer.indexOf("\\n")) >= 0;) { const command = buffer.slice(0, end); buffer = buffer.slice(end + 1); on(command); }
+});
+function on(command) {
+  appendFileSync(process.env.FAKE_LOG, command + "\\n");
+  if (command === "start" && mode !== "late-start") setTimeout(() => say({ event: "started", pid: cli }), mode === "slow-ready" ? 100 : 0);
+  if (command === "start" && mode === "die") setTimeout(() => process.exit(3), 50);
+  if (command === "kill" && mode === "no-ended") process.exit(0);
+  if (command === "kill" && mode !== "hang") { say({ event: "exit", pid: cli, signal: 9 }); say({ event: "ended", reaped: 0 }); io.end(() => process.exit(0)); }
+}
+setInterval(() => {}, 1_000);
+`;
 
 describe("Linux tree listing (PO-11)", () => {
   it("reads the parent and start time after the last ')' of the command name", () => {
@@ -120,8 +145,116 @@ describe("Linux guardian driver (PO-9, PO-10, M1-AC15 on Linux)", () => {
     expect(await stoppedGrowing(out)).toBe(true);
   }, 20_000);
 
+  linux("finds the built helper for this processor (a missing build fails, not skips)", () => {
+    expect(existsSync(helperPath())).toBe(true);
+  });
+
+  linux("refuses a listing once the guardian is gone, so a reused pid can't lend its tree", async () => {
+    const { managed } = await start();
+    await managed.close({ grace: false });
+    await expect(managed.list()).rejects.toThrow(/gone or its pid names another process/);
+    await expect(listTree(process.pid, "/proc", 1)).rejects.toThrow(/discarded/);
+  }, 20_000);
+
   linux("starts nothing for a missing executable or helper", async () => {
     await expect(spawnManagedProcess({ file: "no-such-cli-sa", cwd: tmpdir() })).rejects.toThrow(/could not find executable/);
     await expect(spawnManagedProcess({ file: "node", cwd: tmpdir() }, "/nonexistent/sa-contain")).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe("Linux driver failure paths, with a fake guardian (PO-9, PO-10, PO-15)", () => {
+  let dir: string;
+  const guardians: number[] = [];
+  afterEach(() => {
+    for (const pid of guardians.splice(0)) try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ }
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function setup(mode: string) {
+    dir = mkdtempSync(join(tmpdir(), "sa-linux-fake-"));
+    const helper = join(dir, "fake-guard.mjs");
+    writeFileSync(helper, `#!${process.execPath}\n${fakeGuardian}`);
+    chmodSync(helper, 0o755);
+    const log = join(dir, "commands.log");
+    const spawnIt = (limits: Parameters<typeof spawnManagedProcess>[2] = {}) =>
+      spawnManagedProcess({ file: process.execPath, cwd: dir, env: { ...process.env, FAKE_GUARD: mode, FAKE_LOG: log } }, helper, limits);
+    const commands = () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []);
+    return { spawnIt, commands };
+  }
+
+  linux("fails a guardian that never reports ready, and never sends start", async () => {
+    const { spawnIt, commands } = setup("silent");
+    const began = performance.now();
+    await expect(spawnIt({ ready: 300 })).rejects.toThrow(/report ready within 300 ms/);
+    expect(performance.now() - began).toBeLessThan(2_000);
+    expect(commands()).not.toContain("start");
+  });
+
+  linux("counts one handshake deadline: a slow ready leaves only the rest for the start", async () => {
+    const { spawnIt, commands } = setup("slow-ready"); // ready at 250 ms, started 100 ms after start: 350 ms > 300 ms.
+    await expect(spawnIt({ ready: 300 })).rejects.toThrow(/start the CLI within 300 ms/);
+    expect(commands()).toEqual(["start", "kill"]);
+  });
+
+  linux("fails a late start and has the guardian end what it started", async () => {
+    const { spawnIt, commands } = setup("late-start");
+    await expect(spawnIt({ ready: 300 })).rejects.toThrow(/start the CLI within 300 ms/);
+    expect(commands()).toEqual(["start", "kill"]);
+  });
+
+  linux("fails close when the guardian ends without its ended report", async () => {
+    const { spawnIt } = setup("no-ended");
+    const managed = await spawnIt();
+    await expect(managed.close({ grace: false })).rejects.toThrow(/containment failed: the guardian/);
+    await expect(managed.exited).rejects.toThrow(/containment failed/);
+  });
+
+  linux("reports an unexpected guardian exit as a containment failure, not as the CLI's exit", async () => {
+    const { spawnIt } = setup("die");
+    const managed = await spawnIt();
+    await expect(managed.exited).rejects.toThrow(/containment failed: the guardian( ended \(status 3\)|'s control channel closed)/);
+  });
+
+  linux("keeps a guardian whose tree is not reported empty in time, and fails close (PO-15)", async () => {
+    const { spawnIt } = setup("hang");
+    const managed = await spawnIt({ empty: 300 });
+    guardians.push(managed.guardianPid);
+    await expect(managed.close({ grace: false })).rejects.toThrow(/not reported empty 300 ms after its kill began/);
+    expect(() => process.kill(managed.guardianPid, 0)).not.toThrow();
+  });
+
+  linux("counts the empty-tree limit from the first kill, even if the CLI's exit never comes", async () => {
+    const { spawnIt, commands } = setup("hang");
+    const managed = await spawnIt({ termAfter: 100, killAfter: 200, empty: 300 });
+    guardians.push(managed.guardianPid);
+    const began = performance.now();
+    await expect(managed.close()).rejects.toThrow(/not reported empty/);
+    expect(performance.now() - began).toBeLessThan(1_500);
+    expect(commands()).toEqual(["start", "term", "kill"]);
+  });
+
+  linux("lets an immediate close hurry a graceful close that is waiting", async () => {
+    const { spawnIt, commands } = setup("");
+    const managed = await spawnIt();
+    const began = performance.now();
+    const graceful = managed.close();
+    await managed.close({ grace: false });
+    await graceful;
+    expect(performance.now() - began).toBeLessThan(2_000);
+    expect(commands()).toEqual(["start", "kill"]);
+  });
+});
+
+describe("Linux command search, as Node's own start does it (PO-9)", () => {
+  linux("searches /usr/bin:/bin without PATH, an empty entry as cwd, and skips directories", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sa-linux-path-"));
+    try {
+      expect(await resolveCommand("true", dir, {})).toMatch(/^\/(usr\/)?bin\/true$/);
+      writeFileSync(join(dir, "tool"), "#!/bin/sh\n");
+      chmodSync(join(dir, "tool"), 0o755);
+      expect(await resolveCommand("tool", dir, { PATH: "/nonexistent::/usr/bin" })).toBe(join(dir, "tool"));
+      mkdirSync(join(dir, "sub", "true"), { recursive: true });
+      expect(await resolveCommand("true", dir, { PATH: `${join(dir, "sub")}:/usr/bin:/bin` })).toMatch(/^\/(usr\/)?bin\/true$/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
