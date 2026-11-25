@@ -57,7 +57,7 @@ describe("tree records (PO-16, M1-AC16)", () => {
     const record = await TreeRecord.create(root, "own", { pid: 1, startTime: 1 });
     expect((await readTrees(root)).map((tree) => tree.verified)).toEqual([true]);
     symlinkSync(file("own"), file("pointer"));
-    expect(Object.fromEntries((await readTrees(root)).map((tree) => [tree.id, tree.verified]))).toEqual({ own: true, pointer: false });
+    expect(Object.fromEntries((await readTrees(root)).map((tree) => [tree.id, tree.verified]))).toEqual({ own: true }); // O_NOFOLLOW refuses to open the link: never read, never acted on.
     await record.remove(); rmSync(file("pointer"));
     await TreeRecord.create(root, "open", { pid: 1, startTime: 1 });
     chmodSync(file("open"), 0o666);
