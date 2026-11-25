@@ -1,12 +1,33 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireLock, lockMessages, type LockRecord, type StartTimeOf } from "./lock.js";
+
+/** Faults armed by a test: the lock's temporary writes, and the Nth folder scan, fail. */
+const fault = vi.hoisted(() => ({ tmpWrite: null as string | null, scanCall: 0, scans: 0 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const failure = (code: string) => Object.assign(new Error(code), { code });
+  return {
+    ...actual,
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+      if (fault.tmpWrite && String(args[0]).includes(".tmp-")) throw failure(fault.tmpWrite);
+      return actual.writeFile(...args);
+    },
+    readdir: async (...args: Parameters<typeof actual.readdir>) => {
+      if (fault.scanCall && ++fault.scans === fault.scanCall) throw failure("EIO");
+      return actual.readdir(...args);
+    },
+  };
+});
 
 let dir: string;
 beforeEach(async () => { dir = join(await mkdtemp(join(tmpdir(), "sa-lock-")), "lock"); });
-afterEach(async () => { await rm(join(dir, ".."), { recursive: true, force: true }); });
+afterEach(async () => {
+  Object.assign(fault, { tmpWrite: null, scanCall: 0, scans: 0 });
+  await rm(join(dir, ".."), { recursive: true, force: true });
+});
 
 /** A fake process table: pid to start time. A pid not in it has no process. */
 function processes(table: Record<number, string>): StartTimeOf {
@@ -95,6 +116,22 @@ describe("PO-1's lock", () => {
     const result = await acquireLock(join(blocked, "lock"), office(10), processes({}));
     expect(result).toMatchObject({ ok: false, kind: "not-written" });
     expect(!result.ok && result.message).toMatch(/^the army can't start: lock not written · \S/);
+  });
+
+  it("gives the live lock's message, not a write failure, when the disk is full", async () => {
+    const live = processes({ 10: "1000", [otherClaude.pid]: otherClaude.startTime });
+    await acquireLock(dir, office(10, otherClaude), live);
+    fault.tmpWrite = "ENOSPC";
+    expect(await acquireLock(dir, office(20), live)).toMatchObject({ ok: false, kind: "running", message: lockMessages.running(10) });
+  });
+
+  it("takes back its own published lock when the check after publishing fails, and says the lock wasn't written", async () => {
+    fault.scanCall = 2; // the first scan finds the folder empty; the one after publishing fails
+    const result = await acquireLock(dir, office(10), processes({}));
+    expect(result).toEqual({ ok: false, kind: "not-written", message: lockMessages.notWritten("EIO") });
+    fault.scanCall = 0;
+    expect(await lockFiles()).toEqual([]);
+    expect(await acquireLock(dir, office(20), processes({ 10: "1000" }))).toMatchObject({ ok: true });
   });
 
   describe("two starts on one stale lock", () => {

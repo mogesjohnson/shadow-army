@@ -78,16 +78,13 @@ export async function acquireLock(dir: string, record: LockRecord, startTimeOf: 
   if (!isProcessId(record) || !isProcessId(record.starter) || !Number.isInteger(record.port)) throw new Error("lock record needs pid, start time, port and starter");
   const body = JSON.stringify(record);
   const tmp = join(dir, `.tmp-${record.pid}-${randomBytes(6).toString("hex")}`);
+  const notWritten = (error: unknown): AcquireResult => ({ ok: false, kind: "not-written", message: lockMessages.notWritten(writeReason(error)) });
+  let staged = false;
   try {
-    await mkdir(dir, { recursive: true });
-    await writeFile(tmp, body, { flag: "wx", mode: 0o600 });
-  } catch (error) {
-    await unlink(tmp).catch(() => undefined);
-    return { ok: false, kind: "not-written", message: lockMessages.notWritten(writeReason(error)) };
-  }
-  try {
+    try { await mkdir(dir, { recursive: true }); } catch (error) { return notWritten(error); }
     for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-      const existing = await generations(dir);
+      let existing: number[];
+      try { existing = await generations(dir); } catch (error) { return notWritten(error); }
       const top = existing.at(-1) ?? 0;
       let replaced: { reason: StaleReason; previous?: LockRecord } | undefined;
       if (top > 0) {
@@ -98,20 +95,28 @@ export async function acquireLock(dir: string, record: LockRecord, startTimeOf: 
           replaced = { reason: now === null ? "no process has its pid" : "its pid now has another start time", previous: read.record };
         } else if ("stale" in read) replaced = { reason: read.stale };
       }
+      // Staged only once no live holder is found, so a write failure never hides a live lock.
+      if (!staged) {
+        try { await writeFile(tmp, body, { flag: "wx", mode: 0o600 }); } catch (error) { return notWritten(error); }
+        staged = true;
+      }
       const mine = join(dir, `${top + 1}.lock`);
       try { await link(tmp, mine); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
-        return { ok: false, kind: "not-written", message: lockMessages.notWritten(writeReason(error)) };
+        return notWritten(error);
       }
       // A start that read an old generation can fill a hole below the top; it loses to the top.
-      if ((await generations(dir)).some((n) => n > top + 1)) { await unlink(mine).catch(() => undefined); continue; }
+      // If that check fails, this start takes back only the generation it published.
+      let after: number[];
+      try { after = await generations(dir); } catch (error) { await unlink(mine).catch(() => undefined); return notWritten(error); }
+      if (after.some((n) => n > top + 1)) { await unlink(mine).catch(() => undefined); continue; }
       for (const n of existing) await unlink(join(dir, `${n}.lock`)).catch(() => undefined);
       const lock: HeldLock = { record, release: () => release(dir, mine) };
       if (!replaced) return { ok: true, lock };
       const who = replaced.previous ? `pid ${replaced.previous.pid}, start ${replaced.previous.startTime}` : `${top}.lock`;
       return { ok: true, lock, replaced: { ...replaced, logLine: `lock: replaced a stale lock (${who}): ${replaced.reason}` } };
     }
-    return { ok: false, kind: "not-written", message: lockMessages.notWritten(`still contended after ${ATTEMPTS} tries`) };
+    return notWritten(new Error(`still contended after ${ATTEMPTS} tries`));
   } finally {
     await unlink(tmp).catch(() => undefined);
   }
