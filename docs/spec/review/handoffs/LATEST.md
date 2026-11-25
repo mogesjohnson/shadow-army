@@ -4,14 +4,20 @@ Self-contained: do not read older handoffs. Range `013be2e` to this commit.
 
 ## Owner's instructions in force
 
-- **HOLD (the owner, 2026-11-25 03:40 UTC): start no new worker sessions until the owner says so. Only let the running workers finish, check their reports and close their tabs.** The queues below wait.
+- HOLD (03:40 UTC) lifted by the owner at 05:20 UTC.
 - **The 5-hour limit: 80% at most.** Stop all new work at 80% on the cockpit line.
 - At every 5-minute tick, check Codex's reviews: `bash C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/codex_tick.sh <last tick ISO>`. Last tick: 04:07 UTC.
 - Keep startup context small (2026-11-25): orch-37 cut RUNBOOK.md to section 0 and both STATE.md files to short current states (old logs: `git show 013be2e:docs/spec/review/STATE.md` and `.shadow/v2-tools/STATE-log-to-2026-11-25.md`). Keep LATEST.md under 5 KB.
 
 ## Running workers
 
-None (orch-38, 04:09 UTC). Under the HOLD, start none.
+The owner lifted the HOLD at 05:20 UTC ("Hold lifted, launch w104"). orch-38 launched:
+
+| Worker | PR | Files |
+|---|---|---|
+| w104-fix136-wincalls (Opus medium) | #136 Windows timeouts | `postOffice.ts`, `postOffice.test.ts` |
+| w91-fix134 (Opus medium) | #134, review 10 | `register.ts`, `sweep.ts` per brief (not beside #138 C1) |
+| w82-fix119 (Sonnet medium) | #119, review 8 | roster and instructions per brief |
 
 ## Done by orch-38 (`a1eb4681`)
 
