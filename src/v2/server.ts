@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { PostOffice, type OfficeOptions } from "./postOffice.js";
@@ -22,6 +22,8 @@ export interface ServerOptions extends OfficeOptions {
   memoryProtection?: string;
   /** Schedules the refusal reports' minute; tests pass a fake monotonic clock. */
   refusalTimer?: After;
+  /** Claude Code's own pid, from the bootstrap's `starter`, so a relay reloaded under it is the same starter. Defaults to the parent. */
+  starter?: number;
 }
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -42,20 +44,56 @@ const run = promisify(execFile);
 /**
  * PO-1's creation stamp: field 22 of /proc/<pid>/stat on Linux. STOP-GAP on win32 and darwin until
  * M1b-17's script (GetProcessTimes) and M1b-1's helper (proc_pidinfo) exist: PowerShell's StartTime in FILETIME
- * units, and `ps` on darwin (not tested, there is no Mac). Null when no process has the pid.
+ * units, and `ps` on darwin (not tested, there is no Mac). Null only when the system confirms no process has
+ * the pid; a lookup that fails for a live or unknown pid throws, so the lock refuses rather than replace a holder.
  */
-export const processStartTime: StartTimeOf = async (pid) => {
-  try {
-    if (process.platform === "linux") {
-      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? null;
+export const processStartTime: StartTimeOf = (pid) => startTimeFrom(pid, async () => {
+  if (process.platform === "linux") {
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  }
+  const { stdout } = process.platform === "win32"
+    ? await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`], { windowsHide: true })
+    : await run("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" } });
+  return stdout.trim();
+});
+
+/** A stamp from `lookup`; when it fails, null only if `isGone` confirms the pid has no process, otherwise an error. */
+export async function startTimeFrom(pid: number, lookup: () => Promise<string | undefined>, isGone: (pid: number) => boolean = gone): Promise<string | null> {
+  const stamp = await lookup().catch(() => undefined);
+  if (stamp) return stamp;
+  if (isGone(pid)) return null;
+  throw new Error(`the start time of pid ${pid} is unavailable`);
+}
+
+/** True only when the system confirms no process has the pid: signal 0 fails with ESRCH (EPERM means it exists). */
+export function gone(pid: number): boolean {
+  try { process.kill(pid, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+}
+
+/**
+ * M1a's marker, `.shadow/v2/post-office.lock` (`{pid}`, created exclusively). A running M1a build takes only that
+ * file, so this build takes it too, after PO-1's lock: a start of either build is refused while the other runs.
+ * Only PO-1's holder touches it, so it replaces a marker whose pid is confirmed gone; a live or unknown pid refuses.
+ * Retire it once no M1a build can start in a folder (the mod ships only M1b's post office).
+ */
+async function takeLegacyMarker(root: string): Promise<() => Promise<void>> {
+  const path = join(root, ".shadow", "v2", "post-office.lock");
+  const record = JSON.stringify({ pid: process.pid });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await writeFile(path, record, { flag: "wx", mode: 0o600 });
+      return async () => { if (await readFile(path, "utf8").catch(() => "") === record) await unlink(path); };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const text = await readFile(path, "utf8").catch(() => "");
+      let pid: unknown;
+      try { pid = (JSON.parse(text) as { pid?: unknown }).pid; } catch { /* unreadable: refused below */ }
+      if (attempt === 0 && typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 && gone(pid)) { await unlink(path).catch(() => undefined); continue; }
+      throw new Error(`the army is already running in this folder (an older post office, ${text.trim() || "empty marker"}); close it, or remove .shadow/v2/post-office.lock after checking that pid`);
     }
-    const { stdout } = process.platform === "win32"
-      ? await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToFileTimeUtc()`], { windowsHide: true })
-      : await run("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" } });
-    return stdout.trim() || null;
-  } catch { return null; }
-};
+  }
+}
 
 /** `/send --claim` arrives as `claims`: a list of non-empty path patterns, or nothing. */
 function turnOptions(claims: unknown): { claims?: string[] } {
@@ -76,6 +114,9 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
     else log({ type: "command_refused", data: { reason: "wrong or missing Monarch credential", count, since: "the last report" } });
   }, options.refusalTimer);
   let held: HeldLock | undefined;
+  let legacy: (() => Promise<void>) | undefined;
+  // PO-1: no command runs until the lock, the M1a marker and the lease are held.
+  let ready = false;
   let server: Server | undefined;
   let lease: SessionLease | undefined;
   let api: OfficeServer | undefined;
@@ -98,6 +139,10 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
           response.writeHead(401); response.end(JSON.stringify({ error: "wrong or missing Monarch credential" }));
           request.resume();
           return;
+        }
+        if (!ready) {
+          response.writeHead(503); response.end(JSON.stringify({ error: "post office is starting" }));
+          request.resume(); return;
         }
         if (request.method !== "POST" || request.url !== "/command") {
           response.writeHead(404); response.end(JSON.stringify({ error: "command endpoint only; events are sent over stdout" }));
@@ -144,11 +189,14 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
     const address = await bindLoopback(server, options.port ?? 0, options.host);
     // PO-1: the lock names this process and the one that started it (PO-7's watch), by creation stamp.
     const startTimeOf = options.startTimeOf ?? processStartTime;
-    const [startTime, starterTime] = await Promise.all([startTimeOf(process.pid), startTimeOf(process.ppid)]);
-    if (startTime === null || starterTime === null) throw new Error(lockMessages.notWritten(`no start time for pid ${startTime === null ? process.pid : process.ppid}`));
-    const taken = await acquireLock(join(office.root, ".shadow", "v2", "lock"), { pid: process.pid, startTime, port: address.port, starter: { pid: process.ppid, startTime: starterTime } }, startTimeOf);
+    const starter = options.starter ?? process.ppid;
+    const notWritten = (error: unknown): never => { throw new Error(lockMessages.notWritten(error instanceof Error ? error.message : String(error))); };
+    const [startTime, starterTime] = await Promise.all([startTimeOf(process.pid), startTimeOf(starter)]).catch(notWritten);
+    if (startTime === null || starterTime === null) throw new Error(lockMessages.notWritten(`no start time for pid ${startTime === null ? process.pid : starter}`));
+    const taken = await acquireLock(join(office.root, ".shadow", "v2", "lock"), { pid: process.pid, startTime, port: address.port, starter: { pid: starter, startTime: starterTime } }, startTimeOf).catch(notWritten);
     if (!taken.ok) throw new Error(taken.message);
     held = taken.lock;
+    legacy = await takeLegacyMarker(office.root);
     if (taken.replaced) log({ type: "lock", line: taken.replaced.logLine });
     let closing: Promise<void> | undefined;
     const bound = server;
@@ -156,7 +204,7 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
     api = { office, url: `http://${host}:${address.port}`, close() {
       return closing ??= (async () => {
         lease?.dispose();
-        refusals.flush();
+        refusals.stop();
         const stopped = new Promise<void>((resolve, reject) => bound.close((error) => error ? reject(error) : resolve()));
         try {
           await office.close();
@@ -167,6 +215,7 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
           // cannot launch another writer until the owner has checked the previous session.
           await stopped;
         }
+        await legacy!();
         await held!.release();
       })();
     } };
@@ -175,12 +224,14 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
       office.leaseEnded(lease!.session, "expired");
       requestShutdown();
     }, options.leaseClock);
+    ready = true;
     return api;
   } catch (error) {
     lease?.dispose();
     server?.close();
-    refusals.flush();
+    refusals.stop();
     await office.close();
+    await legacy?.();
     await held?.release();
     throw error;
   }

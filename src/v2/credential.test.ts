@@ -16,10 +16,13 @@ describe("PO-3 credential on standard input", () => {
   it("reads the secret and the lease from one line", async () => {
     expect(await bootstrap((s) => s.write(`${JSON.stringify({ credential: secret, lease: { session: "s1" } })}\n`))).toEqual({ credential: secret, lease: { session: "s1" } });
     expect(await bootstrap((s) => s.write(`${JSON.stringify({ credential: secret })}\n`))).toEqual({ credential: secret });
+    const full = { credential: secret, lease: { session: "s".repeat(128) }, starter: 4_194_304 };
+    expect(await bootstrap((s) => s.write(`${JSON.stringify(full)}\n`))).toEqual(full);
+    for (const starter of [0, -1, 1.5, "12"]) await expect(bootstrap((s) => s.write(`${JSON.stringify({ credential: secret, starter })}\n`))).rejects.toThrow("invalid credential bootstrap");
   });
 
   it("refuses a line that is not whole, too long or not a secret of 32 bytes, and never repeats the line in its error", async () => {
-    for (const line of [`{"credential":"${secret}`, "not json", "null", JSON.stringify({ credential: "short" }), JSON.stringify({ credential: secret, lease: { session: 1 } }), JSON.stringify({ credential: secret, pad: "x".repeat(300) })]) {
+    for (const line of [`{"credential":"${secret}`, "not json", "null", JSON.stringify({ credential: "short" }), JSON.stringify({ credential: secret, lease: { session: 1 } }), JSON.stringify({ credential: secret, pad: "x".repeat(600) })]) {
       const error = await bootstrap((s) => s.write(`${line}\n`)).catch((e: Error) => e);
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toBe("invalid credential bootstrap");
@@ -76,7 +79,7 @@ describe("PO-3 refusal reports", () => {
     expect(clock.waiting()).toBe(0);
   });
 
-  it("reports in full again after a quiet minute, and flush reports what is pending", () => {
+  it("reports in full again after a quiet minute, and a shutdown inside a minute gives no early count", () => {
     const clock = fake(); const reports: [number, boolean][] = [];
     const reporter = new RefusalReporter((count, first) => reports.push([count, first]), clock.after);
     reporter.refuse();
@@ -84,8 +87,8 @@ describe("PO-3 refusal reports", () => {
     reporter.refuse();
     expect(reports).toEqual([[1, true], [1, true]]);
     reporter.refuse(); reporter.refuse();
-    reporter.flush();
-    expect(reports.at(-1)).toEqual([2, false]);
+    reporter.stop();
+    expect(reports).toEqual([[1, true], [1, true]]);
     expect(clock.waiting()).toBe(0);
   });
 });
