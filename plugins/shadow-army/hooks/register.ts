@@ -342,10 +342,25 @@ async function gitValue($: EngineInterface, path: string, prefix = ""): Promise<
   } catch { return undefined; }
 }
 
+/** The admin folder a checkout's `.git` file names, read from `<checkout>/.git`; `null` when that checkout is gone, `undefined` when it names none. */
+async function adminOf($: EngineInterface, checkout: string): Promise<string | null | undefined> {
+  try { await $.fs.stat(`${checkout}/.git`); } catch (error) { return isMissing(error) ? null : undefined; }
+  const own = await gitValue($, `${checkout}/.git`, "gitdir:");
+  return own ? joined(checkout, own) : undefined;
+}
+
+/** Whether two paths land on the same real path; a path that leads nowhere matches nothing. */
+async function sameReal($: EngineInterface, a: string, b: string): Promise<boolean> {
+  const [x, y] = [await realPathOf($, a), await realPathOf($, b)];
+  return !!x && !!y && normal(x) === normal(y);
+}
+
 /**
- * Every checkout of the repository, read from git's own files before anything runs (HOST-2, CH-1; C9, review 21): the nearest checkout, the
- * main checkout and each registered worktree (`<common git folder>/worktrees/<name>/gitdir`). A linked checkout's `.git` file must name a git folder
- * whose `gitdir` names that checkout back and whose `commondir` names the common folder; anything else leaves the layout unverified, and nothing starts.
+ * Every checkout of the repository, read from git's own files before anything runs (HOST-2, CH-1; C9, reviews 21 and 24): the nearest checkout,
+ * the main checkout and each registered worktree (`<common git folder>/worktrees/<name>/gitdir`). The common folder must be a folder; a linked
+ * checkout's `.git` file must name a git folder that names that checkout back, whose `commondir` names the common folder, and which the common
+ * folder lists as one of its worktrees. Each other registered worktree whose checkout is there must name its own git folder back; one whose
+ * checkout is gone is still barred. An empty registry counts only for a main checkout; anything unverified leaves the layout unknown, and nothing starts.
  */
 async function checkouts($: EngineInterface, root: string): Promise<string[] | { refusal: string }> {
   const refusal = { refusal: `Shadow Army: the git worktrees of ${root} cannot be verified · nothing started` };
@@ -353,38 +368,45 @@ async function checkouts($: EngineInterface, root: string): Promise<string[] | {
   let kind: string;
   try { kind = (await $.fs.stat(dotGit)).kind; } catch (error) { return isMissing(error) ? [root] : refusal; }
   let common = joined(root, ".git");
+  let admin: string | undefined;
   if (kind === "file") {
-    const own = await gitValue($, dotGit, "gitdir:");
-    if (!own) return refusal;
-    const admin = joined(root, own);
+    admin = (await adminOf($, root)) ?? undefined;
+    if (!admin) return refusal;
     const [back, shared] = [await gitValue($, `${admin}/gitdir`), await gitValue($, `${admin}/commondir`)];
-    if (!back || !shared) return refusal;
-    const [named, real] = [await realPathOf($, joined(admin, back)), await realPathOf($, dotGit)];
-    if (!named || !real || normal(named) !== normal(real)) return refusal;
+    if (!back || !shared || !await sameReal($, joined(admin, back), dotGit)) return refusal;
     common = joined(admin, shared);
+    try { if ((await $.fs.stat(common)).kind !== "directory") return refusal; } catch { return refusal; }
   } else if (kind !== "directory") return refusal;
   const found = [root, common.endsWith("/.git") ? common.slice(0, -"/.git".length) : common];
   let names: string[] = [];
   try { names = (await $.fs.list(`${common}/worktrees`)).filter((entry) => entry.kind === "directory").map((entry) => entry.name); }
-  catch (error) { if (!isMissing(error)) return refusal; }
+  catch (error) { if (admin || !isMissing(error)) return refusal; }
+  let listed = false;
   for (const name of names) {
-    const back = await gitValue($, `${common}/worktrees/${name}/gitdir`);
+    const entry = `${common}/worktrees/${name}`;
+    if (admin && await sameReal($, entry, admin)) { listed = true; continue; }
+    const back = await gitValue($, `${entry}/gitdir`);
     if (!back) return refusal;
-    found.push(joined(`${common}/worktrees/${name}`, back).replace(/\/\.git$/, ""));
+    const checkout = joined(entry, back).replace(/\/\.git$/, "");
+    const named = await adminOf($, checkout);
+    if (named === undefined || (named !== null && !await sameReal($, named, entry))) return refusal;
+    found.push(checkout);
   }
-  return found;
+  return admin && !listed ? refusal : found;
 }
 
 /**
- * WSP-11's snapshot roots, outside the checkout and without a `.shadow` component (C10, review 21): the default `~/.shadow-army/snapshots`
- * and the folder `SHADOW_ARMY_SNAPSHOTS` names. Without a home folder, or with a setting that is not absolute, they cannot be known, and nothing starts.
+ * WSP-11's snapshot roots, outside the checkout and without a `.shadow` component (C10, reviews 21 and 24): the default `~/.shadow-army/snapshots`
+ * and the folder `SHADOW_ARMY_SNAPSHOTS` names in the shell or in Claude Code's loaded settings. The host's precedence between the two is not
+ * established, so both count. Without a home folder, or with a value that is not absolute, they cannot be known, and nothing starts.
  */
-async function snapshotRoots($: EngineInterface): Promise<string[] | { refusal: string }> {
+async function snapshotRoots($: EngineInterface, settings: Record<string, unknown>): Promise<string[] | { refusal: string }> {
   const home = process.platform === "win32" ? (await $.env.get("USERPROFILE")) || (await $.env.get("HOME")) : await $.env.get("HOME");
   if (!home || !isAbsolute(home)) return { refusal: "Shadow Army: the home folder, where snapshots go, is not known · nothing started" };
-  const moved = await $.env.get("SHADOW_ARMY_SNAPSHOTS");
-  if (moved && !isAbsolute(moved)) return { refusal: "Shadow Army: SHADOW_ARMY_SNAPSHOTS is not an absolute path · nothing started" };
-  return [joined(home, ".shadow-army/snapshots"), ...(moved ? [moved] : [])];
+  const moved = [await $.env.get("SHADOW_ARMY_SNAPSHOTS"), settings.SHADOW_ARMY_SNAPSHOTS]
+    .filter((value): value is string => typeof value === "string" && value.trim() !== "");
+  if (moved.some((root) => !isAbsolute(root))) return { refusal: "Shadow Army: SHADOW_ARMY_SNAPSHOTS is not an absolute path · nothing started" };
+  return [joined(home, ".shadow-army/snapshots"), ...moved];
 }
 
 /**
@@ -392,12 +414,12 @@ async function snapshotRoots($: EngineInterface): Promise<string[] | { refusal: 
  * snapshot roots (C10), each in its own spelling and by its own real path, so a link or junction on any of them is followed (C1). The working
  * folder and the nearest checkout must resolve; another may be absent, but one that is there and does not resolve stops the start.
  */
-async function barredFolders($: EngineInterface, cwd: string, root: string): Promise<string[] | { refusal: string }> {
+async function barredFolders($: EngineInterface, cwd: string, root: string, settings: Record<string, unknown>): Promise<string[] | { refusal: string }> {
   const refusal = (path: string) => ({ refusal: `Shadow Army: ${path} does not resolve to a real path · nothing started` });
   const [cwdReal, rootReal] = [await rootIdentity($, cwd), await rootIdentity($, root)];
   if (typeof cwdReal !== "string") return refusal(cwd);
   if (typeof rootReal !== "string") return refusal(root);
-  const [layout, snapshots] = [await checkouts($, root), await snapshotRoots($)];
+  const [layout, snapshots] = [await checkouts($, root), await snapshotRoots($, settings)];
   if (!Array.isArray(layout)) return layout;
   if (!Array.isArray(snapshots)) return snapshots;
   const folders = [cwd, cwdReal];
@@ -416,9 +438,9 @@ async function barredFolders($: EngineInterface, cwd: string, root: string): Pro
 }
 
 /** Node.js's and git's absolute paths, found before either is run (HOST-2), or the line to show when one is missing. */
-async function resolveTools($: EngineInterface, cwd: string): Promise<{ node: string; git: string } | { refusal: string }> {
+async function resolveTools($: EngineInterface, cwd: string, settings: Record<string, unknown>): Promise<{ node: string; git: string } | { refusal: string }> {
   const path = (await $.env.get("PATH")) ?? (await $.env.get("Path")) ?? "";
-  const barred = await barredFolders($, cwd, await repoRoot($, cwd));
+  const barred = await barredFolders($, cwd, await repoRoot($, cwd), settings);
   if (!Array.isArray(barred)) return barred;
   const node = await findOnPath($, "node", path, barred);
   if (!node) return { refusal: "Shadow Army needs Node.js 22.0 or later on PATH; none was found" };
@@ -434,14 +456,13 @@ const listsLoopback = (value: string): boolean => value.split(",").some((entry) 
  * Both sources are read once, and the host's precedence between them is not established (P-16 tried one at a time), so a proxy in either counts
  * and the bypass counts only when every `NO_PROXY` and `no_proxy` value in either lists the loopback address.
  */
-async function proxyRefusal($: EngineInterface): Promise<string | undefined> {
+async function proxyRefusal($: EngineInterface, merged: Record<string, unknown>): Promise<string | undefined> {
   // `$.env.get` takes names spelled as literals, so each is written out.
   const shell: Record<string, string | undefined> = {
     HTTPS_PROXY: await $.env.get("HTTPS_PROXY"), https_proxy: await $.env.get("https_proxy"),
     HTTP_PROXY: await $.env.get("HTTP_PROXY"), http_proxy: await $.env.get("http_proxy"),
     NO_PROXY: await $.env.get("NO_PROXY"), no_proxy: await $.env.get("no_proxy"),
   };
-  const merged = (await $.settings.read() as { env?: Record<string, unknown> } | undefined)?.env ?? {};
   const values = (name: string): string[] => [shell[name], merged[name]].filter((value): value is string => typeof value === "string" && value.trim() !== "");
   const bypass = NO_PROXY_VARIABLES.flatMap(values);
   if (bypass.length && bypass.every(listsLoopback)) return undefined;
@@ -452,7 +473,7 @@ async function proxyRefusal($: EngineInterface): Promise<string | undefined> {
 }
 
 /** HOST-2's preflight: the line to show when the army must not start, or `undefined` to go on. */
-async function preflight($: EngineInterface, cwd: string, tools: { node: string; git: string }): Promise<string | undefined> {
+async function preflight($: EngineInterface, cwd: string, tools: { node: string; git: string }, settings: Record<string, unknown>): Promise<string | undefined> {
   const host = String(await $.session.version());
   const hostParts = /(\d+)\.(\d+)\.(\d+)/.exec(host)?.slice(1).map(Number);
   if (!hostParts || olderThan(hostParts, MIN_HOST)) return `Shadow Army needs Claude Code 2.1.294 or later; this is ${host}`;
@@ -466,7 +487,7 @@ async function preflight($: EngineInterface, cwd: string, tools: { node: string;
     if (olderThan(found.version, [...least])) return `Shadow Army needs ${name} ${least.join(".")} or later on PATH; found ${found.version.join(".")}`;
   }
   // P-16: Claude Code sends the mod's fetch through a proxy named in these variables, the loopback address too.
-  return proxyRefusal($);
+  return proxyRefusal($, settings);
 }
 
 /**
@@ -533,10 +554,12 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     // `finished` also waits for the relay's end to be confirmed, so a restart never overlaps a start still being cleaned up.
     owned.finished = (async () => {
       // Both executables are found, by absolute path, before either is run; the relay then starts with this same Node.js.
-      const tools = await resolveTools($, cwd);
+      // Claude Code's loaded settings, read once per start: the snapshot roots (WSP-11, C10) and the proxy check (P-16) both use them.
+      const settings = (await $.settings.read() as { env?: Record<string, unknown> } | undefined)?.env ?? {};
+      const tools = await resolveTools($, cwd, settings);
       if ("refusal" in tools) throw new Error(tools.refusal);
       if (!checked) {
-        const refusal = await preflight($, cwd, tools);
+        const refusal = await preflight($, cwd, tools, settings);
         if (refusal) throw new Error(refusal);
         checked = true;
       }

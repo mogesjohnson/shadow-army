@@ -601,7 +601,7 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
         cwd: LINKED, lists: { [ADMIN]: ["w9", "w2"] },
         files: {
           [`${LINKED}/.git`]: `gitdir: ${ADMIN}/w9\n`, [`${ADMIN}/w9/gitdir`]: `${fwd(LINKED)}/.git\n`, [`${ADMIN}/w9/commondir`]: "../..\n",
-          [`${ADMIN}/w2/gitdir`]: `${fwd(OTHER)}/.git\n`, ...files,
+          [`${ADMIN}/w2/gitdir`]: `${fwd(OTHER)}/.git\n`, [`${fwd(OTHER)}/.git`]: `gitdir: ${ADMIN}/w2\n`, ...files,
         },
       });
 
@@ -617,8 +617,51 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
         ["its git folder does not name it back", { [`${ADMIN}/w9/gitdir`]: "/somewhere/else/.git\n" }],
         ["its git folder has no commondir", { [`${ADMIN}/w9/commondir`]: undefined }],
         ["a registered worktree's gitdir cannot be read", { [`${ADMIN}/w2/gitdir`]: undefined }],
+        ["its commondir names no git folder", { [`${ADMIN}/w9/commondir`]: "../../../nowhere\n" }],
+        ["a registered worktree's checkout names another git folder (C9, review 24)", { [`${fwd(OTHER)}/.git`]: `gitdir: ${ADMIN}/w9\n` }],
+        ["a registered worktree's checkout names no git folder (C9, review 24)", { [`${fwd(OTHER)}/.git`]: "nonsense\n" }],
       ])("starts nothing from a linked checkout when %s", async (_case, files) => {
         const { probes, spawns, line } = await launched(linked(files));
+        expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
+        expect(probes).toEqual([]);
+        expect(spawns).toEqual([]);
+      });
+
+      it.each([
+        ["lists no worktrees", {}],
+        ["lists worktrees without its git folder", { [ADMIN]: ["w2"] }],
+      ])("starts nothing from a linked checkout when the common folder %s (C9, review 24)", async (_case, lists) => {
+        const { probes, spawns, line } = await launched({ ...linked(), lists });
+        expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
+        expect(probes).toEqual([]);
+        expect(spawns).toEqual([]);
+      });
+
+      it("still bars a registered worktree whose checkout is gone, and starts (C9, review 24)", async () => {
+        const dirs = [where(OTHER, "bin"), BIN];
+        const { probes, spawns } = await launched({ ...linked(), dirs, unresolved: [`${fwd(OTHER)}/.git`] });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+        expect(spawns).toHaveLength(1);
+      });
+    });
+
+    describe("a SHADOW_ARMY_SNAPSHOTS root in Claude Code's settings (C10, review 24)", () => {
+      const [MOVED, SET] = process.platform === "win32" ? ["F:\\snaps", "G:\\set"] : ["/snaps", "/set"];
+      const snap = (root: string) => where(root, "repo-0a1b2c3d4e5f", "s1", "bin");
+
+      it("refuses entries in a root set only in the settings", async () => {
+        const { probes } = await launched({ dirs: [snap(SET), BIN], settingsEnv: { SHADOW_ARMY_SNAPSHOTS: SET } });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+      });
+
+      it("refuses entries in both roots when the shell and the settings name different ones", async () => {
+        const dirs = [snap(MOVED), snap(SET), BIN];
+        const { probes } = await launched({ dirs, vars: { SHADOW_ARMY_SNAPSHOTS: MOVED }, settingsEnv: { SHADOW_ARMY_SNAPSHOTS: SET } });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+      });
+
+      it("starts nothing when the settings' SHADOW_ARMY_SNAPSHOTS is relative", async () => {
+        const { probes, spawns, line } = await launched({ settingsEnv: { SHADOW_ARMY_SNAPSHOTS: "snaps" } });
         expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
         expect(probes).toEqual([]);
         expect(spawns).toEqual([]);
