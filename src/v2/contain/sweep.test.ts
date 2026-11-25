@@ -11,8 +11,9 @@ import { readTrees, TreeRecord, treesDir } from "./trees.js";
 /** Fake processes by pid → start time. Ending one removes it, unless its pid is in `stuck`. */
 function fakeOps(alive: Record<number, number | string | null>, platform: NodeJS.Platform = "linux", stuck: number[] = []) {
   const calls: string[] = [];
+  let clock = 0; // A fake monotonic clock: only the waits move it.
   const ops: SweepOps = {
-    platform,
+    platform, now: () => clock,
     owned: async () => true,
     startTimeOf: async (pid) => alive[pid],
     commandOf: async (pid) => `cmd-${pid} Bearer abc123`,
@@ -24,7 +25,7 @@ function fakeOps(alive: Record<number, number | string | null>, platform: NodeJS
     },
     removeJob: async (label) => { calls.push(`job ${label}`); },
     endCoalition: async (id) => { calls.push(`coalition ${id}`); },
-    wait: async () => {},
+    wait: async (ms) => { clock += ms; },
   };
   return { ops, calls, alive };
 }
@@ -126,6 +127,23 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(await sweepTrees(root, throwing)).toMatchObject({ swept: 0, left: [{ pid: 8 }] });
   });
 
+  it.each(["probe", "end"])("ends the sweep near its limit when a %s never answers, and keeps the entry (C10)", async (stuck) => {
+    await TreeRecord.create(root, "stuck", { pid: 3, startTime: 30 }, { pid: 4, startTime: 40 });
+    const { ops } = fakeOps({ 4: 40 });
+    let closed = 0;
+    const hanging: SweepOps = {
+      ...ops, now: () => performance.now(), wait: (ms) => new Promise((done) => setTimeout(done, ms)), close: () => { closed++; },
+      startTimeOf: (pid) => stuck === "probe" && pid === 4 ? new Promise(() => {}) : ops.startTimeOf(pid),
+      endProcess: (target, tree) => stuck === "end" ? new Promise(() => {}) : ops.endProcess(target, tree),
+    };
+    const began = performance.now();
+    const report = await sweepTrees(root, hanging, 500);
+    expect(performance.now() - began).toBeLessThan(500 + 100 + 1_000); // The limit, the last check's bound, slack.
+    expect(report).toMatchObject({ swept: 0, left: [{ pid: 4 }] });
+    expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["stuck"]);
+    expect(closed).toBe(1);
+  });
+
   it("never ends a process on a record it couldn't verify as the user's own, and keeps the record", async () => {
     const record = await TreeRecord.create(root, "foreign", { pid: 3, startTime: 30 });
     await record.add({ kind: "cli", pid: 5, startTime: 50 });
@@ -178,9 +196,11 @@ describe("the sweep (PO-16, M1-AC16)", () => {
   });
 
   it.runIf(process.platform === "win32")("reads a Windows process's exact creation time, not milliseconds", async () => {
-    const now = await systemOps().startTimeOf(process.pid);
-    expect(now).toMatch(/^[1-9]\d{17}$/);
-    expect(await systemOps().startTimeOf(2 ** 31 - 2)).toBeUndefined();
+    const ops = systemOps();
+    try {
+      expect(await ops.startTimeOf(process.pid)).toMatch(/^[1-9]\d{17}$/);
+      expect(await ops.startTimeOf(2 ** 31 - 2)).toBeUndefined();
+    } finally { await ops.close?.(); }
   }, 30_000);
 
   const linux = it.runIf(process.platform === "linux");
