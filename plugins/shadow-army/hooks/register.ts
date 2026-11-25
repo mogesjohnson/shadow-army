@@ -48,7 +48,7 @@ const READY_WAIT_MS = 60_000;
 /** The post office's own lease (PO-7): past it the post office has ended itself, whatever the host confirmed. */
 const CLEANUP_WAIT_MS = 30_000;
 /** Claude Code's own words for a refused fetch; a later rejection with these is a policy change, not transport. */
-const POLICY_WORDS = /polic|refus|not allow|denied|disabled/i;
+const POLICY_WORDS = /\b(?:polic|refus|not allow|denied|disabled)/i; // `\b`: a socket's ECONNREFUSED is transport
 const MIN_HOST = [2, 1, 294];
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 const NO_PROXY_VARIABLES = ["NO_PROXY", "no_proxy"];

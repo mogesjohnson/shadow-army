@@ -8,6 +8,8 @@ const turn = (summary: string, write?: Partial<WriteOutcome>): TurnResult => ({
 });
 
 type Handler = (...args: any[]) => any;
+/** Lets every promise now ready run, and the timers of the fake's own tasks. */
+const flush = async () => { for (let i = 0; i < 5; i++) await new Promise((done) => setTimeout(done, 0)); };
 const URL_ = "http://127.0.0.1:4321";
 const SOLDIERS = [
   { key: "claude-sonnet", name: "Tank", roles: ["build"], supported: true },
@@ -33,8 +35,12 @@ type Env = {
   dirs?: string[];
   /** `fetch` rejects with this after the first answer. */
   transport?: string;
-  /** The relay's end waits for this gate; `never` leaves it unresolved. */
+  /** The relay's end waits for this gate; a promise that never settles leaves it unconfirmed. */
   gate?: Promise<void>;
+  /** The relay starts but never reports ready. Read at each start, so a test can change it between two. */
+  silent?: boolean;
+  /** The relay reports ready only once this settles. */
+  late?: Promise<void>;
 };
 async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {}) {
   vi.resetModules();
@@ -50,6 +56,10 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
   const killed: string[] = [];
   const relaysEnded: string[] = [];
   const commands: any[] = [];
+  /** Every request sent, answered or not; `commands` holds only the answered ones. */
+  const attempted: any[] = [];
+  /** Relay starts and relay ends, in the order they happened. */
+  const order: string[] = [];
   const logs: string[] = [];
   const registered: any[] = [];
   const claudeId = { value: "session-1" };
@@ -92,20 +102,23 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
           return run;
         }
         spawns.push(options);
+        order.push("relay started");
         let stop: () => void = () => {};
         const closed = new Promise<void>((done) => { stop = done; });
         const relay = (async function* () {
-          yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
+          if (env.late) await env.late;
+          if (!env.silent) yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
           await closed;
           return { code: null, signal: null };
         })();
         const origin = relay.return.bind(relay);
-        relay.return = (async (value: unknown) => { stop(); await env.gate; relaysEnded.push(options.argv[0]!); return origin(value as never); }) as typeof relay.return;
+        relay.return = (async (value: unknown) => { stop(); await env.gate; relaysEnded.push(options.argv[0]!); order.push("relay ended"); return origin(value as never); }) as typeof relay.return;
         return relay;
       },
     },
     http: {
       fetch: async (_url: string, init: { body: string }) => {
+        attempted.push(JSON.parse(init.body));
         if (env.refuse) throw new Error(env.refuse);
         if (env.transport && answered) throw new Error(env.transport);
         answered = true;
@@ -123,7 +136,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, probes, killed, relaysEnded, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, probes, killed, relaysEnded, commands, attempted, order, logs, registered, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {
@@ -388,21 +401,17 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
   });
 
   it("ends a post office that never reports ready after 60 s, naming the step, and the next use starts a new one", async () => {
-    const { send, after, spawns, logs, $ } = await mod(() => ({ status: "completed", summary: "ok" }));
-    const spawn = $.process.spawn as (o: { argv: string[] }) => unknown;
-    let silent = true;
-    ($ as any).process.spawn = (options: { argv: string[] }) => {
-      const real = spawn(options) as any;
-      if (!silent || options.argv[1] === "--version") return real;
-      return { async *[Symbol.asyncIterator]() { await new Promise(() => {}); }, return: async () => ({ done: true }) };
-    };
+    const env: Env = { silent: true };
+    const { send, after, spawns, logs, relaysEnded } = await mod(() => ({ status: "completed", summary: "ok" }), env);
     const pending = send("claude-sonnet --claim a go");
-    await new Promise((done) => setTimeout(done, 0));
-    await new Promise((done) => setTimeout(done, 0));
+    await flush();
     after.find((t) => t.ms === 60_000)!.run();
     await pending;
-    expect(logs[0]).toMatch(/did not report ready within 60 s · step: waiting for its ready event/);
-    silent = false;
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/did not report ready within 60 s · step: waiting for its ready event · relay ended$/);
+    expect(logs[0]).not.toContain("ended with its processes");
+    expect(relaysEnded).toHaveLength(1);
+    env.silent = false;
     expect(await send("claude-sonnet --claim a go")).toContain("Tank");
     expect(spawns).toHaveLength(2);
   });
@@ -427,5 +436,201 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
     const { send, logs } = await mod(() => ({}), { refuse: "no\u001b[31m\u202e web" });
     await send("claude-sonnet --claim a go");
     expect(logs[0]).toContain("no\\u{1b}[31m\\u{202e} web");
+  });
+});
+
+/** Every Cc and Cf character but newline and tab, read from this Node's own Unicode data, not from the module's table (M1-AC12). */
+const CONTROL_AND_FORMAT: number[] = [];
+for (let code = 0; code <= 0x10ffff; code++) {
+  if (code !== 9 && code !== 10 && /^[\p{Cc}\p{Cf}]$/u.test(String.fromCodePoint(code))) CONTROL_AND_FORMAT.push(code);
+}
+const SEP = process.platform === "win32" ? "\\" : "/";
+const ROOT = process.platform === "win32" ? "C:\\work\\repo" : "/repo";
+const isAbsolutePath = (path: string) => process.platform === "win32" ? /^[A-Za-z]:\\/.test(path) : path.startsWith("/");
+const OK = () => ({ status: "completed", summary: "ok" });
+
+describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
+  it("runs both probes by absolute path and starts the relay with the same Node.js", async () => {
+    const { send, probes, spawns } = await mod(OK);
+    await send("claude-sonnet --claim a go");
+    expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+    expect(spawns[0].argv[0]).toBe(probes[0].argv[0]);
+    for (const run of [...probes, ...spawns]) expect(isAbsolutePath(run.argv[0])).toBe(true);
+  });
+
+  it("skips empty, relative, repository, worktree and .shadow PATH entries, though each holds node and git", async () => {
+    const dirs = [
+      "", `relative${SEP}bin`, ROOT, [ROOT, "node_modules", ".bin"].join(SEP), [ROOT, ".shadow", "snap", "bin"].join(SEP),
+      `${ROOT}-worktrees${SEP}x${SEP}bin`, BIN,
+    ];
+    const { send, probes, spawns } = await mod(OK, { cwd: ROOT, dirs });
+    await send("claude-sonnet --claim a go");
+    expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+    expect(spawns[0].argv[0]).toBe(exeIn(BIN, "node"));
+  });
+
+  it("runs no probe at all when git is missing", async () => {
+    const { send, probes, spawns } = await mod(OK, { tools: { git: "missing" } });
+    expect(await send("claude-sonnet --claim a go")).toMatch(/^Shadow Army needs git 2\.34 or later on PATH; none was found$/);
+    expect(probes).toEqual([]);
+    expect(spawns).toEqual([]);
+  });
+});
+
+describe("what a version run must show (HOST-2, C2)", () => {
+  it.each([["node", "Node\\.js 22\\.0", { node: 1 }, 1], ["git", "git 2\\.34", { git: 128 }, 128]])(
+    "starts nothing when %s prints a supported version and then exits nonzero", async (_tool, needs, exits, code) => {
+      const { send, spawns, logs } = await mod(OK, { exits });
+      const line = new RegExp(`^Shadow Army needs ${needs} or later on PATH; .*${_tool}(?:\\.exe)? --version did not exit cleanly \\(exit code ${code}\\)$`);
+      expect(await send("claude-sonnet --claim a go")).toMatch(line);
+      expect(logs[0]).toMatch(line);
+      expect(spawns).toEqual([]);
+    });
+
+  it.each([
+    ["node", { node: "hello world" }], ["node", { node: "git version 2.43.0" }], ["git", { git: "v22.1.0" }], ["git", { git: "" }],
+  ])("starts nothing when %s prints no version line of its own (%j)", async (tool, tools) => {
+    const { send, spawns } = await mod(OK, { tools });
+    expect(await send("claude-sonnet --claim a go")).toMatch(new RegExp(`${tool}(?:\\.exe)? --version did not print a version line$`));
+    expect(spawns).toEqual([]);
+  });
+});
+
+describe("the proxy sources (P-16, HOST-2, C3)", () => {
+  const line = (name: string) => `Shadow Army: ${name} would send the army's commands through a proxy · add 127.0.0.1 to NO_PROXY · nothing started`;
+
+  it("refuses when the shell's NO_PROXY lists the loopback address but the settings' does not", async () => {
+    const { send, spawns } = await mod(OK, { vars: { HTTPS_PROXY: "http://p:8080", NO_PROXY: "127.0.0.1" }, settingsEnv: { NO_PROXY: "example.com" } });
+    expect(await send("claude-sonnet --claim a go")).toBe(line("HTTPS_PROXY"));
+    expect(spawns).toEqual([]);
+  });
+
+  it("refuses a proxy in the settings when the shell's NO_PROXY is the only bypass listed", async () => {
+    const { send } = await mod(OK, { vars: { no_proxy: "*" }, settingsEnv: { HTTP_PROXY: "http://p:8080", no_proxy: "example.com" } });
+    expect(await send("claude-sonnet --claim a go")).toBe(line("HTTP_PROXY"));
+  });
+
+  it("starts when every NO_PROXY value in both sources lists the loopback address", async () => {
+    const { send, spawns } = await mod(OK, { vars: { HTTPS_PROXY: "http://p:8080", NO_PROXY: "*" }, settingsEnv: { no_proxy: "localhost,127.0.0.1" } });
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    expect(spawns).toHaveLength(1);
+  });
+
+  it.each([
+    ["with a proxy set", { vars: { HTTPS_PROXY: "http://p:8080", NO_PROXY: "127.0.0.1" } }],
+    ["with none set", {}],
+  ])("reads the settings once %s", async (_name, env: Env) => {
+    const settingsReads = { count: 0 };
+    const { send } = await mod(OK, { ...env, settingsReads });
+    await send("claude-sonnet --claim a go");
+    expect(settingsReads.count).toBe(1);
+  });
+});
+
+describe("a refused fetch and a failed one (PO-7, HOST-2, C4)", () => {
+  it("treats a failed fetch after an answer as transport: the command fails, nothing is logged, and renewals go on", async () => {
+    const { send, tick, attempted, every, logs, relaysEnded } = await mod(OK, { transport: "connect ECONNREFUSED 127.0.0.1:4321" });
+    expect(await send("claude-sonnet --claim a go")).toContain("ECONNREFUSED");
+    expect(logs).toEqual([]);
+    await tick(); await tick();
+    expect(attempted.filter((c) => c.action === "renew")).toHaveLength(2);
+    expect(every.every((t) => !t.cancelled)).toBe(true);
+    expect(relaysEnded).toEqual([]);
+  });
+
+  it("stops at the host's policy words even after an answer, with one line, and leaves the relay to the lease", async () => {
+    const { send, every, logs, relaysEnded, attempted } = await mod(OK, { transport: "your organization's policy doesn't allow web fetch" });
+    await send("claude-sonnet --claim a go");
+    expect(logs).toEqual(["Shadow Army can't reach its post office: Claude Code refused the request (your organization's policy doesn't allow web fetch)"]);
+    expect(every.every((t) => t.cancelled)).toBe(true);
+    expect(relaysEnded).toEqual([]);
+    expect(attempted.length).toBe(2);
+  });
+
+  it("sends nothing more and does not return the relay after a refusal before any answer", async () => {
+    const { $, handlers, send, attempted, every, logs, relaysEnded } = await mod(() => ({}), { refuse: "your organization's policy doesn't allow web fetch" });
+    await send("claude-sonnet --claim a go");
+    expect(logs).toHaveLength(1);
+    expect(relaysEnded).toEqual([]);
+    expect(every.every((t) => t.cancelled)).toBe(true);
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "logout" }, async () => undefined);
+    expect(attempted).toEqual([{ action: "army" }]);
+  });
+});
+
+describe("a start that stalls (HOST-2, PO-7, C5)", () => {
+  it("holds the next use until the host confirms the relay's end, and logs the line after it", async () => {
+    let open!: () => void;
+    const env: Env = { silent: true, gate: new Promise<void>((done) => { open = done; }) };
+    const { send, after, order, logs, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    after.find((t) => t.ms === 60_000)!.run();
+    await flush();
+    env.silent = false;
+    const second = send("claude-sonnet --claim a go");
+    await flush();
+    expect(spawns).toHaveLength(1);
+    expect(logs).toEqual([]);
+    open();
+    expect(await second).toContain("Tank");
+    await first;
+    expect(order).toEqual(["relay started", "relay ended", "relay started"]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay ended$/);
+  });
+
+  it("says the end was not confirmed after the lease's 30 s, and then lets the next use start", async () => {
+    const env: Env = { silent: true, gate: new Promise<void>(() => {}) };
+    const { send, after, logs, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    after.find((t) => t.ms === 60_000)!.run();
+    await flush();
+    expect(logs).toEqual([]);
+    after.find((t) => t.ms === 30_000)!.run();
+    await first;
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/relay's end not confirmed in 30 s, so the lease ends the post office$/);
+    env.silent = false;
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    expect(spawns).toHaveLength(2);
+  });
+
+});
+
+describe("the acceptance scenarios (M1-AC1, M1-AC12, C6)", () => {
+  it("cancels the 60 s deadline when ready arrives in time, and the army stays usable", async () => {
+    let ready!: () => void;
+    const { send, after, logs, spawns, every } = await mod(OK, { late: new Promise<void>((done) => { ready = done; }) });
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    expect(after.find((t) => t.ms === 60_000)!.cancelled).toBe(false);
+    ready();
+    expect(await first).toContain("Tank");
+    expect(after.find((t) => t.ms === 60_000)!.cancelled).toBe(true);
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    expect(spawns).toHaveLength(1);
+    expect(logs).toEqual([]);
+    expect(every.some((t) => !t.cancelled)).toBe(true);
+  });
+
+  it("shows every Cc and Cf character of the Unicode data but newline and tab as a placeholder on the summary card", async () => {
+    expect(CONTROL_AND_FORMAT.length).toBeGreaterThan(150);
+    const hostile = `a${String.fromCodePoint(...CONTROL_AND_FORMAT)}b\tc\nd`;
+    const { send } = await mod(() => turn(hostile, { apply: { applied: true, files: [{ change: "A", path: `x${String.fromCodePoint(...CONTROL_AND_FORMAT)}.ts` }] } }));
+    const row = await send("claude-sonnet --claim src/** go");
+    for (const code of CONTROL_AND_FORMAT) expect(row).toContain(`\\u{${code.toString(16)}}`);
+    expect(row).toContain("b\tc\nd");
+    expect(row.replace(/[\n\t]/g, "")).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+  });
+
+  it("shows every one of them in a refusal's words, in the log and in the command's row", async () => {
+    const { send, logs } = await mod(() => ({}), { refuse: `no ${String.fromCodePoint(...CONTROL_AND_FORMAT)} web` });
+    const row = await send("claude-sonnet --claim a go");
+    for (const text of [row, logs[0]!]) {
+      for (const code of CONTROL_AND_FORMAT) expect(text).toContain(`\\u{${code.toString(16)}}`);
+      expect(text).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+    }
   });
 });
