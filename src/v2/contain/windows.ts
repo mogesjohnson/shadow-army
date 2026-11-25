@@ -440,6 +440,8 @@ exit ([ShadowJobSupervisor]::Run())
 // a pid reused between the check and the end can't receive the end (taskkill takes a bare pid). A tree also ends
 // each child of the checked process, each checked on its own handle: its parent pid, and a creation time after
 // the parent's. "absent" when no such process runs; "unknown" when a query failed, never read as absent.
+// TerminateProcess only starts an exit, so each exit is confirmed by waiting on the same handle. "incomplete" when
+// a descendant could not be listed, opened, ended or confirmed: the parent alone is no evidence of an empty tree.
 const SWEEP_HELPER = String.raw`
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @'
@@ -455,6 +457,7 @@ public static class ShadowSweep {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateProcess(IntPtr process,uint code);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint ms);
   [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32FirstW(IntPtr snapshot,ref ENTRY entry);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32NextW(IntPtr snapshot,ref ENTRY entry);
@@ -479,28 +482,42 @@ public static class ShadowSweep {
     IntPtr handle; long creation; string state=Open(pid,0x1000,out handle,out creation);
     try { return state ?? creation.ToString(CultureInfo.InvariantCulture); } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
+  // SYNCHRONIZE, PROCESS_QUERY_LIMITED_INFORMATION and PROCESS_TERMINATE: checked, ended and waited on one handle.
+  const uint EndAccess=0x101001;
   public static string End(uint pid,long expected,bool tree) {
-    IntPtr handle; long creation; string state=Open(pid,0x1001,out handle,out creation);
+    IntPtr handle; long creation; string state=Open(pid,EndAccess,out handle,out creation);
     try {
       if(state!=null) return state; if(creation!=expected) return "different";
-      if(tree) foreach(uint child in Children(pid)) EndChild(child,pid,creation);
-      return TerminateProcess(handle,1) ? "ended" : "unknown";
+      bool complete=!tree || EndChildren(pid,creation);
+      if(!Terminated(handle)) return "unknown";
+      return complete ? "ended" : "incomplete";
     } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
-  static void EndChild(uint pid,uint parent,long after) {
-    IntPtr handle; long creation; string state=Open(pid,0x1001,out handle,out creation);
+  // Ends the process on its handle and waits there for the exit: true only once it has exited.
+  static bool Terminated(IntPtr handle) { TerminateProcess(handle,1); return WaitForSingleObject(handle,3000)==0; }
+  static bool EndChildren(uint parent,long after) {
+    List<uint> children=Children(parent); if(children==null) return false;
+    bool complete=true; foreach(uint child in children) complete&=EndChild(child,parent,after); return complete;
+  }
+  // True when the pid is no descendant (gone, created before its parent, or another parent's) or was ended and confirmed.
+  static bool EndChild(uint pid,uint parent,long after) {
+    IntPtr handle; long creation; string state=Open(pid,EndAccess,out handle,out creation);
     try {
+      if(state=="absent") return true; if(state!=null) return false;
       BASIC info=new BASIC();
-      if(state!=null || creation<after || NtQueryInformationProcess(handle,0,ref info,Marshal.SizeOf(info),IntPtr.Zero)!=0 || info.parent.ToInt64()!=parent) return;
-      foreach(uint child in Children(pid)) EndChild(child,pid,creation);
-      TerminateProcess(handle,1);
+      if(NtQueryInformationProcess(handle,0,ref info,Marshal.SizeOf(info),IntPtr.Zero)!=0) return false;
+      if(creation<after || info.parent.ToInt64()!=parent) return true;
+      bool complete=EndChildren(pid,creation);
+      return Terminated(handle) && complete;
     } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
   }
+  // Every pid whose parent is this one; null when the processes could not be listed.
   static List<uint> Children(uint parent) {
-    List<uint> found=new List<uint>(); IntPtr snapshot=CreateToolhelp32Snapshot(2,0); if(snapshot==new IntPtr(-1)) return found;
+    List<uint> found=new List<uint>(); IntPtr snapshot=CreateToolhelp32Snapshot(2,0); if(snapshot==new IntPtr(-1)) return null;
     try {
       ENTRY entry=new ENTRY(); entry.size=(uint)Marshal.SizeOf(typeof(ENTRY));
-      for(bool more=Process32FirstW(snapshot,ref entry);more;more=Process32NextW(snapshot,ref entry)) if(entry.parent==parent && entry.pid!=parent) found.Add(entry.pid);
+      bool more=Process32FirstW(snapshot,ref entry); if(!more) return null;
+      for(;more;more=Process32NextW(snapshot,ref entry)) if(entry.parent==parent && entry.pid!=parent) found.Add(entry.pid);
     } finally { CloseHandle(snapshot); }
     return found;
   }
@@ -538,11 +555,11 @@ export async function ownedByCurrentUser(path: string): Promise<boolean> {
   return await sweepHelper(`[ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))`).catch(() => "") === "owned";
 }
 
-export type WindowsEnd ="ended" | "absent" | "different" | "unknown";
+export type WindowsEnd = "ended" | "incomplete" | "absent" | "different" | "unknown";
 /** Ends the process only while its exact creation time (a FILETIME string) is the recorded one, through the checked handle. */
 export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean): Promise<WindowsEnd> {
   // An old millisecond record has no exact identity: nothing is ended on its evidence.
   if (!isWindowsPid(pid) || creationTime === undefined || !/^[1-9]\d{0,18}$/.test(creationTime) || BigInt(creationTime) >= 2n ** 63n) return "unknown";
   const result = await sweepHelper(`[ShadowSweep]::End(${pid}, [long]'${creationTime}', $${tree})`).catch(() => "unknown");
-  return (["ended", "absent", "different"] as const).find((one) => one === result) ?? "unknown";
+  return (["ended", "incomplete", "absent", "different"] as const).find((one) => one === result) ?? "unknown";
 }

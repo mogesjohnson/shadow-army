@@ -18,9 +18,10 @@ export interface SweepOps {
   commandOf?(pid: number): Promise<string | undefined>;
   /**
    * Ends the process with this identity, never a bare pid: on Windows the creation time is checked on the handle
-   * that ends it. `tree` also ends a harness git command's children (its process group on Linux).
+   * that ends it. `tree` also ends a harness git command's children (its process group on Linux). `"incomplete"`
+   * when the tree's descendants could not all be listed, ended and confirmed: the entry is then kept (PO-16).
    */
-  endProcess(target: Identity, tree: boolean): Promise<void>;
+  endProcess(target: Identity, tree: boolean): Promise<"ended" | "incomplete">;
   /** macOS (PO-17's operations): removes a launchd job, and ends the members of a coalition. */
   removeJob?(label: string): Promise<void>;
   endCoalition?(id: string): Promise<void>;
@@ -78,16 +79,21 @@ export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepRepo
     const compared = async () => Promise.all(targets.map(async (target) => ({ target, match: judge(target, await ops.startTimeOf(target.pid)) })));
     const matching = async () => (await compared()).filter(({ match }) => match === "same").map(({ target }) => target);
     const named = new Map<number, string | undefined>();
+    // Trees whose last end left descendants unconfirmed: kept even once the checked parent has gone (C9).
+    const incomplete = new Set<number>();
     for (let remaining = await matching(), waited = 0; remaining.length > 0 && waited <= SWEEP_LIMIT_MS; remaining = await matching(), waited += 100) {
       for (const target of remaining) {
         if (!named.has(target.pid)) named.set(target.pid, await ops.commandOf?.(target.pid).catch(() => undefined));
         // The identity is checked again just before the signal: the pid may have been reused since the listing.
-        if (judge(target, await ops.startTimeOf(target.pid)) === "same") await ops.endProcess(target, target.kind === "git").catch(() => {});
+        if (judge(target, await ops.startTimeOf(target.pid)) !== "same") continue;
+        const tree = target.kind === "git";
+        const result = await ops.endProcess(target, tree).catch(() => "incomplete" as const);
+        if (tree && result === "incomplete") incomplete.add(target.pid); else incomplete.delete(target.pid);
       }
       await ops.wait(100);
     }
     const last = await compared();
-    const left = new Set(last.filter(({ match }) => match !== "different").map(({ target }) => target.pid));
+    const left = new Set([...last.filter(({ match }) => match !== "different").map(({ target }) => target.pid), ...incomplete]);
     for (const { target, match } of last) if (match === "unsure" && !named.has(target.pid)) named.set(target.pid, await ops.commandOf?.(target.pid).catch(() => undefined));
     const swept = (pid: number): SweptProcess => ({ pid, ...(named.get(pid) === undefined ? {} : { command: redact(named.get(pid)) as string }) });
     for (const pid of named.keys()) (left.has(pid) ? report.left : report.ended).push(swept(pid));
@@ -120,7 +126,11 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
       },
       commandOf: async (pid) => (await readFile(`/proc/${pid}/cmdline`, "latin1")).replaceAll("\0", " ").trim(),
       // Node has no pidfd: the identity is checked just before the signal (above), not on a handle.
-      endProcess: async ({ pid }, tree) => { try { process.kill(tree ? -pid : pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } },
+      // A group's SIGKILL reaches every member at once; ESRCH means no member is left.
+      endProcess: async ({ pid }, tree) => {
+        try { process.kill(tree ? -pid : pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+        return "ended";
+      },
     };
   }
   if (platform === "win32") {
@@ -128,7 +138,8 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
       platform, wait: pause, owned: ownedByCurrentUser,
       // The exact FILETIME from GetProcessTimes, as the supervisor's listing records it (PO-11).
       startTimeOf: probeWindowsProcess,
-      endProcess: async ({ pid, creationTime }, tree) => { await endWindowsProcess(pid, creationTime, tree); },
+      // A tree is complete only when the helper ended and confirmed every descendant and the parent on their handles.
+      endProcess: async ({ pid, creationTime }, tree) => (await endWindowsProcess(pid, creationTime, tree)) === "ended" || !tree ? "ended" : "incomplete",
     };
   }
   throw new Error(`The sweep has no operations for ${platform} yet: macOS needs PO-17's helper (M1b-18).`);

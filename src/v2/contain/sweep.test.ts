@@ -20,6 +20,7 @@ function fakeOps(alive: Record<number, number | string | null>, platform: NodeJS
     endProcess: async ({ pid, startTime, creationTime }, tree) => {
       calls.push(`${tree ? "tree" : "end"} ${pid}`);
       if (alive[pid] === (creationTime ?? startTime) && !stuck.includes(pid)) delete alive[pid];
+      return "ended";
     },
     removeJob: async (label) => { calls.push(`job ${label}`); },
     endCoalition: async (id) => { calls.push(`coalition ${id}`); },
@@ -112,6 +113,17 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(report.left.map((one) => one.pid).sort()).toEqual([3, 8]);
     expect(calls).toEqual([]);
     expect((await readTrees(root)).map((tree) => tree.id).sort()).toEqual(["git", "office"]);
+  });
+
+  it("keeps a tree whose descendants weren't all confirmed ended, even once its checked parent has gone (C9)", async () => {
+    const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
+    await record.add({ kind: "git", pid: 8, startTime: 80 });
+    const { ops } = fakeOps({ 8: 80 });
+    const failing: SweepOps = { ...ops, endProcess: async (target, tree) => { await ops.endProcess(target, tree); return "incomplete"; } };
+    expect(await sweepTrees(root, failing)).toMatchObject({ swept: 0, ended: [], left: [{ pid: 8 }] });
+    expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["git"]);
+    const throwing: SweepOps = { ...fakeOps({ 8: 80 }).ops, endProcess: async () => { throw new Error("EPERM"); } };
+    expect(await sweepTrees(root, throwing)).toMatchObject({ swept: 0, left: [{ pid: 8 }] });
   });
 
   it("never ends a process on a record it couldn't verify as the user's own, and keeps the record", async () => {
