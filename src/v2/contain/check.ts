@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { arch as osArch, platform as osPlatform, release, tmpdir } from "node:os";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { containmentFor, spawnManagedProcess, type ManagedProcess, type ManagedProcessOptions } from "./index.js";
 import { failureMessage, type Failure, type Where } from "./messages.js";
@@ -9,12 +10,20 @@ export const STEPS = ["helper", "checksums", "mode", "probe"] as const;
 export type StepName = (typeof STEPS)[number];
 
 export type StepOutcome = { ok: true } | { ok: false; failure: Failure };
-const PASS: StepOutcome = { ok: true };
-const fail = (failure: Failure): StepOutcome => ({ ok: false, failure });
+/** A file step 2 checked, and the SHA-256 it found (PO-13). */
+export interface FileDigest { file: string; sha256: string }
+export type ChecksumsOutcome = { ok: true; files: readonly FileDigest[] } | { ok: false; failure: Failure };
+/** A runner's outcome; a pass carries what the pass log names (AC18). */
+type Outcome = { ok: true; files?: readonly FileDigest[]; containment?: string } | { ok: false; failure: Failure };
+const PASS = { ok: true } as const;
+const fail = (failure: Failure): { ok: false; failure: Failure } => ({ ok: false, failure });
 
 export interface StepContext {
   signal: AbortSignal;
-  /** A process or tree to kill if the check fails or runs out of time ("anything it started is killed"). */
+  /**
+   * A process or tree to kill if the check fails or runs out of time ("anything it started is killed"). Register it
+   * before awaiting the launch; one registered after the check failed runs at once.
+   */
   killOnFail(kill: () => void | Promise<void>): void;
   /** Calls `fn` after `ms` of counted time, which leaves out time the post office did not run (PO-7). */
   after(ms: number, fn: () => void): () => void;
@@ -27,12 +36,15 @@ export interface StepContext {
 export interface SystemSteps {
   /** Step 1 after the dispatch table: the helper (Windows: the script and its DLL) is there and can be run. */
   helper(ctx: StepContext): Promise<StepOutcome>;
-  /** Step 2: each file's SHA-256 matches the one in the post office's code (PO-13). */
-  checksums(ctx: StepContext): Promise<StepOutcome>;
+  /** Step 2: each file's SHA-256 matches the one in the post office's code (PO-13); a pass names each file checked. */
+  checksums(ctx: StepContext): Promise<ChecksumsOutcome>;
   /** Step 3: Linux subreaper mark; macOS lookups, structure sizes and audit token; Windows FullLanguage mode. */
   mode(ctx: StepContext): Promise<StepOutcome>;
-  /** PO-11's listing of the tree under `rootPid`; on macOS also whether the coalition is new (PO-18). */
-  listTree(ctx: StepContext, rootPid: number): Promise<{ pids: number[]; newCoalition?: boolean }>;
+  /**
+   * PO-11's listing of the tree under `rootPid`, and the containment it is in, named for the log (the job, the
+   * subreaper or the coalition); on macOS also whether the coalition is new (PO-18).
+   */
+  listTree(ctx: StepContext, rootPid: number): Promise<{ pids: number[]; containment: string; newCoalition?: boolean }>;
 }
 
 /** Monotonic milliseconds, and a repeating timer. Faked in tests. */
@@ -49,8 +61,13 @@ export interface CheckOptions {
   arch?: string;
   osVersion?: string;
   shadowArmy?: string;
-  /** Starts a CLI in containment; by default the one PO-12's table names for this system. */
-  spawn?: (options: ManagedProcessOptions) => Promise<ManagedProcess>;
+  /** Starts a CLI in containment; by default the one PO-12's table names for this system. `signal` aborts a launch. */
+  spawn?: (options: ManagedProcessOptions, signal: AbortSignal) => Promise<ManagedProcess>;
+  /**
+   * Step 4's kill of the probe's whole tree, with no grace (PO-14). By default `close()`, not awaited: the drivers'
+   * close still grants shutdown grace until they have a no-grace kill.
+   */
+  killTree?: (child: ManagedProcess) => void;
   probePath?: string;
   /** PO-12's table lookup, which throws for a system with no helper. Tests replace it for pairs not built yet. */
   dispatch?: (platform: string, arch: string) => unknown;
@@ -64,12 +81,13 @@ export interface CheckOptions {
 }
 
 export type CheckResult =
-  | { ok: true; line: string }
+  | { ok: true; line: string; containment: string; files: readonly FileDigest[] }
   | { ok: false; step: StepName; failure: Failure; message: string };
 
 const TIMEOUT_MS = 10_000;
 const LONGEST_STEP_MS = 5_000;
 const PIPE_END_MS = 3_000;
+const CLEANUP_MS = 5_000;
 const DEFAULT_PROBE = fileURLToPath(new URL("../../../native/probe.mjs", import.meta.url));
 
 const versionParts = (version: string) => version.split(".").map((part) => Number.parseInt(part, 10) || 0);
@@ -81,11 +99,30 @@ function compareVersions(a: string, b: string): number {
 
 const SYSTEM_NAMES: Record<string, string> = { darwin: "macOS", linux: "Linux", win32: "Windows" };
 const aborted = (signal: AbortSignal) => new Promise<never>((_, reject) => {
-  signal.addEventListener("abort", () => reject(new Error("check ended")), { once: true });
+  if (signal.aborted) reject(new Error("check ended"));
+  else signal.addEventListener("abort", () => reject(new Error("check ended")), { once: true });
 });
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** How the probe's pipe ended: only end of file is the proof; an error or a close without it is not (AC18). */
+type PipeEnd = { kind: "eof" } | { kind: "error"; message: string } | { kind: "closed" };
+function watchPipe(stream: Readable): { seen(): PipeEnd | undefined; settled: Promise<PipeEnd> } {
+  let seen: PipeEnd | undefined;
+  const settled = new Promise<PipeEnd>((done) => {
+    const settle = (end: PipeEnd) => { if (!seen) { seen = end; done(end); } };
+    stream.once("end", () => settle({ kind: "eof" }));
+    stream.on("error", (error: Error) => settle({ kind: "error", message: error.message }));
+    stream.once("close", () => settle({ kind: "closed" }));
+  });
+  return { seen: () => seen, settled };
+}
+const pipeOutcome = (end: PipeEnd): Outcome => (end.kind === "eof" ? PASS : fail({
+  cause: "helper-failed",
+  detail: end.kind === "error" ? `the test process's pipe failed (${end.message})` : "the test process's pipe closed without reaching its end",
+}));
 
 /** Waits for the probe's two report lines; ends early if the pipe ends first. */
-function readPids(child: ManagedProcess, ended: Promise<void>): Promise<{ probe: number; grandchild: number }> {
+function readPids(child: ManagedProcess, ended: Promise<PipeEnd>): Promise<{ probe: number; grandchild: number }> {
   return new Promise((resolve, reject) => {
     const pids: Record<string, number> = {};
     let buffer = "";
@@ -103,19 +140,22 @@ function readPids(child: ManagedProcess, ended: Promise<void>): Promise<{ probe:
   });
 }
 
-async function probeStep(ctx: StepContext, o: Required<Pick<CheckOptions, "platform" | "spawn" | "probePath">>, steps: SystemSteps): Promise<StepOutcome> {
+type ProbeOptions = Required<Pick<CheckOptions, "platform" | "spawn" | "probePath" | "killTree">>;
+async function probeStep(ctx: StepContext, o: ProbeOptions, steps: SystemSteps): Promise<Outcome> {
+  // Owned from the moment it is asked for: a launch that completes after the check failed is closed then.
+  const launching = o.spawn({ file: process.execPath, args: [o.probePath], cwd: tmpdir() }, ctx.signal);
+  ctx.killOnFail(() => launching.then((started) => started.close(), () => {}));
   let child: ManagedProcess;
   try {
-    child = await o.spawn({ file: process.execPath, args: [o.probePath], cwd: tmpdir() });
+    child = await Promise.race([launching, aborted(ctx.signal)]);
   } catch (error) {
-    return fail({ cause: "helper-failed", detail: `the test process would not start (${error instanceof Error ? error.message : String(error)})` });
+    if (ctx.signal.aborted) throw error;
+    return fail({ cause: "helper-failed", detail: `the test process would not start (${errorText(error)})` });
   }
-  ctx.killOnFail(() => child.close());
-  const ended = new Promise<void>((done) => {
-    for (const event of ["end", "close", "error"]) child.stdout.once(event, () => done());
-  });
+  const pipe = watchPipe(child.stdout);
+  let containment: string;
   try {
-    const pids = await Promise.race([readPids(child, ended), aborted(ctx.signal)]);
+    const pids = await Promise.race([readPids(child, pipe.settled), aborted(ctx.signal)]);
     const listed = await steps.listTree(ctx, pids.probe);
     if (!listed.pids.includes(pids.probe) || !listed.pids.includes(pids.grandchild)) {
       return fail({ cause: "helper-failed", detail: "the listing did not show the test process and its grandchild" });
@@ -123,13 +163,22 @@ async function probeStep(ctx: StepContext, o: Required<Pick<CheckOptions, "platf
     if (o.platform === "darwin" && listed.newCoalition !== true) {
       return fail({ cause: "helper-failed", detail: "the test process is not in a new coalition" });
     }
+    if (!listed.containment) return fail({ cause: "helper-failed", detail: "the listing did not name the containment" });
+    containment = listed.containment;
   } catch (error) {
     if (ctx.signal.aborted) throw error;
-    return fail({ cause: "helper-failed", detail: error instanceof Error ? error.message : String(error) });
+    return fail({ cause: "helper-failed", detail: errorText(error) });
   }
-  await child.close(); // killed with no grace; the pipe's end, not the listing, is the proof
-  const outlived = new Promise<StepOutcome>((done) => { ctx.after(PIPE_END_MS, () => done(fail({ cause: "outlived" }))); });
-  return Promise.race([ended.then(() => PASS), outlived, aborted(ctx.signal)]);
+  // The pipe's end after the kill, not the listing, is the proof; an end seen before the kill proves nothing.
+  if (pipe.seen()) return fail({ cause: "helper-failed", detail: "the test process's pipe ended before it was killed" });
+  const outlived = new Promise<Outcome>((done) => { ctx.after(PIPE_END_MS, () => done(fail({ cause: "outlived" }))); });
+  try {
+    o.killTree(child);
+  } catch (error) {
+    return fail({ cause: "helper-failed", detail: `the test process could not be killed (${errorText(error)})` });
+  }
+  const end = await Promise.race([pipe.settled.then(pipeOutcome), outlived, aborted(ctx.signal)]);
+  return end.ok ? { ok: true, containment } : end;
 }
 
 /** PO-14: the check, as the machine is now, within 10 seconds of counted time. It never throws. */
@@ -171,20 +220,37 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
     return () => { const i = timers.indexOf(timer); if (i >= 0) timers.splice(i, 1); };
   };
 
+  // Cleanup runs when the check fails without holding up its result. A kill that fails is logged; the ticking that
+  // bounds the cleanup stops once every kill is done or CLEANUP_MS have counted.
   const controller = new AbortController();
   const killers: (() => void | Promise<void>)[] = [];
-  const ctx: StepContext = { signal: controller.signal, killOnFail: (kill) => { killers.push(kill); }, after };
+  const cleanups: Promise<void>[] = [];
+  const cleanUp = (kill: () => void | Promise<void>) => {
+    let done: Promise<unknown>;
+    try { done = Promise.resolve(kill()); } catch (error) { done = Promise.reject(error); }
+    cleanups.push(done.then(() => {}, (error: unknown) => { log(`Cleanup after the containment check failed: ${errorText(error)}`); }));
+  };
+  const ctx: StepContext = {
+    signal: controller.signal,
+    killOnFail: (kill) => { if (controller.signal.aborted) cleanUp(kill); else killers.push(kill); },
+    after,
+  };
   const steps = options.systems[`${platform}-${arch}`];
   const need = (step: string): Failure => ({ cause: "not-built", step });
   const spawn = options.spawn ?? ((spawnOptions: ManagedProcessOptions) => spawnManagedProcess(spawnOptions, platform, arch));
-  const runners: Record<StepName, () => Promise<StepOutcome>> = {
+  const killTree = options.killTree ?? ((child: ManagedProcess) => { void child.close().catch(() => {}); });
+  const runners: Record<StepName, () => Promise<Outcome>> = {
     async helper() {
       try { (options.dispatch ?? containmentFor)(platform, arch); } catch { return fail({ cause: "no-helper" }); }
       return steps ? steps.helper(ctx) : fail(need("helper"));
     },
-    checksums: async () => (steps ? steps.checksums(ctx) : fail(need("checksums"))),
+    async checksums() {
+      if (!steps) return fail(need("checksums"));
+      const outcome = await steps.checksums(ctx);
+      return outcome.ok && outcome.files.length === 0 ? fail({ cause: "helper-failed", detail: "the checksums step checked no file" }) : outcome;
+    },
     mode: async () => (steps ? steps.mode(ctx) : fail(need("mode"))),
-    probe: async () => (steps ? probeStep(ctx, { platform, spawn, probePath: options.probePath ?? DEFAULT_PROBE }, steps) : fail(need("probe"))),
+    probe: async () => (steps ? probeStep(ctx, { platform, spawn, probePath: options.probePath ?? DEFAULT_PROBE, killTree }, steps) : fail(need("probe"))),
   };
 
   let current: StepName = STEPS[0];
@@ -192,26 +258,35 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
   const deadline = new Promise<"timeout">((done) => { timedOut = () => done("timeout"); });
   after(options.timeoutMs ?? TIMEOUT_MS, timedOut);
   let result: { step: StepName; failure: Failure } | undefined;
-  try {
-    for (const step of STEPS) {
-      current = step;
-      const run = runners[step]().catch((error: unknown): StepOutcome => (
-        controller.signal.aborted ? PASS
-          : fail({ cause: "helper-failed", detail: `the ${step} step failed: ${error instanceof Error ? error.message : String(error)}` })));
-      const outcome = await Promise.race([run, deadline]);
-      if (outcome === "timeout") { result = { step, failure: { cause: "timeout", step } }; break; }
-      if (!outcome.ok) { result = { step, failure: outcome.failure }; break; }
-    }
-  } finally {
-    stopTicking();
+  let files: readonly FileDigest[] = [];
+  let containment = "";
+  for (const step of STEPS) {
+    current = step;
+    const run = runners[step]().catch((error: unknown): Outcome => (
+      controller.signal.aborted ? PASS : fail({ cause: "helper-failed", detail: `the ${step} step failed: ${errorText(error)}` })));
+    const outcome = await Promise.race([run, deadline]);
+    if (outcome === "timeout") { result = { step, failure: { cause: "timeout", step } }; break; }
+    if (!outcome.ok) { result = { step, failure: outcome.failure }; break; }
+    files = outcome.files ?? files;
+    containment = outcome.containment ?? containment;
   }
   if (!result) {
-    const line = `Containment check passed on ${where.system} ${where.version} (${arch}) in ${((clock.now() - startedAt) / 1000).toFixed(1)} s: ${STEPS.join(", ")}.`;
+    stopTicking();
+    const digests = files.map((file) => `${file.file} SHA-256 ${file.sha256}`).join("; ");
+    const line = `Containment check passed on ${where.system} ${where.version} (${arch}) in ${((clock.now() - startedAt) / 1000).toFixed(1)} s: `
+      + `helper, checksums (${digests}), mode, probe (in ${containment}).`;
     log(line);
-    return { ok: true, line };
+    return { ok: true, line, containment, files };
   }
   controller.abort();
-  await Promise.allSettled(killers.map(async (kill) => kill()));
+  for (const kill of killers.splice(0)) cleanUp(kill);
+  let bounded = false;
+  after(CLEANUP_MS, () => {
+    bounded = true;
+    stopTicking();
+    log(`Cleanup after the containment check did not finish within ${CLEANUP_MS / 1000} s.`);
+  });
+  void Promise.all(cleanups).then(() => { if (!bounded) stopTicking(); });
   const message = failureMessage(result.failure, where);
   log(message);
   return { ok: false, step: current, failure: result.failure, message };
@@ -219,18 +294,30 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
 
 /**
  * PO-14's rule for when to check: when the post office starts, and again before a soldier is started or
- * reconnected after a failed check or a failed containment (PO-15). Concurrent callers share one check.
+ * reconnected after a failed check or a failed containment (PO-15). Concurrent callers share one check, but only
+ * one started after the latest reported failure: a check already running then cannot write its result back.
  */
 export function createContainmentGate(options: CheckOptions) {
   let last: CheckResult | undefined;
-  let running: Promise<CheckResult> | undefined;
-  const run = () => (running ??= checkContainment(options).then((result) => { last = result; return result; }).finally(() => { running = undefined; }));
+  let generation = 0;
+  let running: { generation: number; result: Promise<CheckResult> } | undefined;
+  const run = (): Promise<CheckResult> => {
+    if (running?.generation === generation) return running.result;
+    const started = generation;
+    const before = running?.result;
+    const result = (before ?? Promise.resolve()).then(() => checkContainment(options)).then((outcome) => {
+      if (started === generation) last = outcome;
+      return outcome;
+    }).finally(() => { if (running?.result === result) running = undefined; });
+    running = { generation: started, result };
+    return result;
+  };
   return {
     /** The check at start-up, before any soldier starts. */
     start: run,
     /** Before a soldier starts or reconnects: the last pass stands until a failure is reported. */
     ready: () => (last?.ok ? Promise.resolve(last) : run()),
     /** PO-15: a session's containment failed, so the next start checks again. */
-    containmentFailed: () => { last = undefined; },
+    containmentFailed: () => { last = undefined; generation++; },
   };
 }

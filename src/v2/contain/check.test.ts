@@ -2,26 +2,49 @@ import { spawn } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { checkContainment, createContainmentGate, type CheckOptions, type Clock, type StepContext, type StepOutcome, type SystemSteps } from "./check.js";
+import { checkContainment, createContainmentGate, type CheckOptions, type ChecksumsOutcome, type Clock, type StepContext, type StepOutcome, type SystemSteps } from "./check.js";
 import type { ManagedProcess } from "./index.js";
 import { failureMessage, type Failure, type Where } from "./messages.js";
 
+/*
+ * AC17/AC18 mapping (V8). These tests drive PO-14's check through its seams: injected per-system steps, a fake
+ * clock and a fake probe whose pipe ends, fails or closes on cue. Covered here: the four steps in order, each
+ * failure cause and its message, the 10 s counted deadline and PO-7's sleep rule, the probe's end-of-file proof
+ * (natural EOF only), launch ownership at the deadline, bounded cleanup, the pass log's containment and digests,
+ * and the rerun rule. The last test runs the real native/probe.mjs. Not covered here (pending): the per-system
+ * steps (M1b-15, M1b-16, M1b-19), the drivers' no-grace tree kill, wiring the gate into the post office's start,
+ * the packaged probe, and native evidence on Linux, macOS and real Windows policy cases.
+ */
 const ok: StepOutcome = { ok: true };
 const flush = () => new Promise<void>((done) => setImmediate(done));
+const digest = { file: "guardian", sha256: "ab".repeat(32) };
 
-/** A contained probe that reports both pids; its `stdout` ends at `close()`, unless `leaks`. */
-function fakeProbe(leaks = false): { spawn: CheckOptions["spawn"]; closed: () => number } {
+type PipeAtKill = "eof" | "leak" | "error" | "close";
+/** A contained probe that reports both pids; at `close()` its `stdout` ends (or leaks, fails, closes without end). */
+function fakeProbe(atKill: PipeAtKill = "eof", over: { closeHangs?: boolean; launch?: Promise<void> } = {}) {
   let closes = 0;
+  let stdout!: PassThrough;
   return {
     closed: () => closes,
-    spawn: async () => {
-      const stdout = new PassThrough();
+    stdout: () => stdout,
+    spawn: (async () => {
+      await over.launch;
+      stdout = new PassThrough();
       stdout.write('{"role":"probe","pid":10}\n{"role":"grandchild","pid":12}\n');
+      const pipe = stdout;
+      let first = true;
       return {
         pid: 10, stdin: new Writable(), stdout, stderr: new PassThrough(), exited: new Promise(() => {}),
-        close: async () => { closes++; if (!leaks) stdout.end(); },
+        close: async () => {
+          closes++;
+          if (first && atKill === "eof") pipe.end();
+          if (first && atKill === "error") pipe.destroy(new Error("EPIPE"));
+          if (first && atKill === "close") pipe.destroy();
+          first = false;
+          if (over.closeHangs) await new Promise(() => {});
+        },
       } as unknown as ManagedProcess;
-    },
+    }) satisfies CheckOptions["spawn"],
   };
 }
 
@@ -37,8 +60,8 @@ class FakeClock implements Clock {
 }
 
 const steps = (over: Partial<SystemSteps> = {}): SystemSteps => ({
-  helper: async () => ok, checksums: async () => ok, mode: async () => ok,
-  listTree: async () => ({ pids: [10, 12], newCoalition: true }), ...over,
+  helper: async () => ok, checksums: async () => ({ ok: true, files: [digest] }), mode: async () => ok,
+  listTree: async () => ({ pids: [10, 12], containment: "job \\Sessions\\1\\sa-7", newCoalition: true }), ...over,
 });
 
 const base = (over: Partial<CheckOptions> = {}, system: SystemSteps = steps()): CheckOptions => ({
@@ -47,29 +70,79 @@ const base = (over: Partial<CheckOptions> = {}, system: SystemSteps = steps()): 
 });
 
 describe("PO-14 check", () => {
-  it("passes when every step does, and logs one line saying so", async () => {
+  it("passes when every step does, and logs one line naming the containment and each file's SHA-256 (AC18)", async () => {
     const lines: string[] = [];
     const result = await checkContainment(base({ log: (line) => lines.push(line) }));
-    expect(result.ok).toBe(true);
-    expect(lines).toEqual([expect.stringMatching(/^Containment check passed on Windows 10\.0\.26200 \(x64\) in [\d.]+ s: helper, checksums, mode, probe\.$/)]);
+    expect(result).toMatchObject({ ok: true, containment: "job \\Sessions\\1\\sa-7", files: [digest] });
+    expect(lines).toEqual([expect.stringMatching(/^Containment check passed on Windows 10\.0\.26200 \(x64\) in [\d.]+ s: helper, checksums \(guardian SHA-256 (ab){32}\), mode, probe \(in job \\Sessions\\1\\sa-7\)\.$/)]);
+  });
+
+  it("fails a checksums pass that names no file, and a listing that names no containment (AC18)", async () => {
+    const none = await checkContainment(base({}, steps({ checksums: async () => ({ ok: true, files: [] }) })));
+    expect(none).toMatchObject({ ok: false, step: "checksums", failure: { detail: "the checksums step checked no file" } });
+    const unnamed = await checkContainment(base({}, steps({ listTree: async () => ({ pids: [10, 12], containment: "" }) })));
+    expect(unnamed).toMatchObject({ ok: false, step: "probe", failure: { detail: "the listing did not name the containment" } });
   });
 
   it("fails with 'outlived' when the probe's pipe stays open after the kill, and kills what it started", async () => {
     const clock = new FakeClock();
-    const probe = fakeProbe(true);
+    const probe = fakeProbe("leak");
     const pending = checkContainment(base({ clock, spawn: probe.spawn }));
     await flush();
     await clock.advance(3000);
     const result = await pending;
     expect(result).toMatchObject({ ok: false, step: "probe", failure: { cause: "outlived" } });
     expect(!result.ok && result.message).toMatch(/a test process outlived its containment/);
+    await flush();
     expect(probe.closed()).toBe(2);
   });
 
+  it.each<[PipeAtKill, string]>([
+    ["error", "the test process's pipe failed (EPIPE)"],
+    ["close", "the test process's pipe closed without reaching its end"],
+  ])("takes only end of file as the proof: a pipe that ends by %s fails (C1)", async (atKill, detail) => {
+    const result = await checkContainment(base({ spawn: fakeProbe(atKill).spawn }));
+    expect(result).toMatchObject({ ok: false, step: "probe", failure: { cause: "helper-failed", detail } });
+  });
+
+  it("fails when the pipe ended before the kill: that end proves nothing (C1)", async () => {
+    const probe = fakeProbe();
+    const result = await checkContainment(base({ spawn: probe.spawn }, steps({
+      listTree: async () => { probe.stdout().end(); await flush(); return { pids: [10, 12], containment: "job" }; },
+    })));
+    expect(result).toMatchObject({ ok: false, step: "probe", failure: { detail: "the test process's pipe ended before it was killed" } });
+  });
+
+  it("kills the probe with killTree and times the pipe's end from the kill, not from a close that waits (C4)", async () => {
+    const probe = fakeProbe("eof", { closeHangs: true });
+    let kills = 0;
+    const result = await checkContainment(base({ spawn: probe.spawn, killTree: () => { kills++; probe.stdout().end(); } }));
+    expect(result.ok).toBe(true);
+    expect([kills, probe.closed()]).toEqual([1, 0]);
+    const byDefault = await checkContainment(base({ spawn: fakeProbe("eof", { closeHangs: true }).spawn }));
+    expect(byDefault.ok).toBe(true);
+  });
+
+  it("closes a probe whose launch completes after the deadline, and gives the launch the abort signal (C2)", async () => {
+    const clock = new FakeClock();
+    let launched!: () => void;
+    const probe = fakeProbe("eof", { launch: new Promise<void>((done) => { launched = done; }) });
+    let signal: AbortSignal | undefined;
+    const pending = checkContainment(base({ clock, spawn: (o, s) => { signal = s; return probe.spawn(o, s); } }));
+    await flush();
+    await clock.advance(10_000);
+    expect(await pending).toMatchObject({ ok: false, step: "probe", failure: { cause: "timeout" } });
+    expect(signal?.aborted).toBe(true);
+    expect(probe.closed()).toBe(0);
+    launched();
+    await flush();
+    expect(probe.closed()).toBe(1);
+  });
+
   it("fails when the listing misses the grandchild, or on macOS the coalition is not new", async () => {
-    const missing = await checkContainment(base({}, steps({ listTree: async () => ({ pids: [10], newCoalition: true }) })));
+    const missing = await checkContainment(base({}, steps({ listTree: async () => ({ pids: [10], containment: "job", newCoalition: true }) })));
     expect(!missing.ok && missing.message).toMatch(/did not show the test process and its grandchild/);
-    const shared = await checkContainment(base({ platform: "darwin", arch: "arm64", dispatch: () => ok }, steps({ listTree: async () => ({ pids: [10, 12] }) })));
+    const shared = await checkContainment(base({ platform: "darwin", arch: "arm64", dispatch: () => ok }, steps({ listTree: async () => ({ pids: [10, 12], containment: "coalition 9" }) })));
     expect(!shared.ok && shared.message).toMatch(/not in a new coalition/);
   });
 
@@ -121,11 +194,28 @@ describe("PO-14 check", () => {
     expect(killed).toBe(1);
   });
 
+  it("returns a failure without waiting on a cleanup that hangs, logs a cleanup that fails, and bounds the rest (C3)", async () => {
+    const clock = new FakeClock();
+    const lines: string[] = [];
+    const hang = (ctx: StepContext) => {
+      ctx.killOnFail(() => new Promise<void>(() => {}));
+      ctx.killOnFail(() => Promise.reject(new Error("access denied")));
+      return new Promise<StepOutcome>(() => {});
+    };
+    const pending = checkContainment(base({ clock, log: (line) => lines.push(line) }, steps({ mode: hang })));
+    await flush();
+    await clock.advance(10_000);
+    expect(await pending).toMatchObject({ ok: false, failure: { cause: "timeout", step: "mode" } });
+    expect(lines).toContain("Cleanup after the containment check failed: access denied");
+    await clock.advance(5000);
+    expect(lines).toContain("Cleanup after the containment check did not finish within 5 s.");
+  });
+
   it("counts at most 5 s of a step the computer slept through, and logs it (PO-7)", async () => {
     const clock = new FakeClock();
     const lines: string[] = [];
     let release!: () => void;
-    const slow = () => new Promise<StepOutcome>((done) => { release = () => done(ok); });
+    const slow = () => new Promise<ChecksumsOutcome>((done) => { release = () => done({ ok: true, files: [digest] }); });
     const pending = checkContainment(base({ clock, log: (line) => lines.push(line) }, steps({ checksums: slow })));
     await flush();
     await clock.sleep(3_600_000);
@@ -155,6 +245,24 @@ describe("rerun at reconnect (PO-14, PO-15)", () => {
     expect(runs).toBe(2);
     await gate.ready();
     expect(runs).toBe(3);
+  });
+
+  it("does not keep a pass from a check that began before a reported failure (C6)", async () => {
+    let runs = 0;
+    let release!: () => void;
+    const gate = createContainmentGate(base({}, steps({
+      helper: async () => { runs++; if (runs === 1) await new Promise<void>((done) => { release = done; }); return ok; },
+    })));
+    const early = gate.start();
+    await flush();
+    gate.containmentFailed();
+    const later = gate.ready();
+    release();
+    expect((await early).ok).toBe(true);
+    expect((await later).ok).toBe(true);
+    expect(runs).toBe(2);
+    await gate.ready();
+    expect(runs).toBe(2);
   });
 });
 
