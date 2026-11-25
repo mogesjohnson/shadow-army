@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error | Promise<string>; ownOpen?: boolean } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; refuseOn?: string; answer?: string | Error | Promise<string>; ownOpen?: boolean } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -76,11 +76,12 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
       fetch: async (_url: string, init: { body: string }) => {
         if (env.refuse) throw new Error(env.refuse);
         const command = JSON.parse(init.body);
+        if (command.action === env.refuseOn) { commands.push(command); throw new Error("web fetch is not allowed"); }
         commands.push(command);
         if (command.action === env.hang) await new Promise(() => {});
         if (command.action === "army") return { ok: true, status: 200, text: JSON.stringify({ result: SOLDIERS }) };
         if (command.action === "open" && !env.ownOpen) return { ok: true, status: 200, text: JSON.stringify({ result: { session: "tank-1" } }) };
-        try { return { ok: true, status: 200, text: JSON.stringify({ result: respond(command) }) }; }
+        try { return { ok: true, status: 200, text: JSON.stringify({ result: await respond(command) }) }; }
         catch (error) { return { ok: false, status: 400, text: JSON.stringify({ error: (error as Error).message }) }; }
       },
     },
@@ -520,6 +521,39 @@ describe("the mod's trust dialog (ARM-7, M1-AC13)", () => {
     const { send, asks } = await mod(respond, { answer: "Trust these files", ownOpen: true });
     expect(await send(run)).toMatch(/Nothing started: nothing was accepted, the trust record can't be written: EACCES/);
     expect(asks).toHaveLength(1);
+    expect(state).toMatchObject({ opened: 0, sent: 0 });
+  });
+
+  it("accepts a card for orchestratorDelegate.md, the fifth policy file ARM-7 names (C8)", async () => {
+    const { state, respond } = office(undefined, [{ kind: "file", name: "orchestratorDelegate.md", state: "changed", hash: A }]);
+    const { send } = await mod(respond, { answer: "Trust these files", ownOpen: true });
+    expect(await send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(state).toMatchObject({ accepted: [[A]], opened: 1, sent: 1 });
+  });
+
+  it("answers a use whose card arrives after Not now with that answer, and asks no second time (C3)", async () => {
+    const { state, respond } = office();
+    const slow = deferred(), owner = deferred();
+    let opens = 0;
+    const { send, asks } = await mod((c) => c.action === "open" && ++opens === 2 ? slow.promise.then(() => respond(c)) : respond(c), { answer: owner.promise, ownOpen: true });
+    const first = send(run), second = send(run);
+    for (let i = 0; i < 10; i++) await later();
+    expect(opens).toBe(2);
+    expect(asks).toHaveLength(1);
+    owner.answer("Not now");
+    expect(await first).toMatch(/Nothing started: the army waits for you/);
+    slow.answer("");
+    expect(await second).toMatch(/Nothing started: the army waits for you/);
+    expect(asks).toHaveLength(1);
+    expect(state).toMatchObject({ accepted: [], opened: 0, sent: 0 });
+  });
+
+  it("posts nothing more when Claude Code refuses the accept's fetch (C9, HOST-2)", async () => {
+    const { state, respond } = office();
+    const { send, asks, commands } = await mod(respond, { answer: "Trust these files", ownOpen: true, refuseOn: "trust" });
+    expect(await send(run)).toMatch(/Nothing started/);
+    expect(asks).toHaveLength(1);
+    expect(commands.map((c) => c.action).slice(-1)).toEqual(["trust"]);
     expect(state).toMatchObject({ opened: 0, sent: 0 });
   });
 

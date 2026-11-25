@@ -20,8 +20,8 @@ interface Runtime {
   renewing?: symbol;
   diagnostic: string;
   finished?: Promise<void>;
-  /** ARM-7: the folder's one trust card while it is open; every use that meets it waits on its answer. */
-  card?: Promise<CardOutcome>;
+  /** ARM-7: the folder's latest trust card, kept after its answer: a use whose request was in flight when it was drawn takes its answer too. */
+  card?: Card;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -332,7 +332,10 @@ type TrustRow =
   | { kind: "server"; file: string; name: string; target: string };
 /** What the folder's card ended with: `accepted`, or the line to return with nothing started. */
 type CardOutcome = { accepted: true } | { accepted: false; reason: string; failed?: string };
-const POLICY_FILES = new Set(["shadow.config.json", "agent.md", "rules.md", ".mcp.json"]);
+/** One card the owner was shown, by identity; `settled` once its answer is in. */
+type Card = { outcome: Promise<CardOutcome>; settled: boolean };
+/** ARM-7's five policy files, as `src/v2/trust.ts` names them (#143). */
+const POLICY_FILES = new Set(["shadow.config.json", "orchestratorDelegate.md", "agent.md", "rules.md", ".mcp.json"]);
 const TRUST_QUESTION = "Trust this folder's Shadow Army files?";
 const TRUST_NOT_NOW = "Not now";
 const TRUST_ACCEPT = "Trust these files";
@@ -342,7 +345,7 @@ const isText = (value: unknown): value is string => typeof value === "string";
 function isTrustRow(value: unknown): value is TrustRow {
   const row = value as Record<string, unknown> | null;
   if (!row || typeof row !== "object") return false;
-  // A file row names one of the four policy files with its full hash; a gone file may have no last-trusted hash.
+  // A file row names one of the five policy files with its full hash; a gone file may have no last-trusted hash.
   if (row.kind === "file") return isText(row.name) && POLICY_FILES.has(row.name) && isText(row.hash) && /^([a-f0-9]{64})?$/.test(row.hash)
     && (row.state === "new" || row.state === "changed" || row.state === "gone") && (row.hash !== "" || row.state === "gone")
     && (row.soldier === undefined || isText(row.soldier));
@@ -380,7 +383,10 @@ async function showCard($: EngineInterface, runtime: Runtime, rows: TrustRow[], 
   const hashes = rows.flatMap((row) => row.kind === "file" ? [row.hash] : []);
   let result: unknown;
   try { result = await post($, runtime, { action: "trust", hashes }); }
-  catch (error) { return { accepted: false, failed: cardKey(rows), reason: show(`Nothing started: nothing was accepted, ${safeText(error instanceof Error ? error.message : error, runtime.credential)}.`) }; }
+  catch (error) {
+    // HOST-2: Claude Code refused the fetch and `post` retired the army; that is not a stale card, so nothing more is posted.
+    if (runtime.closing) return { accepted: false, reason: show(`Nothing started: nothing was accepted, the army ended: ${safeText(error instanceof Error ? error.message : error, runtime.credential)}.`) };
+    return { accepted: false, failed: cardKey(rows), reason: show(`Nothing started: nothing was accepted, ${safeText(error instanceof Error ? error.message : error, runtime.credential)}.`) }; }
   if ((result as { ok?: unknown } | null)?.ok !== true) return { accepted: false, reason: "Nothing started: the post office did not confirm the trust; nothing was accepted." };
   return { accepted: true };
 }
@@ -394,20 +400,28 @@ async function gated($: EngineInterface, runtime: Runtime, command: Record<strin
   let refused: { key: string; reason: string } | undefined;
   for (;;) {
     const open = runtime.card;
-    if (open) {
-      const outcome = await open;
+    if (open && !open.settled) {
+      const outcome = await open.outcome;
       if (!outcome.accepted) return { held: outcome.reason };
       if (runtime.closing) throw new Error("The army ended before the command could run");
     }
+    const seen = runtime.card;
     const value = await post($, runtime, command);
     const rows = trustRows(value);
     if (!rows) return { value };
-    if (runtime.card) continue;
+    // C3: a card drawn while this request was in flight answers this use too, even when it was answered before the reply came.
+    const met = runtime.card;
+    if (met && met !== seen) {
+      const outcome = await met.outcome;
+      if (!outcome.accepted) return { held: outcome.reason };
+      if (runtime.closing) throw new Error("The army ended before the command could run");
+      continue;
+    }
     if (refused && refused.key === cardKey(rows)) return { held: refused.reason };
-    const card = showCard($, runtime, rows, refused !== undefined);
+    const card: Card = { outcome: showCard($, runtime, rows, refused !== undefined), settled: false };
+    card.outcome = card.outcome.finally(() => { card.settled = true; });
     runtime.card = card;
-    let outcome: CardOutcome;
-    try { outcome = await card; } finally { if (runtime.card === card) runtime.card = undefined; }
+    const outcome = await card.outcome;
     if (outcome.accepted) { if (runtime.closing) throw new Error("The army ended before the command could run"); refused = undefined; continue; }
     if (outcome.failed === undefined) return { held: outcome.reason };
     refused = { key: outcome.failed, reason: outcome.reason };
