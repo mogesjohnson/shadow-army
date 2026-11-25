@@ -1,7 +1,8 @@
 // ARM-7's trust store: the hashes the owner accepted for a folder's own policy files, kept per repository in
 // `~/.shadow-army/trust/`, never in the folder. Nothing here shows the card; it hashes, compares and records.
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { execa } from "execa";
 import { z } from "zod";
@@ -18,7 +19,13 @@ export interface TrustDeps {
   home: string;
   platform?: NodeJS.Platform;
   log?: (message: string) => void;
+  /** Test seams: the file operations a commit uses, a pause before each attempt's commit, and the lock wait. */
+  io?: Partial<TrustIo>;
+  beforeCommit?: (attempt: number) => Promise<void>;
+  lockWaitMs?: number;
 }
+const realIo = { link, readFile, rename, rm, writeFile };
+type TrustIo = typeof realIo;
 
 const recordSchema = z.object({
   version: z.literal(1),
@@ -121,7 +128,9 @@ export function untrustedFiles(record: TrustRecord | null, worktree: string, cur
 export function isAccepted(record: TrustRecord | null, name: PolicyFile, hash: string): boolean {
   return record?.accepted[name]?.includes(hash) ?? false;
 }
-export type AcceptResult = { ok: true; record: TrustRecord } | { ok: false; reason: string };
+export type AcceptResult = { ok: true; record: TrustRecord; warning?: string } | { ok: false; reason: string };
+export type ObserveResult = { ok: true; record: TrustRecord | null; warning?: string } | { ok: false; reason: string };
+type Input = { commonDir: string; worktree: string; shown: readonly Untrusted[]; current: readonly { name: PolicyFile; hash: string }[] };
 
 /**
  * Records exactly the hashes the card showed, for every working tree of the repository. `current` is this working
@@ -129,35 +138,28 @@ export type AcceptResult = { ok: true; record: TrustRecord } | { ok: false; reas
  * before each write, merged, never stripped of another working tree's entries, and replaced by one rename of a
  * file written beside it. A rename that finds the record changed since the read retries, up to MAX_ATTEMPTS times.
  */
-export async function accept(deps: TrustDeps, input: {
-  commonDir: string; worktree: string; shown: readonly Untrusted[]; current: readonly { name: PolicyFile; hash: string }[];
-}): Promise<AcceptResult> {
-  const path = recordPath(deps.home, input.commonDir);
-  try { await mkdir(join(deps.home, ".shadow-army", "trust"), { recursive: true }); } catch (error) {
-    return { ok: false, reason: `the trust record can't be written: ${code(error) ?? String(error)}` };
-  }
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const before = await load(deps, input.commonDir);
-    const record = merge(before.record, input);
-    const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-    try {
-      await writeFile(temp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
-      // The compare and the rename happen under one short lock, so two writers can't both pass the compare.
-      const renamed = await withLock(`${path}.lock`, async () => {
-        if (await rawNow(path) !== before.raw) return false;
-        await rename(temp, path);
-        return true;
-      });
-      if (!renamed) { await rm(temp, { force: true }); continue; }
-      return { ok: true, record };
-    } catch (error) {
-      await rm(temp, { force: true }).catch(() => undefined);
-      return { ok: false, reason: `the trust record can't be written: ${code(error) ?? String(error)}` };
-    }
-  }
-  return { ok: false, reason: `the trust record kept changing during ${MAX_ATTEMPTS} attempts; nothing was accepted` };
+export async function accept(deps: TrustDeps, input: Input): Promise<AcceptResult> {
+  return commit(deps, input.commonDir, (base) => merge(base, input)) as Promise<AcceptResult>;
 }
-function merge(base: TrustRecord | null, input: { commonDir: string; worktree: string; shown: readonly Untrusted[]; current: readonly { name: PolicyFile; hash: string }[] }): TrustRecord {
+
+/**
+ * Adds to this working tree's last-trusted list the present files whose hashes are already accepted, as a check
+ * with no card finds them, so a file trusted here and later deleted shows as gone. It accepts no hash and removes
+ * no entry, and writes nothing when the list wouldn't change.
+ */
+export async function observe(deps: TrustDeps, input: Omit<Input, "shown">): Promise<ObserveResult> {
+  return commit(deps, input.commonDir, (base) => {
+    if (!base) return null;
+    const list = { ...base.worktrees[input.worktree] };
+    let changed = false;
+    for (const file of input.current) {
+      if (base.accepted[file.name]?.includes(file.hash) && list[file.name] !== file.hash) { list[file.name] = file.hash; changed = true; }
+    }
+    return changed ? { ...base, worktrees: { ...base.worktrees, [input.worktree]: list } } : null;
+  });
+}
+
+function merge(base: TrustRecord | null, input: Input): TrustRecord {
   const record: TrustRecord = base
     ? { version: 1, commonDir: base.commonDir, accepted: { ...base.accepted }, worktrees: { ...base.worktrees } }
     : { version: 1, commonDir: input.commonDir, accepted: {}, worktrees: {} };
@@ -172,27 +174,126 @@ function merge(base: TrustRecord | null, input: { commonDir: string; worktree: s
   return record;
 }
 
-const LOCK_STALE_MS = 10_000;
-const LOCK_WAIT_MS = 5_000;
-async function withLock<T>(lock: string, fn: () => Promise<T>): Promise<T> {
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  for (;;) {
-    try { await writeFile(lock, String(process.pid), { flag: "wx" }); break; } catch (error) {
-      if (code(error) !== "EEXIST") throw error;
-      const age = await stat(lock).then((s) => Date.now() - s.mtimeMs, () => 0);
-      if (age > LOCK_STALE_MS) { await rm(lock, { force: true }); continue; }
-      if (Date.now() > deadline) throw Object.assign(new Error(`${lock} is held`), { code: "ELOCKED" });
-      await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 20));
+/** `change` returns the record to write, or null when nothing needs writing. Once the rename lands, the result is ok. */
+async function commit(deps: TrustDeps, commonDir: string, change: (base: TrustRecord | null) => TrustRecord | null): Promise<ObserveResult> {
+  const io: TrustIo = { ...realIo, ...deps.io };
+  const path = recordPath(deps.home, commonDir);
+  const failed = (error: unknown) => ({ ok: false as const, reason: `the trust record can't be written: ${describe(error)}` });
+  try { await mkdir(join(deps.home, ".shadow-army", "trust"), { recursive: true }); } catch (error) { return failed(error); }
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const before = await load(deps, commonDir);
+    const record = change(before.record);
+    if (!record) return { ok: true, record: before.record };
+    const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    let renamed = false;
+    let releaseError: unknown;
+    try {
+      await io.writeFile(temp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+      await deps.beforeCommit?.(attempt);
+      // The compare and the rename happen under one lock, so two writers can't both pass the compare.
+      const lock = await acquire(io, `${path}.lock`, deps.lockWaitMs ?? LOCK_WAIT_MS);
+      try {
+        if (await rawNow(io, path) === before.raw) { await io.rename(temp, path); renamed = true; }
+      } finally {
+        await release(io, lock).catch((error: unknown) => { releaseError = error; });
+      }
+    } catch (error) {
+      await io.rm(temp, { force: true }).catch(() => undefined);
+      return failed(error);
     }
+    if (!renamed) { await io.rm(temp, { force: true }).catch(() => undefined); continue; }
+    if (releaseError === undefined) return { ok: true, record };
+    const warning = `the trust record was written, but its lock ${path}.lock can't be removed: ${describe(releaseError)}`;
+    deps.log?.(warning);
+    return { ok: true, record, warning };
   }
-  try { return await fn(); } finally { await rm(lock, { force: true }); }
+  return { ok: false, reason: `the trust record kept changing during ${MAX_ATTEMPTS} attempts; nothing was accepted` };
 }
 
-async function rawNow(path: string): Promise<string | null> {
-  try { return await readFile(path, "utf8"); } catch (error) {
+// The lock names its owner. It is made whole by one link, removed only by its owner, and taken over only when its
+// owner is gone: a process on this host that no longer runs, or this process when it no longer holds it. An owner
+// that is alive keeps it however long it stalls; a writer that can't get it in time accepts nothing.
+const LOCK_WAIT_MS = 5_000;
+interface LockOwner { pid: number; host: string; token: string }
+interface Held extends LockOwner { path: string }
+const heldHere = new Set<string>();
+
+async function acquire(io: TrustIo, path: string, waitMs: number): Promise<Held> {
+  const me: Held = { pid: process.pid, host: hostname(), token: randomBytes(8).toString("hex"), path };
+  const temp = `${path}.${me.token}.tmp`;
+  await io.writeFile(temp, JSON.stringify({ pid: me.pid, host: me.host, token: me.token }), "utf8");
+  try {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      try { await io.link(temp, path); heldHere.add(me.token); return me; } catch (error) {
+        if (code(error) !== "EEXIST") throw error;
+      }
+      const owner = await readOwner(io, path);
+      if (owner === null) continue;
+      // A gone owner is taken over; the pass still ends with the deadline check, in case recovery is itself stuck.
+      const gone = owner !== "unreadable" && isGone(owner);
+      if (gone) await takeOver(io, path, owner);
+      if (Date.now() > deadline) {
+        const who = owner === "unreadable" ? "an owner it doesn't name"
+          : `process ${owner.pid} on ${owner.host}${gone ? `, which is gone, but ${path}.recover blocks taking it over` : ""}`;
+        throw Object.assign(new Error(`${path} is held by ${who}`), { code: "ELOCKED" });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 20));
+    }
+  } finally {
+    await io.rm(temp, { force: true }).catch(() => undefined);
+  }
+}
+
+async function release(io: TrustIo, held: Held): Promise<void> {
+  try {
+    const owner = await readOwner(io, held.path);
+    if (owner !== null && owner !== "unreadable" && owner.token === held.token) await io.rm(held.path);
+  } finally {
+    heldHere.delete(held.token);
+  }
+}
+
+/** Removes a gone owner's lock. One recovery at a time, under its own guard, and only if the lock is still that owner's. */
+async function takeOver(io: TrustIo, path: string, gone: LockOwner): Promise<void> {
+  const guard = `${path}.recover`;
+  try { await io.writeFile(guard, String(process.pid), { flag: "wx" }); } catch (error) {
+    if (code(error) === "EEXIST") return;
+    throw error;
+  }
+  try {
+    const owner = await readOwner(io, path);
+    if (owner !== null && owner !== "unreadable" && owner.token === gone.token) await io.rm(path);
+  } finally {
+    await io.rm(guard, { force: true });
+  }
+}
+
+async function readOwner(io: TrustIo, path: string): Promise<LockOwner | null | "unreadable"> {
+  const raw = await rawNow(io, path);
+  if (raw === null) return null;
+  try {
+    const owner = JSON.parse(raw) as Partial<LockOwner>;
+    if (typeof owner.pid === "number" && typeof owner.host === "string" && typeof owner.token === "string") return owner as LockOwner;
+  } catch { /* falls through */ }
+  return "unreadable";
+}
+
+function isGone(owner: LockOwner): boolean {
+  if (owner.host !== hostname()) return false;
+  if (owner.pid === process.pid) return !heldHere.has(owner.token);
+  try { process.kill(owner.pid, 0); return false; } catch (error) { return code(error) === "ESRCH"; }
+}
+
+async function rawNow(io: TrustIo, path: string): Promise<string | null> {
+  try { return await io.readFile(path, "utf8"); } catch (error) {
     if (code(error) === "ENOENT") return null;
     throw error;
   }
+}
+function describe(error: unknown): string {
+  if (code(error) === "ELOCKED") return (error as Error).message;
+  return code(error) ?? (error instanceof Error ? error.message : String(error));
 }
 function code(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | null)?.code;
