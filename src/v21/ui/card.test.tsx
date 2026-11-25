@@ -156,4 +156,50 @@ describe("v2.1 War Table cards", () => {
       expect(ink(s, info, { width: 35, focus: r.id === "beru", notch: notch(i) }), r.id).toEqual(NEEDS_110[r.id]);
     });
   });
+
+  it("narrows to three across 80 columns (the 80x24 frame draws no cards): every row stays 25 cells", () => {
+    for (const s of ROSTER) {
+      const rows = ink(s, WORK[s.id], { width: 25, notch: "bottom" });
+      expect(rows).toHaveLength(7);
+      for (const row of rows) expect(cells(row), row).toBe(25);
+    }
+    expect(text(who("beru"), WORK.beru, { width: 25 }).slice(1, 3)).toEqual(["┃ ! waiting on you grok ┃", "┃ build · asks: Run th… ┃"]);
+  });
+
+  it("tells a needs-you card from a working one with colour off", () => {
+    for (const ascii of [false, true]) {
+      const edges = (["work", "wait", "idle"] as const).map((state) => {
+        const rows = text(who("iron", { state }), { role: "build" }, { width: 30, ascii });
+        return rows[0][0] + rows[1][0] + rows[6].slice(1, 4);
+      });
+      expect(edges).toEqual(ascii ? ["+|---", "+|===", "+:..."] : ["╭│───", "┏┃━━━", "╭┆┄┄┄"]);
+    }
+    for (const state of Object.keys(STATES) as SoldierState[]) expect(cardEdge(state) === "heavy", state).toBe(needs(state));
+    expect((["work", "near", "prep", "idle", "cold", "start", "off"] as const).map(cardEdge))
+      .toEqual(["round", "round", "round", "dashed", "dashed", "dashed", "dashed"]);
+  });
+
+  it("cuts a long name, host, task or tool with … and never overflows", () => {
+    const long = "x".repeat(90);
+    const s = who("iron", { name: `Iron${long}`, host: `claude-${long}`, task: long });
+    for (const width of [46, 35, 25, 12]) {
+      for (const focus of [false, true]) {
+        const rows = text(s, { role: "build", elapsed: "2:14", tool: long }, { width, focus, notch: "top" });
+        for (const row of rows) expect(cells(row), row).toBe(width);
+        for (const i of [0, 2, 3]) expect(rows[i], rows[i]).toContain("…");
+      }
+    }
+    expect(text(who("iron", { host: `claude-${long}` }), WORK.iron, { width: 35 })[1]).toBe("│ ◐ working  2:14 claude-xxxxxxx… │");
+  });
+
+  it("is all ASCII in the fallback, and shows a control from a soldier as a placeholder", () => {
+    ROSTER.forEach((s, i) => {
+      const rows = ink(s, WORK[s.id], { width: 46, focus: true, notch: notch(i), ascii: true });
+      for (const row of rows) expect(row).toMatch(/^[\x20-\x7e]{46}$/);
+    });
+    expect(text(who("iron"), WORK.iron, { width: 46, ascii: true })[3]).toBe("| > Edit Page.tsx +18 -2                     |");
+    const evil = text(who("iron", { name: "Ir\u202eon", host: "a\u001bb" }), { role: "r\u2066", elapsed: "\r", task: "t\n", note: { text: "n\u200f" } }, { width: 60 }).join("");
+    for (const code of ["202E", "001B", "2066", "000D", "000A", "200F"]) expect(evil).toContain(`<U+${code}>`);
+    expect(text(who("iron"), { role: "build", tool: "go\u202e" }, { width: 60 })[3]).toContain("go<U+202E>");
+  });
 });
