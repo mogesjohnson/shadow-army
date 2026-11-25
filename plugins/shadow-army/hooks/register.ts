@@ -28,8 +28,8 @@ interface Runtime {
   reached: boolean;
   /** The one line that stopped the army because Claude Code refused a fetch; nothing is sent after it. */
   refused?: string;
-  /** Ending the relay, which resolves with whether the host confirmed it within the lease's 30 s. */
-  cleanup?: Promise<boolean>;
+  /** Ending the relay: `ended` once the host confirmed it, else `failed` or `late` (no confirmation in 30 s). */
+  cleanup?: Promise<RelayEnd>;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -47,6 +47,9 @@ const VERSION_WAIT_MS = 10_000;
 const READY_WAIT_MS = 60_000;
 /** The post office's own lease (PO-7): past it the post office has ended itself, whatever the host confirmed. */
 const CLEANUP_WAIT_MS = 30_000;
+type RelayEnd = "ended" | "failed" | "late";
+/** C5: set while a relay's end is unconfirmed; every start is refused with it until the host confirms that end. */
+let unconfirmedEnd: string | undefined;
 /** Claude Code's own words for a refused fetch; a later rejection with these is a policy change, not transport. */
 const POLICY_WORDS = /\b(?:polic|refus|not allow|denied|disabled)/i; // `\b`: a socket's ECONNREFUSED is transport
 const MIN_HOST = [2, 1, 294];
@@ -132,14 +135,22 @@ function refuse($: EngineInterface, runtime: Runtime, words: string): void {
   fail($, runtime, line, true);
 }
 
-/** Ends the relay and resolves with whether the host confirmed it, or `false` after the lease's 30 s, by when the post office has ended itself (PO-7). */
-async function endRelay($: EngineInterface, runtime: Runtime): Promise<boolean> {
+/**
+ * Ends the relay. The relay exits only after its post office's process has exited, so the host confirming
+ * the relay's end is the observed shutdown (C5). A timer is never taken as confirmation: a failed or late
+ * end refuses every start until the host confirms it, which may be never (then the army stays refused).
+ */
+async function endRelay($: EngineInterface, runtime: Runtime): Promise<RelayEnd> {
   let timer: Timer | undefined;
-  const bound = new Promise<false>((done) => { timer = $.clock.after(CLEANUP_WAIT_MS, () => done(false)); });
-  const ended = Promise.resolve(runtime.stream?.return({ code: null, signal: null })).then(() => true, () => false);
-  const confirmed = await Promise.race([ended, bound]);
+  const bound = new Promise<"late">((done) => { timer = $.clock.after(CLEANUP_WAIT_MS, () => done("late")); });
+  const ended = Promise.resolve(runtime.stream?.return({ code: null, signal: null })).then(() => "ended" as const, () => "failed" as const);
+  const outcome = await Promise.race([ended, bound]);
   timer?.cancel();
-  return confirmed;
+  if (outcome === "ended") return outcome;
+  unconfirmedEnd = `Shadow Army won't start the army: the last relay's end ${outcome === "failed" ? "failed" : `was not confirmed in ${CLEANUP_WAIT_MS / 1000} s`} at step: ${runtime.step}, so its post office may still be running`;
+  const mine = unconfirmedEnd;
+  if (outcome === "late") void ended.then((how) => { if (how === "ended" && unconfirmedEnd === mine) unconfirmedEnd = undefined; });
+  return outcome;
 }
 
 /** One renewal. The army's id stays the army's after `/clear`, `/resume` or `/branch` gives Claude another, so it is never compared with `$.session.id()`. A failed renewal stops nothing: the next goes at its time. */
@@ -461,8 +472,9 @@ async function stalled($: EngineInterface, runtime: Runtime): Promise<void> {
   runtime.closing = true;
   retiring.add(runtime);
   if (active === runtime) active = undefined;
-  const ended = await (runtime.cleanup ??= runtime.stream ? endRelay($, runtime) : Promise.resolve(true));
-  const line = `post office did not report ready within 60 s · step: ${step}${said ? ` · its relay said: ${said}` : ""} · ${ended ? "relay ended" : "relay's end not confirmed in 30 s, so the lease ends the post office"}`;
+  const ended = await (runtime.cleanup ??= runtime.stream ? endRelay($, runtime) : Promise.resolve("ended" as const));
+  const how = ended === "ended" ? "relay ended" : `relay's end ${ended === "failed" ? "failed" : `not confirmed in ${CLEANUP_WAIT_MS / 1000} s`}; the army won't start again until it is confirmed`;
+  const line = `post office did not report ready within 60 s · step: ${step}${said ? ` · its relay said: ${said}` : ""} · ${how}`;
   $.ui.log(sanitize(prefixed(safeText(line, runtime.credential))));
   fail($, runtime, line);
 }
@@ -477,6 +489,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     // The end hook only requests release. A later foreground command waits for the
     // old relay/helper to finish guard finalization and release the folder marker.
     await Promise.all([...retiring].map((old) => old.finished));
+    if (unconfirmedEnd) throw new Error(unconfirmedEnd);
     // Another concurrent foreground call may have opened the army while we waited.
     if (active && !active.closing && active.cwd === cwd) {
       const shared = active;

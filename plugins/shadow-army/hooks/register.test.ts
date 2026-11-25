@@ -743,7 +743,7 @@ describe("a start that stalls (HOST-2, PO-7, C5)", () => {
     expect(logs[0]).toMatch(/step: waiting for its ready event · relay ended$/);
   });
 
-  it("says the end was not confirmed after the lease's 30 s, and then lets the next use start", async () => {
+  it("never takes the 30 s timer as the relay's end: a cleanup that never resolves keeps every next start refused", async () => {
     const env: Env = { silent: true, gate: new Promise<void>(() => {}) };
     const { send, after, logs, spawns } = await mod(OK, env);
     const first = send("claude-sonnet --claim a go");
@@ -754,10 +754,44 @@ describe("a start that stalls (HOST-2, PO-7, C5)", () => {
     after.find((t) => t.ms === 30_000)!.run();
     await first;
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/relay's end not confirmed in 30 s, so the lease ends the post office$/);
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay's end not confirmed in 30 s; the army won't start again until it is confirmed$/);
     env.silent = false;
+    for (let i = 0; i < 2; i++) {
+      expect(await send("claude-sonnet --claim a go")).toMatch(/won't start the army: the last relay's end was not confirmed in 30 s at step: waiting for its ready event, so its post office may still be running/);
+    }
+    expect(spawns).toHaveLength(1);
+  });
+
+  it("lets the next use start once the host confirms a late relay end", async () => {
+    let open!: () => void;
+    const env: Env = { silent: true, gate: new Promise<void>((done) => { open = done; }) };
+    const { send, after, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    after.find((t) => t.ms === 60_000)!.run();
+    await flush();
+    after.find((t) => t.ms === 30_000)!.run();
+    await first;
+    env.silent = false;
+    expect(await send("claude-sonnet --claim a go")).toMatch(/won't start the army/);
+    open();
+    await flush();
     expect(await send("claude-sonnet --claim a go")).toContain("Tank");
     expect(spawns).toHaveLength(2);
+  });
+
+  it("refuses the next start when the relay's end fails, naming the step", async () => {
+    const env: Env = { silent: true, gate: Promise.reject(new Error("kill failed")) };
+    void env.gate!.catch(() => {});
+    const { send, after, logs, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    after.find((t) => t.ms === 60_000)!.run();
+    await first;
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay's end failed; the army won't start again until it is confirmed$/);
+    env.silent = false;
+    expect(await send("claude-sonnet --claim a go")).toMatch(/the last relay's end failed at step: waiting for its ready event/);
+    expect(spawns).toHaveLength(1);
   });
 
 });
