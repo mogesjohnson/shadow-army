@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { endThroughHelper, OP_LIMIT_MS, readVerifiedTrees, sweepTrees, systemOps, SWEEP_LIMIT_MS, type Probe, type SweepOps } from "./sweep.js";
+import { endThroughHelper, OP_LIMIT_MS, readVerifiedTrees, sweepTrees, systemOps, SWEEP_LIMIT_MS, windowsTrust, type Probe, type SweepOps } from "./sweep.js";
 import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
 
@@ -22,6 +22,7 @@ function fakeOps(alive: Record<number, number | "unknown">, platform: NodeJS.Pla
     removeJob: async (label) => { calls.push(`job ${label}`); },
     endCoalition: async (id) => { calls.push(`coalition ${id}`); },
     wait: async () => {},
+    trust: null, // Fake processes: the real folder checks are tested on their own below.
   };
   return { ops, calls, alive };
 }
@@ -112,6 +113,25 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(report).toMatchObject({ swept: 0, left: [{ pid: 5 }], kept: [{ id: "t", reason: "1 process couldn't be ended by identity on this machine; left running" }] });
   });
 
+  it("ends nothing on an entry the trust check fails, and keeps it with the reason (review 15 C1)", async () => {
+    await (await TreeRecord.create(root, "open", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    const { ops, calls } = fakeOps({ 5: 50 });
+    const asked: { path: string; acl: boolean }[][] = [];
+    const trust = async (paths: { path: string; acl: boolean }[]) => { asked.push(paths); return paths.map((one) => one.path.endsWith(".jsonl") ? "writable by S-1-1-0" : undefined); };
+    expect(await sweepTrees(root, { ...ops, trust })).toMatchObject({ swept: 0, ended: [], kept: [{ id: "open", reason: expect.stringContaining("writable by S-1-1-0") }] });
+    expect(calls).toEqual([]);
+    expect(asked[0]!.map((one) => one.acl)).toEqual([false, true, true]); // `.shadow/` keeps the checkout's ACL.
+    await expect(readVerifiedTrees(root, async (paths) => paths.map((_, index) => index === 1 ? "owned by S-1-5-32-544" : undefined))).rejects.toThrow(/owned by S-1-5-32-544/);
+  });
+
+  it("reports a process whose last probe couldn't tell as left, never as ended (review 15 C8)", async () => {
+    await (await TreeRecord.create(root, "t", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    const { ops } = fakeOps({ 5: 50 });
+    let probes = 0;
+    const report = await sweepTrees(root, { ...ops, endIdentity: async () => "ended", probe: async (pid) => pid === 5 && probes++ > 0 ? "unknown" : ops.probe(pid) });
+    expect(report).toMatchObject({ swept: 0, ended: [], left: [{ pid: 5 }], kept: [{ id: "t", reason: "1 process whose state couldn't be told" }] });
+  });
+
   it("keeps to 10 s on a monotonic clock, gives every entry its first attempt, and bounds an operation that hangs (C5)", async () => {
     await (await TreeRecord.create(root, "a", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
     await (await TreeRecord.create(root, "b", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 6, startTime: 60 });
@@ -147,7 +167,14 @@ describe("the sweep (PO-16, M1-AC16)", () => {
       await TreeRecord.create(other, "elsewhere", { pid: 3, startTime: 30 });
       await TreeRecord.create(root, "mine", { pid: 3, startTime: 30 });
       symlinkSync(join(treesDir(other), "elsewhere.jsonl"), join(treesDir(root), "linked.jsonl"));
-      expect((await readVerifiedTrees(root)).map((tree) => tree.id)).toEqual(["mine"]);
+      const trusted = async () => (await readVerifiedTrees(root)).filter((tree) => !tree.untrusted).map((tree) => tree.id);
+      expect(await trusted()).toEqual(["mine"]);
+      expect((await readVerifiedTrees(root)).find((tree) => tree.id === "linked")).toMatchObject({ lines: [], untrusted: "a link or not a file" });
+      linkSync(join(treesDir(root), "mine.jsonl"), join(other, "second-name")); // Another name could change it.
+      expect((await readVerifiedTrees(root)).find((tree) => tree.id === "mine")?.untrusted).toBe("has another link");
+      rmSync(join(other, "second-name"));
+      chmodSync(join(treesDir(root), "mine.jsonl"), 0o666); // Review 15 C1: writable by others.
+      expect((await readVerifiedTrees(root)).find((tree) => tree.id === "mine")?.untrusted).toBe("not the owner's alone");
       rmSync(join(root, ".shadow"), { recursive: true });
       mkdirSync(join(root, ".shadow"));
       symlinkSync(join(other, ".shadow", "v2"), join(root, ".shadow", "v2"));
@@ -189,24 +216,41 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     } finally { try { process.kill(pid, "SIGKILL"); } catch { /* Gone. */ } }
   }, 20_000);
 
-  linux("ends a real git-like group leader's whole group on Linux, and declines a process that leads no group", async () => {
+  posixOnly("declines a group end without running the helper: a group id can't be bound to its leader (review 15 C2)", async () => {
+    expect(await endThroughHelper({ pid: 5, startTime: 50 }, true, "/bin/true")).toBe("declined"); // A helper that would exit 0.
+  });
+
+  linux("declines a real git-like group leader's group on Linux, leaving every member running (review 15 C2)", async () => {
     const ops = systemOps();
     const leader = spawn("sh", ["-c", "sleep 30 & echo $!; wait"], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
     const member = Number(await new Promise<string>((done) => leader.stdout!.once("data", (data) => done(String(data)))));
-    const pid = orphan();
     try {
       const start = await ops.probe(leader.pid!);
-      expect(await ops.endIdentity({ pid: leader.pid!, startTime: start as number }, true)).toBe("ended");
+      expect(await ops.endIdentity({ pid: leader.pid!, startTime: start as number }, true)).toBe("declined");
       await new Promise((done) => setTimeout(done, 200));
-      expect(await ops.probe(member)).toBe("absent");
-      expect(await ops.endIdentity({ pid, startTime: (await ops.probe(pid)) as number }, true)).toBe("declined"); // Not a group leader.
-      expect(typeof await ops.probe(pid)).toBe("number");
+      expect(typeof await ops.probe(member)).toBe("number");
+      expect(typeof await ops.probe(leader.pid!)).toBe("number");
     } finally {
-      for (const one of [pid, member, leader.pid!]) { try { process.kill(one, "SIGKILL"); } catch { /* Gone. */ } }
+      for (const one of [member, leader.pid!]) { try { process.kill(one, "SIGKILL"); } catch { /* Gone. */ } }
     }
   }, 20_000);
 
   const windows = it.runIf(process.platform === "win32");
+  windows("on Windows passes the owner's own tree and fails a file or folder others can write (review 15 C1)", async () => {
+    await TreeRecord.create(root, "mine", { pid: 3, startTime: 30 });
+    const file = join(treesDir(root), "mine.jsonl");
+    // PO-5's ACL, as the folders operation makes it: inheritance off, only this user, SYSTEM and Administrators.
+    const me = spawnSync("powershell.exe", ["-NoProfile", "-Command", "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"], { encoding: "utf8" }).stdout.trim();
+    const narrow = (path: string, inherit: string) => spawnSync("icacls", [path, "/inheritance:r", "/grant:r", ...[me, "S-1-5-18", "S-1-5-32-544"].map((sid) => `*${sid}:${inherit}F`)]).status;
+    expect([narrow(join(root, ".shadow", "v2"), "(OI)(CI)"), narrow(treesDir(root), "(OI)(CI)"), narrow(file, "")]).toEqual([0, 0, 0]);
+    expect(await windowsTrust([{ path: join(root, ".shadow", "v2"), acl: true }, { path: file, acl: true }])).toEqual([undefined, undefined]);
+    expect((await readVerifiedTrees(root)).map((tree) => [tree.id, tree.untrusted])).toEqual([["mine", undefined]]);
+    expect(spawnSync("icacls", [file, "/grant", "*S-1-1-0:(M)"]).status).toBe(0); // Everyone may modify it.
+    expect((await readVerifiedTrees(root))[0]).toMatchObject({ lines: [], untrusted: "writable by S-1-1-0" });
+    expect(await windowsTrust([{ path: join(root, "missing"), acl: true }])).toEqual(["unreadable"]);
+    expect(spawnSync("icacls", [treesDir(root), "/grant", "*S-1-1-0:(M)"]).status).toBe(0);
+    await expect(readVerifiedTrees(root)).rejects.toThrow(/writable by S-1-1-0/);
+  }, 30_000);
   windows("ends a real process on Windows through its handle, and only while its creation time matches", async () => {
     const ops = systemOps();
     const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
