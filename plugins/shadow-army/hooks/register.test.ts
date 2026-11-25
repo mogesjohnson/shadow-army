@@ -213,6 +213,54 @@ describe("the lease renewals (M1b-14, HOST-2, M1-AC1, M1-AC9)", () => {
     expect(commands.at(-1)).toMatchObject({ action: "release", session: "session-1" });
   });
 
+  it("starts no army when a logout comes while the first command awaits the session (C1)", async () => {
+    const { $, handlers, send, spawns, every, commands } = await mod(() => ({ status: "completed" }));
+    let open!: () => void;
+    const gate = new Promise<void>((done) => { open = done; });
+    $.session.cwd = async () => { await gate; return "/repo"; };
+    const pending = send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "logout" }, async () => undefined);
+    open();
+    expect(await pending).toMatch(/army ended/);
+    expect(spawns).toHaveLength(0);
+    expect(every).toHaveLength(0);
+    expect(commands).toHaveLength(0);
+  });
+
+  it("starts the army normally when a /clear comes while the first command awaits the session (C1)", async () => {
+    const { $, handlers, send, spawns, heartbeat } = await mod(() => ({ status: "completed" }));
+    let open!: () => void;
+    const gate = new Promise<void>((done) => { open = done; });
+    $.session.cwd = async () => { await gate; return "/repo"; };
+    const pending = send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "clear" }, async () => undefined);
+    open();
+    expect(await pending).toMatch(/completed/);
+    expect(spawns).toHaveLength(1);
+    expect(heartbeat()).toBeDefined();
+  });
+
+  it("releases a relay that reports ready after a logout with the logout reason (C2)", async () => {
+    const { $, handlers, send, every, commands } = await mod(() => ({ status: "completed" }));
+    let open!: () => void;
+    const gate = new Promise<void>((done) => { open = done; });
+    $.process.spawn = () => ({
+      async *[Symbol.asyncIterator]() {
+        await gate;
+        yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
+      },
+      return: async () => ({ done: true }),
+    }) as never;
+    const pending = send("claude-sonnet --claim a go");
+    await new Promise((done) => setTimeout(done, 0));
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "logout" }, async () => undefined);
+    open();
+    expect(await pending).toMatch(/ended/);
+    await new Promise((done) => setTimeout(done, 0));
+    expect(commands).toEqual([{ action: "release", session: "session-1", reason: "logout" }]);
+    expect(every).toHaveLength(0);
+  });
+
   it("registers nothing, starts nothing and sends nothing in a session that is not interactive (M1-AC9)", async () => {
     const { $, handlers, registered, spawns, commands, every } = await mod();
     await handlers["session.start"]!($, { isInteractive: false }, async () => undefined);

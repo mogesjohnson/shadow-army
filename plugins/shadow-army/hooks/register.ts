@@ -8,6 +8,8 @@ interface Runtime {
   cwd: string;
   credential: string;
   closing: boolean;
+  /** The `session.end` reason the army was released with, kept for a relay that reports ready afterwards. */
+  releaseReason?: string;
   ready: Promise<void>;
   accept: () => void;
   reject: (error: Error) => void;
@@ -31,6 +33,8 @@ const RENEW_EVERY_MS = 10_000;
 const RENEW_WAIT_MS = 5_000;
 /** `session.end` reasons that keep the army running (HOST-2, PO-7). */
 const KEEPS_ARMY = new Set(["clear", "resume"]);
+/** Counts army-ending `session.end` events; a start begun before one is abandoned rather than published. */
+let ends = 0;
 
 function safeText(value: unknown, credential = ""): string {
   let text = String(value);
@@ -67,6 +71,7 @@ async function release($: EngineInterface, runtime: Runtime, reason?: string): P
   // Stop renewals before a network wait: session.end shares the native 1.5s
   // deadline, and /clear keeps the Claude process/module alive afterwards.
   runtime.closing = true;
+  runtime.releaseReason ??= reason;
   cancelTimers(runtime);
   runtime.reject(new Error("Claude session ended before the post office was ready"));
   retiring.add(runtime);
@@ -113,7 +118,7 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     runtime.deadline = undefined;
     if (runtime.closing) {
       // An end event may beat relay startup. Release a late ready helper too.
-      void post($, runtime, { action: "release", session: runtime.session }).catch(() => {});
+      void post($, runtime, { action: "release", session: runtime.session, ...(runtime.releaseReason ? { reason: runtime.releaseReason } : {}) }).catch(() => {});
       return;
     }
     runtime.heartbeat = $.clock.every(RENEW_EVERY_MS, () => renew($, runtime));
@@ -161,8 +166,11 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
 }
 
 async function ensure($: EngineInterface): Promise<Runtime> {
+  const begun = ends;
+  const ended = () => { if (ends !== begun) throw new Error("The army ended before the command could run"); };
   const session = await $.session.id();
   const cwd = await $.session.cwd();
+  ended();
   // The army keeps the id it started with after /clear, /resume or /branch (HOST-2), so only another folder replaces it.
   if (active && active.cwd !== cwd) await release($, active);
   let runtime = active;
@@ -170,6 +178,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     // The end hook only requests release. A later foreground command waits for the
     // old relay/helper to finish guard finalization and release the folder marker.
     await Promise.all([...retiring].map((old) => old.finished));
+    ended();
     // Another concurrent foreground call may have opened the army while we waited.
     if (active && !active.closing && active.cwd === cwd) {
       const shared = active;
@@ -273,6 +282,7 @@ export const register: Register = (on) => {
   on("session.end", async ($, e, next) => {
     const runtime = active;
     // /clear and /resume keep the army and its renewals; any other end stops renewing first, then releases with the reason (HOST-2).
+    if (!inert && !KEEPS_ARMY.has(String(e.reason))) ends++;
     if (runtime && !inert && !KEEPS_ARMY.has(String(e.reason))) {
       try { await release($, runtime, typeof e.reason === "string" ? e.reason : undefined); }
       catch { /* Cancelled renewals let the independent lease expire if release cannot arrive. */ }
