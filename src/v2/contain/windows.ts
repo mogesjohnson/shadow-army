@@ -1,6 +1,6 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
@@ -496,4 +496,201 @@ async function compileSupervisor(cache: string): Promise<string> {
   } finally {
     await rm(work, { recursive: true, force: true });
   }
+}
+
+// PO-16's sweep on Windows. Each call opens the process once and checks it, and ends it, through that one handle:
+// a pid reused between the check and the end can't receive the end (taskkill takes a bare pid). A tree also ends
+// each child of the checked process, each checked on its own handle: its parent pid, and a creation time after
+// the parent's. "absent" when no such process runs; "unknown" when a query failed, never read as absent.
+// TerminateProcess only starts an exit, so each exit is confirmed by waiting on the same handle. "incomplete" when
+// a descendant could not be listed, opened, ended or confirmed: the parent alone is no evidence of an empty tree.
+const SWEEP_HELPER = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+public static class ShadowSweep {
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateProcess(IntPtr process,uint code);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint ms);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32FirstW(IntPtr snapshot,ref ENTRY entry);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32NextW(IntPtr snapshot,ref ENTRY entry);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process,int kind,ref BASIC info,int length,IntPtr returned);
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct ENTRY { public uint size,usage,pid; public IntPtr heap; public uint module,threads,parent; public int priority; public uint flags; [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string file; }
+  [StructLayout(LayoutKind.Sequential)] struct BASIC { public IntPtr exit,peb,affinity,priority,pid,parent; }
+  static string Open(uint pid,uint access,out IntPtr handle,out long creation) {
+    creation=0; handle=OpenProcess(access,false,pid);
+    if(handle==IntPtr.Zero) return Marshal.GetLastWin32Error()==87 ? "absent" : "unknown";
+    uint code; long exit,kernel,user;
+    if(!GetExitCodeProcess(handle,out code)) return "unknown"; if(code!=259) return "absent";
+    if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return "unknown";
+    return exit!=0 ? "absent" : null;
+  }
+  public static string Owned(string path) {
+    FileSystemSecurity security=System.IO.Directory.Exists(path) ? (FileSystemSecurity)System.IO.Directory.GetAccessControl(path,AccessControlSections.Owner) : System.IO.File.GetAccessControl(path,AccessControlSections.Owner);
+    IdentityReference owner=security.GetOwner(typeof(SecurityIdentifier)); WindowsIdentity me=WindowsIdentity.GetCurrent();
+    // An elevated token's files are owned by its default owner (Administrators), not its user.
+    return owner!=null && (owner.Equals(me.User) || owner.Equals(me.Owner)) ? "owned" : "other";
+  }
+  public static string Probe(uint pid) {
+    IntPtr handle; long creation; string state=Open(pid,0x1000,out handle,out creation);
+    try { return state ?? creation.ToString(CultureInfo.InvariantCulture); } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
+  // SYNCHRONIZE, PROCESS_QUERY_LIMITED_INFORMATION and PROCESS_TERMINATE: checked, ended and waited on one handle.
+  const uint EndAccess=0x101001;
+  public static string End(uint pid,long expected,bool tree) {
+    IntPtr handle; long creation; string state=Open(pid,EndAccess,out handle,out creation);
+    try {
+      if(state!=null) return state; if(creation!=expected) return "different";
+      bool complete=!tree || EndChildren(pid,creation);
+      if(!Terminated(handle)) return "unknown";
+      return complete ? "ended" : "incomplete";
+    } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
+  // Ends the process on its handle and waits there for the exit: true only once it has exited.
+  static bool Terminated(IntPtr handle) { TerminateProcess(handle,1); return WaitForSingleObject(handle,3000)==0; }
+  static bool EndChildren(uint parent,long after) {
+    List<uint> children=Children(parent); if(children==null) return false;
+    bool complete=true; foreach(uint child in children) complete&=EndChild(child,parent,after); return complete;
+  }
+  // True when the pid is no descendant (gone, created before its parent, or another parent's) or was ended and confirmed.
+  static bool EndChild(uint pid,uint parent,long after) {
+    IntPtr handle; long creation; string state=Open(pid,EndAccess,out handle,out creation);
+    try {
+      if(state=="absent") return true; if(state!=null) return false;
+      BASIC info=new BASIC();
+      if(NtQueryInformationProcess(handle,0,ref info,Marshal.SizeOf(info),IntPtr.Zero)!=0) return false;
+      if(creation<after || info.parent.ToInt64()!=parent) return true;
+      bool complete=EndChildren(pid,creation);
+      return Terminated(handle) && complete;
+    } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
+  // Every pid whose parent is this one; null when the processes could not be listed.
+  static List<uint> Children(uint parent) {
+    List<uint> found=new List<uint>(); IntPtr snapshot=CreateToolhelp32Snapshot(2,0); if(snapshot==new IntPtr(-1)) return null;
+    try {
+      ENTRY entry=new ENTRY(); entry.size=(uint)Marshal.SizeOf(typeof(ENTRY));
+      bool more=Process32FirstW(snapshot,ref entry); if(!more) return null;
+      for(;more;more=Process32NextW(snapshot,ref entry)) if(entry.parent==parent && entry.pid!=parent) found.Add(entry.pid);
+    } finally { CloseHandle(snapshot); }
+    return found;
+  }
+}
+'@
+`;
+
+const isWindowsPid = (pid: number): boolean => Number.isSafeInteger(pid) && pid > 0 && pid <= 0xffff_ffff;
+/** PowerShell by its absolute path under the system root, never by a name the PATH resolves (PO-16). */
+async function systemPowerShell(): Promise<string> {
+  const root = process.env.SystemRoot;
+  if (!root || !/^[A-Za-z]:\\/.test(root)) throw new Error("the system root is not an absolute path");
+  const path = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const stats = await lstat(path);
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("PowerShell is not a plain file");
+  return path;
+}
+// One line in, one answer line out: the helper is compiled once per session, never once per call (C10).
+const SWEEP_LOOP = String.raw`
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $part = $line.Split(' ')
+  try {
+    $answer = switch ($part[0]) {
+      'probe' { [ShadowSweep]::Probe([uint32]$part[1]) }
+      'end' { [ShadowSweep]::End([uint32]$part[1], [long]$part[2], $part[3] -eq '1') }
+      'owned' { [ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part[1]))) }
+      default { 'unknown' }
+    }
+  } catch { $answer = 'unknown' }
+  [Console]::Out.WriteLine([string]$answer); [Console]::Out.Flush()
+}
+`;
+/** A call's limit, the helper's start and compile included: past it the session is ended and answers "unknown". */
+export const SWEEP_CALL_LIMIT_MS = 15_000;
+
+/** One PowerShell helper for a whole sweep: calls run one at a time, each bounded; `close` ends the process. */
+export interface SweepSession {
+  call(line: string): Promise<string>;
+  /** The helper's pid once started (for tests). */
+  readonly pid: number | undefined;
+  close(): void;
+}
+
+export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS): SweepSession {
+  let child: ChildProcess | undefined;
+  let ended = false;
+  let pending: ((answer: string) => void) | undefined;
+  let buffered = "";
+  let queue: Promise<unknown> = Promise.resolve();
+  // A failure, an exit or a timeout ends the session: the pending call and every later one answer "unknown".
+  const stop = () => { ended = true; child?.kill(); const answer = pending; pending = undefined; answer?.("unknown"); };
+  const start = async (): Promise<ChildProcess | undefined> => {
+    if (child || ended) return child;
+    const script = Buffer.from(`${SWEEP_HELPER}\n${SWEEP_LOOP}`, "utf16le").toString("base64");
+    child = spawn(await systemPowerShell(), ["-NoProfile", "-NonInteractive", "-EncodedCommand", script], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    child.on("error", stop).on("exit", stop);
+    child.stdin!.on("error", stop);
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+      buffered += chunk;
+      for (let at = buffered.indexOf("\n"); at >= 0; at = buffered.indexOf("\n")) {
+        const line = buffered.slice(0, at).trim();
+        buffered = buffered.slice(at + 1);
+        const answer = pending; pending = undefined; answer?.(line);
+      }
+    });
+    // A session left open never holds the process alive; a pending call's timer does while it waits.
+    child.unref(); (child.stdin as unknown as { unref?(): void }).unref?.(); (child.stdout as unknown as { unref?(): void }).unref?.();
+    return child;
+  };
+  const send = async (line: string): Promise<string> => {
+    const helper = await start().catch(() => { ended = true; return undefined; });
+    if (ended || !helper) return "unknown";
+    return new Promise<string>((done) => {
+      const timer = setTimeout(stop, callLimitMs);
+      pending = (answer) => { clearTimeout(timer); done(answer); };
+      helper.stdin!.write(`${line}\n`);
+    });
+  };
+  return {
+    call: (line) => { const answer = queue.then(() => send(line)); queue = answer.catch(() => {}); return answer; },
+    get pid() { return child?.pid; },
+    close: stop,
+  };
+}
+/** Through the sweep's session, or a session of its own for this one call. */
+async function ask(session: SweepSession | undefined, line: string): Promise<string> {
+  const own = session ?? openSweepSession();
+  try { return await own.call(line); } finally { if (!session) own.close(); }
+}
+
+/**
+ * A process's exact creation time (a FILETIME string); `undefined` when no such process runs; `null` when the
+ * probe failed. Unknown is never read as absent: the sweep keeps the record and reports it.
+ */
+export async function probeWindowsProcess(pid: number, session?: SweepSession): Promise<string | undefined | null> {
+  // A pid Windows can't hold is a bad record, not a process known to have ended: unknown.
+  if (!isWindowsPid(pid)) return null;
+  const result = await ask(session, `probe ${pid}`);
+  return result === "absent" ? undefined : /^[1-9]\d*$/.test(result) ? result : null;
+}
+
+/** Whether this user (or an elevated token's default owner) owns the path; a failed check is not ownership. */
+export async function ownedByCurrentUser(path: string, session?: SweepSession): Promise<boolean> {
+  return await ask(session, `owned ${Buffer.from(path, "utf8").toString("base64")}`) === "owned";
+}
+
+export type WindowsEnd = "ended" | "incomplete" | "absent" | "different" | "unknown";
+/** Ends the process only while its exact creation time (a FILETIME string) is the recorded one, through the checked handle. */
+export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean, session?: SweepSession): Promise<WindowsEnd> {
+  // An old millisecond record has no exact identity: nothing is ended on its evidence.
+  if (!isWindowsPid(pid) || creationTime === undefined || !/^[1-9]\d{0,18}$/.test(creationTime) || BigInt(creationTime) >= 2n ** 63n) return "unknown";
+  const result = await ask(session, `end ${pid} ${creationTime} ${tree ? 1 : 0}`);
+  return (["ended", "incomplete", "absent", "different"] as const).find((one) => one === result) ?? "unknown";
 }

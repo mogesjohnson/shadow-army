@@ -6,7 +6,7 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, exitGraceFor, listingFrom, spawnManagedProcess, supervisorBinary, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, supervisorBinary, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -310,5 +310,63 @@ describe("Windows supervisor cache (compiled once, verified on every spawn)", ()
     await session.close({ grace: false });
     expect(await gone(session.pid, 5_000)).toBe(true);
     expect(await gone(child, 5_000)).toBe(true);
+  }, 60_000);
+});
+
+const filetimeOf = (pid: number): string => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`], { encoding: "utf8" }).trim();
+const running = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+describe("the sweep's identity-bound end on Windows (PO-16)", () => {
+  windowsOnly("ends a process and its children only through the handle whose creation time was checked", async () => {
+    const script = "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1e3)'],{stdio:'ignore'});console.log(c.pid);setInterval(()=>{},1e3)";
+    const parent = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = Number(await new Promise<string>((done) => parent.stdout.once("data", (data: Buffer) => done(data.toString()))));
+    stray.push(parent.pid!, child);
+    const exact = filetimeOf(parent.pid!);
+    // Another process now holding the pid has another creation time: it is left running.
+    expect(await endWindowsProcess(parent.pid!, (BigInt(exact) + 1n).toString(), true)).toBe("different");
+    expect(running(parent.pid!) && running(child)).toBe(true);
+    expect(await endWindowsProcess(parent.pid!, undefined, true)).toBe("unknown"); // An old millisecond record.
+    expect(await endWindowsProcess(parent.pid!, exact, true)).toBe("ended");
+    await new Promise((done) => setTimeout(done, 500));
+    expect([running(parent.pid!), running(child)]).toEqual([false, false]);
+    // Both confirmed gone: their pids may be reused, so the generic cleanup must not kill them (C11).
+    for (const pid of [parent.pid!, child]) stray.splice(stray.indexOf(pid), 1);
+    expect(await endWindowsProcess(parent.pid!, exact, true)).toBe("absent");
+  }, 60_000);
+});
+
+describe("the sweep's owner check on Windows (PO-16)", () => {
+  windowsOnly("takes this user's own file and folder as owned, and the system's folder as not", async () => {
+    const folder = await directory();
+    await writeFile(join(folder, "t.jsonl"), "{}");
+    expect([await ownedByCurrentUser(folder), await ownedByCurrentUser(join(folder, "t.jsonl"))]).toEqual([true, true]);
+    expect(await ownedByCurrentUser(join(process.env.SystemRoot ?? "C:/Windows", "System32"))).toBe(false);
+    expect(await ownedByCurrentUser(join(folder, "missing' ; exit 0 ; '"))).toBe(false); // A failed check, never ownership.
+  }, 60_000);
+});
+
+describe("the sweep's one helper session on Windows (C10)", () => {
+  windowsOnly("answers several calls from one PowerShell, compiled once", async () => {
+    const session = openSweepSession();
+    try {
+      const folder = await directory();
+      const self = await probeWindowsProcess(process.pid, session);
+      expect(self).toMatch(/^[1-9]\d{17}$/);
+      const helper = session.pid!;
+      expect(await probeWindowsProcess(helper, session)).toMatch(/^[1-9]\d{17}$/); // The helper itself, still running.
+      expect(await ownedByCurrentUser(folder, session)).toBe(true);
+      expect(await Promise.all([probeWindowsProcess(process.pid, session), probeWindowsProcess(2 ** 31 - 2, session)])).toEqual([self, undefined]);
+      expect(session.pid).toBe(helper);
+    } finally { session.close(); }
+  }, 60_000);
+
+  windowsOnly("ends a call that outlives its limit, and answers unknown from then on", async () => {
+    const session = openSweepSession(1); // Too short for PowerShell to start.
+    const began = performance.now();
+    expect(await probeWindowsProcess(process.pid, session)).toBeNull();
+    expect(await ownedByCurrentUser(".", session)).toBe(false);
+    expect(performance.now() - began).toBeLessThan(5_000);
+    session.close();
   }, 60_000);
 });
