@@ -8,7 +8,7 @@ Self-contained: do not read older handoffs. Range `32d1e47` to this commit. The 
 - Timers: hi 50 min, watch 5 min. Claude Code killed orch-43's timers for low memory (~21:50); start yours, and if they are killed again, do not restart them until the owner asks.
 - A Codex file for every pushed fix: `codex-reviews/11-25-2026-codex-review-<n>.md` in the main checkout (copy review 31's layout; next is **32**); tell the owner. Tick: `codex_tick.sh <last ISO>`; last tick `2026-11-25T21:46:44Z`.
 - Merges: auto mode refuses them unless the owner asks in the session. When the owner asks, check `gh pr list --base <branch>` (V14), `gh pr ready <n>`, then `gh pr merge <n> --merge --match-head-commit <full 40-char sha>` (short SHAs are rejected).
-- **New task from the owner: the v2.1 Ink UI**, brief `.shadow/v2-tools/tasks/ui-v2-start.md`. v2.0 keeps its screens in the mod (M5; the Ink non-goal binds v2.0 only). The brief's step 1 is a decision note and owner questions (which v2.1 design, Ink inside the mod or a standalone `shadow` app, which v2.0 pieces first), then a first Ink slice in new files (`src/v21/ui/`), based on `main`. It touches no running worker's files, so it can run beside the fixes. Opus, high.
+- **New task from the owner: the v2.1 Ink UI**, brief `.shadow/v2-tools/tasks/ui-v21-start.md`. v2.0 keeps its screens in the mod (M5; the Ink non-goal binds v2.0 only). The brief's step 1 is a decision note and owner questions (which v2.1 design, Ink inside the mod or a standalone `shadow` app, which v2.0 pieces first), then a first Ink slice in new files (`src/v21/ui/`), based on `main`. It touches no running worker's files, so it can run beside the fixes. Opus, high.
 
 ## Waiting on the owner
 
@@ -44,7 +44,7 @@ Done: **#114 merged** into `claude/63-m1b` (`7d2ec3a`, at the owner's request); 
 3. `register.ts`: #128 C5, C9, C10 → #134 C5 → #131 C3, C9 (C5 after `/army` exists).
 4. `snapshot.ts`: wait for review 31 on #120.
 5. Others: #117 review 20 (`scripts/check-spec-trace.mjs`), #123, #140.
-6. v2.1 UI: `ui-v2-start.md` (new files only; parallel).
+6. v2.1 UI: `ui-v21-start.md` (new files only; parallel).
 
 ## Lessons
 
