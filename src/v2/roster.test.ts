@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getAdapter } from "../adapters/registry.js";
-import { RosterError } from "../core/roster.js";
+import { checkAssignment } from "../core/assign.js";
+import { loadRoster, RosterError } from "../core/roster.js";
 import { shippedRoster } from "../core/roster.testutil.js";
 import { route } from "../core/router.js";
 import { DEFAULT_SHADOW_NAMES, loadConfiguredShadowNames, loadV2Roster, resolveShadowNames, shadowName } from "./roster.js";
@@ -98,5 +99,55 @@ describe("the shipped roster (ARM-1, M1-AC6)", () => {
       agy: { cli: "agy", model: "m" },
     } });
     expect(() => loadV2Roster(dir)).toThrow(/"Beru".*"codex-sol".*"grok"|"Beru".*"grok".*"codex-sol"/s);
+  });
+});
+
+describe("the v2 loader ignores the legacy Monarch settings (C2)", () => {
+  const shippedDelegate = readFileSync(new URL("../../orchestratorDelegate.md", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  const shippedConfig = readFileSync(new URL("../../shadow.config.json", import.meta.url), "utf8");
+  const LEGACY = "monarch:\n  default: codex-astra\n  fallback: claude-opus\n";
+  const project = (delegate: string): string => {
+    const dir = projectWith(JSON.parse(shippedConfig));
+    writeFileSync(join(dir, "orchestratorDelegate.md"), delegate);
+    return dir;
+  };
+
+  it("starts with no monarch block, and v1 refuses the same files", () => {
+    const delegate = shippedDelegate.replace(LEGACY, "");
+    expect(delegate).not.toMatch(/^monarch:/m);
+    const dir = project(delegate);
+    const { roster, names } = loadV2Roster(dir);
+    expect([...roster.soldiers.keys()]).toEqual(["codex-sol", "claude-opus", "codex-astra", "claude-sonnet", "grok", "agy"]);
+    expect(names.get("claude-opus")).toBe("Kaisel");
+    expect(() => loadRoster(dir)).toThrow(/monarch/);
+  });
+
+  it("starts with a stale monarch block: a ghost soldier, or one without the orchestrate role", () => {
+    for (const stale of ["monarch:\n  default: ghost\n", "monarch:\n  default: agy\n  fallback: grok\n"]) {
+      const dir = project(shippedDelegate.replace(LEGACY, stale));
+      expect(loadV2Roster(dir).roster.soldiers.size).toBe(6);
+      expect(() => loadRoster(dir)).toThrow();
+    }
+  });
+
+  it("still refuses a soldier the two files disagree on, and a soldier rule contradiction", () => {
+    const dir = project(shippedDelegate.replace(LEGACY, "").replace("  agy:\n", "  extra:\n    roles: [build]\n  agy:\n"));
+    expect(() => loadV2Roster(dir)).toThrow(/"extra" is in orchestratorDelegate.md but has no cli\/model/);
+    const bad = project(shippedDelegate.replace(LEGACY, "").replace("roles: [research, test]", "roles: [research, test]\n    buildFor: [hard]"));
+    expect(() => loadV2Roster(bad)).toThrow(/does not have the build role/);
+  });
+
+  it("still cannot grant an adapter more: agy never writes and grok never reviews, whatever the file says", () => {
+    const granting = "---\nsoldiers:\n  grok:\n    roles: [build, review]\n  agy:\n    roles: [research, build]\n    write: true\n---\n";
+    const dir = projectWith({ soldiers: { grok: { cli: "grok", model: "m" }, agy: { cli: "agy", model: "m" } } });
+    writeFileSync(join(dir, "orchestratorDelegate.md"), granting);
+    writeFileSync(join(dir, "agent.md"), ""); // the shipped agent.md has sections for soldiers this small roster lacks
+    const { roster } = loadV2Roster(dir);
+    const agy = roster.soldiers.get("agy")!;
+    expect(agy.write).toBe(true);
+    expect(checkAssignment(agy, getAdapter("agy"), "build", true).ok).toBe(false);
+    const grok = roster.soldiers.get("grok")!;
+    expect(grok.roles).toContain("review");
+    expect(checkAssignment(grok, getAdapter("grok"), "review", false).ok).toBe(false);
   });
 });
