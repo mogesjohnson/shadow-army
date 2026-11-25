@@ -434,6 +434,27 @@ describe("M1b-26 harness git and outside snapshots", () => {
     } finally { process.env.SHADOW_ARMY_SNAPSHOTS = snapshots; }
   });
 
+  it("keeps a read-only turn's harness git calls, hold checks included, to a fixed count (each costs ~440 ms on Windows)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    for (const name of ["a", "b", "c"]) repo.write(`src/${name}.ts`, "owner's uncommitted work\n");
+    const calls: string[][] = [];
+    const counting: GitFactory = (target) => {
+      const harness = new HarnessGit({ repo: target, hooksDir: join(repo.dir, ".shadow", "v2", "hooks") });
+      return { run: (args, kind, cwd) => { calls.push(args); return harness.run(args, kind, cwd); } };
+    };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, gitFactory: counting,
+      channelFactory: (): NativeChannel => ({ async send() { return { status: "completed", text: "ok", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(office);
+    await office.open("scout");
+    calls.length = 0;
+    expect((await office.send("scout", "look")).status).toBe("completed");
+    console.log(`read-only turn: ${calls.length} harness git calls: ${calls.map((args) => args[0]).join(" ")}`);
+    // Three dirty files are hashed in one call per guard read, not one call each.
+    expect(calls.filter((args) => args[0] === "hash-object")).toHaveLength(2);
+    // Was 34 (one hash-object per dirty file per read, and a hold check twice in a row after the turn).
+    expect(calls.length).toBeLessThanOrEqual(28);
+  }, 60_000);
+
   it("refuses a folder outside any git working tree", async () => {
     const outside = mkdtempSync(join(homedir(), ".sa-test-nogit-"));
     try { await expect(PostOffice.create({ cwd: outside, credential, roster })).rejects.toThrow("the army runs only inside a git working tree"); }

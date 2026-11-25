@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
@@ -99,18 +99,43 @@ function carryApply(sessions: Session[], before: RepoState, after: RepoState, pa
   }
 }
 
+/**
+ * Each path's `git hash-object`, "gone" where it can't be hashed (deleted, a folder), as guard.ts records it.
+ * One call per chunk of paths: a harness git call costs about 440 ms on Windows. A chunk that fails is hashed path by path.
+ */
+async function hashAll(run: (args: string[]) => Promise<string>, root: string, all: string[]): Promise<Map<string, string>> {
+  const hashes = new Map<string, string>();
+  // A deleted path would fail its whole chunk; it is "gone" without a call. One deleted later still falls back below.
+  const paths: string[] = [];
+  for (const path of all) if (existsSync(join(root, path))) paths.push(path); else hashes.set(path, "gone");
+  for (let from = 0; from < paths.length;) {
+    let to = from, length = 0;
+    while (to < paths.length && (to === from || length + paths[to]!.length < 8000)) length += paths[to++]!.length + 1;
+    const chunk = paths.slice(from, to);
+    from = to;
+    const lines = await run(["hash-object", "--", ...chunk]).then((out) => out.split("\n").map((line) => line.trim()).filter(Boolean), () => []);
+    if (lines.length === chunk.length) { chunk.forEach((path, i) => hashes.set(path, lines[i]!)); continue; }
+    for (const path of chunk) hashes.set(path, (await run(["hash-object", "--", path]).catch(() => "gone")).trim());
+  }
+  return hashes;
+}
+
 /** guard.ts's checkout state, read through harness git (WSP-10), so `diffState` compares the same fields. */
-async function harnessState(run: (args: string[]) => Promise<string>): Promise<RepoState> {
+async function harnessState(run: (args: string[]) => Promise<string>, root: string): Promise<RepoState> {
   const head = (await run(["rev-parse", "-q", "--verify", "HEAD"]).catch(() => "")).trim();
   const branch = (await run(["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")).trim();
   const dirty = new Map<string, string>();
+  const listed: { path: string; code: string; hashed: boolean }[] = [];
+  const seen = new Set<string>();
   const entries = splitZ(await run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!, code = entry.slice(0, 2), path = entry.slice(3);
     if (code.startsWith("R") || code.startsWith("C")) i++;
-    const hash = dirty.size < MAX_HASHED ? (await run(["hash-object", "--", path]).catch(() => "gone")).trim() : "";
-    dirty.set(path, `${code} ${hash}`);
+    listed.push({ path, code, hashed: seen.size < MAX_HASHED });
+    seen.add(path);
   }
+  const hashes = await hashAll(run, root, [...new Set(listed.filter((item) => item.hashed).map((item) => item.path))]);
+  for (const { path, code, hashed } of listed) dirty.set(path, `${code} ${hashed ? hashes.get(path)! : ""}`);
   const index = new Map<string, string>();
   for (const entry of splitZ(await run(["ls-files", "--stage", "-z"]))) {
     const tab = entry.indexOf("\t"), path = entry.slice(tab + 1);
@@ -210,15 +235,18 @@ export class PostOffice {
     };
   }
 
-  /** The folder's checkout state for the guard, by harness git between two hold checks (WSP-10). */
-  private async guardState(): Promise<RepoState> {
+  /**
+   * The folder's checkout state for the guard, by harness git between two hold checks (WSP-10).
+   * `closeCheck: false` only where the caller's very next step is a hold check, which then closes this read.
+   */
+  private async guardState(closeCheck = true): Promise<RepoState> {
     await this.unheld();
     const state = await harnessState(async (args) => {
       const result = await this.officeGit.run(args, "guard");
       if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
       return result.stdout;
-    });
-    await this.unheld();
+    }, this.root);
+    if (closeCheck) await this.unheld();
     return state;
   }
 
@@ -462,13 +490,15 @@ export class PostOffice {
     const changes: string[] = startFailure ? [`checkout guard could not start: ${startFailure}`] : [];
     const base = session.guardBase;
     session.guardBase = undefined;
+    const start = session.turnStart;
+    session.turnStart = undefined;
+    const snapshotTurn = Boolean(session.snapshot && start);
     try {
-      if (base) changes.push(...await this.exclusive(async () => diffState(base, await this.guardState())));
+      // A snapshot turn's hold check before findWrites, next, also closes this guard read (one check, not two back to back).
+      if (base) changes.push(...await this.exclusive(async () => diffState(base, await this.guardState(!snapshotTurn))));
     } catch (error) { changes.push(`checkout guard could not complete: ${String(error)}`); }
     // WSP-11: the snapshot's writes are a read-violation, reported, then discarded before its next turn.
     // A failed guard keeps them instead, as the partial work its line names.
-    const start = session.turnStart;
-    session.turnStart = undefined;
     if (session.snapshot && start) {
       try {
         await this.unheld();
