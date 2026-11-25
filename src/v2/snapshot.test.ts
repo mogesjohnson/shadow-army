@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HarnessGit } from "./git/harness.js";
 import {
-  armyMark, beginTurn, closeSnapshot, discardWrites, findWrites, FOLDER_FILE, ignoredEntries, openSnapshot, removeInside,
+  armyMark, beginTurn, closeSnapshot, discardWrites, findWrites, FOLDER_FILE, ignoredEntries, openSnapshot, removeInside, removeSnapshot,
   snapshotSubfolder, sweepOrphans, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type Orphan,
 } from "./snapshot.js";
 
@@ -266,5 +266,53 @@ describe("Codex review 5", () => {
     await expect(beginTurn(snap, failing((args) => args[0] === "rev-parse"))).rejects.toThrow(/git/);
     const start = await beginTurn(snap, factory);
     for (const sub of ["ls-files", "diff", "rev-parse"]) await expect(findWrites(snap, start, failing((args) => args[0] === sub))).rejects.toThrow(/git/);
+  }, 60_000);
+});
+
+describe("Codex review 14", () => {
+  const recording = (calls: string[][]): GitFactory => (repo) => {
+    const real = factory(repo);
+    return { run: (args, kind, cwd) => { calls.push(args); return real.run(args, kind, cwd); } };
+  };
+  const listed = (folder: string) => git(folder, "worktree", "list", "--porcelain");
+  it("C9: git removes an existing snapshot, locked too; a missing one loses only its own registration", async () => {
+    const r = makeRepo(), calls: string[][] = [];
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    git(r.folder, "worktree", "lock", snap.path);
+    await removeSnapshot(snap, r.root, r.repo, recording(calls));
+    expect(calls).toContainEqual(["worktree", "remove", "--force", "--force", snap.path]);
+    expect([existsSync(snap.path), listed(r.folder).includes("s1")]).toEqual([false, false]);
+    const stale = join(temp(), "stale");
+    git(r.folder, "worktree", "add", "-q", "--detach", stale);
+    rmSync(stale, { recursive: true, force: true });
+    const gone = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s2", repo: r.repo, git: factory });
+    rmSync(gone.path, { recursive: true, force: true });
+    calls.length = 0;
+    await removeSnapshot(gone, r.root, r.repo, recording(calls));
+    expect(calls.filter((args) => args[0] === "worktree" && args[1] !== "list")).toEqual([]);
+    expect([listed(r.folder).includes("s2"), listed(r.folder).includes("stale")]).toEqual([false, true]);
+  }, 60_000);
+  it("C10: keeps git's ignore precedence and the global excludes the turn began with", async () => {
+    const r = makeRepo();
+    put(join(r.folder, "keep", ".gitignore"), "!*.out\n");
+    git(r.folder, "add", "."); git(r.folder, "commit", "-q", "-m", "keep");
+    put(join(r.repo.commonDir, "info", "exclude"), "*.out\n");
+    const globalFile = join(temp(), "ignore");
+    put(globalFile, "*.tmp\n");
+    git(r.folder, "config", "core.excludesFile", globalFile);
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory);
+    put(join(snap.path, "a.tmp"), "w"); put(join(snap.path, "b.out"), "w"); put(join(snap.path, "keep", "c.out"), "w");
+    put(globalFile, "");
+    expect((await findWrites(snap, start, factory))?.files).toEqual(["keep/c.out"]);
+  }, 60_000);
+  it("#136 C9: a .gitignore that is itself a link to an outside folder is replaced, never written through", async () => {
+    const r = makeRepo(), outside = temp();
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory);
+    rmSync(join(snap.path, ".gitignore")); link(outside, join(snap.path, ".gitignore"));
+    expect((await findWrites(snap, start, factory))?.files).toContain(".gitignore");
+    expect(readdirSync(outside)).toEqual([]);
+    expect(readFileSync(join(snap.path, ".gitignore"), "utf8")).toBe("dist/\n.claude/settings.local.json\n");
   }, 60_000);
 });

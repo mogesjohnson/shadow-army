@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { GitResult, HarnessKind } from "./git/harness.js";
 
@@ -80,9 +81,20 @@ function registrationsOf(commonDir: string, path: string) {
     try { return fold(realish(readFileSync(join(admin, "gitdir"), "utf8").trim())) === want; } catch { return false; }
   });
 }
-/** Removes one worktree: its folder inside `root` and its own registration, then checks git no longer lists it. Nothing else is pruned. */
+/**
+ * Removes one worktree (WSP-10): while its folder exists, a real folder inside `root`, through `git worktree remove --force --force`;
+ * once the folder is gone, only its own registration. An unregistered folder (a failed add's leftover) is deleted inside `root`.
+ * Then checks git no longer lists it. Nothing else is pruned.
+ */
 async function dropWorktree(root: string, repo: OpenOptions["repo"], git: GitFactory, path: string) {
-  removeInside(root, path);
+  const info = lstatSync(path, { throwIfNoEntry: false });
+  if (info && registrationsOf(repo.commonDir, path).length > 0) {
+    const real = realish(path);
+    if (info.isSymbolicLink() || !info.isDirectory() || real === realish(root) || !within(realish(root), real)) throw new SnapshotError(`refusing to remove ${path}: not a folder inside ${root}`);
+    const removed = await runIn(git, repo)(["worktree", "remove", "--force", "--force", path], "snapshot");
+    if (removed.code !== 0) throw new SnapshotError(`git worktree remove failed: ${removed.stderr.trim() || `exit ${removed.code}`}`);
+  } else if (info) removeInside(root, path);
+  if (lstatSync(path, { throwIfNoEntry: false })) throw new SnapshotError(`snapshot ${path} is still there`);
   for (const admin of registrationsOf(repo.commonDir, path)) removeInside(join(repo.commonDir, "worktrees"), admin);
   if ((await listWorktrees(runIn(git, repo))).includes(fold(realish(path)))) throw new SnapshotError(`snapshot ${path} is still registered`);
 }
@@ -143,11 +155,17 @@ async function changedPaths(run: RunGit) {
   }
   return paths;
 }
-/** Paths changed against HEAD, and untracked files not ignored by the `.gitignore` files on disk and `exclude` (no other ignore source). */
-async function auditPaths(run: RunGit, exclude: string[]) {
+/**
+ * Paths changed against HEAD, and untracked files not ignored by the `.gitignore` files on disk and the saved `excludes`
+ * (global excludes, then `info/exclude`). `--exclude-from` ranks them below per-directory rules, the later one higher, as git does.
+ */
+async function auditPaths(run: RunGit, excludes: string[]) {
   const tracked = entries(await must(run, ["diff", "--name-only", "-z", "--no-renames", "HEAD"]));
-  const others = entries(await must(run, ["ls-files", "-z", "--others", "--exclude-per-directory=.gitignore", ...exclude.map((p) => `--exclude=${p}`)]));
-  return [...tracked, ...others];
+  const dir = mkdtempSync(join(tmpdir(), "sa-excludes-"));
+  try {
+    const from = excludes.map((text, i) => { const file = join(dir, String(i)); writeFileSync(file, text); return `--exclude-from=${file}`; });
+    return [...tracked, ...entries(await must(run, ["ls-files", "-z", "--others", "--exclude-per-directory=.gitignore", ...from]))];
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 /** What `git status --ignored` lists as ignored, less `.shadow/` (W12-4: the guard compares these too). */
 export async function ignoredEntries(run: RunGit) {
@@ -196,10 +214,22 @@ function replaceable(snapshot: Snapshot, rel: string) {
   return file;
 }
 
-/** What a turn began with: the HEAD, its ignore rules (every `.gitignore` on disk, base64, and info/exclude's patterns) and every audited file's hash. */
-export interface TurnStart { head: string; ignores: Record<string, string>; exclude: string[]; prints: Record<string, string> }
+/**
+ * What a turn began with: the HEAD, its ignore rules (every `.gitignore` on disk, base64; the global excludes file's and
+ * info/exclude's text, in that order) and every audited file's hash.
+ */
+export interface TurnStart { head: string; ignores: Record<string, string>; excludes: string[]; prints: Record<string, string> }
 export interface ReadViolation { files: string[]; head?: { from: string; to: string } }
 
+const readText = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return ""; } };
+/** The text of `core.excludesFile`, or of git's default `$XDG_CONFIG_HOME/git/ignore` when it is unset; a missing file is empty. */
+async function globalExcludes(run: RunGit, workTree: string) {
+  const result = await run(["config", "--path", "--get", "core.excludesFile"], "guard");
+  if (result.code !== 0 && result.code !== 1) throw new SnapshotError(`git config failed: ${result.stderr.trim() || `exit ${result.code}`}`);
+  const set = result.code === 0 ? result.stdout.trim() : "";
+  const xdg = process.env.XDG_CONFIG_HOME || join(process.env.HOME || homedir(), ".config");
+  return readText(set ? resolve(workTree, set) : join(xdg, "git", "ignore"));
+}
 export async function beginTurn(snapshot: Snapshot, git: GitFactory): Promise<TurnStart> {
   const run = own(snapshot, git);
   const head = await headOf(run);
@@ -208,9 +238,8 @@ export async function beginTurn(snapshot: Snapshot, git: GitFactory): Promise<Tu
     const file = join(snapshot.path, path);
     if (lstatSync(file, { throwIfNoEntry: false })?.isFile()) ignores[path] = readFileSync(file).toString("base64");
   }
-  let exclude: string[] = [];
-  try { exclude = readFileSync(join(snapshot.commonDir, "info", "exclude"), "utf8").split(/\r?\n/).filter((l) => l.trim() !== "" && !l.startsWith("#")); } catch { /* none */ }
-  return { head, ignores, exclude, prints: await fingerprint(snapshot, run, exclude) };
+  const excludes = [await globalExcludes(run, snapshot.path), readText(join(snapshot.commonDir, "info", "exclude"))];
+  return { head, ignores, excludes, prints: await fingerprint(snapshot, run, excludes) };
 }
 
 /**
@@ -232,7 +261,7 @@ export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitF
     const target = replaceable(snapshot, path);
     if (target) writeFileSync(target, bytes, { flag: "wx" });
   }
-  const now = await fingerprint(snapshot, run, start.exclude);
+  const now = await fingerprint(snapshot, run, start.excludes);
   for (const path of new Set([...Object.keys(now), ...Object.keys(start.prints)])) if (now[path] !== start.prints[path]) files.add(path);
   const head = await headOf(run);
   if (head !== start.head) for (const path of entries(await must(run, ["diff", "--name-only", "-z", "--no-renames", start.head, head]))) files.add(path);
