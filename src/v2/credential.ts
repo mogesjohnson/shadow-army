@@ -3,9 +3,9 @@ import type { Interface } from "node:readline";
 import type { LeaseOptions } from "./lease.js";
 
 /** PO-3: the Monarch's secret comes in on standard input only, as one line of JSON, and is never echoed back. */
-export interface Bootstrap { credential: string; lease?: LeaseOptions }
+export interface Bootstrap { credential: string; lease?: LeaseOptions; starter?: number }
 
-const MAX_LINE = 256;
+const MAX_LINE = 512;
 const BOOTSTRAP_WAIT_MS = 10_000;
 const REFUSAL_WINDOW_MS = 60_000;
 
@@ -27,11 +27,14 @@ export async function readBootstrap(input: Interface, waitMs = BOOTSTRAP_WAIT_MS
   let parsed: unknown;
   try { parsed = JSON.parse(line); } catch { throw invalid(); }
   if (!parsed || typeof parsed !== "object") throw invalid();
-  const { credential, lease } = parsed as { credential?: unknown; lease?: unknown };
+  const { credential, lease, starter } = parsed as { credential?: unknown; lease?: unknown; starter?: unknown };
   if (typeof credential !== "string" || !/^[a-f0-9]{64}$/i.test(credential)) throw invalid();
-  if (lease === undefined) return { credential };
+  // `starter` is Claude Code's own pid (PO-1, PO-7), so a relay reloaded under the same Claude Code is the same starter.
+  if (starter !== undefined && !(typeof starter === "number" && Number.isSafeInteger(starter) && starter > 0)) throw invalid();
+  const boot: Bootstrap = starter === undefined ? { credential } : { credential, starter };
+  if (lease === undefined) return boot;
   if (!lease || typeof lease !== "object" || typeof (lease as LeaseOptions).session !== "string") throw invalid();
-  return { credential, lease: { session: (lease as LeaseOptions).session } };
+  return { ...boot, lease: { session: (lease as LeaseOptions).session } };
 }
 
 /**
@@ -75,13 +78,14 @@ export class RefusalReporter {
     this.arm();
   }
 
-  /** Reports what is still pending, as at shutdown, and stops the timer. */
-  flush(): void {
+  /**
+   * Stops the timer at shutdown without an early report: PO-3 allows one count a minute, at the minute's end,
+   * so refusals in a minute cut short by shutdown go unreported (a shutdown summary needs a spec decision).
+   */
+  stop(): void {
     this.cancel?.();
     this.cancel = undefined;
-    const count = this.pending;
     this.pending = 0;
-    if (count) this.report(count, false);
   }
 
   private arm(): void {
