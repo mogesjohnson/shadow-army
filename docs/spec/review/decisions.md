@@ -585,7 +585,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Kind:** big. It changes the scope for v2.1. v2.0 keeps its screens in the mod (M5), and the non-goal still binds v2.0.
 - **Options:** A, keep the non-goal for v2.1 too; B, say the non-goal is v2.0's only and v2.1 adds the standalone app.
 - **Choice:** B. The owner answered S-9's three questions with the recommendations (War Table, a standalone app, fixtures now and connecting after M1b), then "yes to both" to D-40 and D-41 (2026-11-25).
-- **Applied:** not yet. A spec task edits §1's non-goal line and Appendix C's War Table row, then runs both spec checkers.
+- **Applied:** v0.29 (2026-11-25): §1's non-goal line and Appendix C's War Table row, with the R1 row's mention of the non-goal. The War Table's status still starts "Held" (in the mod only), as `check-appendix-c.mjs` requires.
 
 ## D-41 A read-only event feed for a local viewer (the owner, 2026-11-25)
 
@@ -593,7 +593,7 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Kind:** big. It adds a new reader of the post office.
 - **Options:** A, no feed: the app shows fixtures or nothing while the mod runs; B, a read-only event feed for a local viewer, with its own credential that allows nothing else (no commands, no records written).
 - **Choice:** B ("yes to both", 2026-11-25). Typed event payloads (PO-5) and usage (OBS-3) are needed for the app to read the feed.
-- **Applied:** not yet. A spec task writes the feed's requirement beside PO-5. Building it waits for the M1b stack to merge.
+- **Applied:** v0.29 (2026-11-25): PO-22 beside PO-5, a new milestone M7 (v2.1) with M7-AC1, open question Q11 (how the viewer gets its credential and the port), §3, PO-3 and Appendix D. Building it waits for the M1b stack to merge.
 
 ## Values set in the fix pass
 
