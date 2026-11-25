@@ -26,7 +26,7 @@ Range: `0097e52` (orch-35's handoff) to this commit. orch-35's handoff (`git sho
 **Running** (launched 03:27 to 03:28 UTC with the `wt.exe` fallback to save orch-36's context; workers are black and white either way):
 - **w99-fix128-rest** (`792a510a`, Sonnet high): #128's rest. Files: `plugins/shadow-army/hooks/register.ts` and its test.
 - **w100-fix136-close** (`1b861682`, Sonnet high): #136's checks, replies and body. Files: `postOffice.ts`, `postOffice.test.ts`, `client.test.ts`, `src/workspace/session.ts`, `snapshot.ts`, `snapshot.test.ts`.
-- **w101-fix140** (Sonnet high): #140, review 12. Files: `src/v2/cli.ts`, `cli.test.ts`. Check with `check_workers.py` that it started (it had no name yet at 03:29).
+- **w101-fix140** (`9b8b67ae`, Sonnet high): #140, review 12. Files: `src/v2/cli.ts`, `cli.test.ts`.
 
 ## Next
 
