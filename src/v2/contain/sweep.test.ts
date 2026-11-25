@@ -14,7 +14,11 @@ function fakeOps(alive: Record<number, number | string>, platform: NodeJS.Platfo
     platform,
     startTimeOf: async (pid) => alive[pid],
     commandOf: async (pid) => `cmd-${pid} Bearer abc123`,
-    endProcess: async (pid, tree) => { calls.push(`${tree ? "tree" : "end"} ${pid}`); if (!stuck.includes(pid)) delete alive[pid]; },
+    // Like the Windows handle: the end reaches only the process whose start time is the given identity's.
+    endProcess: async ({ pid, startTime, creationTime }, tree) => {
+      calls.push(`${tree ? "tree" : "end"} ${pid}`);
+      if (alive[pid] === (creationTime ?? startTime) && !stuck.includes(pid)) delete alive[pid];
+    },
     removeJob: async (label) => { calls.push(`job ${label}`); },
     endCoalition: async (id) => { calls.push(`coalition ${id}`); },
     wait: async () => {},
@@ -77,6 +81,23 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(await sweepTrees(root, ops)).toMatchObject({ running: 0, swept: 1, ended: [], left: [] });
     expect(calls).toEqual([]);
     expect(await readTrees(root)).toEqual([]);
+  });
+
+  it("gives the end operation the verified identity, so a pid reused after the last check is spared", async () => {
+    const record = await TreeRecord.create(root, "w", { pid: 3, startTime: 30, creationTime: "134394736000030000" });
+    await record.add({ kind: "git", pid: 8, startTime: 80, creationTime: "134394736000080000" });
+    const { ops, alive } = fakeOps({ 8: "134394736000080000" }, "win32");
+    const ended: unknown[] = [];
+    let probes = 0;
+    const racing: SweepOps = {
+      ...ops,
+      // The pid is reused just after the check before the end.
+      startTimeOf: async (pid) => { const now = alive[pid]; if (pid === 8 && ++probes === 2) alive[8] = "134394736000090000"; return now; },
+      endProcess: async (target, tree) => { ended.push(target); await ops.endProcess(target, tree); },
+    };
+    await sweepTrees(root, racing);
+    expect(ended).toEqual([{ kind: "git", pid: 8, startTime: 80, creationTime: "134394736000080000" }]);
+    expect(alive[8]).toBe("134394736000090000");
   });
 
   it("on Windows reads an old millisecond record, but never ends a process on its evidence alone", async () => {

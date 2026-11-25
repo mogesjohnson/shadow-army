@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, exitGraceFor, listingFrom, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -253,4 +253,25 @@ describe("reading the supervisor's listing reply (PO-11)", () => {
     expect(listingFrom({ processes: [{ pid: 8, creationTime: "134394736000080001" }], unverified: [9] }, last))
       .toEqual({ status: "incomplete", reason: expect.stringContaining("pid 9"), lastVerified: last });
   });
+});
+
+const filetimeOf = (pid: number): string => execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`], { encoding: "utf8" }).trim();
+const running = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+describe("the sweep's identity-bound end on Windows (PO-16)", () => {
+  windowsOnly("ends a process and its children only through the handle whose creation time was checked", async () => {
+    const script = "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1e3)'],{stdio:'ignore'});console.log(c.pid);setInterval(()=>{},1e3)";
+    const parent = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = Number(await new Promise<string>((done) => parent.stdout.once("data", (data: Buffer) => done(data.toString()))));
+    stray.push(parent.pid!, child);
+    const exact = filetimeOf(parent.pid!);
+    // Another process now holding the pid has another creation time: it is left running.
+    expect(await endWindowsProcess(parent.pid!, (BigInt(exact) + 1n).toString(), true)).toBe("different");
+    expect(running(parent.pid!) && running(child)).toBe(true);
+    expect(await endWindowsProcess(parent.pid!, undefined, true)).toBe("unknown"); // An old millisecond record.
+    expect(await endWindowsProcess(parent.pid!, exact, true)).toBe("ended");
+    await new Promise((done) => setTimeout(done, 500));
+    expect([running(parent.pid!), running(child)]).toEqual([false, false]);
+    expect(await endWindowsProcess(parent.pid!, exact, true)).toBe("absent");
+  }, 60_000);
 });

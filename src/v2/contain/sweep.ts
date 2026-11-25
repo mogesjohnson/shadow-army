@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { redact } from "../logs.js";
 import { parseStat } from "./linux.js";
+import { endWindowsProcess } from "./windows.js";
 import { compareStart, readTrees, treesDir, type Identity, type TreeLine } from "./trees.js";
 
 const run = promisify(execFile);
@@ -14,8 +15,11 @@ export interface SweepOps {
   /** The process's start time (Linux's clock ticks, or Windows's exact FILETIME as a string), or `undefined` when no such process runs. */
   startTimeOf(pid: number): Promise<number | string | undefined>;
   commandOf?(pid: number): Promise<string | undefined>;
-  /** Ends a process; `tree` ends the harness git command's whole process group (`taskkill /t /f` on Windows). */
-  endProcess(pid: number, tree: boolean): Promise<void>;
+  /**
+   * Ends the process with this identity, never a bare pid: on Windows the creation time is checked on the handle
+   * that ends it. `tree` also ends a harness git command's children (its process group on Linux).
+   */
+  endProcess(target: Identity, tree: boolean): Promise<void>;
   /** macOS (PO-17's operations): removes a launchd job, and ends the members of a coalition. */
   removeJob?(label: string): Promise<void>;
   endCoalition?(id: string): Promise<void>;
@@ -68,7 +72,7 @@ export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepRepo
       for (const target of remaining) {
         if (!named.has(target.pid)) named.set(target.pid, await ops.commandOf?.(target.pid).catch(() => undefined));
         // The identity is checked again just before the signal: the pid may have been reused since the listing.
-        if (compareStart(target, await ops.startTimeOf(target.pid)) === "same") await ops.endProcess(target.pid, target.kind === "git").catch(() => {});
+        if (compareStart(target, await ops.startTimeOf(target.pid)) === "same") await ops.endProcess(target, target.kind === "git").catch(() => {});
       }
       await ops.wait(100);
     }
@@ -85,7 +89,7 @@ export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepRepo
 
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
-/** The real machine's operations: Linux through `/proc`, Windows through PowerShell and `taskkill`. macOS needs PO-17's helper. */
+/** The real machine's operations: Linux through `/proc`, Windows through PowerShell and one process handle per end. macOS needs PO-17's helper. */
 export function systemOps(platform: NodeJS.Platform = process.platform): SweepOps {
   if (platform === "linux") {
     return {
@@ -98,11 +102,11 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
         } catch { return undefined; }
       },
       commandOf: async (pid) => (await readFile(`/proc/${pid}/cmdline`, "latin1")).replaceAll("\0", " ").trim(),
-      endProcess: async (pid, tree) => { try { process.kill(tree ? -pid : pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } },
+      // Node has no pidfd: the identity is checked just before the signal (above), not on a handle.
+      endProcess: async ({ pid }, tree) => { try { process.kill(tree ? -pid : pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; } },
     };
   }
   if (platform === "win32") {
-    const taskkill = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
     return {
       platform, wait: pause,
       startTimeOf: async (pid) => {
@@ -113,7 +117,7 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
           return /^[1-9]\d*$/.test(filetime) ? filetime : undefined;
         } catch { return undefined; }
       },
-      endProcess: async (pid) => { await run(taskkill, ["/t", "/f", "/pid", String(pid)]); },
+      endProcess: async ({ pid, creationTime }, tree) => { await endWindowsProcess(pid, creationTime, tree); },
     };
   }
   throw new Error(`The sweep has no operations for ${platform} yet: macOS needs PO-17's helper (M1b-18).`);
