@@ -272,6 +272,8 @@ describe("the sweep's identity-bound end on Windows (PO-16)", () => {
     expect(await endWindowsProcess(parent.pid!, exact, true)).toBe("ended");
     await new Promise((done) => setTimeout(done, 500));
     expect([running(parent.pid!), running(child)]).toEqual([false, false]);
+    // Both confirmed gone: their pids may be reused, so the generic cleanup must not kill them (C11).
+    for (const pid of [parent.pid!, child]) stray.splice(stray.indexOf(pid), 1);
     expect(await endWindowsProcess(parent.pid!, exact, true)).toBe("absent");
   }, 60_000);
 });
