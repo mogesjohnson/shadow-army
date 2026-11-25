@@ -20,6 +20,16 @@ interface Runtime {
   renewing?: symbol;
   diagnostic: string;
   finished?: Promise<void>;
+  /** The Node.js executable vetted for this start (HOST-2); the relay runs with it. */
+  node: string;
+  /** The startup step now under way, for the line that names a stall (HOST-2). */
+  step: string;
+  /** Set once a request to the post office got an answer: a later failed fetch is then not a host policy refusal. */
+  reached: boolean;
+  /** The one line that stopped the army because Claude Code refused a fetch; nothing is sent after it. */
+  refused?: string;
+  /** Ending the relay, which resolves with whether the host confirmed it within the lease's 30 s. */
+  cleanup?: Promise<boolean>;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -35,6 +45,10 @@ const KEEPS_ARMY = new Set(["clear", "resume"]);
 /** HOST-2: each `--version` run ends after 10 s, and a post office that never reports ready is ended after 60 s. */
 const VERSION_WAIT_MS = 10_000;
 const READY_WAIT_MS = 60_000;
+/** The post office's own lease (PO-7): past it the post office has ended itself, whatever the host confirmed. */
+const CLEANUP_WAIT_MS = 30_000;
+/** Claude Code's own words for a refused fetch; a later rejection with these is a policy change, not transport. */
+const POLICY_WORDS = /polic|refus|not allow|denied|disabled/i;
 const MIN_HOST = [2, 1, 294];
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 const NO_PROXY_VARIABLES = ["NO_PROXY", "no_proxy"];
@@ -57,6 +71,7 @@ function cancelTimers(runtime: Runtime): void {
 }
 
 async function post($: EngineInterface, runtime: Runtime, command: Record<string, unknown>): Promise<unknown> {
+  if (runtime.refused) throw new Error(runtime.refused);
   if (!runtime.url || !runtime.credential) throw new Error("post office is not connected");
   let response: { ok: boolean; status: number; text: string };
   try {
@@ -65,10 +80,12 @@ async function post($: EngineInterface, runtime: Runtime, command: Record<string
       headers: { Authorization: `Bearer ${runtime.credential}`, "Content-Type": "application/json" },
       body: JSON.stringify(command),
     });
+    runtime.reached = true;
   } catch (error) {
-    // Claude Code itself refused (HOST-2): stop renewing so the lease ends the post office, and send nothing more.
     const words = safeText(error instanceof Error ? error.message : error, runtime.credential);
-    if (!runtime.closing) fail($, runtime, `Shadow Army can't reach its post office: Claude Code refused the request (${words || "your organization's policy doesn't allow web fetch"})`);
+    // A policy refusal is the same for every request, so a request that fails before any got an answer, or that carries the host's policy words, is one (HOST-2).
+    // After an answer, a failed fetch is ordinary transport: this command fails, a renewal is skipped, and the army goes on (PO-7).
+    if (!runtime.closing && (!runtime.reached || POLICY_WORDS.test(words))) refuse($, runtime, words);
     throw new Error(words);
   }
   try {
@@ -93,7 +110,7 @@ async function release($: EngineInterface, runtime: Runtime, reason?: string): P
   // native unload kills the relay first, the independent helper's lease expires.
 }
 
-function fail($: EngineInterface, runtime: Runtime, error: unknown): void {
+function fail($: EngineInterface, runtime: Runtime, error: unknown, keepRelay = false): void {
   const message = safeText(error, runtime.credential);
   const wasClosing = runtime.closing;
   runtime.closing = true;
@@ -103,7 +120,26 @@ function fail($: EngineInterface, runtime: Runtime, error: unknown): void {
   if (!wasClosing) $.ui.log(sanitize(prefixed(message)));
   // The native stream owns only the relay. Returning it cannot skip the
   // detached post office's independent expiry/containment/finalization path.
-  if (runtime.stream) void runtime.stream.return({ code: null, signal: null }).catch(() => {});
+  // `finished` waits for this, so a new start waits until the relay's end is confirmed.
+  if (runtime.stream && !keepRelay) runtime.cleanup ??= endRelay($, runtime);
+}
+
+/** Claude Code refused a fetch: send nothing more and stop renewing, and leave the relay alone, so the lease ends the post office and the relay ends with it (HOST-2, PO-7). */
+function refuse($: EngineInterface, runtime: Runtime, words: string): void {
+  const line = `Shadow Army can't reach its post office: Claude Code refused the request (${words || "your organization's policy doesn't allow web fetch"})`;
+  runtime.refused = line;
+  retiring.add(runtime);
+  fail($, runtime, line, true);
+}
+
+/** Ends the relay and resolves with whether the host confirmed it, or `false` after the lease's 30 s, by when the post office has ended itself (PO-7). */
+async function endRelay($: EngineInterface, runtime: Runtime): Promise<boolean> {
+  let timer: Timer | undefined;
+  const bound = new Promise<false>((done) => { timer = $.clock.after(CLEANUP_WAIT_MS, () => done(false)); });
+  const ended = Promise.resolve(runtime.stream?.return({ code: null, signal: null })).then(() => true, () => false);
+  const confirmed = await Promise.race([ended, bound]);
+  timer?.cancel();
+  return confirmed;
 }
 
 /** One renewal. The army's id stays the army's after `/clear`, `/resume` or `/branch` gives Claude another, so it is never compared with `$.session.id()`. A failed renewal stops nothing: the next goes at its time. */
@@ -146,13 +182,16 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
 
 async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
   const entry = `${$.plugin.root}/../../dist/v2/modRelay.js`;
+  runtime.step = "looking for the relay's file";
   if (!await $.fs.exists(entry)) throw new Error("Shadow Army runtime is missing; run npm run build in its repository");
   if (runtime.closing) return;
+  runtime.step = "starting the relay";
   runtime.stream = $.process.spawn({
-    argv: ["node", entry, "--cwd", runtime.cwd],
+    argv: [runtime.node, entry, "--cwd", runtime.cwd],
     cwd: runtime.cwd,
     input: `${JSON.stringify({ credential: runtime.credential, session: runtime.session })}\n`,
   });
+  runtime.step = "waiting for its ready event";
   let buffer = "";
   try {
     // Native chunks are decoded UTF-8 pieces, not JSON lines. Keep pulling after
@@ -177,17 +216,29 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
   }
 }
 
-/** A tool's `--version` as numbers, `undefined` when it is missing, or `"late"` after 10 s, with its processes ended (HOST-2). */
-async function versionOf($: EngineInterface, tool: string, cwd: string): Promise<number[] | undefined | "late"> {
+/** What one `--version` run gave: the version as numbers, or why there is none (HOST-2). */
+type Probe = { version: number[] } | { problem: string } | "late";
+
+/** Runs `<exe> --version` and reads the first line with `pattern`. The run counts only if it exited 0, and ends after 10 s with its processes (HOST-2). */
+async function versionOf($: EngineInterface, exe: string, pattern: RegExp, cwd: string): Promise<Probe> {
   let stream: HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
-  try { stream = $.process.spawn({ argv: [tool, "--version"], cwd }); } catch { return undefined; }
+  try { stream = $.process.spawn({ argv: [exe, "--version"], cwd }); } catch { return { problem: "could not be started" }; }
   let timer: Timer | undefined;
   const late = new Promise<"late">((done) => { timer = $.clock.after(VERSION_WAIT_MS, () => done("late")); });
-  const read = (async () => {
+  const read = (async (): Promise<Probe> => {
     let out = "";
-    try { for await (const chunk of stream) if (chunk.stream === "stdout") out += chunk.text; } catch { return undefined; }
-    const found = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(out);
-    return found ? [Number(found[1]), Number(found[2]), Number(found[3] ?? 0)] : undefined;
+    let ended: ProcessSpawnResult | undefined;
+    try {
+      for (;;) {
+        const step = await stream.next();
+        if (step.done) { ended = step.value; break; }
+        if (step.value.stream === "stdout") out += step.value.text;
+      }
+    } catch { return { problem: "could not be read" }; }
+    // A run that prints a supported version and then fails or is ended proves nothing.
+    if (!ended || ended.code !== 0 || ended.signal) return { problem: `did not exit cleanly (${ended?.signal ?? (ended ? `exit code ${ended.code}` : "no exit result")})` };
+    const found = pattern.exec(out.split(/\r?\n/).find((line) => line.trim()) ?? "");
+    return found ? { version: [Number(found[1]), Number(found[2]), Number(found[3] ?? 0)] } : { problem: "did not print a version line" };
   })();
   const result = await Promise.race([read, late]);
   timer?.cancel();
@@ -200,35 +251,95 @@ const olderThan = (found: number[], least: number[]): boolean => {
   return false;
 };
 
-/** A variable's value from the shell (`$.env.get`) or the merged settings' `env`. */
-async function setting($: EngineInterface, name: string): Promise<string | undefined> {
-  const shell = await $.env.get(name);
-  if (shell) return shell;
-  const merged = await $.settings.read() as { env?: Record<string, string> } | undefined;
-  return merged?.env?.[name] || undefined;
+const normal = (path: string): string => {
+  const text = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? text.toLowerCase() : text;
+};
+const isAbsolute = (path: string): boolean => process.platform === "win32" ? /^(?:[A-Za-z]:[\\/]|\\\\)/.test(path) : path.startsWith("/");
+
+/**
+ * An executable by its absolute path on `PATH` alone, as CH-1 finds each CLI: never one in the folder, the repository, its worktrees or a snapshot,
+ * and never through a relative or empty entry. The current folder is not searched on Windows, because only the listed entries are (HOST-2).
+ */
+async function findOnPath($: EngineInterface, name: string, path: string, barred: string[]): Promise<string | undefined> {
+  const file = process.platform === "win32" ? `${name}.exe` : name;
+  for (const raw of path.split(process.platform === "win32" ? ";" : ":")) {
+    const entry = raw.trim().replace(/^"(.*)"$/, "$1").replace(/[\\/]+$/, "");
+    if (!entry || !isAbsolute(entry)) continue;
+    const here = normal(entry);
+    if (/\/\.shadow(?:\/|$)/.test(here) || barred.some((root) => here === root || here.startsWith(`${root}/`))) continue;
+    const found = `${entry}${entry.includes("\\") ? "\\" : "/"}${file}`;
+    if (await $.fs.exists(found)) return found;
+  }
+  return undefined;
+}
+
+/** Node.js's and git's absolute paths, found before either is run (HOST-2), or the line to show when one is missing. */
+async function resolveTools($: EngineInterface, cwd: string): Promise<{ node: string; git: string } | { refusal: string }> {
+  const path = (await $.env.get("PATH")) ?? (await $.env.get("Path")) ?? "";
+  const root = await repoRoot($, cwd);
+  const barred = [normal(cwd), normal(root), `${normal(root)}-worktrees`];
+  const node = await findOnPath($, "node", path, barred);
+  if (!node) return { refusal: "Shadow Army needs Node.js 22.0 or later on PATH; none was found" };
+  const git = await findOnPath($, "git", path, barred);
+  if (!git) return { refusal: "Shadow Army needs git 2.34 or later on PATH; none was found" };
+  return { node, git };
+}
+
+const listsLoopback = (value: string): boolean => value.split(",").some((entry) => ["127.0.0.1", "*"].includes(entry.trim()));
+
+/**
+ * The line to show when the shell's and the settings' proxy variables would send the army's fetch through a proxy.
+ * Both sources are read once, and the host's precedence between them is not established (P-16 tried one at a time), so a proxy in either counts
+ * and the bypass counts only when every `NO_PROXY` and `no_proxy` value in either lists the loopback address.
+ */
+async function proxyRefusal($: EngineInterface): Promise<string | undefined> {
+  // `$.env.get` takes names spelled as literals, so each is written out.
+  const shell: Record<string, string | undefined> = {
+    HTTPS_PROXY: await $.env.get("HTTPS_PROXY"), https_proxy: await $.env.get("https_proxy"),
+    HTTP_PROXY: await $.env.get("HTTP_PROXY"), http_proxy: await $.env.get("http_proxy"),
+    NO_PROXY: await $.env.get("NO_PROXY"), no_proxy: await $.env.get("no_proxy"),
+  };
+  const merged = (await $.settings.read() as { env?: Record<string, unknown> } | undefined)?.env ?? {};
+  const values = (name: string): string[] => [shell[name], merged[name]].filter((value): value is string => typeof value === "string" && value.trim() !== "");
+  const bypass = NO_PROXY_VARIABLES.flatMap(values);
+  if (bypass.length && bypass.every(listsLoopback)) return undefined;
+  for (const name of PROXY_VARIABLES) {
+    if (values(name).length) return `Shadow Army: ${name} would send the army's commands through a proxy · add 127.0.0.1 to NO_PROXY · nothing started`;
+  }
+  return undefined;
 }
 
 /** HOST-2's preflight: the line to show when the army must not start, or `undefined` to go on. */
-async function preflight($: EngineInterface, cwd: string): Promise<string | undefined> {
+async function preflight($: EngineInterface, cwd: string, tools: { node: string; git: string }): Promise<string | undefined> {
   const host = String(await $.session.version());
   const hostParts = /(\d+)\.(\d+)\.(\d+)/.exec(host)?.slice(1).map(Number);
   if (!hostParts || olderThan(hostParts, MIN_HOST)) return `Shadow Army needs Claude Code 2.1.294 or later; this is ${host}`;
-  for (const [tool, name, least] of [["node", "Node.js", [22, 0]], ["git", "git", [2, 34]]] as const) {
-    const found = await versionOf($, tool, cwd);
-    if (found === undefined || found === "late") {
-      return `${found === "late" ? `${tool} --version gave no answer in 10 s · ` : ""}Shadow Army needs ${name} ${least.join(".")} or later on PATH; none was found`;
-    }
-    if (olderThan(found, [...least])) return `Shadow Army needs ${name} ${least.join(".")} or later on PATH; found ${found.join(".")}`;
+  for (const [tool, name, least, pattern] of [
+    ["node", "Node.js", [22, 0], /^v(\d+)\.(\d+)\.(\d+)/], ["git", "git", [2, 34], /^git version (\d+)\.(\d+)(?:\.(\d+))?/],
+  ] as const) {
+    const exe = tools[tool];
+    const found = await versionOf($, exe, pattern, cwd);
+    if (found === "late") return `${tool} --version gave no answer in 10 s · Shadow Army needs ${name} ${least.join(".")} or later on PATH; none was found`;
+    if ("problem" in found) return `Shadow Army needs ${name} ${least.join(".")} or later on PATH; ${exe} --version ${found.problem}`;
+    if (olderThan(found.version, [...least])) return `Shadow Army needs ${name} ${least.join(".")} or later on PATH; found ${found.version.join(".")}`;
   }
   // P-16: Claude Code sends the mod's fetch through a proxy named in these variables, the loopback address too.
-  const listed = (await Promise.all(NO_PROXY_VARIABLES.map((name) => setting($, name)))).some((value) =>
-    (value ?? "").split(",").some((entry) => ["127.0.0.1", "*"].includes(entry.trim())));
-  if (!listed) {
-    for (const name of PROXY_VARIABLES) {
-      if (await setting($, name)) return `Shadow Army: ${name} would send the army's commands through a proxy · add 127.0.0.1 to NO_PROXY · nothing started`;
-    }
-  }
-  return undefined;
+  return proxyRefusal($);
+}
+
+/** The post office gave no `ready` in 60 s: end the relay, wait for the host to confirm it, and only then say so, with the step it stopped at (HOST-2). */
+async function stalled($: EngineInterface, runtime: Runtime): Promise<void> {
+  const step = runtime.step;
+  const said = runtime.diagnostic.trim().split(/\r?\n/).pop();
+  // Closing first keeps the relay's own end from being reported as a second failure; retiring holds the next start back.
+  runtime.closing = true;
+  retiring.add(runtime);
+  if (active === runtime) active = undefined;
+  const ended = await (runtime.cleanup ??= runtime.stream ? endRelay($, runtime) : Promise.resolve(true));
+  const line = `post office did not report ready within 60 s · step: ${step}${said ? ` · its relay said: ${said}` : ""} · ${ended ? "relay ended" : "relay's end not confirmed in 30 s, so the lease ends the post office"}`;
+  $.ui.log(sanitize(prefixed(safeText(line, runtime.credential))));
+  fail($, runtime, line);
 }
 
 async function ensure($: EngineInterface): Promise<Runtime> {
@@ -256,19 +367,27 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     runtime = {
       session, cwd, credential: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""),
       closing: false, ready, accept, reject, diagnostic: "",
+      node: "", step: "checking Claude Code, Node.js, git and the proxy settings", reached: false,
     };
     active = runtime;
     const owned = runtime;
     // HOST-2: two uses at once share this one start and its refusal; `active` is set before the first wait.
+    // `finished` also waits for the relay's end to be confirmed, so a restart never overlaps a start still being cleaned up.
     owned.finished = (async () => {
+      // Both executables are found, by absolute path, before either is run; the relay then starts with this same Node.js.
+      const tools = await resolveTools($, cwd);
+      if ("refusal" in tools) throw new Error(tools.refusal);
       if (!checked) {
-        const refusal = await preflight($, cwd);
+        const refusal = await preflight($, cwd, tools);
         if (refusal) throw new Error(refusal);
         checked = true;
       }
-      owned.deadline = $.clock.after(READY_WAIT_MS, () => fail($, owned, "post office did not report ready within 60 s · step: waiting for its ready event · ended with its processes"));
+      owned.node = tools.node;
+      owned.deadline = $.clock.after(READY_WAIT_MS, () => { void stalled($, owned); });
       await consume($, owned);
-    })().catch((error) => fail($, owned, error instanceof Error ? error.message : error)).finally(() => { retiring.delete(owned); });
+    })().catch((error) => fail($, owned, error instanceof Error ? error.message : error))
+      .then(() => owned.cleanup)
+      .finally(() => { retiring.delete(owned); });
   }
   await runtime.ready;
   if (runtime.closing) throw new Error("The army ended before the command could run");

@@ -15,8 +15,28 @@ const SOLDIERS = [
   { key: "codex", name: "Igris", roles: ["build"], supported: false },
 ];
 
+const BIN = process.platform === "win32" ? "C:\\tools\\bin" : "/usr/local/bin";
+const PATH_SEPARATOR = process.platform === "win32" ? ";" : ":";
+const exeIn = (dir: string, name: string) => `${dir}${dir.includes("\\") ? "\\" : "/"}${name}${process.platform === "win32" ? ".exe" : ""}`;
+const toolOf = (argv0: string) => /([^\\/]+?)(?:\.exe)?$/.exec(argv0)![1]!;
+
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string } = {}) {
+type Env = {
+  cwd?: string; git?: string; hang?: string; host?: string;
+  /** What each tool prints for `--version`, or `missing` (not on PATH), `unspawnable` (found, but cannot start), `hang` (never ends). */
+  tools?: Record<string, string>;
+  /** An exit code for a tool's `--version`, and what it prints when it is `0`. */
+  exits?: Record<string, number>;
+  vars?: Record<string, string>; settingsEnv?: Record<string, string>; settingsReads?: { count: number };
+  refuse?: string;
+  /** Directories where node and git are found, as listed in PATH. */
+  dirs?: string[];
+  /** `fetch` rejects with this after the first answer. */
+  transport?: string;
+  /** The relay's end waits for this gate; `never` leaves it unresolved. */
+  gate?: Promise<void>;
+};
+async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -28,18 +48,26 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const spawns: any[] = [];
   const probes: any[] = [];
   const killed: string[] = [];
+  const relaysEnded: string[] = [];
   const commands: any[] = [];
   const logs: string[] = [];
   const registered: any[] = [];
   const claudeId = { value: "session-1" };
   const every: { ms: number; run: () => void; cancelled: boolean }[] = [];
   const after: { ms: number; run: () => void; cancelled: boolean }[] = [];
+  let answered = false;
   const $ = {
     session: { id: async () => claudeId.value, cwd: async () => env.cwd ?? "/repo", version: async () => env.host ?? "2.1.294" },
-    env: { get: async (name: string) => env.vars?.[name] },
-    settings: { read: async () => ({ env: env.settingsEnv ?? {} }) },
+    env: { get: async (name: string) => env.vars?.[name] ?? (name === "PATH" ? (env.dirs ?? [BIN]).join(PATH_SEPARATOR) : undefined) },
+    settings: { read: async () => { if (env.settingsReads) env.settingsReads.count++; return { env: env.settingsEnv ?? {} }; } },
     plugin: { root: "/x/plugins/shadow-army" },
-    fs: { exists: async (path: string) => env.git === undefined || path === `${env.git}/.git` || path.includes("/dist/") },
+    fs: {
+      exists: async (path: string) => {
+        const exe = /^(.*)[\\/](node|git)(?:\.exe)?$/.exec(path);
+        if (exe) return (env.dirs ?? [BIN]).includes(exe[1]!) && env.tools?.[exe[2]!] !== "missing";
+        return env.git === undefined || path === `${env.git}/.git` || path.includes("/dist/");
+      },
+    },
     clock: {
       every: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; every.push(t); return { cancel() { t.cancelled = true; } }; },
       after: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; after.push(t); return { cancel() { t.cancelled = true; } }; },
@@ -50,30 +78,37 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
       spawn: (options: { argv: string[] }) => {
         if (options.argv[1] === "--version") {
           probes.push(options);
-          const tool = env.tools?.[options.argv[0]!] ?? (options.argv[0] === "node" ? "v22.1.0" : "git version 2.43.0");
-          if (tool === "missing") throw new Error("not found");
+          const name = toolOf(options.argv[0]!);
+          const tool = env.tools?.[name] ?? (name === "node" ? "v22.1.0" : "git version 2.43.0");
+          if (tool === "unspawnable") throw new Error("cannot start");
           let end: () => void = () => {};
           const hung = new Promise<void>((done) => { end = done; });
-          return {
-            async *[Symbol.asyncIterator]() { if (tool === "hang") await hung; else yield { stream: "stdout", text: tool + "\n" }; },
-            return: async () => { killed.push(options.argv[0]!); end(); return { done: true }; },
-          };
+          const run = (async function* () {
+            if (tool === "hang") await hung; else yield { stream: "stdout", text: tool + "\n" };
+            return { code: env.exits?.[name] ?? 0, signal: null };
+          })();
+          const origin = run.return.bind(run);
+          run.return = (async (value: unknown) => { killed.push(name); end(); return origin(value as never); }) as typeof run.return;
+          return run;
         }
         spawns.push(options);
         let stop: () => void = () => {};
         const closed = new Promise<void>((done) => { stop = done; });
-        return {
-          async *[Symbol.asyncIterator]() {
-            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
-            await closed;
-          },
-          return: async () => { stop(); return { done: true }; },
-        };
+        const relay = (async function* () {
+          yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
+          await closed;
+          return { code: null, signal: null };
+        })();
+        const origin = relay.return.bind(relay);
+        relay.return = (async (value: unknown) => { stop(); await env.gate; relaysEnded.push(options.argv[0]!); return origin(value as never); }) as typeof relay.return;
+        return relay;
       },
     },
     http: {
       fetch: async (_url: string, init: { body: string }) => {
         if (env.refuse) throw new Error(env.refuse);
+        if (env.transport && answered) throw new Error(env.transport);
+        answered = true;
         const command = JSON.parse(init.body);
         commands.push(command);
         if (command.action === env.hang) await new Promise(() => {});
@@ -88,7 +123,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, probes, killed, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, probes, killed, relaysEnded, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {
