@@ -1,25 +1,28 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { HarnessGit, HarnessGitHeld } from "./harness.js";
-import { changedFiles, HarnessHold, type HoldEvent } from "./hold.js";
-import { addSubmodule, createHostileRepo, plantChange, type HostileRepo } from "./hostileRepo.testutil.js";
+import { HarnessGit, HarnessGitHeld, HarnessGitTimeout } from "./harness.js";
+import { changedFiles, HarnessHold, withConfig, type GitRepo, type GitRunner, type HoldEvent } from "./hold.js";
+import { addSubmodule, createHostileRepo, plainGit, plantChange, type HostileRepo } from "./hostileRepo.testutil.js";
 
 const folders: string[] = [];
 const temp = () => { const folder = mkdtempSync(join(tmpdir(), "sa-hold-")); folders.push(folder); return folder; };
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
 const filter = '[filter "evil"]\n\tclean = evil-clean\n';
+const posixOnly = it.skipIf(process.platform === "win32");
 
-function setup() {
+function setup(limits?: { entries?: number; bytes?: number }) {
   const base = temp(), repo = createHostileRepo(base), hooksDir = join(base, "empty-hooks"), events: HoldEvent[] = [];
   mkdirSync(hooksDir);
   const env = { ...process.env, GIT_CONFIG_GLOBAL: repo.globalConfig, GIT_CONFIG_NOSYSTEM: "1" };
-  const gitFor = (where: { gitDir: string; workTree: string; commonDir: string }) => new HarnessGit({ repo: where, hooksDir, env });
-  const main = { gitDir: repo.gitDir, workTree: repo.root, commonDir: repo.gitDir };
-  const open = () => new HarnessHold({ repo: main, gitFor, statePath: join(base, "log", "hold.json"), log: (event) => events.push(event) });
-  return { repo, events, gitFor, main, open };
+  const gitFor = (where: GitRepo, config: [string, string][] = []) => new HarnessGit({ repo: where, hooksDir, env: withConfig(env, config) });
+  const main: GitRepo = { gitDir: repo.gitDir, workTree: repo.root, commonDir: repo.gitDir };
+  const statePath = join(base, "log", "hold.json");
+  const open = (wrap?: (repo: GitRepo, runner: GitRunner) => GitRunner) =>
+    new HarnessHold({ repo: main, gitFor: (where, config) => (wrap ?? ((_, runner) => runner))(where, gitFor(where, config)), statePath, limits, log: (event) => events.push(event) });
+  return { base, repo, events, hooksDir, main, statePath, open };
 }
 
 describe("harness git hold", () => {
@@ -48,16 +51,25 @@ describe("harness git hold", () => {
     expect(await hold.check()).toEqual({ held: false });
   }, 60_000);
 
-  it("keeps a filter in the config when the post office started, and holds nothing for `git push -u`", async () => {
-    const { repo, open } = setup();
-    appendFileSync(join(repo.gitDir, "config"), filter);
+  it("keeps a filter that runs, set when the post office started, and holds nothing for a `git push -u` that succeeds", async () => {
+    const { base, repo, hooksDir, main, open } = setup();
+    const marker = join(base, "markers", "filter");
+    appendFileSync(join(repo.gitDir, "config"), `[filter "evil"]\n\tclean = "echo ran >> '${marker.replace(/\\/g, "/")}'; cat"\n`);
+    mkdirSync(join(repo.gitDir, "info"), { recursive: true });
+    appendFileSync(join(repo.gitDir, "info", "attributes"), "*.txt filter=evil\n");
     const hold = open();
     expect(await hold.start()).toEqual({ held: false });
-    const remote = join(temp(), "remote.git"), run = (...args: string[]) => execFileSync("git", args, { cwd: repo.root, stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: repo.globalConfig } });
-    run("init", "-q", "--bare", remote); run("remote", "add", "origin", remote);
-    try { run("-c", "core.hooksPath=/nowhere", "push", "-q", "-u", "origin", "HEAD"); } catch { /* the planted hooks may refuse */ }
-    expect(readFileSync(join(repo.gitDir, "config"), "utf8")).toContain("[remote \"origin\"]");
+    writeFileSync(join(repo.root, "new.txt"), "x\n");
+    plainGit(repo, repo.root, "add", "new.txt");
+    expect(existsSync(marker)).toBe(true); // the filter is live
+    const remote = join(temp(), "remote.git");
+    plainGit(repo, repo.root, "init", "-q", "--bare", remote);
+    plainGit(repo, repo.root, "remote", "add", "origin", remote);
+    plainGit(repo, repo.root, "-c", `core.hooksPath=${hooksDir}`, "push", "-q", "-u", "origin", "HEAD");
+    const branch = plainGit(repo, repo.root, "branch", "--show-current").trim();
+    expect(plainGit(repo, repo.root, "config", `branch.${branch}.remote`).trim()).toBe("origin");
     expect(await hold.check()).toEqual({ held: false });
+    expect((await hold.run(main, ["status", "--porcelain"], "guard")).code).toBe(0);
   }, 60_000);
 
   it("stays held across starts until the change is gone, and says it can't be told from the owner's", async () => {
@@ -85,19 +97,75 @@ describe("harness git hold", () => {
   }, 60_000);
 
   it("refuses to run harness git while held, and holds for a change a command leaves behind", async () => {
-    const { repo, gitFor, main, open } = setup(), hold = open(), git = gitFor(main);
+    const { repo, main, open } = setup(), hold = open();
     await hold.start();
-    expect((await hold.run(git, ["status", "--porcelain"], "guard")).code).toBe(0);
-    await expect(hold.run(git, ["config", "filter.evil.clean", "x"])).rejects.toThrow("harness git held · Shadow Army: harness git held · .git/config changed");
-    await expect(hold.run(git, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
-    await git.run(["config", "--unset", "filter.evil.clean"]);
-    expect((await hold.run(git, ["status"])).code).toBe(0);
+    expect((await hold.run(main, ["status", "--porcelain"], "guard")).code).toBe(0);
+    await expect(hold.run(main, ["config", "filter.evil.clean", "x"])).rejects.toThrow("harness git held · Shadow Army: harness git held · .git/config changed");
+    await expect(hold.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+    plainGit(repo, repo.root, "config", "--unset", "filter.evil.clean");
+    expect((await hold.run(main, ["status"])).code).toBe(0);
     expect(repo.ran()).toEqual([]);
   }, 60_000);
 
   it("names the files that differ", () => {
     expect(changedFiles({ "config .git/config": "a", "x": "1" }, { "config .git/config": "b", "y": "2" })).toEqual([".git/config", "x", "y"]);
   });
+});
+
+describe("the command's own repository (C2)", () => {
+  it("runs git only in a repository the hold covers, and compares a registered worktree's metadata", async () => {
+    const { base, repo, open } = setup(), hold = open();
+    await hold.start();
+    const tree = join(base, "snap");
+    plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "worktree", "add", "-q", "--detach", tree);
+    const gitDir = join(repo.gitDir, "worktrees", "snap"), snap: GitRepo = { gitDir, workTree: tree, commonDir: repo.gitDir };
+    await expect(hold.run(snap, ["status"])).rejects.toThrow("isn't a repository this hold covers");
+    await hold.register(snap);
+    expect((await hold.run(snap, ["status", "--porcelain"], "guard")).code).toBe(0);
+    appendFileSync(join(gitDir, "commondir"), "\n../../../elsewhere");
+    expect(await hold.check()).toMatchObject({ held: true, files: [expect.stringMatching(/worktrees\/snap\/commondir$/)] });
+    expect(await open().start()).toMatchObject({ held: true }); // the registered worktree is kept across a restart
+    await hold.unregister(snap);
+    expect(await hold.check()).toEqual({ held: false });
+  }, 60_000);
+});
+
+describe("the hold's own record (C3, C4)", () => {
+  it("holds when the last record exists but can't be read, until the owner accepts", async () => {
+    const { statePath, open } = setup();
+    await open().start();
+    writeFileSync(statePath, readFileSync(statePath, "utf8").slice(0, 20)); // a write cut short
+    const hold = open();
+    expect(await hold.start()).toMatchObject({ held: true, files: [expect.stringMatching(/hold\.json$/)] });
+    expect(await hold.check()).toMatchObject({ held: true });
+    await hold.accept();
+    expect(await hold.check()).toEqual({ held: false });
+    expect(readdirSync(dirname(statePath))).toEqual(["hold.json"]); // written whole, by rename
+  }, 60_000);
+
+  it("compares after a command that throws, and keeps its error", async () => {
+    const { repo, main, open } = setup();
+    const failing = open((_, runner) => ({ run: async (args, kind) => {
+      const result = await runner.run(args, kind);
+      if (args[0] !== "status") return result;
+      plantChange(repo, "config"); throw new HarnessGitTimeout("other", 1);
+    } }));
+    await failing.start();
+    await expect(failing.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitTimeout);
+    expect(await failing.check()).toMatchObject({ held: true, files: [".git/config"] });
+  }, 60_000);
+
+  it("keeps the last trusted state for a post office that starts while a command was running", async () => {
+    const { repo, main, open } = setup();
+    let restart: Promise<unknown> | undefined;
+    const crashing = open((_, runner) => ({ run: async (args, kind) => {
+      if (args[0] === "status") { plantChange(repo, "hook"); restart = open().start(); await restart; } // the post office dies mid-command
+      return runner.run(args, kind);
+    } }));
+    await crashing.start();
+    await crashing.run(main, ["status"]).catch(() => {});
+    expect(await restart).toMatchObject({ held: true, files: [".git/hooks/pre-rebase"] });
+  }, 60_000);
 });
 
 describe("submodules", () => {
@@ -142,5 +210,60 @@ describe("submodules", () => {
     await hold.start();
     addSubmodule(repo, "late");
     expect(await hold.check()).toMatchObject({ held: true, files: expect.arrayContaining(["late/.git"]) });
+  }, 60_000);
+
+  it("follows gitlinks at any depth, and holds when a submodule's index can't be listed (C1)", async () => {
+    const { repo, open } = setup();
+    const names = Array.from({ length: 10 }, (_, i) => `d${i + 1}`);
+    let root = repo.root;
+    for (const name of names) root = addSubmodule({ ...repo, root } as HostileRepo, name);
+    const hold = open();
+    await hold.start();
+    appendFileSync(join(root, ".git", "config"), filter);
+    const deepest = await hold.check();
+    expect(deepest.held && deepest.files).toEqual([`${names.join("/")}/.git/config`]);
+    writeFileSync(join(root, ".git", "config"), readFileSync(join(root, ".git", "config"), "utf8").replace(filter, ""));
+    expect(await hold.check()).toEqual({ held: false });
+    writeFileSync(join(repo.root, "d1", ".git", "index"), "not an index");
+    expect(await hold.check()).toMatchObject({ held: true, files: ["d1/.git/index"], line: expect.stringContaining("can't be inspected") });
+  }, 180_000);
+
+  posixOnly("reads a gitlink whose path holds a newline (C1)", async () => {
+    const { repo, open } = setup();
+    const folder = addSubmodule(repo, "odd\nname");
+    const hold = open();
+    await hold.start();
+    appendFileSync(join(folder, ".git", "config"), filter);
+    expect(await hold.check()).toMatchObject({ held: true, files: ["odd\nname/.git/config"] });
+  }, 60_000);
+
+  it("lets a guard command see a change that a nested submodule's `.gitmodules` ignores (C5)", async () => {
+    const { repo, main, open } = setup();
+    const sub = addSubmodule(repo, "sub");
+    addSubmodule({ ...repo, root: sub } as HostileRepo, "de=ep");
+    for (const [key, value] of [["path", "de=ep"], ["ignore", "all"]]) plainGit(repo, sub, "config", "-f", ".gitmodules", `submodule.de=ep.${key}`, value!);
+    plainGit(repo, sub, "add", ".gitmodules"); plainGit(repo, sub, "commit", "-q", "-m", "ignore");
+    plainGit(repo, repo.root, "add", "sub"); plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "commit", "-q", "--no-gpg-sign", "-m", "sub");
+    const hold = open();
+    await hold.start();
+    writeFileSync(join(sub, "de=ep", "file.txt"), "changed\n");
+    expect((await hold.run(main, ["status", "--porcelain"], "guard")).stdout).toContain("sub");
+  }, 120_000);
+});
+
+describe("the metadata scan (C6)", () => {
+  it("holds, naming the folder, when hooks/ holds more entries than the scan allows", async () => {
+    const { repo, open } = setup({ entries: 40 }), hold = open();
+    expect(await hold.start()).toEqual({ held: false });
+    for (let i = 0; i < 40; i++) writeFileSync(join(repo.gitDir, "hooks", `extra-${i}`), "x");
+    expect(await hold.check()).toMatchObject({ held: true, files: [".git/hooks"], line: expect.stringContaining("can't be inspected") });
+  }, 60_000);
+
+  posixOnly("holds, without opening it, for a FIFO in info/", async () => {
+    const { repo, open } = setup(), hold = open();
+    await hold.start();
+    mkdirSync(join(repo.gitDir, "info"), { recursive: true });
+    execFileSync("mkfifo", [join(repo.gitDir, "info", "pipe")]);
+    expect(await hold.check()).toMatchObject({ held: true, files: [".git/info/pipe"], line: expect.stringContaining("can't be inspected") });
   }, 60_000);
 });

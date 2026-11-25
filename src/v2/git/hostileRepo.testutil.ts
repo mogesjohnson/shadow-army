@@ -82,9 +82,14 @@ export function plantChange(repo: HostileRepo, change: "config" | "hook" | "info
   return () => (before === undefined ? rmSync(file) : writeFileSync(file, before));
 }
 
+/** Plain git, as the owner runs it, with the test's global config: it runs the repository's traps. */
+export function plainGit(repo: HostileRepo, cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: repo.globalConfig, GIT_CONFIG_NOSYSTEM: "1" } });
+}
+
 /** A repository inside `repo` that is a gitlink, with `.git` as a folder, or moved to `.git/modules/<name>` with a `.git` file. */
 export function addSubmodule(repo: HostileRepo, name: string, absorb = false): string {
-  const folder = join(repo.root, name), git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: repo.globalConfig, GIT_CONFIG_NOSYSTEM: "1" } });
+  const folder = join(repo.root, name), git = (cwd: string, ...args: string[]) => plainGit(repo, cwd, ...args);
   mkdirSync(folder, { recursive: true });
   git(folder, "init", "-q"); git(folder, "config", "user.name", "t"); git(folder, "config", "user.email", "t@example.com");
   writeFileSync(join(folder, "file.txt"), "sub\n");
