@@ -683,6 +683,34 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     expect(events.some((event) => event.type === "read_violation")).toBe(false);
     await finish(); await second.close();
   }, 60_000);
+
+  it("recovers a snapshot under its recorded root after the setting changed, reporting a commit made in it (WSP-11)", async () => {
+    const { repo, opened, record, finish } = await stoppedMidTurn();
+    await git(opened.cwd, ["add", "soldier.txt"]);
+    await git(opened.cwd, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a commit"]);
+    const moved = mkdtempSync(join(homedir(), ".sa-test-snapshots-moved-"));
+    process.env.SHADOW_ARMY_SNAPSHOTS = moved;
+    const events: OfficeEvent[] = [];
+    try {
+      const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+      const violation = events.find((event) => event.type === "read_violation")?.data as { head?: { from: string; to: string }; line: string };
+      expect(violation.head?.from).not.toBe(violation.head?.to);
+      expect(violation.line).toMatch(/HEAD moved from/);
+      expect([existsSync(opened.cwd), existsSync(record)]).toEqual([false, false]);
+      await finish(); await second.close();
+    } finally { process.env.SHADOW_ARMY_SNAPSHOTS = snapshots; rmSync(moved, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it("reports an orphan snapshot whose folder is gone and removes only its own worktree entry (WSP-11)", async () => {
+    const { repo, opened, record, finish } = await stoppedMidTurn();
+    const { gitDir } = JSON.parse(await readFile(record, "utf8")) as { gitDir: string };
+    rmSync(opened.cwd, { recursive: true, force: true });
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(events.find((event) => event.type === "snapshot" && (event.data as { orphan?: boolean }).orphan)?.data).toMatchObject({ session: opened.session, line: expect.stringMatching(/was gone; its worktree entry is removed/) });
+    expect([existsSync(gitDir), existsSync(record)]).toEqual([false, false]);
+    await finish(); await second.close();
+  }, 60_000);
 });
 
 describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {

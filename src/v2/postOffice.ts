@@ -356,35 +356,62 @@ export class PostOffice {
       const state = await identity(id);
       if (state === "unknown") unresolved(id, `${id}'s snapshot`);
       if (state !== "stopped") continue;
-      let recorded: { path?: string; gitDir?: string } = {};
+      let recorded: { path?: string; root?: string; gitDir?: string; head?: string } = {};
       try { recorded = JSON.parse(await readFile(file, "utf8")); } catch { /* reported below */ }
-      if (!recorded.path || !this.snapshots.ok) { unresolved(id, `${id}'s snapshot (no usable record)`); continue; }
+      // WSP-11: the root the snapshot was made under, as recorded; the current setting only for records older than that.
+      const root = recorded.root ?? (this.snapshots.ok ? this.snapshots.root : undefined);
+      if (!recorded.path || !root) { unresolved(id, `${id}'s snapshot (no usable record)`); continue; }
       const snapshot: Snapshot = { path: recorded.path, subfolder: dirname(recorded.path), gitDir: recorded.gitDir ?? "", commonDir: this.repo.commonDir };
       try {
         if (!recorded.gitDir) {
           // A snapshot started but not made: removed as one that timed out (WSP-10).
-          removeInside(this.snapshots.root, snapshot.path);
+          removeInside(root, snapshot.path);
           this.record({ type: "snapshot", data: { session: id, removed: true, made: false } });
-          await this.logPending;
+          await this.durable();
+          await unlink(file).catch(() => {});
+          continue;
+        }
+        if (!existsSync(snapshot.path)) {
+          // An orphan: its folder is gone, its worktree entry may not be. Only that entry goes, never a repository-wide prune.
+          const admin = resolve(snapshot.gitDir);
+          const entry = within(resolve(this.repo.commonDir, "worktrees"), admin) && existsSync(admin);
+          this.record({ type: "snapshot", data: { session: id, orphan: true, line: `${id}'s snapshot at ${snapshot.path} was gone; ${entry ? "its worktree entry is removed" : "it left no worktree entry"}` } });
+          await this.durable();
+          if (entry) rmSync(admin, { recursive: true, force: true });
           await unlink(file).catch(() => {});
           continue;
         }
         // The git identity recorded as the snapshot was made, never re-read from the snapshot (WSP-10).
         await this.unheld();
-        const status = await this.git({ gitDir: snapshot.gitDir, workTree: snapshot.path, commonDir: snapshot.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
-        await this.unheld();
+        const own = this.git({ gitDir: snapshot.gitDir, workTree: snapshot.path, commonDir: snapshot.commonDir });
+        const status = await own.run(["status", "--porcelain", "--untracked-files=all"], "guard");
         if (status.code !== 0) throw new Error(`git status failed: ${status.stderr.trim() || `exit ${status.code}`}`);
+        const headNow = recorded.head ? await own.run(["rev-parse", "HEAD"], "guard") : undefined;
+        await this.unheld();
+        if (headNow && headNow.code !== 0) throw new Error(`git rev-parse HEAD failed: ${headNow.stderr.trim() || `exit ${headNow.code}`}`);
         const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
-        if (files.length) this.record({ type: "read_violation", data: { session: id, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
+        const head = headNow && headNow.stdout.trim() !== recorded.head ? { from: recorded.head!, to: headNow.stdout.trim() } : undefined;
+        if (files.length || head) {
+          const what = [...(files.length ? [`writes: ${files.join(", ")}`] : []), ...(head ? [`HEAD moved from ${head.from} to ${head.to}`] : [])];
+          this.record({ type: "read_violation", data: { session: id, files, ...(head ? { head } : {}), line: `a read-only snapshot the last post office left had ${what.join("; ")}` } });
+        }
+        // The report is on disk before the snapshot it describes goes.
+        await this.durable();
       } catch (error) {
         pending ??= error;
         this.record({ type: "snapshot", data: { session: id, pending: true, reason: String(error) } });
         continue;
       }
-      if (!await this.dropSnapshot(snapshot)) pending ??= new Error(`the snapshot ${snapshot.path} could not be removed`);
+      if (!await this.dropSnapshot(snapshot, undefined, root)) pending ??= new Error(`the snapshot ${snapshot.path} could not be removed`);
     }
     await this.logPending;
     if (pending) throw pending;
+  }
+
+  /** Waits for the log's pending lines; throws if a write failed, so what they report is kept (PO-5). */
+  private async durable(): Promise<void> {
+    await this.logPending;
+    if (this.logFailure) throw this.logFailure;
   }
 
   /** Throws while WSP-10's hold is on: nothing office-side runs git then. */
@@ -541,10 +568,12 @@ export class PostOffice {
   /** WSP-11: a snapshot with its record: the path before it is made, its git folder once it is, for a later start. */
   private async openRecorded(root: string, sessionId: string): Promise<Snapshot> {
     const file = join(snapshotsDir(this.root), `${sessionId}.json`);
-    await mkdir(snapshotsDir(this.root), { recursive: true });
-    await writeFile(file, JSON.stringify({ path: join(snapshotSubfolder(root, this.root), sessionId) }), { mode: 0o600 });
+    // The snapshot root goes in the record too: a later start finds it even after SHADOW_ARMY_SNAPSHOTS changed.
+    await writeAtomic(file, JSON.stringify({ path: join(snapshotSubfolder(root, this.root), sessionId), root }));
     const snapshot = await openSnapshot({ root, folder: this.root, sessionId, repo: this.repo, git: this.git });
-    await writeFile(file, JSON.stringify({ path: snapshot.path, gitDir: snapshot.gitDir }), { mode: 0o600 });
+    // The HEAD it was made at, so a later start can report a commit made in it (WSP-11).
+    const head = (await this.git({ gitDir: snapshot.gitDir, workTree: snapshot.path, commonDir: snapshot.commonDir }).run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+    await writeAtomic(file, JSON.stringify({ path: snapshot.path, root, gitDir: snapshot.gitDir, head }));
     return snapshot;
   }
 
@@ -888,9 +917,8 @@ export class PostOffice {
    * WSP-11: removes this session's snapshot alone, by `git worktree remove` on its own path (never a repository-wide prune), and
    * checks the result. The intent is logged before and the outcome after, so a later start can find an unfinished removal.
    */
-  private async dropSnapshot(snapshot: Snapshot | undefined, session?: Session): Promise<boolean> {
-    if (!snapshot || !this.snapshots.ok) return false;
-    const root = this.snapshots.root;
+  private async dropSnapshot(snapshot: Snapshot | undefined, session?: Session, root = this.snapshots.ok ? this.snapshots.root : undefined): Promise<boolean> {
+    if (!snapshot || !root) return false;
     const note = (data: Record<string, unknown>) => this.record({ ...(session ? { soldier: session.spec.key } : {}), type: "snapshot", data: { path: snapshot.path, ...data } }, session);
     try {
       const real = realish(snapshot.path);
