@@ -38,6 +38,8 @@ type Env = {
   transport?: string;
   /** The relay's end waits for this gate; a promise that never settles leaves it unconfirmed. */
   gate?: Promise<void>;
+  /** The relay ends on its own once this settles, as after its client closed its post office; a rejection fails its stream. */
+  ends?: Promise<void>;
   /** The relay starts but never reports ready. Read at each start, so a test can change it between two. */
   silent?: boolean;
   /** The relay reports ready only once this settles. */
@@ -137,7 +139,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
         const relay = (async function* () {
           if (env.late) await env.late;
           if (!env.silent) yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
-          await closed;
+          if (await Promise.race([closed.then(() => false), (env.ends ?? new Promise<void>(() => {})).then(() => true)])) order.push("relay ended on its own");
           return { code: null, signal: null };
         })();
         const origin = relay.return.bind(relay);
@@ -429,18 +431,21 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
     expect(spawns).toHaveLength(1);
   });
 
-  it("ends a post office that never reports ready after 60 s, naming the step, and the next use starts a new one", async () => {
-    const env: Env = { silent: true };
+  it("waits for a relay that never reports ready to close its post office, naming the step, and the next use starts a new one", async () => {
+    let close!: () => void;
+    const env: Env = { silent: true, ends: new Promise<void>((done) => { close = done; }) };
     const { send, after, spawns, logs, relaysEnded } = await mod(() => ({ status: "completed", summary: "ok" }), env);
     const pending = send("claude-sonnet --claim a go");
     await flush();
     after.find((t) => t.ms === 60_000)!.run();
+    close();
     await pending;
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/did not report ready within 60 s · step: waiting for its ready event · relay ended$/);
+    expect(logs[0]).toMatch(/did not report ready within 60 s · step: waiting for its ready event · relay ended after closing its post office$/);
     expect(logs[0]).not.toContain("ended with its processes");
-    expect(relaysEnded).toHaveLength(1);
+    expect(relaysEnded).toEqual([]);
     env.silent = false;
+    env.ends = undefined;
     expect(await send("claude-sonnet --claim a go")).toContain("Tank");
     expect(spawns).toHaveLength(2);
   });
@@ -722,30 +727,32 @@ describe("a refused fetch and a failed one (PO-7, HOST-2, C4)", () => {
 });
 
 describe("a start that stalls (HOST-2, PO-7, C5)", () => {
-  it("holds the next use until the host confirms the relay's end, and logs the line after it", async () => {
-    let open!: () => void;
-    const env: Env = { silent: true, gate: new Promise<void>((done) => { open = done; }) };
-    const { send, after, order, logs, spawns } = await mod(OK, env);
+  it("holds the next use until the relay ends on its own, never killing it, and logs the line after it", async () => {
+    let close!: () => void;
+    const env: Env = { silent: true, ends: new Promise<void>((done) => { close = done; }) };
+    const { send, after, order, logs, spawns, relaysEnded } = await mod(OK, env);
     const first = send("claude-sonnet --claim a go");
     await flush();
     after.find((t) => t.ms === 60_000)!.run();
     await flush();
     env.silent = false;
+    env.ends = undefined;
     const second = send("claude-sonnet --claim a go");
     await flush();
     expect(spawns).toHaveLength(1);
     expect(logs).toEqual([]);
-    open();
+    close();
     expect(await second).toContain("Tank");
     await first;
-    expect(order).toEqual(["relay started", "relay ended", "relay started"]);
+    expect(order).toEqual(["relay started", "relay ended on its own", "relay started"]);
+    expect(relaysEnded).toEqual([]);
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/step: waiting for its ready event · relay ended$/);
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay ended after closing its post office$/);
   });
 
-  it("never takes the 30 s timer as the relay's end: a cleanup that never resolves keeps every next start refused", async () => {
-    const env: Env = { silent: true, gate: new Promise<void>(() => {}) };
-    const { send, after, logs, spawns } = await mod(OK, env);
+  it("never takes the 30 s timer as the relay's end: a relay that never ends keeps every next start refused", async () => {
+    const env: Env = { silent: true };
+    const { send, after, logs, spawns, relaysEnded } = await mod(OK, env);
     const first = send("claude-sonnet --claim a go");
     await flush();
     after.find((t) => t.ms === 60_000)!.run();
@@ -754,17 +761,18 @@ describe("a start that stalls (HOST-2, PO-7, C5)", () => {
     after.find((t) => t.ms === 30_000)!.run();
     await first;
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/step: waiting for its ready event · relay's end not confirmed in 30 s; the army won't start again until it is confirmed$/);
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay has not ended in 30 s; the army won't start again until it does$/);
     env.silent = false;
     for (let i = 0; i < 2; i++) {
-      expect(await send("claude-sonnet --claim a go")).toMatch(/won't start the army: the last relay's end was not confirmed in 30 s at step: waiting for its ready event, so its post office may still be running/);
+      expect(await send("claude-sonnet --claim a go")).toMatch(/won't start the army: the last relay has not ended in 30 s \(step: waiting for its ready event\), so its post office may still be running/);
     }
     expect(spawns).toHaveLength(1);
+    expect(relaysEnded).toEqual([]);
   });
 
-  it("lets the next use start once the host confirms a late relay end", async () => {
-    let open!: () => void;
-    const env: Env = { silent: true, gate: new Promise<void>((done) => { open = done; }) };
+  it("lets the next use start once a late relay ends on its own", async () => {
+    let close!: () => void;
+    const env: Env = { silent: true, ends: new Promise<void>((done) => { close = done; }) };
     const { send, after, spawns } = await mod(OK, env);
     const first = send("claude-sonnet --claim a go");
     await flush();
@@ -773,24 +781,27 @@ describe("a start that stalls (HOST-2, PO-7, C5)", () => {
     after.find((t) => t.ms === 30_000)!.run();
     await first;
     env.silent = false;
+    env.ends = undefined;
     expect(await send("claude-sonnet --claim a go")).toMatch(/won't start the army/);
-    open();
+    close();
     await flush();
     expect(await send("claude-sonnet --claim a go")).toContain("Tank");
     expect(spawns).toHaveLength(2);
   });
 
-  it("refuses the next start when the relay's end fails, naming the step", async () => {
-    const env: Env = { silent: true, gate: Promise.reject(new Error("kill failed")) };
-    void env.gate!.catch(() => {});
+  it("refuses every next start when the relay's stream fails before it closes its post office", async () => {
+    let broke!: (error: Error) => void;
+    const env: Env = { silent: true, ends: new Promise<void>((_done, failed) => { broke = failed; }) };
     const { send, after, logs, spawns } = await mod(OK, env);
     const first = send("claude-sonnet --claim a go");
     await flush();
     after.find((t) => t.ms === 60_000)!.run();
+    broke(new Error("stream broke"));
     await first;
-    expect(logs[0]).toMatch(/step: waiting for its ready event · relay's end failed; the army won't start again until it is confirmed$/);
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay failed before closing its post office; the army won't start again$/);
     env.silent = false;
-    expect(await send("claude-sonnet --claim a go")).toMatch(/the last relay's end failed at step: waiting for its ready event/);
+    env.ends = undefined;
+    expect(await send("claude-sonnet --claim a go")).toMatch(/the last relay failed before it could close its post office \(step: waiting for its ready event\)/);
     expect(spawns).toHaveLength(1);
   });
 

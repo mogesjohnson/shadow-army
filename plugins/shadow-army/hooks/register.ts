@@ -28,8 +28,13 @@ interface Runtime {
   reached: boolean;
   /** The one line that stopped the army because Claude Code refused a fetch; nothing is sent after it. */
   refused?: string;
-  /** Ending the relay: `ended` once the host confirmed it, else `failed` or `late` (no confirmation in 30 s). */
+  /** Ending the relay: `ended` once its end was seen, else `failed` or `late` (not seen in 30 s). */
   cleanup?: Promise<RelayEnd>;
+  /** Reading the relay's stream; it settles only when the relay has ended. */
+  relay?: Promise<void>;
+  /** A next start waits for this: the relay's end, or a stalled start's decision to refuse (C5). */
+  barrier: Promise<void>;
+  lift: () => void;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -48,7 +53,7 @@ const READY_WAIT_MS = 60_000;
 /** The post office's own lease (PO-7): past it the post office has ended itself, whatever the host confirmed. */
 const CLEANUP_WAIT_MS = 30_000;
 type RelayEnd = "ended" | "failed" | "late";
-/** C5: set while a relay's end is unconfirmed; every start is refused with it until the host confirms that end. */
+/** C5: set while a relay's end is unconfirmed; every start is refused with it until that end is seen. */
 let unconfirmedEnd: string | undefined;
 /** Claude Code's own words for a refused fetch; a later rejection with these is a policy change, not transport. */
 const POLICY_WORDS = /\b(?:polic|refus|not allow|denied|disabled)/i; // `\b`: a socket's ECONNREFUSED is transport
@@ -136,9 +141,9 @@ function refuse($: EngineInterface, runtime: Runtime, words: string): void {
 }
 
 /**
- * Ends the relay. The relay exits only after its post office's process has exited, so the host confirming
- * the relay's end is the observed shutdown (C5). A timer is never taken as confirmation: a failed or late
- * end refuses every start until the host confirms it, which may be never (then the army stays refused).
+ * Ends the relay after a failure. The host may kill it outright, so this confirms the relay's end only, not its
+ * post office's (whose lease then ends it, PO-7). A timer is never taken as confirmation: a failed or late end
+ * refuses every start until the host confirms it, which may be never (then the army stays refused, C5).
  */
 async function endRelay($: EngineInterface, runtime: Runtime): Promise<RelayEnd> {
   let timer: Timer | undefined;
@@ -464,7 +469,11 @@ async function preflight($: EngineInterface, cwd: string, tools: { node: string;
   return proxyRefusal($);
 }
 
-/** The post office gave no `ready` in 60 s: end the relay, wait for the host to confirm it, and only then say so, with the step it stopped at (HOST-2). */
+/**
+ * The post office gave no `ready` in 60 s. The relay is not killed: a kill would orphan its post office. Its client
+ * gave up at 30 s and closes the post office, waiting for its process to exit, before the relay ends; so the relay's
+ * own end is the observed shutdown (C5). If it is not seen in 30 s more, every start is refused until it is.
+ */
 async function stalled($: EngineInterface, runtime: Runtime): Promise<void> {
   const step = runtime.step;
   const said = runtime.diagnostic.trim().split(/\r?\n/).pop();
@@ -472,11 +481,20 @@ async function stalled($: EngineInterface, runtime: Runtime): Promise<void> {
   runtime.closing = true;
   retiring.add(runtime);
   if (active === runtime) active = undefined;
-  const ended = await (runtime.cleanup ??= runtime.stream ? endRelay($, runtime) : Promise.resolve("ended" as const));
-  const how = ended === "ended" ? "relay ended" : `relay's end ${ended === "failed" ? "failed" : `not confirmed in ${CLEANUP_WAIT_MS / 1000} s`}; the army won't start again until it is confirmed`;
+  // A stream that failed was abandoned, and the host then kills the relay: its post office's end is not seen.
+  const own = (runtime.relay ?? Promise.resolve()).then(() => "ended" as const, () => "failed" as const);
+  let timer: Timer | undefined;
+  const bound = new Promise<"late">((done) => { timer = $.clock.after(CLEANUP_WAIT_MS, () => done("late")); });
+  const ended = await (runtime.cleanup ??= Promise.race([own, bound]).finally(() => timer?.cancel()));
+  if (ended !== "ended") {
+    const mine = unconfirmedEnd = `Shadow Army won't start the army: the last relay ${ended === "failed" ? "failed before it could close its post office" : `has not ended in ${CLEANUP_WAIT_MS / 1000} s`} (step: ${step}), so its post office may still be running`;
+    void own.then((how) => { if (how === "ended" && unconfirmedEnd === mine) unconfirmedEnd = undefined; });
+  }
+  const how = ended === "ended" ? "relay ended after closing its post office" : ended === "failed" ? "relay failed before closing its post office; the army won't start again" : `relay has not ended in ${CLEANUP_WAIT_MS / 1000} s; the army won't start again until it does`;
   const line = `post office did not report ready within 60 s · step: ${step}${said ? ` · its relay said: ${said}` : ""} · ${how}`;
   $.ui.log(sanitize(prefixed(safeText(line, runtime.credential))));
   fail($, runtime, line);
+  runtime.lift();
 }
 
 async function ensure($: EngineInterface): Promise<Runtime> {
@@ -488,7 +506,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
   if (!runtime || runtime.closing) {
     // The end hook only requests release. A later foreground command waits for the
     // old relay/helper to finish guard finalization and release the folder marker.
-    await Promise.all([...retiring].map((old) => old.finished));
+    await Promise.all([...retiring].map((old) => old.barrier));
     if (unconfirmedEnd) throw new Error(unconfirmedEnd);
     // Another concurrent foreground call may have opened the army while we waited.
     if (active && !active.closing && active.cwd === cwd) {
@@ -501,10 +519,12 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     let reject!: (error: Error) => void;
     const ready = new Promise<void>((resolve, failed) => { accept = resolve; reject = failed; });
     void ready.catch(() => {});
+    let lift!: () => void;
+    const barrier = new Promise<void>((done) => { lift = done; });
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     runtime = {
       session, cwd, credential: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""),
-      closing: false, ready, accept, reject, diagnostic: "",
+      closing: false, ready, accept, reject, diagnostic: "", barrier, lift,
       node: "", step: "checking Claude Code, Node.js, git and the proxy settings", reached: false,
     };
     active = runtime;
@@ -522,10 +542,10 @@ async function ensure($: EngineInterface): Promise<Runtime> {
       }
       owned.node = tools.node;
       owned.deadline = $.clock.after(READY_WAIT_MS, () => { void stalled($, owned); });
-      await consume($, owned);
+      await (owned.relay = consume($, owned));
     })().catch((error) => fail($, owned, error instanceof Error ? error.message : error))
       .then(() => owned.cleanup)
-      .finally(() => { retiring.delete(owned); });
+      .finally(() => { retiring.delete(owned); owned.lift(); });
   }
   await runtime.ready;
   if (runtime.closing) throw new Error("The army ended before the command could run");
