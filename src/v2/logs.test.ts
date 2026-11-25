@@ -88,6 +88,28 @@ describe("every kind redact() matches (M1-AC2, SEC-4)", () => {
     expect(redact("preauthorization: approved")).toBe("preauthorization: approved");
   });
 
+  it("an Authorization value with quotes in it, in a header, a JSON value and escaped JSON, as persisted (C5)", async () => {
+    const dir = await directory();
+    const logs = new SessionLogs(dir, []);
+    const values = [
+      'Authorization: Digest username="bob", response="resp-one-secret"\nnext',
+      "Authorization: Basic it's-resp-two-secret",
+      JSON.stringify({ headers: { Authorization: 'Digest a="x", response="resp-three-secret"' } }),
+      JSON.stringify(JSON.stringify({ Authorization: "Token resp-four-secret" })),
+      `log {"authorization": 'Token resp-five-secret', "kept": 1}`,
+    ];
+    for (const text of values) await logs.write("soldier-1", { type: "message", text });
+    const file = await readFile(join(dir, "soldier-1.jsonl"), "utf8");
+    for (const secret of ["bob", "resp-one", "resp-two", "resp-three", "resp-four", "resp-five"]) expect(file).not.toContain(secret);
+    const texts = file.trim().split("\n").map((line) => JSON.parse(line).text as string);
+    expect(texts[0]).toBe(`Authorization: ${REDACTED}\nnext`);
+    expect(JSON.parse(texts[2]!)).toEqual({ headers: { Authorization: REDACTED } });
+    expect(JSON.parse(JSON.parse(texts[3]!))).toEqual({ Authorization: REDACTED });
+    expect(texts[4]).toBe(`log {"authorization": '${REDACTED}', "kept": 1}`);
+    // JSON text is also redacted as structure: a short value the patterns miss goes by its key.
+    expect(redact('{ "api_key": "short", "n": 1 }')).toBe(`{"api_key":"${REDACTED}","n":1}`);
+  });
+
   it("the password in a URL's user part, even one that holds @ or :", () => {
     expect(redact("postgres://u:p@ss:w@rd@host/db")).toBe(`postgres://u:${REDACTED}@host/db`);
     expect(redact("see https://bob:hunter2@example.com:8080/path?x=a@b now")).toBe(`see https://bob:${REDACTED}@example.com:8080/path?x=a@b now`);
@@ -279,5 +301,32 @@ describe("a failed log write (PO-5, M1-AC4)", () => {
     expect(lines.some((line) => line.startsWith('{"n":2') && !line.endsWith("}"))).toBe(true);
     expect(parsed(file.text())).toEqual([{ n: 1 }, { type: "log-gap", lost: 1, time: expect.any(String) }, { n: 3 }]);
     expect(file.text().endsWith("\n")).toBe(true);
+  });
+
+  it("keeps the record when the first try leaves part of it and the retry works (C4)", async () => {
+    vi.useFakeTimers();
+    const file = fakeFile();
+    file.failing.count = 1;
+    file.failing.torn = true;
+    const logs = new SessionLogs("logs", [], { append: file.append });
+    const result = logs.write("soldier-1", { n: 1, padding: "x".repeat(40) });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await result).toEqual({ written: true });
+    expect(parsed(file.text())).toEqual([{ n: 1, padding: "x".repeat(40) }]);
+    await logs.write("soldier-1", { n: 2 });
+    expect(parsed(file.text())).toEqual([{ n: 1, padding: "x".repeat(40) }, { n: 2 }]);
+  });
+
+  it("keeps writing a log whose failure callback throws (C6)", async () => {
+    vi.useFakeTimers();
+    const file = fakeFile();
+    file.failing.count = 2;
+    const logs = new SessionLogs("logs", [], { append: file.append, onFailure: () => { throw new Error("notice failed"); } });
+    const lost = logs.write("soldier-1", { n: 1 });
+    const next = logs.write("soldier-1", { n: 2 });
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await lost).written).toBe(false);
+    expect((await next).written).toBe(true);
+    expect(parsed(file.text())).toEqual([{ type: "log-gap", lost: 1, time: expect.any(String) }, { n: 2 }]);
   });
 });

@@ -5,7 +5,7 @@ export const REDACTED = "[REDACTED]";
 
 const SECRET_KEYS = new Set([
   "secret", "secrets", "credential", "credentials", "password", "passwd", "apikey",
-  "token", "accesstoken", "refreshtoken", "authorization", "cookie", "setcookie", "privatekey",
+  "token", "accesstoken", "refreshtoken", "authorization", "proxyauthorization", "cookie", "setcookie", "privatekey",
 ]);
 
 const NAME_SUFFIX = /(?:key|token|secret|password|credential)$/i;
@@ -39,7 +39,38 @@ function secretMatcher(secrets: readonly string[]): RegExp | undefined {
 const NOT_IN_WORD = "(?<![A-Za-z0-9_])";
 const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*$)/g;
 const URL_PASSWORD = new RegExp(`${NOT_IN_WORD}([A-Za-z][A-Za-z0-9+.-]*://[^\\s/?#:@"']*:)[^/?#\\s"']*@`, "g");
-const AUTHORIZATION = new RegExp(`${NOT_IN_WORD}(authorization["']?[ \\t]*[=:][ \\t]*["']?)[^\\r\\n"']+`, "gi");
+// The name, its own quote (escaped to any depth, as in JSON inside JSON) and the separator.
+const AUTHORIZATION = new RegExp(`${NOT_IN_WORD}(?:proxy-)?authorization(?:\\\\*["'])?[ \\t]*[=:][ \\t]*`, "gi");
+const OPENING_QUOTE = /^\\*["']/;
+
+/** Where a quote as deep as `quote` closes the value on its line, or -1. An inner quote carries more backslashes. */
+function closingQuote(text: string, from: number, quote: string): number {
+  const lineEnd = text.slice(from).search(/[\r\n]/);
+  const limit = lineEnd === -1 ? text.length : from + lineEnd;
+  const mark = quote.at(-1)!;
+  for (let at = text.indexOf(mark, from); at !== -1 && at < limit; at = text.indexOf(mark, at + 1)) {
+    let slashes = 0;
+    while (at - slashes - 1 >= from && text[at - slashes - 1] === "\\") slashes++;
+    if (slashes === quote.length - 1) return at - slashes;
+  }
+  return -1;
+}
+
+/** The whole Authorization value (WSP-8): a quoted one to its own closing quote, any other to the end of its line. */
+function redactAuthorization(text: string): string {
+  let out = "";
+  let done = 0;
+  for (const match of text.matchAll(AUTHORIZATION)) {
+    if (match.index < done) continue;
+    const start = match.index + match[0].length;
+    const quote = OPENING_QUOTE.exec(text.slice(start))?.[0];
+    const close = quote ? closingQuote(text, start + quote.length, quote) : -1;
+    const lineEnd = text.slice(start).search(/[\r\n]/);
+    out += text.slice(done, start) + (close !== -1 ? `${quote}${REDACTED}${quote}` : REDACTED);
+    done = close !== -1 ? close + quote!.length : lineEnd === -1 ? text.length : start + lineEnd;
+  }
+  return out + text.slice(done);
+}
 const BEARER = new RegExp(`${NOT_IN_WORD}Bearer[ \\t]+[A-Za-z0-9._~+/=-]+`, "gi");
 const PREFIXED_KEY = new RegExp(`${NOT_IN_WORD}(?:sk-(?:ant-)?|gh[pousr]_)[A-Za-z0-9_-]{12,}`, "g");
 const NAMED_VALUE = new RegExp(`${NOT_IN_WORD}([A-Za-z0-9_-]*(?:key|token|secret|password|credential)["']?[ \\t]*[=:][ \\t]*["']?)[^\\s"',;}]{8,}`, "gi");
@@ -49,13 +80,21 @@ export function redact(data: unknown, secrets: readonly string[] = []): unknown 
   const known = secretMatcher(secrets);
   const cleanString = (text: string): string => {
     if (known) text = text.replace(known, REDACTED);
-    return text
+    const patterned = redactAuthorization(text
       .replace(PRIVATE_KEY_BLOCK, REDACTED)
-      .replace(URL_PASSWORD, `$1${REDACTED}@`)
-      .replace(AUTHORIZATION, `$1${REDACTED}`)
+      .replace(URL_PASSWORD, `$1${REDACTED}@`))
       .replace(BEARER, `Bearer ${REDACTED}`)
       .replace(PREFIXED_KEY, REDACTED)
       .replace(NAMED_VALUE, `$1${REDACTED}`);
+    // Text that is JSON is also redacted as structure; when that finds more, the structure is kept (compacted).
+    if (!/^\s*[[{]/.test(patterned)) return patterned;
+    try {
+      const parsed: unknown = JSON.parse(patterned);
+      const safe = JSON.stringify(visit(parsed));
+      return safe === JSON.stringify(parsed) ? patterned : safe;
+    } catch {
+      return patterned;
+    }
   };
   const seen = new WeakSet<object>();
   const visit = (value: unknown): unknown => {
@@ -158,23 +197,24 @@ export class SessionLogs {
   }
 
   private enqueue(name: string, task: () => Promise<LogWriteResult>): Promise<LogWriteResult> {
-    const next = (this.pending.get(name) ?? Promise.resolve()).then(task);
+    // Each write runs whatever the one before it did, and the cleanup never rejects.
+    const next = (this.pending.get(name) ?? Promise.resolve()).then(task, task);
     this.pending.set(name, next);
-    void next.finally(() => { if (this.pending.get(name) === next) this.pending.delete(name); });
+    const forget = (): void => { if (this.pending.get(name) === next) this.pending.delete(name); };
+    next.then(forget, forget);
     return next;
   }
 
   private async tryWrite(name: string, line: string): Promise<LogWriteResult> {
     const lost = this.lost.get(name) ?? 0;
     const gap = lost > 0 ? `${JSON.stringify({ type: "log-gap", lost, time: new Date().toISOString() })}\n` : "";
-    // A line cut short by a failed write is ended before the next one.
-    const text = `${this.cut.has(name) ? "\n" : ""}${gap}${line}\n`;
     const path = join(this.directory, `${name}.jsonl`);
     let error: Error | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) await sleep(this.retryDelayMs);
       try {
-        await this.append(path, text);
+        // Built for each try: a line cut short by a failed try (or write) is ended before this one.
+        await this.append(path, `${this.cut.has(name) ? "\n" : ""}${gap}${line}\n`);
         this.lost.delete(name);
         this.cut.delete(name);
         return { written: true };
@@ -184,7 +224,10 @@ export class SessionLogs {
       }
     }
     this.lost.set(name, lost + 1);
-    if (lost === 0) this.options.onFailure?.({ name, error: error! });
+    if (lost === 0) {
+      // The notice belongs to the caller; a notice that throws must not stop this log's queue.
+      try { this.options.onFailure?.({ name, error: error! }); } catch { /* the caller's own failure */ }
+    }
     return { written: false, error };
   }
 }
