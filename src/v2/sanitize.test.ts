@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error the generator is a plain .mjs script with no type declarations
-import { BEGIN, block, END } from "../../scripts/gen-sanitize.mjs";
+import { BEGIN, block, END, PINNED_UNICODE } from "../../scripts/gen-sanitize.mjs";
 import { CC_CF_RANGES, placeholder, sanitize, UNICODE_VERSION } from "./sanitize.js";
 
 const MAX_CODE_POINT = 0x10ffff;
@@ -15,12 +15,20 @@ function* codePoints(): Generator<number> {
   }
 }
 
+// The exact checks against Node's own Unicode data run only on the runtime the table was generated
+// from. A supported Node with older or newer data still tests the committed table below.
+const onPinnedRuntime = process.versions.unicode === UNICODE_VERSION;
+const whenPinned = it.skipIf(!onPinnedRuntime);
+
 describe("the generated table", () => {
-  it("matches a fresh generation from this Node's Unicode data", () => {
+  it("is generated for the Unicode version the generator pins", () => {
+    expect(UNICODE_VERSION).toBe(PINNED_UNICODE);
+  });
+
+  whenPinned("matches a fresh generation from this Node's Unicode data", () => {
     const source = readFileSync(new URL("./sanitize.ts", import.meta.url), "utf8").replaceAll("\r\n", "\n");
     const committed = source.slice(source.indexOf(BEGIN), source.indexOf(END) + END.length);
     expect(committed).toBe(block());
-    expect(UNICODE_VERSION).toBe(process.versions.unicode);
   });
 
   it("lists sorted, separate, non-adjacent ranges", () => {
@@ -29,10 +37,30 @@ describe("the generated table", () => {
       if (index > 0) expect(first).toBeGreaterThan(CC_CF_RANGES[index - 1][1] + 1);
     });
   });
+
+  it("shows each end of every range and keeps the code point beside it, on any Node", () => {
+    for (const [first, last] of CC_CF_RANGES) {
+      for (const codePoint of [first, last]) {
+        const shown = KEPT.has(codePoint) ? String.fromCodePoint(codePoint) : placeholder(codePoint);
+        expect(sanitize(String.fromCodePoint(codePoint))).toBe(shown);
+      }
+      for (const codePoint of [first - 1, last + 1]) {
+        if (codePoint < 0 || codePoint > MAX_CODE_POINT || isSurrogate(codePoint)) continue;
+        expect(sanitize(String.fromCodePoint(codePoint))).toBe(String.fromCodePoint(codePoint));
+      }
+    }
+  });
+
+  it("holds the whole of the control (Cc) set, which Unicode never changes", () => {
+    const shown = (codePoint: number): boolean => CC_CF_RANGES.some(([first, last]) => codePoint >= first && codePoint <= last);
+    for (let codePoint = 0; codePoint <= 0x9f; codePoint++) {
+      expect(shown(codePoint)).toBe(codePoint <= 0x1f || codePoint >= 0x7f);
+    }
+  });
 });
 
 describe("sanitize (SEC-6, M1-AC12)", () => {
-  it("shows every Cc and Cf code point but newline and tab as a placeholder", () => {
+  whenPinned("shows every Cc and Cf code point but newline and tab as a placeholder", () => {
     let shown = 0;
     for (const codePoint of codePoints()) {
       const character = String.fromCodePoint(codePoint);
@@ -48,7 +76,7 @@ describe("sanitize (SEC-6, M1-AC12)", () => {
     expect(shown).toBeGreaterThan(150);
   });
 
-  it("keeps every other code point", () => {
+  whenPinned("keeps every other code point", () => {
     const kept: string[] = [];
     for (const codePoint of codePoints()) {
       const character = String.fromCodePoint(codePoint);

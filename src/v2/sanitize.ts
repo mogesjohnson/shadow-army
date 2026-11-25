@@ -2,7 +2,8 @@
 // character as a visible placeholder, except newline and tab. Every other character is kept.
 //
 // The table between the markers is written by `node scripts/gen-sanitize.mjs`, never by hand.
-// sanitize.test.ts compares it with a fresh generation, so a Node with newer Unicode data shows up as a diff.
+// The table is pinned to one Unicode version (PINNED_UNICODE in the generator). sanitize.test.ts compares it
+// with a fresh generation only on a Node with that version; on any other Node it tests the committed table.
 
 // BEGIN GENERATED
 // Unicode 17.0 (Node's process.versions.unicode). Control (Cc) and format (Cf) code points, inclusive ranges.

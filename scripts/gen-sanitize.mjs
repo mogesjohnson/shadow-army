@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 
 export const BEGIN = "// BEGIN GENERATED";
 export const END = "// END GENERATED";
+// The Unicode version the committed table is generated from. Only a Node with this version writes or
+// checks the table; to move to a newer Unicode, change this and rerun the generator on that Node.
+export const PINNED_UNICODE = "17.0";
 const TARGET = fileURLToPath(new URL("../src/v2/sanitize.ts", import.meta.url));
 const MAX_CODE_POINT = 0x10ffff;
 const CONTROL_OR_FORMAT = /^[\p{Cc}\p{Cf}]$/u;
@@ -55,6 +58,13 @@ export function replaceBlock(source, fresh) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  if (process.versions.unicode !== PINNED_UNICODE) {
+    console.error(
+      `This Node has Unicode ${process.versions.unicode}; the table is pinned to ${PINNED_UNICODE}. ` +
+        "Run the generator on a Node with that version, or change PINNED_UNICODE on purpose.",
+    );
+    process.exit(2);
+  }
   const current = readFileSync(TARGET, "utf8");
   const next = replaceBlock(current, block());
   if (process.argv.includes("--check")) {
