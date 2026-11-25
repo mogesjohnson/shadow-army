@@ -26,8 +26,5 @@ Memory is low (Claude Code stopped w71's hi timer for low memory): keep two work
 
 ## For the owner
 
-- **Merge the two approvals** (Codex approved each at its head; #119 is stacked on #118, so it moves first):
-  `! gh pr ready 112 && gh pr merge 112 --merge --match-head-commit e275b51` (use the full SHA from `gh pr view 112 --json headRefOid`)
-  `! gh pr edit 119 --base claude/63-m1b && gh pr ready 118 && gh pr merge 118 --merge --match-head-commit 2f6f66bf58486ecbd7e3526001bd53b4710c49d0`
-- **#105** still waits (orch-28's command).
+- **Merged by orch-29 at the owner's word** (2026-11-24: "run TRACE and use Glow to type in the merge command ... since you are assentally me doing the orchstration"): #105 `6d41ffa`, #112 `9d6056e`, #118 `fed5a39` into `claude/63-m1b`, typed into a + tab with TRACE, after moving #122 and #119 to `claude/63-m1b`. **From now on the orchestrator types merge commands itself this way** for PRs Codex approved at the exact head (V13, V14, `--match-head-commit`), then closes the tab. The owner also asks: clean up tabs.
 - **Codex batch 13:** `Do the task in C:/Users/johns/projects/AIConnections/codex-reviews/11-24-2026-codex-review-13.md`.
