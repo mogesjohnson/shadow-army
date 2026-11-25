@@ -167,7 +167,7 @@ describe("M1 authenticated loopback command server", () => {
     expect(JSON.stringify([events, logged])).not.toContain(credential);
   }, 60_000);
 
-  windowsOnly("shutdown settles an active native turn, retains its edit and closes stalled request bodies", async () => {
+  windowsOnly("shutdown settles an active native turn as interrupted, reports and discards its read-only edit and closes stalled request bodies", async () => {
     const { repo, server, events } = await setup();
     const opened = await (await command(server, { action: "open", soldier: "scout" })).json() as { result: { cwd: string } };
     const pending = command(server, { action: "send", soldier: "scout", text: "partial" });
@@ -180,8 +180,11 @@ describe("M1 authenticated loopback command server", () => {
     await server.close();
     const response = await pending;
     const result = await response.json() as { result: { status: string } };
-    expect(result.result.status).toBe("failed");
-    expect(await readFile(join(opened.result.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+    // MSG-4: a turn the post office's shutdown cut short ends interrupted.
+    expect(result.result.status).toBe("interrupted");
+    // WSP-11: the read-only snapshot's edit is a read-violation, reported, and not kept.
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ files: ["partial.txt"] });
+    await expect(readFile(join(opened.result.cwd, "partial.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(events.some((event) => event.type === "closed" && event.soldier === "scout")).toBe(true);
     expect(events.filter((event) => event.type === "guard")).toHaveLength(1);
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });

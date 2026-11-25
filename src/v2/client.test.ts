@@ -87,7 +87,7 @@ describe("M1 caller subprocess contract", () => {
     expect(relative(canonicalPath(snapshots), canonicalPath(opened.cwd))).toMatch(/^[^.][^\\/]*-[0-9a-f]{12}[\\/]session-[0-9a-f-]+$/);
     expect((await client.request<TurnResult>({ action: "send", soldier: "scout", text: "inspect" })).status).toBe("completed");
   }, 30_000);
-  windowsOnly("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children while retaining partial work", async () => {
+  windowsOnly("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children, reporting their read-only writes", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];
     const client = new OfficeClient({ cwd: repo.dir, onEvent: (event) => events.push(event), command: { file: process.execPath, args: ["--import", new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url).href, fileURLToPath(new URL("./fixture-main.testutil.ts", import.meta.url))] } }); clients.push(client);
@@ -99,9 +99,12 @@ describe("M1 caller subprocess contract", () => {
     const pending = client.request<TurnResult>({ action: "send", soldier: "scout", text: "partial" });
     await until(() => events.some((event) => event.type === "tool_call"));
     await client.close();
-    expect((await pending).status).toBe("failed");
+    // MSG-4: shutdown cuts the turn short, so it ends interrupted.
+    expect((await pending).status).toBe("interrupted");
     expect(() => process.kill(first.pid, 0)).toThrow();
-    expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+    // WSP-11: the read-only snapshot's edit is reported as a read-violation and not kept.
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ files: ["partial.txt"] });
+    await expect(readFile(join(opened.cwd, "partial.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(client.request({ action: "army" })).rejects.toThrow("closed");
   }, 40_000);
@@ -124,7 +127,7 @@ describe("M1 caller subprocess contract", () => {
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
 
-  windowsOnly("detects an abruptly exited launcher after bootstrap EOF and closes its native child while retaining partial work", async () => {
+  windowsOnly("detects an abruptly exited launcher after bootstrap EOF and closes its native child, reporting its read-only writes", async () => {
     const repo = makeRepo(); repos.push(repo);
     const runtime = launch(repo.dir, ["--launcher"]);
     await until(() => runtime.events.some((event) => event.type === "ready"));
@@ -136,15 +139,16 @@ describe("M1 caller subprocess contract", () => {
     runtime.child.stdin.end("exit without cleanup\n");
     await runtime.exited;
     const result = await pending;
-    if (result) expect(result.status).toBe("failed");
+    if (result) expect(result.status).toBe("interrupted");
     await until(() => { try { process.kill(native.pid, 0); return false; } catch { return true; } });
-    expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+    await expect(readFile(join(opened.cwd, "partial.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await until(async () => { try { await readFile(join(repo.dir, ".shadow", "v2", "post-office.lock")); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT"; } });
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
     const logs = join(repo.dir, ".shadow", "v2", "logs");
     const records = (await Promise.all((await readdir(logs)).map((name) => readFile(join(logs, name), "utf8")))).join("\n");
     expect(records.match(/"type":"guard"/g)).toHaveLength(2);
     expect(records.match(/"type":"delivery"/g)).toHaveLength(2);
+    expect(records).toMatch(/"type":"read_violation","data":\{"files":\["partial\.txt"\]/);
     await until(() => { try { process.kill(ready.pid, 0); return false; } catch { return true; } });
     await runtime.closed;
     expect(await readFile(join(repo.dir, "launcher-stderr.log"), "utf8")).toBe("");
