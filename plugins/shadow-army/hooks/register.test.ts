@@ -18,6 +18,7 @@ const SOLDIERS = [
 ];
 
 const BIN = process.platform === "win32" ? "C:\\tools\\bin" : "/usr/local/bin";
+const HOME_ = process.platform === "win32" ? "C:\\Users\\me" : "/home/me";
 const PATH_SEPARATOR = process.platform === "win32" ? ";" : ":";
 const exeIn = (dir: string, name: string) => `${dir}${dir.includes("\\") ? "\\" : "/"}${name}${process.platform === "win32" ? ".exe" : ""}`;
 const toolOf = (argv0: string) => /([^\\/]+?)(?:\.exe)?$/.exec(argv0)![1]!;
@@ -47,6 +48,10 @@ type Env = {
   unresolved?: string[];
   /** Paths that are there but land nowhere (a dangling link, or a real path the host withholds): `$.fs.stat` answers without `realPath`. */
   dangling?: string[];
+  /** File contents `$.fs.read` returns (git's metadata files); a path not listed, or listed as `undefined`, rejects `ENOENT`. */
+  files?: Record<string, string | undefined>;
+  /** The folders `$.fs.list` lists, by name; a path not listed rejects `ENOENT`. */
+  lists?: Record<string, string[]>;
 };
 async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {}) {
   vi.resetModules();
@@ -74,7 +79,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
   let answered = false;
   const $ = {
     session: { id: async () => claudeId.value, cwd: async () => env.cwd ?? "/repo", version: async () => env.host ?? "2.1.294" },
-    env: { get: async (name: string) => env.vars?.[name] ?? (name === "PATH" ? (env.dirs ?? [BIN]).join(PATH_SEPARATOR) : undefined) },
+    env: { get: async (name: string) => env.vars?.[name] ?? ({ PATH: (env.dirs ?? [BIN]).join(PATH_SEPARATOR), HOME: HOME_, USERPROFILE: HOME_ } as Record<string, string>)[name] },
     settings: { read: async () => { if (env.settingsReads) env.settingsReads.count++; return { env: env.settingsEnv ?? {} }; } },
     plugin: { root: "/x/plugins/shadow-army" },
     fs: {
@@ -88,7 +93,18 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
         const there = !env.unresolved?.includes(path) && (!exe || ((env.dirs ?? [BIN]).includes(exe[1]!) && env.tools?.[exe[2]!] !== "missing"));
         if (!there) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
         if (env.dangling?.includes(path)) return { kind: "other", size: 0, mtimeMs: 0, isLink: true };
-        return { kind: "file", size: 0, mtimeMs: 0, isLink: false, ...(options?.resolve ? { realPath: env.real?.[path] ?? path } : {}) };
+        const kind = env.files?.[path] === undefined && /[\\/]\.git$/.test(path) ? "directory" : "file";
+        return { kind, size: 0, mtimeMs: 0, isLink: false, ...(options?.resolve ? { realPath: env.real?.[path] ?? path } : {}) };
+      },
+      read: async (path: string) => {
+        const text = env.files?.[path];
+        if (text === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+        return text;
+      },
+      list: async (path: string) => {
+        const names = env.lists?.[path];
+        if (!names) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+        return names.map((name) => ({ name, kind: "directory", size: 0, mtimeMs: 0, isLink: false }));
       },
     },
     clock: {
@@ -569,6 +585,57 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
       });
       expect(probes.map((p) => p.argv[0])).toEqual([exeIn(RELEASED, "node"), exeIn(RELEASED, "git")]);
       expect(spawns[0].argv[0]).toBe(exeIn(RELEASED, "node"));
+    });
+
+    describe("the repository's whole layout, read from git's own files (C9, review 21)", () => {
+      const fwd = (path: string) => path.replace(/\\/g, "/");
+      const LINKED = process.platform === "win32" ? "D:\\elsewhere\\w9" : "/elsewhere/w9";
+      const OTHER = process.platform === "win32" ? "E:\\other\\w2" : "/other/w2";
+      const ADMIN = `${fwd(ROOT)}/.git/worktrees`;
+      const linked = (files: Record<string, string | undefined> = {}): Env => ({
+        cwd: LINKED, lists: { [ADMIN]: ["w9", "w2"] },
+        files: {
+          [`${LINKED}/.git`]: `gitdir: ${ADMIN}/w9\n`, [`${ADMIN}/w9/gitdir`]: `${fwd(LINKED)}/.git\n`, [`${ADMIN}/w9/commondir`]: "../..\n",
+          [`${ADMIN}/w2/gitdir`]: `${fwd(OTHER)}/.git\n`, ...files,
+        },
+      });
+
+      it("refuses entries in the main checkout, its worktrees folder and every registered worktree from a linked checkout", async () => {
+        const dirs = [where(ROOT, "bin"), where(`${ROOT}-worktrees`, "x", "bin"), where(OTHER, "bin"), BIN];
+        const { probes, spawns } = await launched({ ...linked(), dirs });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+        expect(spawns).toHaveLength(1);
+      });
+
+      it.each([
+        ["its .git file names no git folder", { [`${LINKED}/.git`]: "nonsense\n" }],
+        ["its git folder does not name it back", { [`${ADMIN}/w9/gitdir`]: "/somewhere/else/.git\n" }],
+        ["its git folder has no commondir", { [`${ADMIN}/w9/commondir`]: undefined }],
+        ["a registered worktree's gitdir cannot be read", { [`${ADMIN}/w2/gitdir`]: undefined }],
+      ])("starts nothing from a linked checkout when %s", async (_case, files) => {
+        const { probes, spawns, line } = await launched(linked(files));
+        expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
+        expect(probes).toEqual([]);
+        expect(spawns).toEqual([]);
+      });
+    });
+
+    describe("snapshot roots outside the checkout (C10, review 21)", () => {
+      const MOVED = process.platform === "win32" ? "F:\\snaps" : "/snaps";
+
+      it("refuses entries in the default snapshot root and in the one SHADOW_ARMY_SNAPSHOTS names", async () => {
+        const dirs = [where(HOME_, ".shadow-army", "snapshots", "repo-0a1b2c3d4e5f", "s1", "bin"), where(MOVED, "repo-0a1b2c3d4e5f", "s1", "bin"), BIN];
+        const { probes } = await launched({ dirs, vars: { SHADOW_ARMY_SNAPSHOTS: MOVED } });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+      });
+
+      it.each([["no home folder is known", { HOME: "", USERPROFILE: "" }], ["SHADOW_ARMY_SNAPSHOTS is relative", { SHADOW_ARMY_SNAPSHOTS: "snaps" }]])(
+        "starts nothing when %s", async (_case, vars) => {
+          const { probes, spawns, line } = await launched({ vars });
+          expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
+          expect(probes).toEqual([]);
+          expect(spawns).toEqual([]);
+        });
     });
   });
 });

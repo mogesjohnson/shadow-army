@@ -291,34 +291,112 @@ async function findOnPath($: EngineInterface, name: string, path: string, barred
   return undefined;
 }
 
+/** Whether a host file call rejected because the path is not there. */
+const isMissing = (error: unknown): boolean => {
+  const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
+  return code === "ENOENT" || (code === undefined && /\bENOENT\b/.test(String(message)));
+};
+
 /** A barred folder's real path; `null` when it is not there (`stat` rejects `ENOENT`), `undefined` when it is there but cannot be resolved. */
 async function rootIdentity($: EngineInterface, path: string): Promise<string | null | undefined> {
   let real: unknown;
-  try { real = (await $.fs.stat(path, { resolve: true })).realPath; } catch (error) {
-    const { code, message } = (error ?? {}) as { code?: unknown; message?: unknown };
-    return code === "ENOENT" || (code === undefined && /\bENOENT\b/.test(String(message))) ? null : undefined;
-  }
+  try { real = (await $.fs.stat(path, { resolve: true })).realPath; } catch (error) { return isMissing(error) ? null : undefined; }
   return typeof real === "string" && real !== "" ? real : undefined;
 }
 
+/** `path` taken from `base` as git takes a path in its own files (an absolute one stands alone), with `.` and `..` folded, in forward slashes. */
+const joined = (base: string, path: string): string => {
+  const own = path.trim();
+  const text = (isAbsolute(own) || /^[\\/]{2}/.test(own) ? own : `${base}/${own}`).replace(/\\/g, "/");
+  const lead = text.startsWith("//") ? "//" : text.startsWith("/") ? "/" : "";
+  const parts: string[] = [];
+  for (const part of text.slice(lead.length).split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") { if (parts.length && !/^[A-Za-z]:$/.test(parts[parts.length - 1]!)) parts.pop(); continue; }
+    parts.push(part);
+  }
+  return lead + parts.join("/");
+};
+
+/** The first line of one of git's own files, after `prefix` (`gitdir: ` in a `.git` file), or `undefined` when it cannot be read or is empty. */
+async function gitValue($: EngineInterface, path: string, prefix = ""): Promise<string | undefined> {
+  try {
+    const line = String(await $.fs.read(path)).split(/\r?\n/)[0] ?? "";
+    return line.startsWith(prefix) && line.slice(prefix.length).trim() ? line.slice(prefix.length).trim() : undefined;
+  } catch { return undefined; }
+}
+
 /**
- * The barred folders as compared: the working folder, the repository and the worktrees folder beside each repository spelling, each in its own
- * spelling and by its own real path, so a link or junction on any of them is followed (C1). The working folder and the repository must resolve;
- * a worktrees folder may be absent, but one that is there and does not resolve stops the start, as does any other failed lookup.
+ * Every checkout of the repository, read from git's own files before anything runs (HOST-2, CH-1; C9, review 21): the nearest checkout, the
+ * main checkout and each registered worktree (`<common git folder>/worktrees/<name>/gitdir`). A linked checkout's `.git` file must name a git folder
+ * whose `gitdir` names that checkout back and whose `commondir` names the common folder; anything else leaves the layout unverified, and nothing starts.
+ */
+async function checkouts($: EngineInterface, root: string): Promise<string[] | { refusal: string }> {
+  const refusal = { refusal: `Shadow Army: the git worktrees of ${root} cannot be verified · nothing started` };
+  const dotGit = `${root}/.git`;
+  let kind: string;
+  try { kind = (await $.fs.stat(dotGit)).kind; } catch (error) { return isMissing(error) ? [root] : refusal; }
+  let common = joined(root, ".git");
+  if (kind === "file") {
+    const own = await gitValue($, dotGit, "gitdir:");
+    if (!own) return refusal;
+    const admin = joined(root, own);
+    const [back, shared] = [await gitValue($, `${admin}/gitdir`), await gitValue($, `${admin}/commondir`)];
+    if (!back || !shared) return refusal;
+    const [named, real] = [await realPathOf($, joined(admin, back)), await realPathOf($, dotGit)];
+    if (!named || !real || normal(named) !== normal(real)) return refusal;
+    common = joined(admin, shared);
+  } else if (kind !== "directory") return refusal;
+  const found = [root, common.endsWith("/.git") ? common.slice(0, -"/.git".length) : common];
+  let names: string[] = [];
+  try { names = (await $.fs.list(`${common}/worktrees`)).filter((entry) => entry.kind === "directory").map((entry) => entry.name); }
+  catch (error) { if (!isMissing(error)) return refusal; }
+  for (const name of names) {
+    const back = await gitValue($, `${common}/worktrees/${name}/gitdir`);
+    if (!back) return refusal;
+    found.push(joined(`${common}/worktrees/${name}`, back).replace(/\/\.git$/, ""));
+  }
+  return found;
+}
+
+/**
+ * WSP-11's snapshot roots, outside the checkout and without a `.shadow` component (C10, review 21): the default `~/.shadow-army/snapshots`
+ * and the folder `SHADOW_ARMY_SNAPSHOTS` names. Without a home folder, or with a setting that is not absolute, they cannot be known, and nothing starts.
+ */
+async function snapshotRoots($: EngineInterface): Promise<string[] | { refusal: string }> {
+  const home = process.platform === "win32" ? (await $.env.get("USERPROFILE")) || (await $.env.get("HOME")) : await $.env.get("HOME");
+  if (!home || !isAbsolute(home)) return { refusal: "Shadow Army: the home folder, where snapshots go, is not known · nothing started" };
+  const moved = await $.env.get("SHADOW_ARMY_SNAPSHOTS");
+  if (moved && !isAbsolute(moved)) return { refusal: "Shadow Army: SHADOW_ARMY_SNAPSHOTS is not an absolute path · nothing started" };
+  return [joined(home, ".shadow-army/snapshots"), ...(moved ? [moved] : [])];
+}
+
+/**
+ * The barred folders as compared: the working folder, every checkout of the repository (C9), the worktrees folder beside each checkout and the
+ * snapshot roots (C10), each in its own spelling and by its own real path, so a link or junction on any of them is followed (C1). The working
+ * folder and the nearest checkout must resolve; another may be absent, but one that is there and does not resolve stops the start.
  */
 async function barredFolders($: EngineInterface, cwd: string, root: string): Promise<string[] | { refusal: string }> {
   const refusal = (path: string) => ({ refusal: `Shadow Army: ${path} does not resolve to a real path · nothing started` });
   const [cwdReal, rootReal] = [await rootIdentity($, cwd), await rootIdentity($, root)];
   if (typeof cwdReal !== "string") return refusal(cwd);
   if (typeof rootReal !== "string") return refusal(root);
-  const folders = [cwd, cwdReal, root, rootReal];
-  for (const repository of new Set([root, rootReal])) {
-    const trees = `${repository.replace(/[\\/]+$/, "")}-worktrees`;
-    const real = await rootIdentity($, trees);
-    if (real === undefined) return refusal(trees);
-    folders.push(trees, ...(real === null ? [] : [real]));
-  }
-  return [...new Set(folders.map(normal))];
+  const [layout, snapshots] = [await checkouts($, root), await snapshotRoots($)];
+  if (!Array.isArray(layout)) return layout;
+  if (!Array.isArray(snapshots)) return snapshots;
+  const folders = [cwd, cwdReal];
+  const add = async (paths: Iterable<string>): Promise<string | undefined> => {
+    for (const path of new Set(paths)) {
+      const real = await rootIdentity($, path);
+      if (real === undefined) return path;
+      folders.push(path, ...(real === null ? [] : [real]));
+    }
+    return undefined;
+  };
+  const unresolved = await add([root, rootReal, ...layout])
+    ?? await add(folders.slice(2).map((checkout) => `${checkout.replace(/[\\/]+$/, "")}-worktrees`))
+    ?? await add(snapshots);
+  return unresolved === undefined ? [...new Set(folders.map(normal))] : refusal(unresolved);
 }
 
 /** Node.js's and git's absolute paths, found before either is run (HOST-2), or the line to show when one is missing. */
