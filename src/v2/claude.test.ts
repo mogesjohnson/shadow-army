@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import * as managedProcesses from "./processTree.js";
-import type { ChannelEvent, NativeError } from "./channel.js";
+import type { ChannelEvent, NativeError, TurnUsage } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, VERSION_TIMEOUT_MS } from "./claude.js";
 
 const channels: ClaudeChannel[] = [];
@@ -280,15 +280,20 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     ];
     const turns: Record<string, Record<string, number>>[] = [];
     const costs: number[] = [];
+    const firstClass: TurnUsage["models"][] = [];
     for (const [index, modelUsage] of totals.entries()) {
       const turn = await send(`turn ${index}`);
       const total = Object.values(modelUsage).reduce((sum, entry) => sum + entry.costUSD, 0);
       emit({ type: "result", subtype: "success", user_message_uuid: turn.id, result: "ok", usage: { input_tokens: 5, output_tokens: 1 }, total_cost_usd: total, modelUsage });
       const usage = (await turn.pending).usage!;
       turns.push(usage.raw.models as Record<string, Record<string, number>>);
+      firstClass.push(usage.models);
       costs.push(usage.costUsd!);
     }
     expect(turns[1]).toEqual({ main: { inputTokens: 150, outputTokens: 20, cacheReadInputTokens: 70, costUSD: expect.closeTo(0.15) }, sub: { inputTokens: 400, outputTokens: 40, costUSD: 0.05 } });
+    // #124 C1: the same figures as TurnUsage's own per-model field, in its names.
+    expect(firstClass[1]).toEqual({ main: { inputTokens: 150, outputTokens: 20, cachedInputTokens: 70, costUsd: expect.closeTo(0.15) }, sub: { inputTokens: 400, outputTokens: 40, costUsd: 0.05 } });
+    for (const model of ["main", "sub"]) expect(firstClass.reduce((sum, models) => sum + (models?.[model]?.inputTokens ?? 0), 0)).toBe((totals[2] as Record<string, Record<string, number>>)[model].inputTokens);
     for (const model of ["main", "sub"]) for (const key of ["inputTokens", "outputTokens", "costUSD"]) {
       const sum = turns.reduce((total, models) => total + (models[model]?.[key] ?? 0), 0);
       expect(sum).toBeCloseTo((totals[2] as Record<string, Record<string, number>>)[model][key]);
@@ -297,14 +302,18 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     // A stopped turn reports no per-model figures, and its totals are the next baseline.
     const stopped = await send("stopped");
     emit({ type: "result", subtype: "error_during_execution", is_error: true, errors: [], user_message_uuid: stopped.id, terminal_reason: "aborted_tools", usage: zeroUsage, total_cost_usd: 0.5, modelUsage: { main: { inputTokens: 350, outputTokens: 40, costUSD: 0.4 }, sub: { inputTokens: 900, outputTokens: 90, costUSD: 0.1 } } });
-    expect((await stopped.pending).usage?.raw.models).toBeUndefined();
+    const stoppedUsage = (await stopped.pending).usage;
+    expect(stoppedUsage?.raw.models).toBeUndefined();
+    expect(stoppedUsage?.models).toBeUndefined();
     const after = await send("after stop");
     emit({ type: "result", subtype: "success", user_message_uuid: after.id, result: "ok", usage: { input_tokens: 5, output_tokens: 1 }, total_cost_usd: 0.6, modelUsage: { main: { inputTokens: 360, outputTokens: 41, costUSD: 0.5 }, sub: { inputTokens: 900, outputTokens: 90, costUSD: 0.1 } } });
     expect((await after.pending).usage?.raw.models).toEqual({ main: { inputTokens: 10, outputTokens: 1, costUSD: expect.closeTo(0.1) }, sub: { inputTokens: 0, outputTokens: 0, costUSD: 0 } });
     // /clear starts the totals over: that turn's own totals are its figures.
     const cleared = await send("/clear");
     emit({ type: "result", subtype: "success", user_message_uuid: cleared.id, result: "", usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.01, modelUsage: { main: { inputTokens: 1, outputTokens: 1, costUSD: 0.01 } } });
-    expect((await cleared.pending).usage?.raw.models).toEqual({ main: { inputTokens: 1, outputTokens: 1, costUSD: 0.01 } });
+    const clearedUsage = (await cleared.pending).usage;
+    expect(clearedUsage?.raw.models).toEqual({ main: { inputTokens: 1, outputTokens: 1, costUSD: 0.01 } });
+    expect(clearedUsage?.models).toEqual({ main: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 } });
   });
 
   // M1-AC14 (unit part): the live run is the owner's.

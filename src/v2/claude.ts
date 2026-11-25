@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, RetryNotice, TurnResult, TurnUsage } from "./channel.js";
+import type { ChannelEvent, ChannelOptions, ModelUsage, NativeChannel, NativeError, RetryNotice, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
@@ -140,6 +140,11 @@ function modelCounters(modelUsage: Frame | undefined): Record<string, Record<str
     models[model] = Object.fromEntries(MODEL_COUNTERS.flatMap((key) => number(entry[key]) === undefined ? [] : [[key, number(entry[key])!]]));
   }
   return models;
+}
+/** #124 C1: the CLI's per-model counters under TurnUsage's own names. */
+const MODEL_FIELDS: Record<(typeof MODEL_COUNTERS)[number], keyof ModelUsage> = { inputTokens: "inputTokens", outputTokens: "outputTokens", cacheReadInputTokens: "cachedInputTokens", cacheCreationInputTokens: "cacheCreationInputTokens", webSearchRequests: "webSearchRequests", costUSD: "costUsd" };
+function turnModels(models: Record<string, Record<string, number>>): Record<string, ModelUsage> {
+  return Object.fromEntries(Object.entries(models).map(([model, counters]) => [model, Object.fromEntries(Object.entries(counters).map(([key, value]) => [MODEL_FIELDS[key as keyof typeof MODEL_FIELDS], value]))]));
 }
 /** A turn's own per-model figures: these totals less the baseline's, a model absent from the baseline counting from zero. */
 function modelDeltas(current: Record<string, Record<string, number>>, baseline: Record<string, Record<string, number>> | undefined): Record<string, Record<string, number>> {
@@ -478,7 +483,7 @@ export class ClaudeChannel implements NativeChannel {
       inputTokens: number(nativeUsage?.input_tokens), cachedInputTokens: number(nativeUsage?.cache_read_input_tokens), outputTokens: number(nativeUsage?.output_tokens), ...costUsage, raw: terminal,
     };
     // CH-2, OBS-3: the turn's own figures by model, subagents included. Absent where CH-2 gives only main-loop figures.
-    if (usage && models) usage = { ...usage, raw: { ...usage.raw, models } };
+    if (usage && models) usage = { ...usage, models: turnModels(models), raw: { ...usage.raw, models } };
     if (usage && turn.model) usage = { ...usage, raw: { ...usage.raw, model: turn.model } };
     if (usage) this.emit("usage", { scope: "turn", ...usage });
     const error = failure && !interrupted ? terminalError ?? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
