@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import { startOfficeServer, type OfficeServer } from "./server.js";
+import { bootstrapLease } from "./main.js";
 import type { LeaseClock } from "./lease.js";
 import type { OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
@@ -16,7 +17,7 @@ const sockets: Socket[] = [];
 async function setup(lease?: { session: string }, leaseClock?: LeaseClock) {
   const repo = makeRepo(); repos.push(repo);
   const events: OfficeEvent[] = [];
-  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, leaseClock, onEvent: (event) => events.push(event) }); servers.push(server);
+  const server = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, lease, live: !lease, leaseClock, onEvent: (event) => events.push(event) }); servers.push(server);
   return { repo, server, events };
 }
 const command = (server: OfficeServer, value: Record<string, unknown>) => fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify(value) });
@@ -33,7 +34,7 @@ describe("M1 authenticated loopback command server", () => {
     expect((await command(server, { action: "release", session: "current" })).status).toBe(200);
     await server.close();
     expect(events.filter((event) => event.type === "lease_ended")).toEqual([
-      { type: "lease_ended", data: { session: "current", reason: "released" } },
+      { type: "lease_ended", data: { session: "current", reason: "Claude Code ended" } },
     ]);
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
   }, 20_000);
@@ -47,9 +48,66 @@ describe("M1 authenticated loopback command server", () => {
     run(30);
     await until(() => events.some((event) => event.type === "lease_ended"));
     await server.close();
-    expect(events.find((event) => event.type === "lease_ended")?.data).toEqual({ session: "expired", reason: "expired" });
+    expect(events.find((event) => event.type === "lease_ended")?.data).toEqual({ session: "expired", reason: "no renewal from the mod for 30 s" });
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
   }, 20_000);
+
+  it.each([
+    ["logout", "the owner logged out"],
+    ["prompt_input_exit", "Claude Code ended"],
+    ["other", "Claude Code ended"],
+  ])("a release at a %s end reports %s as the shutdown's reason (C2)", async (reason, ended) => {
+    const { server, events } = await setup({ session: "current" });
+    expect((await command(server, { action: "release", session: "current", reason })).status).toBe(200);
+    await server.close();
+    expect(events.filter((event) => event.type === "lease_ended")).toEqual([{ type: "lease_ended", data: { session: "current", reason: ended } }]);
+  }, 20_000);
+
+  it("refuses a release whose reason is not a session.end reason, and keeps the lease (C2)", async () => {
+    const { server, events } = await setup({ session: "current" });
+    expect((await command(server, { action: "release", session: "current", reason: "Logout now!" })).status).toBe(400);
+    expect((await command(server, { action: "renew", session: "current" })).status).toBe(200);
+    expect(events.some((event) => event.type === "lease_ended")).toBe(false);
+  });
+
+  it("logs the lease's start, a long step and each refusal, and no renewal (C3)", async () => {
+    let now = 0; let check = () => {};
+    const { repo, server, events } = await setup({ session: "army" }, { now: () => now, every: (fn) => { check = fn; return () => {}; } });
+    expect((await command(server, { action: "renew", session: "army" })).status).toBe(200);
+    now += 9_000; check();
+    expect((await command(server, { action: "renew", session: "old" })).status).toBe(400);
+    expect((await command(server, { action: "release", session: "army" })).status).toBe(200);
+    await server.close();
+    const lease = [
+      { type: "lease_started", data: { session: "army" } },
+      { type: "lease_long_step", data: { session: "army", stepMs: 9_000 } },
+      { type: "lease_refused", data: { session: "army", action: "renew", reason: "mod lease belongs to another session" } },
+      { type: "lease_ended", data: { session: "army", reason: "Claude Code ended" } },
+    ];
+    expect(events.filter((event) => event.type.startsWith("lease_"))).toEqual(lease);
+    const log = (await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line));
+    expect(log.filter((line) => String(line.type).startsWith("lease_")).map(({ type, data }) => ({ type, data }))).toEqual(lease);
+  }, 20_000);
+
+  it.each([
+    [{}, /exactly one/],
+    [{ lease: { session: "army" }, live: true }, /exactly one/],
+    [{ lease: { session: "" } }, /session id/],
+  ])("refuses to start, before taking the folder, with no launcher, both, or no session id (C1)", async (launcher, error) => {
+    const repo = makeRepo(); repos.push(repo);
+    await expect(startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, ...launcher })).rejects.toThrow(error);
+    await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reads the launcher from the bootstrap: the mod's needs a session id, and only `sa live`'s has no lease (C1)", () => {
+    expect(bootstrapLease({ credential, mode: "mod", lease: { session: "army" } })).toEqual({ lease: { session: "army" } });
+    expect(bootstrapLease({ credential, mode: "live" })).toEqual({ live: true });
+    expect(() => bootstrapLease({ credential })).toThrow(/names no launcher/);
+    expect(() => bootstrapLease({ credential, lease: { session: "army" } })).toThrow(/names no launcher/);
+    expect(() => bootstrapLease({ credential, mode: "mod" })).toThrow(/no valid session id/);
+    expect(() => bootstrapLease({ credential, mode: "mod", lease: {} })).toThrow(/no valid session id/);
+    expect(() => bootstrapLease({ credential, mode: "live", lease: { session: "army" } })).toThrow(/no lease/);
+  });
 
   it("a post office with no lease, as `sa live` starts it, refuses renew and release and runs on", async () => {
     const { server, events } = await setup();
@@ -82,7 +140,7 @@ describe("M1 authenticated loopback command server", () => {
   it("passes a command's claims to open and send, so a claims turn is applied to the owner's folder", async () => {
     const repo = makeRepo(); repos.push(repo);
     const builders = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true } });
-    const server = await startOfficeServer({ cwd: repo.dir, credential, roster: builders, channelFactory: (options) => ({
+    const server = await startOfficeServer({ cwd: repo.dir, credential, roster: builders, live: true, channelFactory: (options) => ({
       async send() { await mkdir(dirname(join(options.cwd, "src/a.ts")), { recursive: true }); await writeFile(join(options.cwd, "src/a.ts"), "from the soldier\n"); return { status: "completed", text: "done", refusal: false }; },
       async interrupt() {}, async respondApproval() {}, async close() {},
     }) }); servers.push(server);
@@ -98,7 +156,7 @@ describe("M1 authenticated loopback command server", () => {
 
   it("enforces a folder singleton and releases its non-secret lock on shutdown", async () => {
     const { repo, server } = await setup();
-    const options = { cwd: repo.dir, credential, roster, channelFactory: factory };
+    const options = { cwd: repo.dir, credential, roster, live: true, channelFactory: factory };
     const lock = join(repo.dir, ".shadow", "v2", "post-office.lock");
     expect(await readFile(lock, "utf8")).not.toContain(credential);
     await expect(startOfficeServer(options)).rejects.toThrow("lock already exists");
