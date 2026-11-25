@@ -112,11 +112,32 @@ describe("parseDelegateV2 (Claude is the Monarch)", () => {
     for (const [text, why] of refused) expect(() => parseDelegateV2(doc(text))).toThrow(why);
   });
 
-  it("parses the shipped file the same way v1 does, apart from the monarch block", () => {
+  it("ignores a conflict limited to the legacy orchestrate role, and drops the role; v1 still refuses it", () => {
+    const text = noMonarch.replace("roles: [build]", "roles: [build, orchestrate]\n    forbidden: [orchestrate]");
+    expect(() => parseDelegate(doc(text.replace("soldiers:", "monarch:\n  default: b\nsoldiers:")))).toThrow(
+      /"orchestrate" is both granted in roles and listed in forbidden/,
+    );
+    const d = parseDelegateV2(doc(text));
+    expect(d.policy.soldiers["b"]).toEqual({ roles: ["build"], cost: 2, forbidden: [], write: true });
+    expect(JSON.stringify(d.policy)).not.toContain("orchestrate");
+  });
+
+  it("still refuses a conflict on a role v2 uses, next to the legacy one", () => {
+    const text = noMonarch.replace("roles: [build]", "roles: [build, review, orchestrate]\n    forbidden: [review, orchestrate]");
+    expect(() => parseDelegateV2(doc(text))).toThrow(/"review" is both granted/);
+  });
+
+  it("parses the shipped file the same way v1 does, apart from the monarch block and the orchestrate role", () => {
     const text = readFileSync(new URL("../../orchestratorDelegate.md", import.meta.url), "utf8");
     const v1 = parseDelegate(text);
     const v2 = parseDelegateV2(text);
-    expect(v2.policy.soldiers).toEqual(v1.policy.soldiers);
+    const noLegacy = Object.fromEntries(
+      Object.entries(v1.policy.soldiers).map(([k, v]) => [
+        k,
+        { ...v, roles: v.roles.filter((r) => r !== "orchestrate"), forbidden: v.forbidden.filter((r) => r !== "orchestrate") },
+      ]),
+    );
+    expect(v2.policy.soldiers).toEqual(noLegacy);
     expect(v2.guide).toBe(v1.guide);
   });
 });

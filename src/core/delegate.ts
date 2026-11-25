@@ -28,13 +28,15 @@ const SoldierPolicy = z
   })
   .strict();
 
+type Role = z.infer<typeof Role>;
 const MonarchBlock = z.object({ default: z.string(), fallback: z.string().optional() }).strict();
 type Soldiers = Record<string, z.infer<typeof SoldierPolicy>>;
 
 /** The checks on each soldier's own policy. Shared by v1 and v2: neither may skip a hard rule. */
-function checkSoldiers(soldiers: Soldiers, add: (message: string) => void): void {
+function checkSoldiers(soldiers: Soldiers, add: (message: string) => void, ignore?: Role): void {
   for (const [key, s] of Object.entries(soldiers)) {
     for (const r of s.forbidden) {
+      if (r === ignore) continue;
       if (s.roles.includes(r)) add(`${key}: "${r}" is both granted in roles and listed in forbidden`);
     }
     if (!s.write && s.roles.includes("build")) {
@@ -68,8 +70,8 @@ export const PolicySchema = z
 
 /**
  * The 2.0 policy: Claude Code is the Monarch, so a legacy `monarch` block may be absent, and when present
- * it is not read at all (its shape, its references and the `orchestrate` role are all ignored). Every
- * soldier check is the v1 one, and the keys stay strict.
+ * it is not read at all (its shape, its references and the `orchestrate` role are all ignored, and the
+ * role is removed from every soldier). Every other soldier check is the v1 one, and the keys stay strict.
  */
 export const V2PolicySchema = z
   .object({
@@ -77,8 +79,22 @@ export const V2PolicySchema = z
     soldiers: z.record(z.string(), SoldierPolicy),
   })
   .strict()
-  .superRefine((p, ctx) => checkSoldiers(p.soldiers, (message) => ctx.addIssue({ code: "custom", message })))
-  .transform(({ soldiers }) => ({ soldiers }));
+  .superRefine((p, ctx) =>
+    checkSoldiers(p.soldiers, (message) => ctx.addIssue({ code: "custom", message }), "orchestrate"),
+  )
+  .transform(({ soldiers }) => ({
+    // The legacy `orchestrate` role means nothing in 2.0: project it out of what v2 callers see.
+    soldiers: Object.fromEntries(
+      Object.entries(soldiers).map(([k, s]) => [
+        k,
+        {
+          ...s,
+          roles: s.roles.filter((r) => r !== "orchestrate"),
+          forbidden: s.forbidden.filter((r) => r !== "orchestrate"),
+        },
+      ]),
+    ) as Soldiers,
+  }));
 
 export type DelegatePolicy = z.infer<typeof PolicySchema>;
 export type DelegatePolicyV2 = z.infer<typeof V2PolicySchema>;
