@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, exitGraceFor, spawnManagedProcess, type ManagedProcess } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, exitGraceFor, listingFrom, spawnManagedProcess, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -158,8 +158,13 @@ describe("Windows tree listing (PO-11) and guardian identity (PO-9)", () => {
     });
     stray.push(childPid);
 
-    const first = await session.list!();
-    const second = await session.list!();
+    const processes = async () => {
+      const listing = await session.list!() as TreeListing;
+      expect(listing.status).toBe("listed");
+      return listing.status === "listed" ? listing.processes : [];
+    };
+    const first = await processes();
+    const second = await processes();
     const byPid = (pid: number) => first.find((entry) => entry.pid === pid);
     expect(byPid(session.pid)).toBeDefined();
     expect(byPid(childPid)).toBeDefined();
@@ -174,11 +179,73 @@ describe("Windows tree listing (PO-11) and guardian identity (PO-9)", () => {
 
     process.kill(childPid);
     expect(await gone(childPid, 10_000)).toBe(true);
-    const third = await session.list!();
+    stray.splice(stray.indexOf(childPid), 1); // Confirmed gone: cleanup must never signal a reused pid.
+    const third = await processes();
     expect(third.some((entry) => entry.pid === childPid)).toBe(false);
     expect(third.some((entry) => entry.pid === session.pid)).toBe(true);
 
     await session.close();
-    expect(await session.list!()).toEqual([]);
+    expect(await session.list!()).toEqual({ status: "ended" });
   }, 60_000);
+
+  windowsOnly("ends the tree at once on close({grace:false}) while a listing is still running", async () => {
+    const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", "process.stdin.resume();setInterval(()=>{},1000);"], cwd: await directory(), exitGraceMs: 60_000, listDelayMs: 5_000 });
+    sessions.push(session); session.stdout.resume(); session.stderr.resume();
+    const listing = session.list!();
+    await new Promise((done) => setTimeout(done, 300));
+    const began = Date.now();
+    await session.close({ grace: false });
+    expect(Date.now() - began).toBeLessThan(3_000);
+    expect(alive(session.pid)).toBe(false);
+    expect(await listing).toEqual({ status: "ended" });
+  }, 30_000);
+
+  windowsOnly("loss of the owner ends the tree at once while a listing is still running", async () => {
+    const cwd = await directory();
+    const owner = join(cwd, "owner.mts");
+    const driver = pathToFileURL(join(process.cwd(), "src", "v2", "contain", "windows.ts")).href;
+    await writeFile(owner, [
+      `import { spawnManagedProcess } from ${JSON.stringify(driver)};`,
+      `const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", "process.stdin.resume();setInterval(()=>{},1000);"], cwd: process.cwd(), exitGraceMs: 60000, listDelayMs: 5000 });`,
+      "session.stdout.resume(); session.stderr.resume();",
+      "void session.list();",
+      "setTimeout(() => console.log(`pid:${session.pid}`), 300);",
+      "setInterval(() => {}, 1000);",
+    ].join("\n"), "utf8");
+    const child = spawn(process.execPath, ["--import", "tsx", owner], { cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"], windowsHide: true });
+    try {
+      const pid = await new Promise<number>((done, fail) => {
+        let text = "";
+        child.stdout.on("data", (chunk: Buffer) => { text += chunk.toString(); const match = /pid:(\d+)/.exec(text); if (match) done(Number(match[1])); });
+        child.once("exit", () => fail(new Error("owner exited before launching the CLI")));
+        setTimeout(() => fail(new Error("owner did not launch the CLI in time")), 20_000);
+      });
+      stray.push(pid);
+      // The owner disappears with its listing still held by the supervisor. Node (libuv) holds its
+      // children in a kill-on-close job, so the owner's death also ends the supervisor: this guards
+      // the result, while the close test above is the one that shows the control thread stays free.
+      child.kill();
+      expect(await gone(pid, 3_000)).toBe(true);
+    } finally { child.kill(); }
+  }, 60_000);
+});
+
+describe("reading the supervisor's listing reply (PO-11)", () => {
+  const last = [{ pid: 7, startTime: 1_795_000_000_007 }];
+  it("returns a successful query, empty only when the job is", () => {
+    expect(listingFrom({ processes: [{ pid: 8, startTime: 1_795_000_000_008, extra: 1 }], unverified: [] }, last))
+      .toEqual({ status: "listed", processes: [{ pid: 8, startTime: 1_795_000_000_008 }] });
+    expect(listingFrom({ processes: [], unverified: [] }, last)).toEqual({ status: "listed", processes: [] });
+  });
+  it("reports a failed query as incomplete with the last verified identities", () => {
+    expect(listingFrom({ message: "Access is denied" }, last)).toEqual({ status: "incomplete", reason: expect.stringContaining("Access is denied"), lastVerified: last });
+  });
+  it("never strips a malformed entry from a reply", () => {
+    expect(listingFrom({ processes: [{ pid: 8, startTime: 1_795_000_000_008 }, { pid: "9" }], unverified: [] }, last))
+      .toEqual({ status: "incomplete", reason: expect.stringContaining("malformed"), lastVerified: last });
+  });
+  it("never reads a process whose identity could not be read as absent", () => {
+    expect(listingFrom({ processes: [{ pid: 8, startTime: 1_795_000_000_008 }], unverified: [9] }, last))
+      .toEqual({ status: "incomplete", reason: expect.stringContaining("pid 9"), lastVerified: last });
+  });
 });
