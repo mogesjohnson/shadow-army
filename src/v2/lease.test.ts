@@ -111,6 +111,29 @@ describe("the mod session lease (HOST-2, PO-7)", () => {
     expect(() => new SessionLease({ session: "x".repeat(129) }, vi.fn(), fake().clock)).toThrow(/session id/);
   });
 
+  it("reports its start, each long step check to check even when a renewal reset the gap, and each refusal, but no renewal (C3)", () => {
+    const f = fake();
+    const report = vi.fn();
+    const lease = new SessionLease({ session: "army" }, vi.fn(), f.clock, report);
+    expect(report.mock.calls.map(([r]) => r)).toEqual([{ type: "lease_started", data: { session: "army" } }]);
+    f.run(10); lease.renew("army");
+    expect(report).toHaveBeenCalledTimes(1);
+    f.step(7_000); f.tick(); // 8 s from the previous check
+    f.step(3_000); lease.renew("army"); f.step(4_000); f.tick(); // 8 s check to check, a renewal in between
+    f.step(5_000); f.tick(); // 6 s
+    f.step(4_000); f.tick(); // 5 s is not long
+    expect(() => lease.renew("old")).toThrow(/another session/);
+    lease.release("army");
+    expect(() => lease.renew("army")).toThrow(/ended/);
+    expect(report.mock.calls.slice(1).map(([r]) => r)).toEqual([
+      { type: "lease_long_step", data: { session: "army", stepMs: 8_000 } },
+      { type: "lease_long_step", data: { session: "army", stepMs: 8_000 } },
+      { type: "lease_long_step", data: { session: "army", stepMs: 6_000 } },
+      { type: "lease_refused", data: { session: "army", action: "renew", reason: "mod lease belongs to another session" } },
+      { type: "lease_refused", data: { session: "army", action: "renew", reason: "mod session lease has ended" } },
+    ]);
+  });
+
   it("dispose cancels its timer and fires nothing", () => {
     const { f, expired, lease } = make();
     lease.dispose();

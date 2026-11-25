@@ -15,6 +15,17 @@ export interface LeaseClock {
   every?: (check: () => void, ms: number) => () => void;
 }
 
+/** PO-7: what the post office logs about a lease: its start, each long step between two checks and each refusal, never a renewal one by one. */
+export type LeaseRecord =
+  | { type: "lease_started"; data: { session: string } }
+  | { type: "lease_long_step"; data: { session: string; stepMs: number } }
+  | { type: "lease_refused"; data: { session: string; action: "renew" | "release"; reason: string } };
+
+/** PO-7: the mod's session id, checked before the post office starts. */
+export function assertSessionId(session: unknown): asserts session is string {
+  if (typeof session !== "string" || !session.length || session.length > 128) throw new Error("mod lease requires a session id of at most 128 characters");
+}
+
 function realEvery(check: () => void, ms: number): () => void {
   const timer = setInterval(check, ms);
   timer.unref?.();
@@ -32,22 +43,28 @@ export class SessionLease {
   readonly session: string;
   private gap = 0;
   private mark: number;
+  /** The previous check's time: a long step is measured check to check, so a renewal in between does not hide it. */
+  private lastCheck: number;
   private cancel?: () => void;
   private ended = false;
   private readonly now: () => number;
 
-  constructor(options: LeaseOptions, private readonly onExpire: () => void, clock: LeaseClock = {}) {
-    if (typeof options.session !== "string" || !options.session.length || options.session.length > 128) throw new Error("mod lease requires a session id of at most 128 characters");
+  constructor(options: LeaseOptions, private readonly onExpire: () => void, clock: LeaseClock = {}, private readonly report: (record: LeaseRecord) => void = () => {}) {
+    assertSessionId(options.session);
     this.session = options.session;
     this.now = clock.now ?? (() => performance.now());
-    this.mark = this.now();
+    this.mark = this.lastCheck = this.now();
     this.cancel = (clock.every ?? realEvery)(() => this.check(), CHECK_EVERY_MS);
+    this.report({ type: "lease_started", data: { session: this.session } });
   }
 
   /** The once-a-second check. Only a check ends the lease. */
   check(): void {
     if (this.ended) return;
     const at = this.now();
+    const step = at - this.lastCheck;
+    this.lastCheck = at;
+    if (step > CHECK_CAP_MS) this.report({ type: "lease_long_step", data: { session: this.session, stepMs: Math.round(step) } });
     this.gap += Math.min(Math.max(at - this.mark, 0), CHECK_CAP_MS);
     this.mark = at;
     if (this.gap >= LEASE_MS) {
@@ -60,20 +77,22 @@ export class SessionLease {
     if (this.ended) throw new Error("mod session lease has ended");
   }
 
-  private assertSession(session: unknown): void {
-    if (session !== this.session) throw new Error("mod lease belongs to another session");
-    this.assertActive();
+  private assertSession(session: unknown, action: "renew" | "release"): void {
+    const reason = session !== this.session ? "mod lease belongs to another session" : this.ended ? "mod session lease has ended" : undefined;
+    if (!reason) return;
+    this.report({ type: "lease_refused", data: { session: this.session, action, reason } });
+    throw new Error(reason);
   }
 
   renew(session: unknown): { ttlMs: number } {
-    this.assertSession(session);
+    this.assertSession(session, "renew");
     this.gap = 0;
     this.mark = this.now();
     return { ttlMs: LEASE_MS };
   }
 
   release(session: unknown): void {
-    this.assertSession(session);
+    this.assertSession(session, "release");
     this.dispose();
   }
 
