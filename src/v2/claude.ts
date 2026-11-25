@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
+import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, RetryNotice, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
@@ -298,7 +298,7 @@ export class ClaudeChannel implements NativeChannel {
     if (frame.type === "system" && frame.subtype === "init") { this.init(frame); return; }
     if (frame.type === "system" && frame.subtype === "api_retry") {
       // CH-2: the CLI is backing off. A notice, not an error; the turn goes on.
-      this.emit("raw", { type: "retry_notice", attempt: number(frame.attempt), maxRetries: number(frame.max_retries), retryDelayMs: number(frame.retry_delay_ms), errorStatus: frame.error_status, error: frame.error });
+      this.emit("retry", { attempt: number(frame.attempt), maxRetries: number(frame.max_retries), retryDelayMs: number(frame.retry_delay_ms), errorStatus: frame.error_status, error: frame.error } satisfies RetryNotice);
       return;
     }
     if (frame.type === "result") { this.result(frame); return; }

@@ -623,14 +623,14 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     emit({ type: "system", subtype: "api_retry", attempt: 2, max_retries: 10, retry_delay_ms: 1200, error_status: 529, error: "overloaded" });
     emit({ type: "result", subtype: "success", user_message_uuid: id, result: "done", total_cost_usd: 0.01, usage: { input_tokens: 3, output_tokens: 1 } });
     expect(await pending).toMatchObject({ status: "completed", text: "done" });
-    expect(rawOf(events, "retry_notice").map((event) => event.data)).toEqual([{ type: "retry_notice", attempt: 2, maxRetries: 10, retryDelayMs: 1200, errorStatus: 529, error: "overloaded" }]);
+    expect(events.filter((event) => event.type === "retry").map((event) => event.data)).toEqual([{ attempt: 2, maxRetries: 10, retryDelayMs: 1200, errorStatus: 529, error: "overloaded" }]);
     expect(errorsOf(events)).toHaveLength(0);
   });
 
   windowsOnly("a retry from the fake ends in its own result (CH-2)", async () => {
     const { channel, events } = await setup();
     expect(await channel.send("retry")).toMatchObject({ status: "completed", text: "after retry" });
-    expect(rawOf(events, "retry_notice")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "retry")).toHaveLength(1);
   }, 15_000);
 
   it("opens no session when the version probe's processes cannot be confirmed stopped (CH-2, fail closed)", async () => {

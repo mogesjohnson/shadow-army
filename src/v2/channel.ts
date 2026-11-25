@@ -50,8 +50,16 @@ export interface TurnResult {
   summary?: string;
   write?: WriteOutcome;
 }
+/** The CLI is backing off before retrying its API call; not an error, the turn goes on (CH-2). */
+export interface RetryNotice {
+  attempt?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  errorStatus?: unknown;
+  error?: unknown;
+}
 export interface ChannelEvent {
-  type: "text" | "thinking" | "tool_call" | "tool_result" | "approval" | "usage" | "turn_end" | "error" | "closed" | "raw";
+  type: "text" | "thinking" | "tool_call" | "tool_result" | "approval" | "usage" | "turn_end" | "error" | "retry" | "closed" | "raw";
   data: unknown;
 }
 export interface ChannelOptions {
