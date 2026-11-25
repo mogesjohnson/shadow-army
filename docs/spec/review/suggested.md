@@ -4,6 +4,14 @@ Big changes and architecture questions. Only the orchestrator writes this file (
 
 The owner pre-approved the orchestrator's recommendations on 2026-11-23. Each entry says whether the work went ahead on its recommendation or waits for the owner. Newest first.
 
+## S-8 Refusals in the minute a shutdown cuts short (2026-11-25, orch-31)
+
+From w76's fix of #126 C5 and #130 C2. The server counts refused commands and writes one count per minute. Codex asked that shutdown not write an early count, so the refusals in the last, partial minute are now never written.
+
+- **Options:** A, leave it; the last partial minute goes unreported. B, at shutdown, write that minute's count once, marked `partial: true`, so every refusal is counted and no full-minute count comes early.
+- **Recommendation: B.** The refusal log is an audit record. A gap at shutdown is exactly where a misbehaving caller would end up, and the `partial` mark keeps the once-a-minute rule for full minutes. Can be undone; inside the repo.
+- **Status:** going ahead as a build note after reviews 6 to 9's fixes are re-reviewed, so the fix round does not change shape under Codex.
+
 ## S-7 Combined bases for M1b tasks while Codex's queue waits (2026-11-24, orch-14)
 
 Codex has reviewed none of the M1b PRs (#105 to #123), and every M1b task still to build needs two or more of them. M1b-15 needs #110 and #105; M1b-22 needs #107, #113 and #112.
