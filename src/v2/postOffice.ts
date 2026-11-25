@@ -683,8 +683,18 @@ export class PostOffice {
     // PO-11: the tree's processes as the channel lists them go into its record.
     const channel = session.channel as ListedChannel | undefined;
     if (channel?.list && session.tree) await session.tree.listing(await channel.list().catch(() => []));
-    // PO-15: while a process the failed containment named still runs, the guard stays open; with none named it is cut short.
-    if (session.containmentFailed && this.ops) await holdGuardOpen(await this.leftovers(session), this.processOps(this.ops), { wait: this.ops.wait });
+    // PO-15: while a process the failed containment named still runs, the guard stays open; with none named it is cut short,
+    // and the turn says what it can't cover. Either way the turn is interrupted (PO-8) and nothing it did is applied.
+    let containment: string | undefined;
+    if (session.containmentFailed) {
+      const left = this.ops ? await this.leftovers(session) : "unknown";
+      const held = left !== "unknown" && left.length === 0 ? "ended" : this.ops ? await holdGuardOpen(left, this.processOps(this.ops), { wait: this.ops.wait }) : "cut-short";
+      containment = held === "ended"
+        ? "containment failed during the turn; the processes it named have stopped; nothing is applied"
+        : "containment failed during the turn; processes the CLI started may still be running, and what they change won't be on the turn's attribution card; nothing is applied";
+      result = { ...result, status: "interrupted", error: { kind: result.error?.kind ?? "transport", message: result.error ? `${result.error.message}\n${containment}` : containment } };
+      this.record({ soldier: session.spec.key, type: "containment_turn", data: { ended: held === "ended", line: containment } }, session);
+    }
     const changes: string[] = startFailure ? [`checkout guard could not start: ${startFailure}`] : [];
     const base = session.guardBase;
     session.guardBase = undefined;
@@ -718,6 +728,7 @@ export class PostOffice {
       try { write = await this.audit(session, result, changes); }
       catch (error) { changes.push(`claim audit could not complete: ${String(error)}`); }
     }
+    if (write && containment) write = { ...write, applicable: false, reason: containment };
     if (changes.length) {
       session.tainted = true;
       session.down = true;

@@ -528,7 +528,9 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
         async send(text) { if (channels.length === 1 && text === "fail") options.onEvent({ type: "closed", data: { containmentStopped: false } }); return { status: "completed", text, refusal: false }; } };
     } }); offices.push(office);
     await office.send("scout", "list");
-    expect((await office.send("scout", "fail")).status).toBe("completed");
+    const failed = await office.send("scout", "fail");
+    expect(failed.status).toBe("interrupted");
+    expect(failed.error?.message).toMatch(/the processes it named have stopped; nothing is applied/);
     expect(ended).toEqual([600]);
     expect(waits).toEqual([10_000]);
     alive.set(600, 9);
@@ -536,6 +538,18 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     alive.delete(600);
     await office.open("scout");
     expect(channels).toHaveLength(2);
+  });
+
+  it("finishes a turn whose leftovers are unknown as interrupted, saying the attribution card can't cover them (PO-15)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), onEvent: (event) => events.push(event), channelFactory: (options) => ({
+      ...idle()(options), async send(text) { options.onEvent({ type: "closed", data: { containmentStopped: false } }); return { status: "completed", text, refusal: false }; } }) });
+    const result = await office.send("scout", "fail");
+    expect(result.status).toBe("interrupted");
+    expect(result.error?.message).toMatch(/may still be running, and what they change won't be on the turn's attribution card; nothing is applied/);
+    expect(events.find((event) => event.type === "containment_turn")?.data).toMatchObject({ ended: false });
+    await expect(office.close()).rejects.toThrow("could not be closed");
   });
 
   it("at startup sweeps dead trees, checks the open turn against its baseline and reports and removes the snapshot it left", async () => {
