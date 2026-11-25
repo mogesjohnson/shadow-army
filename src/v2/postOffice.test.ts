@@ -11,7 +11,7 @@ import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
 import type { SweepOps } from "./contain/sweep.js";
-import { PostOffice, type OfficeEvent } from "./postOffice.js";
+import { PostOffice, type OfficeEvent, type OfficeOps } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
 // WSP-11: snapshots go outside the folder; these tests keep theirs in a folder of their own in the home.
@@ -766,4 +766,103 @@ describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup
     expect(second.cwd).not.toBe(first.cwd);
     expect(existsSync(first.cwd)).toBe(false);
   }, 60_000);
+});
+
+describe("M1b-26 review 11 C1, C4: termination and starts gated on verified records (fake processes)", () => {
+  type Id = { pid: number; startTime: number };
+  /** Identity-bound fakes: `endProcess` (pid only) is never what the office should call; a failing probe throws. */
+  function officeOps(alive: Map<number, number>, calls: { ended: Id[]; byPid: number[] } = { ended: [], byPid: [] }, failing = new Set<number>(), stubborn = new Set<number>()): OfficeOps {
+    return { platform: "linux", wait: async () => {}, commandOf: async (pid) => `fake ${pid}`,
+      // What `systemOps` does on a failed probe: it reads as absence.
+      startTimeOf: async (pid) => failing.has(pid) ? undefined : alive.get(pid),
+      endProcess: async (pid) => { calls.byPid.push(pid); if (!stubborn.has(pid)) alive.delete(pid); },
+      probe: async (pid) => { if (failing.has(pid)) throw new Error(`probe of ${pid} failed`); return alive.get(pid) ?? "gone"; },
+      endIdentity: async (one) => { calls.ended.push(one); if (alive.get(one.pid) === one.startTime && !stubborn.has(one.pid)) alive.delete(one.pid); } };
+  }
+  const channel = (extra: Partial<NativeChannel & { identities(): Promise<{ guardian?: Id; cli?: Id }> }> = {}, sent?: string[]) => (options: ChannelOptions): NativeChannel => ({
+    async send(text) { sent?.push(text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {}, ...extra, ...{ options } });
+  const trees = (dir: string) => join(dir, ".shadow", "v2", "trees");
+  const line = (value: object) => `${JSON.stringify(value)}\n`;
+  async function deadTree(dir: string, extra = "") {
+    await mkdir(trees(dir), { recursive: true });
+    await writeFile(join(trees(dir), "dead.jsonl"), line({ kind: "post-office", pid: 999, startTime: 5 }) + line({ kind: "process", pid: 501, startTime: 3 }) + extra);
+  }
+
+  it("ends an earlier tree's process only by its recorded identity, never by its pid alone (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: channel() }); offices.push(office);
+    expect(calls).toEqual({ ended: [{ pid: 501, startTime: 3 }], byPid: [] });
+    expect(existsSync(join(trees(repo.dir), "dead.jsonl"))).toBe(false);
+  });
+
+  it("ends nothing, keeps the entry and starts no soldier while a record doesn't verify, then recovers once it does (C1, C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir, `{"kind":"process","pid":502`);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: (options) => { starts++; return channel()(options); } }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/earlier trees not swept, and no soldier starts: dead\.jsonl is not a whole tree record/);
+    expect([calls, starts, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, 0, true]);
+    await deadTree(repo.dir);
+    await office.open("scout");
+    expect([calls.ended, starts]).toEqual([[{ pid: 501, startTime: 3 }], 1]);
+  });
+
+  it("treats a failed probe as unknown, never as absence: nothing is ended and starts wait (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls, new Set([999])), channelFactory: channel() }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/a process check failed: .*probe of 999 failed/);
+    expect([calls, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, true]);
+  });
+
+  it("keeps new starts gated while an earlier tree's process still runs, and starts once it stops (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const alive = new Map([[process.pid, 1], [501, 3]]), stubborn = new Set([501]);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(alive, undefined, undefined, stubborn), channelFactory: channel() }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/earlier trees still run, and no soldier starts until they stop: 501 fake 501/);
+    expect(existsSync(join(trees(repo.dir), "dead.jsonl"))).toBe(true);
+    alive.delete(501);
+    await office.open("scout");
+    expect(existsSync(join(trees(repo.dir), "dead.jsonl"))).toBe(false);
+  });
+
+  it("refuses to start a soldier with no process operations rather than run it unrecorded (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, channelFactory: (options) => { starts++; return channel()(options); } }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/Containment failed for .*no process operations/);
+    expect(starts).toBe(0);
+  });
+
+  it("puts the guardian's and CLI's identities in the record, and a failed write takes the soldier down on disk with one owner line, sending nothing (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const sent: string[] = [], events: OfficeEvent[] = [];
+    let breakRecord = false;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1]])), onEvent: (event) => events.push(event),
+      channelFactory: channel({ async identities() {
+        if (breakRecord) for (const name of readdirSync(trees(repo.dir))) { rmSync(join(trees(repo.dir), name)); await mkdir(join(trees(repo.dir), name)); }
+        return { guardian: { pid: 600, startTime: 8 }, cli: { pid: 601, startTime: 9 } };
+      } }, sent) }); offices.push(office);
+    const opened = await office.open("scout");
+    await office.send("scout", "inspect");
+    const record = (await readFile(join(trees(repo.dir), `${opened.session}.jsonl`), "utf8")).trim().split("\n").map((text) => JSON.parse(text));
+    expect(record).toEqual([{ kind: "post-office", pid: process.pid, startTime: 1 }, { kind: "guardian", pid: 600, startTime: 8 }, { kind: "cli", pid: 601, startTime: 9 }]);
+    await office.closeSession("scout");
+    breakRecord = true;
+    await office.open("scout");
+    const result = await office.send("scout", "second");
+    expect(sent).toEqual(["inspect"]);
+    expect(result.status).not.toBe("completed");
+    const down = events.filter((event) => event.type === "containment_failed");
+    expect(down).toHaveLength(1);
+    expect(down[0]!.data).toMatchObject({ down: true, message: expect.stringMatching(/^Containment failed for .*tree record not written/) });
+    expect(office.downSoldiers.isDown("scout")).toBe(true);
+    const log = await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8");
+    expect(log).toMatch(/"type":"containment_failed".*"down":true/);
+  });
 });

@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from "node:fs";
-import { mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
@@ -16,18 +18,81 @@ import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutc
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
-import { containmentFailedMessage, DownSoldiers, holdGuardOpen, readTrees, stillRunning, TreeRecord, type Identity, type Leftover, type ProcessOps } from "./contain/trees.js";
+import { containmentFailedMessage, DownSoldiers, holdGuardOpen, parseTreeLine, readTrees, stillRunning, TreeRecord, treesDir, type TreeLine, type Identity, type Leftover, type ProcessOps } from "./contain/trees.js";
 import { sweepTrees, systemOps, type SweepOps } from "./contain/sweep.js";
+import { parseStat } from "./contain/linux.js";
 
-/** A channel that can list its tree's processes (PO-11). The Claude channel doesn't expose `list` yet. */
-type ListedChannel = NativeChannel & { list?(): Promise<Identity[]> };
+/**
+ * A channel that names its tree's processes (PO-11): the guardian and CLI it started, and a listing of the rest.
+ * The Claude channel exposes neither yet (#138); its record then holds the post office's identity alone.
+ */
+type ListedChannel = NativeChannel & { list?(): Promise<Identity[]>; identities?(): Promise<{ guardian?: Identity; cli?: Identity }> };
 /** PO-1: each turn's checkout baseline is kept on disk while the turn runs, so a later post office can close its guard. */
 const turnsDir = (root: string) => join(root, ".shadow", "v2", "turns");
 /** WSP-11: each snapshot's path and git folder as read when it was made, so a later start never reads them from the snapshot. */
 const snapshotsDir = (root: string) => join(root, ".shadow", "v2", "snapshots");
 const stateToJson = (state: RepoState) => ({ ...state, dirty: [...state.dirty], index: [...state.index], refs: [...state.refs] });
 const stateFromJson = (value: ReturnType<typeof stateToJson>): RepoState => ({ head: value.head, branch: value.branch, dirty: new Map(value.dirty), index: new Map(value.index), refs: new Map(value.refs) });
-const machineOps = (): SweepOps | undefined => { try { return systemOps(); } catch { return undefined; } };
+/**
+ * What automatic termination needs beyond the sweep's operations (PO-15, PO-16): a probe that says "gone" only when the
+ * machine says no such process runs and throws when it can't tell, and an end bound to the process's identity.
+ */
+export interface OfficeOps extends SweepOps {
+  probe(pid: number): Promise<number | "gone">;
+  /** Ends the process (its tree with `tree`) only while it is still that identity, in one step bound to it. */
+  endIdentity(identity: Identity, tree?: boolean): Promise<void>;
+}
+/** An injected `SweepOps` (tests, the server's fakes) is trusted to report absence as `undefined`; the machine's never is. */
+const asOfficeOps = (ops: SweepOps | OfficeOps): OfficeOps => "probe" in ops && "endIdentity" in ops ? ops : {
+  ...ops,
+  probe: async (pid) => (await ops.startTimeOf(pid)) ?? "gone",
+  endIdentity: async (identity, tree = false) => { if ((await ops.startTimeOf(identity.pid)) === identity.startTime) await ops.endProcess(identity.pid, tree); },
+};
+const run = promisify(execFile);
+/** Windows' own PowerShell and taskkill by absolute path, never a PATH lookup. */
+const system32 = (...parts: string[]) => join(process.env.SystemRoot ?? "C:\\Windows", "System32", ...parts);
+async function powershell(script: string): Promise<string> {
+  return (await run(system32("WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true })).stdout.trim();
+}
+/** The machine's operations for the office: Linux through `/proc`, Windows through a process handle held across check and end. */
+function machineOps(): OfficeOps | undefined {
+  let base: SweepOps;
+  try { base = systemOps(); } catch { return undefined; }
+  if (process.platform === "linux") {
+    const probe = async (pid: number): Promise<number | "gone"> => {
+      let text: string;
+      try { text = await readFile(`/proc/${pid}/stat`, "latin1"); } catch (error) {
+        if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return "gone";
+        throw error;
+      }
+      if ("ZX".includes(text[text.lastIndexOf(")") + 2] ?? "?")) return "gone";
+      const startTime = parseStat(pid, text)?.startTime;
+      if (startTime === undefined) throw new Error(`process ${pid}'s start time can't be read`);
+      return startTime;
+    };
+    // Node has no pidfd: the identity is checked immediately before the signal, with nothing awaited between.
+    return { ...base, probe, startTimeOf: async (pid) => { const time = await probe(pid); return time === "gone" ? undefined : time; },
+      endIdentity: async ({ pid, startTime }, tree = false) => {
+        if ((await probe(pid)) !== startTime) return;
+        try { process.kill(tree ? -pid : pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+      } };
+  }
+  if (process.platform === "win32") {
+    const time = "([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds()";
+    const probe = async (pid: number): Promise<number | "gone"> => {
+      const out = await powershell(`$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'gone' } else { ${time} }`);
+      if (out === "gone") return "gone";
+      if (!/^\d+$/.test(out)) throw new Error(`process ${pid}'s start time can't be read`);
+      return Number(out);
+    };
+    // The handle opened before the check stays open through the end, so the pid can't pass to another process between.
+    return { ...base, probe, startTimeOf: async (pid) => { const found = await probe(pid); return found === "gone" ? undefined : found; },
+      endIdentity: async ({ pid, startTime }, tree = false) => {
+        await powershell(`$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -ne $p) { $null = $p.Handle; if (${time} -eq ${startTime}) { ${tree ? `& '${system32("taskkill.exe")}' /t /f /pid ${pid} | Out-Null` : "$p.Kill()"} } }`);
+      } };
+  }
+  return undefined;
+}
 /** PO-1: one line per finished turn, by turn ID, flushed before its baseline goes; a later start never reports it twice. */
 const completedFile = (root: string) => join(root, ".shadow", "v2", "completed-turns.jsonl");
 /** Writes a whole file or none of it: a flushed temporary file renamed over the target. */
@@ -65,7 +130,7 @@ export interface OfficeOptions {
   /** Harness git for a repository (WSP-10); tests pass their own. */
   gitFactory?: GitFactory;
   /** The machine's processes (PO-15, PO-16); tests pass fakes. `null` where the platform has none yet (macOS: M1b-18). */
-  processOps?: SweepOps | null;
+  processOps?: SweepOps | OfficeOps | null;
 }
 
 /** The repository `cwd` is in, found from its `.git` as git finds it, so nothing the repository names runs to find it. */
@@ -117,6 +182,8 @@ interface Session {
   turnStart?: TurnStart;
   /** PO-16's record of the soldier's process tree, removed once the tree has ended. Created before start in M1b-26. */
   tree?: TreeRecord;
+  /** The current channel's guardian and CLI are in the tree's record (PO-11). */
+  identified?: boolean;
 }
 
 /**
@@ -208,9 +275,11 @@ export class PostOffice {
   private hold?: HarnessHold;
   /** One harness git for the folder, so a guard timed out twice stays held (WSP-10). */
   private readonly officeGit: { run: RunGit };
-  private readonly ops: SweepOps | undefined;
+  private readonly ops: OfficeOps | undefined;
+  /** C1: earlier trees verified and swept with nothing left; until then the recovery fails and no new soldier starts. */
+  private swept = false;
   /** The post office's own identity for its tree records, read once. */
-  private self?: Promise<Identity | undefined>;
+  private self?: Promise<Identity>;
   /** How many turns have their guard open (PO-8). */
   private openTurns = 0;
   /** PO-1's recovery: running, done, and what it reads once (the last log's end, earlier offices' tree records). */
@@ -228,7 +297,7 @@ export class PostOffice {
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
     this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets);
-    this.ops = options.processOps === undefined ? machineOps() : options.processOps ?? undefined;
+    this.ops = options.processOps === undefined ? machineOps() : options.processOps ? asOfficeOps(options.processOps) : undefined;
   }
 
   /** The office with PO-1's recovery done, for callers that hold the folder themselves. A held recovery resumes at the next open. */
@@ -301,16 +370,28 @@ export class PostOffice {
     const ops = this.ops;
     if (!ops) { this.record({ type: "startup", data: { finished: false, reason: `no process operations on ${process.platform}; earlier trees, turns and snapshots are left` } }); return; }
     await this.unheld();
-    if (!this.earlierTrees) {
-      this.earlierTrees = await readTrees(this.root);
-      const swept = await sweepTrees(this.root, ops);
+    if (!this.swept) {
+      // C1: nothing is ended until the folder, every record, the helper and each identity are verified. A gap, a failed
+      // probe or a process left running keeps every entry and fails the recovery, so no new soldier starts (PO-15).
+      const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+      let verified: { id: string; lines: TreeLine[] }[];
+      try { verified = await this.verifiedTrees(ops); } catch (error) { throw new Error(`earlier trees not swept, and no soldier starts: ${message(error)}`); }
+      this.earlierTrees ??= verified;
+      let swept: Awaited<ReturnType<typeof sweepTrees>>;
+      try { swept = await sweepTrees(this.root, this.boundOps(ops, verified)); } catch (error) { throw new Error(`earlier trees not swept, and no soldier starts: a process check failed: ${message(error)}`); }
       if (swept.swept || swept.left.length || swept.unhandled) this.record({ type: "swept", data: swept });
+      if (swept.left.length || swept.unhandled) {
+        const named = swept.left.map((one) => `${one.pid}${one.command ? ` ${one.command}` : ""}`).join(", ");
+        throw new Error(`earlier trees still run, and no soldier starts until they stop: ${named || "no process named"}${swept.unhandled ? `; ${swept.unhandled} job(s) this machine can't end` : ""}`);
+      }
+      this.swept = true;
     }
-    const trees = this.earlierTrees;
+    const trees = this.earlierTrees ?? [];
     const identity = async (id: string): Promise<"running" | "stopped" | "unknown"> => {
       const office = trees.find((tree) => tree.id === id.replace(/-r\d+$/, ""))?.lines.find((line) => line.kind === "post-office");
       if (!office || !("pid" in office)) return "unknown";
-      const now = await ops.startTimeOf(office.pid).then((time) => time ?? "gone", () => undefined);
+      // A probe that can't tell is not absence.
+      const now = await ops.probe(office.pid).catch(() => undefined);
       return now === undefined ? "unknown" : now === office.startTime ? "running" : "stopped";
     };
     const unresolved = (id: string, what: string) => this.record({ type: "startup", data: { session: id, unresolved: true, line: `${what} left: the post office that ran it can't be identified as stopped` } });
@@ -484,7 +565,7 @@ export class PostOffice {
         // PO-15: a reconnect starts the CLI only once no process the failure named still runs; unnamed ones keep it down.
         const left = await this.leftovers(existing);
         if (left !== "unknown" && !this.downSoldiers.isDown(key)) this.downSoldiers.fail(key, left);
-        if (left === "unknown" || !this.ops || !(await this.downSoldiers.mayStart(key, this.processOps(this.ops)))) {
+        if (left === "unknown" || !this.ops || !(await this.downSoldiers.mayStart(key, this.processOps(this.ops, left)))) {
           throw new Error("native descendants were not confirmed stopped; end this caller and inspect them before starting another session");
         }
         await existing.tree?.remove().catch(() => {});
@@ -577,19 +658,111 @@ export class PostOffice {
     return snapshot;
   }
 
-  private async treeRecord(key: string, id: string): Promise<TreeRecord | undefined> {
+  /**
+   * PO-16: the session's tree record, written and read back before anything of the session starts. With no process
+   * operations, no readable own identity or a failed write, nothing starts: the soldier is down, on disk, with one owner line.
+   */
+  private async treeRecord(key: string, id: string): Promise<TreeRecord> {
+    const fail = async (reason: string): Promise<never> => {
+      const line = containmentFailedMessage(shadowName(key), { reason });
+      this.downSoldiers.fail(key);
+      this.record({ soldier: key, type: "containment_failed", data: { down: true, message: line } });
+      await this.logPending;
+      throw new Error(this.logFailure ? `${line} The post office's log can't be written either: ${String(this.logFailure)}` : line);
+    };
     const ops = this.ops;
-    if (!ops) return undefined;
-    this.self ??= ops.startTimeOf(process.pid).then((startTime) => startTime === undefined ? undefined : { pid: process.pid, startTime });
-    const failed = (reason: string) => new Error(containmentFailedMessage(shadowName(key), { reason }));
-    const self = await this.self;
-    if (!self) throw failed("the post office's own start time can't be read");
-    return TreeRecord.create(this.root, id, self, undefined, (error) => this.record({ soldier: key, type: "tree_record", data: { listed: false, reason: String(error) } }))
-      .catch((error: unknown) => { throw failed(`tree record not written: ${String(error)}`); });
+    if (!ops) return fail(`no process operations on ${process.platform}, so its tree can't be recorded`);
+    const self = await this.ownIdentity(ops).catch((error: unknown) => fail(`the post office's own identity can't be verified: ${String(error)}`));
+    let record: TreeRecord;
+    try {
+      record = await TreeRecord.create(this.root, id, self, undefined, (error) => this.record({ soldier: key, type: "tree_record", data: { listed: false, reason: String(error) } }));
+    } catch (error) { return fail(`tree record not written: ${String(error)}`); }
+    const back = await readFile(join(treesDir(this.root), `${id}.jsonl`), "utf8").then((text) => text.split(/\r?\n/).filter(Boolean).map(parseTreeLine), () => []);
+    const first = back[0];
+    if (back.length !== 1 || first?.kind !== "post-office" || !("pid" in first) || first.pid !== self.pid || first.startTime !== self.startTime) {
+      await record.remove().catch(() => {});
+      return fail("tree record not verified: it doesn't read back as written");
+    }
+    return record;
   }
 
-  private processOps(ops: SweepOps): ProcessOps {
-    return { startTimeOf: (pid) => ops.startTimeOf(pid), end: async (processes) => { for (const one of processes) await ops.endProcess(one.pid, false); } };
+  /** The helper's check (C1): the post office's own start time, read twice and the same, before it is trusted. */
+  private ownIdentity(ops: OfficeOps): Promise<Identity> {
+    return this.self ??= (async () => {
+      const [first, second] = [await ops.probe(process.pid), await ops.probe(process.pid)];
+      if (first === "gone" || first !== second) throw new Error(`the process helper reads the post office's own start time as ${first}, then ${second}`);
+      return { pid: process.pid, startTime: first };
+    })().catch((error: unknown) => { this.self = undefined; throw error; });
+  }
+
+  /**
+   * C1: the earlier trees, before any is ended: a plain folder (owned by this user and not writable by others, on POSIX), plain
+   * files, every line parsed and the post office's line first, and a helper that reads this process correctly. Throws otherwise.
+   */
+  private async verifiedTrees(ops: OfficeOps): Promise<{ id: string; lines: TreeLine[] }[]> {
+    const dir = treesDir(this.root);
+    const info = await lstat(dir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
+    if (!info) return [];
+    if (!info.isDirectory()) throw new Error(`${dir} is not a plain folder`);
+    if (process.platform !== "win32" && (info.uid !== process.getuid?.() || (info.mode & 0o002) !== 0)) throw new Error(`${dir} is not owned by this user, or others can write to it`);
+    await this.ownIdentity(ops);
+    const trees: { id: string; lines: TreeLine[] }[] = [];
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.name.endsWith(".jsonl")) continue;
+      if (!entry.isFile()) throw new Error(`${entry.name} is not a plain file`);
+      const lines = (await readFile(join(dir, entry.name), "utf8")).split(/\r?\n/).filter((line) => line.trim()).map(parseTreeLine);
+      if (lines.some((line) => !line) || lines[0]?.kind !== "post-office") throw new Error(`${entry.name} is not a whole tree record`);
+      trees.push({ id: entry.name.slice(0, -".jsonl".length), lines: lines as TreeLine[] });
+    }
+    return trees;
+  }
+
+  /**
+   * The sweep's operations bound to the verified records (C1): a probe that can't tell throws, never reads as absence, and
+   * a process is ended only as an identity a verified record names, by `endIdentity`, never by its pid alone.
+   */
+  private boundOps(ops: OfficeOps, trees: readonly { lines: readonly TreeLine[] }[]): SweepOps {
+    const known = trees.flatMap((tree) => tree.lines.flatMap((line) => "pid" in line && line.kind !== "post-office" ? [{ pid: line.pid, startTime: line.startTime }] : []));
+    return { ...ops,
+      startTimeOf: async (pid) => { const time = await ops.probe(pid); return time === "gone" ? undefined : time; },
+      endProcess: async (pid, tree) => {
+        const named = known.filter((one) => one.pid === pid);
+        if (named.length === 0) throw new Error(`process ${pid} is in no verified record`);
+        for (const one of named) await ops.endIdentity(one, tree);
+      } };
+  }
+
+  /**
+   * PO-11: the guardian's and CLI's identities, as the channel names them, appended to the tree's record once per process.
+   * A write that fails takes the soldier down, on disk, with one owner line (PO-15), and its turn sends nothing.
+   */
+  private async identify(session: Session): Promise<void> {
+    const channel = session.channel as ListedChannel | undefined;
+    if (session.identified || !channel?.identities || !session.tree) return;
+    try {
+      const { guardian, cli } = await channel.identities();
+      if (guardian) await session.tree.add({ kind: "guardian", ...guardian });
+      if (cli) await session.tree.add({ kind: "cli", ...cli });
+      session.identified = true;
+    } catch (error) {
+      const key = session.spec.key, line = containmentFailedMessage(shadowName(key), { reason: `tree record not written: ${String(error)}` });
+      session.down = true;
+      this.downSoldiers.fail(key);
+      this.record({ soldier: key, type: "containment_failed", data: { down: true, message: line } }, session);
+      await this.logPending;
+      throw new Error(line);
+    }
+  }
+
+  /** PO-15's checks bound to identity: a probe that can't tell counts the process as still running; an end is `endIdentity`. */
+  private processOps(ops: OfficeOps, named: readonly Identity[] = []): ProcessOps {
+    return {
+      startTimeOf: async (pid) => {
+        const time = await ops.probe(pid).catch(() => undefined);
+        return time === undefined ? named.find((one) => one.pid === pid)?.startTime : time === "gone" ? undefined : time;
+      },
+      end: async (processes) => { for (const one of processes) await ops.endIdentity(one, false); },
+    };
   }
 
   /** PO-15: the processes of the session's tree record that still run, named by their command lines; `"unknown"` when none was recorded. */
@@ -598,7 +771,7 @@ export class PostOffice {
     const lines = (await readTrees(this.root)).find((tree) => tree.id === session.id)?.lines ?? [];
     const named = lines.flatMap((line) => "pid" in line && line.kind !== "post-office" ? [{ pid: line.pid, startTime: line.startTime, command: "" }] : []);
     if (!ops || named.length === 0) return "unknown";
-    const left = await stillRunning(this.processOps(ops), named);
+    const left = await stillRunning(this.processOps(ops, named), named);
     return Promise.all(left.map(async (one) => ({ ...one, command: (await ops.commandOf?.(one.pid).catch(() => undefined)) ?? "" })));
   }
 
@@ -628,6 +801,7 @@ export class PostOffice {
   private start(session: Session): void {
     const generation = ++session.generation;
     session.restartPending = false;
+    session.identified = false;
     session.channel = this.factory({ cwd: session.cwd, model: session.spec.model, autonomy: session.spec.autonomy, instructions: session.instructions,
       onEvent: (event: ChannelEvent) => {
         if (generation !== session.generation) return;
@@ -739,6 +913,8 @@ export class PostOffice {
     if (startFailure) session.stopRequested = true;
     // WSP-10: a post office that stops with a turn open leaves the next one the state trusted before it, not the state it finds.
     this.hold?.setTurnOpen(++this.openTurns > 0);
+    // PO-11: the guardian and CLI the channel started go into the tree's record before its first turn; a failed write sends nothing.
+    if (!session.stopRequested) await this.identify(session).catch((error: unknown) => { startFailure ??= String(error instanceof Error ? error.message : error); session.stopRequested = true; });
     // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
     await this.renewLease(session);
     let result: TurnResult;
@@ -752,13 +928,18 @@ export class PostOffice {
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
     // PO-11: the tree's processes as the channel lists them go into its record.
     const channel = session.channel as ListedChannel | undefined;
-    if (channel?.list && session.tree) await session.tree.listing(await channel.list().catch(() => []));
+    if (channel?.list && session.tree) {
+      await session.tree.listing(await channel.list().catch((error: unknown) => {
+        this.record({ soldier: session.spec.key, type: "tree_record", data: { listed: false, reason: `the channel's listing failed: ${String(error)}` } }, session);
+        return [];
+      }));
+    }
     // PO-15: while a process the failed containment named still runs, the guard stays open; with none named it is cut short,
     // and the turn says what it can't cover. Either way the turn is interrupted (PO-8) and nothing it did is applied.
     let containment: string | undefined;
     if (session.containmentFailed) {
       const left = this.ops ? await this.leftovers(session) : "unknown";
-      const held = left !== "unknown" && left.length === 0 ? "ended" : this.ops ? await holdGuardOpen(left, this.processOps(this.ops), { wait: this.ops.wait }) : "cut-short";
+      const held = left !== "unknown" && left.length === 0 ? "ended" : this.ops ? await holdGuardOpen(left, this.processOps(this.ops, left === "unknown" ? [] : left), { wait: this.ops.wait }) : "cut-short";
       containment = held === "ended"
         ? "containment failed during the turn; the processes it named have stopped; nothing is applied"
         : "containment failed during the turn; processes the CLI started may still be running, and what they change won't be on the turn's attribution card; nothing is applied";
