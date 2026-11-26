@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireLock, lockMessages, type LockRecord, type StartTimeOf } from "./lock.js";
 
 /** Faults armed by a test: the lock's temporary writes, and the Nth folder scan, fail. */
-const fault = vi.hoisted(() => ({ tmpWrite: null as string | null, scanCall: 0, scans: 0 }));
+const fault = vi.hoisted(() => ({ tmpWrite: null as string | null, scanCall: 0, scans: 0, lockUnlink: null as string | null, lockRename: null as string | null }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const failure = (code: string) => Object.assign(new Error(code), { code });
@@ -14,6 +14,14 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
       if (fault.tmpWrite && String(args[0]).includes(".tmp-")) throw failure(fault.tmpWrite);
       return actual.writeFile(...args);
+    },
+    unlink: async (...args: Parameters<typeof actual.unlink>) => {
+      if (fault.lockUnlink && String(args[0]).endsWith(".lock")) throw failure(fault.lockUnlink);
+      return actual.unlink(...args);
+    },
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      if (fault.lockRename && String(args[1]).endsWith(".lock")) throw failure(fault.lockRename);
+      return actual.rename(...args);
     },
     readdir: async (...args: Parameters<typeof actual.readdir>) => {
       if (fault.scanCall && ++fault.scans === fault.scanCall) throw failure("EIO");
@@ -25,7 +33,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 let dir: string;
 beforeEach(async () => { dir = join(await mkdtemp(join(tmpdir(), "sa-lock-")), "lock"); });
 afterEach(async () => {
-  Object.assign(fault, { tmpWrite: null, scanCall: 0, scans: 0 });
+  Object.assign(fault, { tmpWrite: null, scanCall: 0, scans: 0, lockUnlink: null, lockRename: null });
   await rm(join(dir, ".."), { recursive: true, force: true });
 });
 
@@ -132,6 +140,35 @@ describe("PO-1's lock", () => {
     fault.scanCall = 0;
     expect(await lockFiles()).toEqual([]);
     expect(await acquireLock(dir, office(20), processes({ 10: "1000" }))).toMatchObject({ ok: true });
+  });
+
+  it("takes back its published lock by marking it released when the unlink after a failed check fails", async () => {
+    Object.assign(fault, { scanCall: 2, lockUnlink: "EBUSY" });
+    const result = await acquireLock(dir, office(10), processes({}));
+    expect(result).toEqual({ ok: false, kind: "not-written", message: lockMessages.notWritten("EIO") });
+    Object.assign(fault, { scanCall: 0, lockUnlink: null });
+    expect(JSON.parse(await readFile(join(dir, "1.lock"), "utf8"))).toEqual({ released: true });
+    expect(await acquireLock(dir, office(20), processes({ 10: "1000" }))).toMatchObject({ ok: true });
+  });
+
+  it("keeps the generation and the cleanup error when it can't take back its lock, until a retry does", async () => {
+    Object.assign(fault, { scanCall: 2, lockUnlink: "EBUSY", lockRename: "EPERM" });
+    const live = processes({ 10: "1000" });
+    const result = await acquireLock(dir, office(10), live);
+    expect(result).toMatchObject({
+      ok: false, kind: "not-written",
+      message: `${lockMessages.notWritten("EIO")}; its own lock 1.lock can't be taken back: EBUSY, then permission denied`,
+      rollback: { path: join(dir, "1.lock"), error: "EBUSY, then permission denied" },
+    });
+    if (result.ok || !result.rollback) throw new Error("expected a pending rollback");
+    fault.scanCall = 0;
+    // While the rollback is pending, its own live generation still answers a start, as the army closing.
+    expect(await acquireLock(dir, office(20), live)).toMatchObject({ ok: false, kind: "closing" });
+    await expect(result.rollback.retry()).rejects.toThrow();
+    Object.assign(fault, { lockUnlink: null, lockRename: null });
+    await result.rollback.retry();
+    expect(await lockFiles()).toEqual([]);
+    expect(await acquireLock(dir, office(20), live)).toMatchObject({ ok: true });
   });
 
   describe("two starts on one stale lock", () => {

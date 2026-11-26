@@ -18,9 +18,15 @@ export type StaleReason = "no process has its pid" | "its pid now has another st
 
 export interface HeldLock { record: LockRecord; release(): Promise<void> }
 
+/**
+ * A generation this start published but couldn't take back. It stays this start's own, and live to
+ * other starts, until `retry` resolves; `retry` rejects while it still can't be taken back.
+ */
+export interface PendingRollback { path: string; error: string; retry(): Promise<void> }
+
 export type AcquireResult =
   | { ok: true; lock: HeldLock; replaced?: { reason: StaleReason; previous?: LockRecord; logLine: string } }
-  | { ok: false; kind: "running" | "closing" | "not-written"; message: string; holder?: LockRecord };
+  | { ok: false; kind: "running" | "closing" | "not-written"; message: string; holder?: LockRecord; rollback?: PendingRollback };
 
 export const lockMessages = {
   running: (pid: number) => `the army is already running in this folder (pid ${pid})`,
@@ -106,10 +112,18 @@ export async function acquireLock(dir: string, record: LockRecord, startTimeOf: 
         return notWritten(error);
       }
       // A start that read an old generation can fill a hole below the top; it loses to the top.
-      // If that check fails, this start takes back only the generation it published.
+      // If that check fails, this start takes back only the generation it published, and keeps it
+      // (with the cleanup error) when it can't, so the caller can retry rather than meet its own lock.
       let after: number[];
-      try { after = await generations(dir); } catch (error) { await unlink(mine).catch(() => undefined); return notWritten(error); }
-      if (after.some((n) => n > top + 1)) { await unlink(mine).catch(() => undefined); continue; }
+      try { after = await generations(dir); } catch (error) {
+        try { await takeBack(dir, mine); } catch (cleanup) {
+          const reason = (cleanup as Error).message;
+          return { ok: false, kind: "not-written", rollback: { path: mine, error: reason, retry: () => takeBack(dir, mine) },
+            message: `${lockMessages.notWritten(writeReason(error))}; its own lock ${top + 1}.lock can't be taken back: ${reason}` };
+        }
+        return notWritten(error);
+      }
+      if (after.some((n) => n > top + 1)) { await takeBack(dir, mine).catch(() => undefined); continue; }
       for (const n of existing) await unlink(join(dir, `${n}.lock`)).catch(() => undefined);
       const lock: HeldLock = { record, release: () => release(dir, mine) };
       if (!replaced) return { ok: true, lock };
@@ -127,6 +141,16 @@ async function refusal(holder: LockRecord, starter: ProcessId, startTimeOf: Star
   const starterAlive = ours || (await startTimeOf(holder.starter.pid)) === holder.starter.startTime;
   if (ours || !starterAlive) return { ok: false, kind: "closing", message: lockMessages.closing(), holder };
   return { ok: false, kind: "running", message: lockMessages.running(holder.pid), holder };
+}
+
+/** Removes this start's own generation, or else marks it released; throws when neither works. */
+async function takeBack(dir: string, path: string): Promise<void> {
+  let removal: unknown;
+  try { await unlink(path); return; } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    removal = error;
+  }
+  try { await release(dir, path); } catch (error) { throw new Error(`${writeReason(removal)}, then ${writeReason(error)}`); }
 }
 
 async function release(dir: string, path: string): Promise<void> {
