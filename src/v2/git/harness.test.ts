@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGitArgs, HarnessGit, HarnessGitHeld, HarnessGitTimeout, LIMIT_MS, resolveGit } from "./harness.js";
@@ -36,6 +36,20 @@ describe("harness git PATH and overrides", () => {
     expect(harness.file).toBe(realpathSync.native(join(outside, gitName)));
     expect(harness.dropped.map((drop) => drop.entry)).toEqual([dotted, tree]);
     if (process.platform === "win32") expect(resolveGit(`\\${outside.slice(3)}`, []).dropped[0]?.reason).toBe("not fully qualified");
+  });
+
+  it("resolves a relative worktree link against its registration folder, and fails closed on one it cannot read", () => {
+    const base = temp(), work = join(base, "work"), admin = join(work, ".git", "worktrees", "t"), tree = join(base, "tree"), outside = temp();
+    for (const folder of [admin, tree, outside]) mkdirSync(folder, { recursive: true });
+    // Git writes this form under worktree.useRelativePaths: relative to the registration folder, not to anyone's cwd.
+    writeFileSync(join(admin, "gitdir"), `${relative(realpathSync.native(admin), join(realpathSync.native(tree), ".git")).split("\\").join("/")}
+`);
+    for (const folder of [tree, outside]) writeFileSync(join(folder, gitName), "");
+    const repo = { gitDir: join(work, ".git"), workTree: work, commonDir: join(work, ".git") };
+    const harness = new HarnessGit({ repo, hooksDir: base, env: { PATH: [tree, outside].join(delimiter) } });
+    expect(harness.dropped.map((drop) => drop.entry)).toEqual([tree]);
+    mkdirSync(join(work, ".git", "worktrees", "unread"));
+    expect(() => new HarnessGit({ repo, hooksDir: base, env: { PATH: outside } })).toThrow("the worktree inventory could not be checked");
   });
 
   it("drops an entry whose git is a link into the checkout (needs symlink rights; skipped on Windows without them)", (ctx) => {
@@ -99,11 +113,26 @@ describe("process tree registration", () => {
     const second = new HarnessGit({ repo, hooksDir: repo.workTree, trees: kept, clock, git: { file: "git" }, spawn: async () => stuck });
     const result = second.run(["status"]).catch((error: unknown) => error);
     await until(() => kept.add.mock.calls.length === 1);
-    clock.advance(LIMIT_MS.other);
+    run(clock, LIMIT_MS.other);
     expect(String(await result)).toContain("tree still running");
     expect(kept.remove).not.toHaveBeenCalled();
   });
+
+  it("bounds a registration that never finishes by the same limit", async () => {
+    const proc = fakeProcess(async () => {});
+    const trees = { add: vi.fn(() => new Promise<void>(() => {})), remove: vi.fn(async () => {}) };
+    const clock = createFakeClock();
+    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, clock, git: { file: "git" }, spawn: async () => proc });
+    const result = harness.run(["status"]).catch((error: unknown) => error);
+    await until(() => trees.add.mock.calls.length === 1);
+    run(clock, LIMIT_MS.other);
+    expect(await result).toBeInstanceOf(HarnessGitTimeout);
+    expect(proc.close).toHaveBeenCalled();
+  });
 });
+
+/** Runs the fake clock in one-second steps, as a post office that never stops does. */
+const run = (clock: ReturnType<typeof createFakeClock>, ms: number) => { for (let left = ms; left > 0; left -= 1_000) clock.advance(Math.min(1_000, left)); };
 
 describe("limits on a monotonic clock", () => {
   const setup = () => {
@@ -119,8 +148,11 @@ describe("limits on a monotonic clock", () => {
     const { harness, clock, lines } = setup();
     const result = harness.run(["status"], "snapshot").then(() => "done", (error: unknown) => error);
     await until(() => lines().length === 2);
-    clock.suspend(60 * 60_000); // an hour of sleep is not an hour of the monotonic clock
-    clock.advance(LIMIT_MS.snapshot - 1);
+    clock.suspend(60 * 60_000); // an hour of Linux suspend is not an hour of the monotonic clock
+    clock.advance(60 * 60_000); // an hour of Windows or macOS sleep is one long step, of which 5 s count
+    expect(await Promise.race([result, new Promise((r) => setTimeout(() => r("running"), 5_000))])).toBe("running");
+    expect(lines().every((line) => alive(line.pid))).toBe(true);
+    run(clock, LIMIT_MS.snapshot - 5_000 - 1);
     expect(await Promise.race([result, new Promise((r) => setTimeout(() => r("running"), 300))])).toBe("running");
     clock.advance(1);
     const error = await result;
@@ -140,9 +172,9 @@ describe("limits on a monotonic clock", () => {
     const { harness, clock, lines } = setup();
     const result = harness.run(["status"], "guard").catch((error: unknown) => error);
     await until(() => lines().length === 2);
-    clock.advance(LIMIT_MS.guard);
+    run(clock, LIMIT_MS.guard);
     await until(() => lines().length === 4); // the second try
-    clock.advance(LIMIT_MS.guard);
+    run(clock, LIMIT_MS.guard);
     const error = await result;
     expect(error).toBeInstanceOf(HarnessGitHeld);
     expect(harness.held).toBe("git took longer than 5 min, twice");

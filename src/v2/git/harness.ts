@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
 import { Writable } from "node:stream";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { spawnManagedProcess, type ManagedProcess, type ManagedProcessOptions, type ProcessExit } from "../processTree.js";
@@ -15,6 +15,22 @@ export const realClock: HarnessClock = {
   now: () => performance.now(),
   after(ms, fn) { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); },
 };
+
+/**
+ * PO-7's running time: a check once a second adds the step since the last one, never more than 5 s of it,
+ * so sleep, hibernation or a stall between two checks spends at most 5 s of a limit. Returns its cancel.
+ */
+export function countedDeadline(clock: HarnessClock, limitMs: number, expired: () => void): () => void {
+  let counted = 0, last = clock.now(), cancel = () => {};
+  const check = () => {
+    const now = clock.now();
+    counted += Math.min(Math.max(now - last, 0), 5_000);
+    last = now;
+    if (counted >= limitMs) expired(); else cancel = clock.after(Math.min(1_000, limitMs - counted), check);
+  };
+  cancel = clock.after(Math.min(1_000, limitMs), check);
+  return () => cancel();
+}
 
 export interface GitResult { code: number | null; stdout: string; stderr: string }
 export class HarnessGitTimeout extends Error {
@@ -70,14 +86,30 @@ export function resolveGit(pathValue: string, untrusted: string[] = [], platform
   return { git, path: kept.join(delimiter), dropped };
 }
 
-/** The checkout's own folders and the worktrees its common folder lists, always untrusted. */
+/**
+ * The checkout's own folders and the worktrees its common folder lists, always untrusted.
+ * A registration Git wrote relative (worktree.useRelativePaths) is relative to its own folder. One that cannot be read fails closed.
+ */
 function repoFolders(repo: HarnessGitOptions["repo"]) {
   const folders = [repo.workTree, repo.gitDir, repo.commonDir];
-  try {
-    for (const name of readdirSync(join(repo.commonDir, "worktrees"))) {
-      try { folders.push(dirname(readFileSync(join(repo.commonDir, "worktrees", name, "gitdir"), "utf8").trim())); } catch { /* not a worktree */ }
-    }
-  } catch { /* no worktrees */ }
+  const admin = join(repo.commonDir, "worktrees");
+  const unchecked = (what: string, cause: unknown) => new Error(`the worktree inventory could not be checked: ${what}`, { cause });
+  let entries: Dirent[];
+  try { entries = readdirSync(admin, { withFileTypes: true }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return folders; // no worktrees
+    throw unchecked(admin, error);
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const registration = join(admin, entry.name);
+    let link: string;
+    try { link = readFileSync(join(registration, "gitdir"), "utf8").trim(); } catch (error) { throw unchecked(registration, error); }
+    if (!link) throw unchecked(registration, new Error("empty gitdir"));
+    // Git resolves the link from the registration's real path, so ".." steps out of the real folder, not a link to it.
+    let from: string;
+    try { from = realpathSync.native(registration); } catch (error) { throw unchecked(registration, error); }
+    folders.push(dirname(resolve(from, link)));
+  }
   return folders;
 }
 
@@ -173,16 +205,16 @@ export class HarnessGit {
     const stdout = collect(proc.stdout), stderr = collect(proc.stderr);
     let registered = false, closed = false, cancel = () => {};
     const close = async () => { if (!closed) { await proc.close(); closed = true; } }; // ends git's whole tree, filters included
+    // The limit runs from the start, so a slow registration spends it too (WSP-10, counted as PO-7 counts).
+    const limit = new Promise<"timeout">((expired) => { cancel = countedDeadline(clock, LIMIT_MS[kind], () => expired("timeout")); });
     try {
-      await this.options.trees?.add({ pid: proc.pid, startedAt: Date.now() });
+      const registering = Promise.resolve(this.options.trees?.add({ pid: proc.pid, startedAt: Date.now() }));
+      if (await Promise.race([registering.then(() => "added" as const), limit]) === "timeout") {
+        registering.catch(() => {}); // a registration that lands later is PO-16's sweep record for an ended tree
+        await close();
+        return "timeout";
+      }
       registered = true;
-      const started = clock.now();
-      const limit = new Promise<"timeout">((expired) => {
-        const arm = (ms: number) => {
-          cancel = clock.after(ms, () => { const left = LIMIT_MS[kind] - (clock.now() - started); if (left > 0) arm(left); else expired("timeout"); });
-        };
-        arm(LIMIT_MS[kind]);
-      });
       const outcome = await Promise.race([proc.exited, limit]);
       await close();
       if (outcome === "timeout") return "timeout";
