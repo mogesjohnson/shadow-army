@@ -3,6 +3,7 @@ import type { ArmyView, Briefs, Message, Soldier } from "./model.js";
 import type { TableCard, TableScene } from "./tableRows.js";
 import type { Summary } from "./summaryRows.js";
 import type { LedgerLine } from "./ledgerRows.js";
+import type { Replay } from "./replayRows.js";
 
 /** The design's whole roster, in roster order; the strip tests compare all six with the canvas frames. */
 export const ROSTER: Soldier[] = [
@@ -109,3 +110,23 @@ export const LEDGER: LedgerLine[] = [
   { soldier: "kaisel", briefs: 1, answers: 1, peakK: 142, peakMark: "cold", time: "0:22", costUsd: 0.09, outcome: { mark: "✓", text: "no blocking findings · began cold" } },
   { soldier: "beru", briefs: 1, answers: 1, peakK: 64, time: "2:23", costUsd: 0.04, outcome: { mark: "!", text: "1 ask · answered Allow once" } },
 ];
+
+/** The "replay 110" scene: the table at 14:31:40. The records hold no meter, window or cost. */
+const THEN: Record<string, [Soldier["state"], string]> = {
+  iron: ["work", "toggle in settings"], igris: ["work", "theme tokens"], beru: ["idle", "no message yet"],
+  tusk: ["work", "lint scan"], kaisel: ["idle", "review of the toggle"], bellion: ["off", "not started"],
+};
+const thenSoldiers: Soldier[] = ROSTER.map((s) => ({ ...s, state: THEN[s.id][0], task: THEN[s.id][1], tokensK: 0 }));
+export const replayTable = (width: number, ascii = false): ArmyView => ({ ...warTable(width, ascii, thenSoldiers), decisions: [], handoffs: [] });
+
+const records = (state: string): TableCard["note"] => ({ text: `from the records: ${state}`, tone: "dm" });
+export const REPLAY_SCENE: TableScene = {
+  runId: "r-0412", hint: "esc back to live", focus: "iron", messages: MESSAGES,
+  briefs: { sent: 2, answered: 0, queued: 0, talkNote: BRIEFS.talkNote },
+  cards: {
+    iron: { role: "build", elapsed: "0:38", note: records("delivered") }, igris: { role: "build", note: records("sent") },
+    beru: { role: "build" }, tusk: { role: "research", note: records("delivered") }, kaisel: { role: "review" },
+    bellion: { role: "orchestrate" },
+  },
+};
+export const REPLAY: Replay = { at: "14:31:40", step: 2, steps: 5, from: "14:31", to: "14:33", track: "■·◆·····□····!···■" };
