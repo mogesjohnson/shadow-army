@@ -28,9 +28,12 @@ const WRITE_LEASE_MS = 60 * 60_000;
 const RESTART_DELAYS_MS = [1_000, 5_000, 30_000];
 /** PO-1: a fourth crash within 10 minutes of the first counted one leaves a channel down; older crashes stop counting. */
 const CRASH_WINDOW_MS = 10 * 60_000;
-export interface TurnOptions { claims?: string[]; }
+/** `exact` (#94 C10): the selected session decides, so a send to a writer must name its claims; the HTTP server sets it. */
+export interface TurnOptions { claims?: string[]; exact?: boolean; }
 interface Session {
   spec: SoldierSpec;
+  /** A turn was reserved on this session. */
+  used?: boolean;
   /** `tip` is the full commit ID of the branch tip the last audit resolved; `lease` is v1's claims lease, renewed here; `leaseLost` sticks once a renewal fails. */
   write?: { ws: WriteSession; claims: string[]; tip?: string; lease?: { locks: Locks; id: string }; leaseLost?: boolean; heartbeat?: ReturnType<typeof setInterval> };
   /** The checkout state at the start of the running turn, carried past Shadow Army's own applies (W12-3). */
@@ -167,11 +170,17 @@ export class PostOffice {
       this.sessions.delete(key);
       existing = undefined;
     }
-    const session = await this.session(key, options.claims);
+    const session = await this.session(key, options.claims, options.exact);
     return { soldier: key, cwd: session.cwd, session: session.id, ...(session.write ? { branch: session.write.ws.branch } : {}) };
   }
 
-  private async session(key: string, claims?: string[]): Promise<Session> {
+  /** The current session's identity and role, read from the office's own state (#94 C10). */
+  held(key: string): { session: string; writer: boolean; used: boolean } | undefined {
+    const session = this.sessions.get(key);
+    return session && { session: session.id, writer: !!session.write, used: !!session.used };
+  }
+
+  private async session(key: string, claims?: string[], exact = false): Promise<Session> {
     this.check();
     const wanted = claims?.length ? [...claims].sort() : undefined;
     const existing = this.sessions.get(key);
@@ -183,11 +192,12 @@ export class PostOffice {
       if (wanted && JSON.stringify(wanted) !== JSON.stringify(held)) {
         throw new Error(held ? `${key} holds claims ${held.join(", ")}; close its session before sending other claims` : `${key} has a read-only session; close it before sending claims`);
       }
+      if (exact && held && !wanted) throw new Error(`${key} holds a write session: a send to a writer needs its claims (close its session to send read-only)`);
       return existing;
     }
     const pending = this.opening.get(key);
     // A send that arrives while the first open is still making its worktree gets the same claim check.
-    if (pending) { await pending; return this.session(key, claims); }
+    if (pending) { await pending; return this.session(key, claims, exact); }
     const next = this.makeSession(key, claims);
     this.opening.set(key, next);
     try { return await next; } finally { this.opening.delete(key); }
@@ -317,11 +327,12 @@ export class PostOffice {
   async send(key: string, text: string, options: TurnOptions = {}): Promise<TurnResult> {
     this.check();
     if (!text.trim()) throw new Error("message is empty");
-    const session = await this.session(key, options.claims);
+    const session = await this.session(key, options.claims, options.exact);
     if (session.active) throw new Error(`${key} already has a running turn`);
     // #90 C7: the turn is reserved before the first await, so a parallel send sees it and is refused,
     // and an interrupt during the lease renewal is kept for run().
     session.stopRequested = false;
+    session.used = true;
     const next = (async () => {
       // WSP-2: fail closed before the brief goes out when the claims may have changed hands.
       if (!(await this.renewLease(session))) {
@@ -481,10 +492,11 @@ export class PostOffice {
     await session.channel!.respondApproval(requestId, response);
   }
 
-  async closeSession(key: string): Promise<void> {
+  /** `only`: close the session only while it is still that one, so a caller never closes a session another request opened. */
+  async closeSession(key: string, only?: string): Promise<void> {
     await this.opening.get(key)?.catch(() => {});
     const session = this.sessions.get(key);
-    if (!session) return;
+    if (!session || (only !== undefined && session.id !== only)) return;
     session.down = true;
     session.wake?.();
     await session.channel?.close();
@@ -492,7 +504,7 @@ export class PostOffice {
     await session.restart;
     if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
     await this.releaseWrite(session);
-    this.sessions.delete(key);
+    if (this.sessions.get(key) === session) this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
   }
 

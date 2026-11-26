@@ -147,6 +147,27 @@ describe("M1 authenticated loopback command server", () => {
     expect(((await claimless.json()) as { error: string }).error).toContain("needs its claims");
   }, 30_000);
 
+  it("#94 C10: a claimless send rejected while a claimed send owns the writer cannot later reach that writer without claims", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => { started = resolve; });
+    const server = await startOfficeServer({ cwd: repo.dir, credential, roster: makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true } }), channelFactory: () => ({
+      async send() { started(); await gate; return { status: "completed", text: "done", refusal: false }; },
+      async interrupt() {}, async respondApproval() {}, async close() {},
+    }) }); servers.push(server);
+    const owner = command(server, { action: "send", soldier: "tank", text: "edit", claims: ["src/a.ts"] });
+    await running;
+    const overlapping = await command(server, { action: "send", soldier: "tank", text: "look" });
+    expect(overlapping.status).toBe(400);
+    release();
+    expect((await owner).status).toBe(200);
+    const claimless = await command(server, { action: "send", soldier: "tank", text: "look" });
+    expect(claimless.status).toBe(400);
+    expect(((await claimless.json()) as { error: string }).error).toContain("needs its claims");
+  }, 30_000);
+
   it("C3: send returns the top-level fields the card reads for applied, refused and reverted outcomes", async () => {
     const reads = (result: SendResponse): Delivery => result;
     const turn = async (writes: string[], claims: string[], prepare?: (dir: string) => Promise<void>) => {
