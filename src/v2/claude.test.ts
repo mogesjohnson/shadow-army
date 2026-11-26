@@ -396,7 +396,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 50 });
     const lost = await channel.send("malformed-idle");
     expect(lost.status).toBe("failed");
-    expect(lost.error).toMatchObject({ kind: "other", message: expect.stringContaining("no valid frame within 50 ms") });
+    expect(lost.error).toMatchObject({ kind: "other", message: expect.stringContaining("no progress on the turn within 50 ms") });
     expect((await channel.send("hello")).status).toBe("completed");
     expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
     expect(events.some((event) => event.type === "closed")).toBe(false);
@@ -410,6 +410,24 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("completed");
     expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
   }, 15_000);
+
+  windowsOnly("keeps recovery armed through frames that belong to no turn (#96 C6)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
+    const stopped = await channel.send("malformed-unrelated");
+    expect(stopped.status).toBe("failed");
+    expect(stopped.error?.kind).toBe("other");
+    expect(events.some((event) => event.type === "error" && (event.data as NativeError).message.includes("no progress on the turn within 100 ms"))).toBe(true);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 8_000);
+
+  windowsOnly("restarts the quiet window at each frame of the turn's own progress (#96 C6)", async () => {
+    const { channel } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
+    const done = await channel.send("malformed-then-progress");
+    expect(done.status).toBe("completed");
+    expect(done.text).toBe("progress finished");
+  }, 8_000);
+
+
 
   windowsOnly("uses only the main conversation for the meter and preserves native terminal/cache usage", async () => {
     const { channel, events } = await setup();

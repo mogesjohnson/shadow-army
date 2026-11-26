@@ -54,6 +54,18 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (text === "malformed-once") { process.stdout.write("{broken JSON sk-ant-abcdefghijklmnop}\n"); result("after bad line"); continue; }
   // The turn's own result arrives broken; the CLI is then idle and an interrupt ends nothing.
   if (text === "malformed-idle") { process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue; }
+  // A bad line, then valid frames that belong to no turn, and no result: only the interrupt ends the turn.
+  if (text === "malformed-unrelated") {
+    process.stdout.write("{broken JSON}\n");
+    for (let i = 0; i < 20; i++) { emit({ type: "system", subtype: "status", status: null }); await new Promise((resolve) => setTimeout(resolve, 20)); }
+    continue;
+  }
+  // A bad line, then the turn's own progress, then its result: the quiet window restarts at each step.
+  if (text === "malformed-then-progress") {
+    process.stdout.write("{broken JSON}\n");
+    for (let i = 0; i < 8; i++) { await new Promise((resolve) => setTimeout(resolve, 30)); assistant(`working ${i}`); }
+    result("progress finished"); continue;
+  }
   if (text === "malformed-long") { process.stdout.write(`{broken ${"x".repeat(185)} sk-ant-abcdefghijklmnop ${"y".repeat(40)}}\n`); result("after long bad line"); continue; }
   if (text === "malformed-ten") { for (let i = 0; i < 10; i++) process.stdout.write("{broken JSON}\n"); continue; }
   if (text === "malformed-nine-then-ok") { for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); assistant("ok"); for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); result("survived"); continue; }

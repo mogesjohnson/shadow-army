@@ -163,16 +163,11 @@ export class ClaudeChannel implements NativeChannel {
       // Review 3 C3: every line, the tenth included, keeps its own diagnostic before the connection is lost.
       this.emit("error", { kind: "other", message } satisfies NativeError);
       if (this.badLines >= MAX_BAD_LINES_IN_A_ROW) void this.failTransport(`Claude connection lost: ${MAX_BAD_LINES_IN_A_ROW} unparseable lines in a row`);
-      else if (this.current && !this.current.stopped && !this.badLineTimer) {
-        const turn = this.current;
-        this.badLineTimer = setTimeout(() => { this.badLineTimer = undefined; void this.recover(turn); }, this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS);
-        this.badLineTimer.unref();
-      }
+      else if (this.current && !this.current.stopped && !this.badLineTimer) this.armBadLineTimer(this.current);
       return;
     }
+    // Only a settled turn disarms recovery: a valid frame that belongs to no turn proves nothing about this one.
     this.badLines = 0;
-    clearTimeout(this.badLineTimer);
-    this.badLineTimer = undefined;
     this.emit("raw", frame);
     if (typeof frame.session_id === "string") this.sessionId = frame.session_id;
     const response = object(frame.response);
@@ -203,6 +198,8 @@ export class ClaudeChannel implements NativeChannel {
     const turn = this.current;
     if (frame.type === "result") { this.result(frame); return; }
     if (!turn) return;
+    // The turn's own progress extends the quiet window; other valid frames leave its deadline as it was.
+    if (this.badLineTimer && ["stream_event", "assistant", "user", "rate_limit_event", "model_refusal_no_fallback"].includes(frame.type as string)) this.armBadLineTimer(turn);
     if (frame.type === "rate_limit_event") {
       const info = object(frame.rate_limit_info);
       if (info?.status === "rejected") {
@@ -343,20 +340,35 @@ export class ClaudeChannel implements NativeChannel {
     else this.finish(result);
   }
 
+  /** (Re)starts the quiet window after an unparseable line; it ends only when the turn settles. */
+  private armBadLineTimer(turn: PendingTurn): void {
+    clearTimeout(this.badLineTimer);
+    this.badLineTimer = setTimeout(() => {
+      this.badLineTimer = undefined;
+      // A turn waiting for the owner's approval is not silent: keep the window armed instead of stopping it.
+      if (this.current === turn && this.approvals.size) this.armBadLineTimer(turn);
+      else void this.recover(turn);
+    }, this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS);
+    this.badLineTimer.unref();
+  }
+
   /**
    * The bad line may have been the turn's result. After a quiet window, ask Claude to stop the
-   * turn natively; if no result follows within a second window, settle it locally as failed.
-   * The connection stays open, so the next turn is not blocked.
+   * turn natively. An acknowledged interrupt with no result in a second window means the turn was
+   * already over, so it settles locally as failed and the connection stays open. An interrupt that
+   * is never acknowledged may leave the native turn running: that takes the bounded containment
+   * close, and the turn settles only after containment is classified.
    */
   private async recover(turn: PendingTurn): Promise<void> {
     if (this.current !== turn || turn.stopped || this.closed) return;
     const quiet = this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS;
     turn.stopped = true;
-    turn.error = { kind: "other", message: `Claude sent no valid frame within ${quiet} ms of an unparseable line` };
+    turn.error = { kind: "other", message: `Claude made no progress on the turn within ${quiet} ms of an unparseable line` };
     this.emit("error", turn.error);
     this.approvals.clear();
     this.stopTimer = setTimeout(() => {
-      if (this.current === turn) this.finish({ status: "failed", text: turn.text, refusal: false, sessionId: this.sessionId, contextTokens: turn.contextTokens, usage: this.eventUsage(turn), error: turn.error });
+      if (this.current !== turn) return;
+      this.finish({ status: "failed", text: turn.text, refusal: false, sessionId: this.sessionId, contextTokens: turn.contextTokens, usage: this.eventUsage(turn), error: turn.error });
     }, this.options.interruptTimeoutMs ?? 30_000);
     this.stopTimer.unref();
     await this.write({ type: "control_request", request_id: randomUUID(), request: { subtype: "interrupt" } }).catch(() => undefined);
