@@ -70,12 +70,10 @@ describe("post office fixes from the M1a pre-review", () => {
     await o.send("tank", "one", { claims: ["src/**"] });
     vi.setSystemTime(Date.now() + 61 * 60_000);
     await o.open("medic", { claims: ["src/b.ts"] });
-    const second = await o.send("tank", "two", { claims: ["src/**"] });
+    // #90's send fails closed: it refuses before the brief goes out and takes the session down.
+    await expect(o.send("tank", "two", { claims: ["src/**"] })).rejects.toThrow("claims lease was lost");
     expect(steps.tank).toHaveLength(1);
-    expect(second.error?.message).toContain("lease");
     await expect(o.send("tank", "three")).rejects.toThrow("reconnect explicitly");
-    expect(second.write?.leaseLost).toBe(true);
-    expect(second.write?.applicable).toBe(false);
     expect(await readFile(join(repo.dir, "src/b.ts"), "utf8")).toBe("b\n");
   }, 30_000);
 
@@ -165,6 +163,17 @@ describe("post office fixes from the M1a pre-review", () => {
     await o.closeSession("tank");
     await expect(o.open("medic", { claims: ["src/a.ts"] })).rejects.toThrow("lease read failed");
     await o.open("tank", { claims: ["src/a.ts"] });
+  }, 30_000);
+
+  it("#90 C7: two matching sends at once run one turn; the other is refused before any brief", async () => {
+    const steps: Record<string, Step[]> = { tank: [async (cwd) => { await put(cwd, "src/a.ts", "one\n"); return "completed"; }, async () => "completed"] };
+    const { office: o } = await office(steps);
+    await o.open("tank", { claims: ["src/**"] });
+    const [a, b] = await Promise.allSettled([o.send("tank", "one", { claims: ["src/**"] }), o.send("tank", "two", { claims: ["src/**"] })]);
+    expect(a.status).toBe("fulfilled");
+    expect(b.status).toBe("rejected");
+    expect(String((b as PromiseRejectedResult).reason)).toContain("already has a running turn");
+    expect(steps.tank).toHaveLength(1);
   }, 30_000);
 
   it("C6: the heartbeat renews the lease while the session is idle and stops when it closes", async () => {
