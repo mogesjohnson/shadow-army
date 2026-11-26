@@ -27,7 +27,7 @@ export const armyMark = (folder: string, platform: NodeJS.Platform = process.pla
   createHash("sha256").update(platform === "win32" ? folder.toLowerCase() : folder, "utf8").digest("hex").slice(0, 12);
 export const snapshotSubfolder = (root: string, folder: string) => join(root, `${basename(folder)}-${armyMark(folder)}`);
 export interface FolderFacts { owner: "owner" | "trusted" | "other"; writableByOthers: boolean }
-/** POSIX facts. Windows needs an ACL reader (M1b-17); it is not tested here. */
+/** POSIX facts; Windows's are `windowsInspector` in `winAcl.ts`. */
 export function posixInspect(dir: string): FolderFacts {
   const info = lstatSync(dir);
   return { owner: info.uid === process.getuid?.() ? "owner" : info.uid === 0 ? "trusted" : "other", writableByOthers: (info.mode & 0o022) !== 0 };
@@ -47,7 +47,9 @@ export function validateSnapshotRoot(value: string | undefined, ctx: { home: str
     const info = lstatSync(dir, { throwIfNoEntry: false });
     if (info) {
       if (!info.isDirectory()) return bad(`has ${dir}, which is not a folder`);
-      const facts = ctx.inspect(dir);
+      // An owner or ACL that can't be read fails closed, like a bad one.
+      let facts: FolderFacts;
+      try { facts = ctx.inspect(dir); } catch (error) { return bad(`has ${dir}, whose owner and permissions can't be checked: ${error instanceof Error ? error.message : String(error)}`); }
       if (facts.owner === "other") return bad(`has ${dir}, which another user owns`);
       if (facts.writableByOthers) return bad(`has ${dir}, which another user can write`);
     }

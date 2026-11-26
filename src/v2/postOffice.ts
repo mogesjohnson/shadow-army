@@ -10,7 +10,8 @@ import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type SessionGit, type WriteSession } from "../workspace/session.js";
 import { HarnessGit, HarnessGitHeld } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
-import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, posixInspect, realish, validateSnapshotRoot, within, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
+import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, realish, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
+import { platformInspect } from "./winAcl.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
@@ -26,6 +27,8 @@ export interface OfficeOptions {
   onEvent?: (event: OfficeEvent) => void;
   /** Waits before the first, second and third automatic restart (PO-1: 1, 5 and 30 seconds). */
   restartDelaysMs?: readonly number[];
+  /** The snapshot root's owner and permission check (WSP-11); tests pass their own. */
+  inspect?: (dir: string) => FolderFacts;
   /** Harness git for a repository (WSP-10); tests pass their own. */
   gitFactory?: GitFactory;
 }
@@ -192,9 +195,9 @@ export class PostOffice {
     const listed = await lister(found).run(["worktree", "list", "--porcelain"], "guard");
     if (listed.code !== 0) throw new Error(`the army can't list the repository's working trees: ${listed.stderr.trim()}`);
     const workTrees = listed.stdout.split(/\r?\n/).filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9));
-    // A bad root starts no soldier, so it is kept to name at each open. The Windows ACL reader is M1b-17.
+    // A bad root starts no soldier, so it is kept to name at each open. Windows reads real owners and ACLs, failing closed.
     const snapshots = validateSnapshotRoot(process.env.SHADOW_ARMY_SNAPSHOTS || join(homedir(), ".shadow-army", "snapshots"), { home: homedir(), folder: found.workTree, workTrees,
-      inspect: process.platform === "win32" ? () => ({ owner: "owner", writableByOthers: false }) : posixInspect });
+      inspect: options.inspect ?? platformInspect() });
     const untrusted = [found.workTree, ...workTrees, ...(snapshots.ok ? [snapshots.root] : [])];
     const gitFor: GitFactory = options.gitFactory ?? ((repo) => new HarnessGit({ repo, hooksDir, untrusted }));
     // The folder as `git rev-parse --show-toplevel` prints it: the army's mark is taken from this path (WSP-11).
