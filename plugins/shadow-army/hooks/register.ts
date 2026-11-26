@@ -114,6 +114,12 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     runtime.accept();
     return;
   }
+  // PO-5: a gap in a log gets one line in Claude's transcript, also while the office closes. The post office sends one event a gap.
+  if (value.type === "log_failed") {
+    const reason = String(value.data?.reason ?? "unknown error").replace(/\s+/g, " ").trim();
+    $.ui.log(safeText(show(`Shadow Army: logs not written · ${reason}`), runtime.credential));
+    return;
+  }
   // M1 observes the event stream without adding another model turn/context.
   // The richer pane and transcript cards belong to the later mod milestones.
   if (!runtime.closing && ["error", "channel_down", "containment_uncertain"].includes(value.type)) {
