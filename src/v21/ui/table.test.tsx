@@ -2,6 +2,7 @@ import React from "react";
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { renderToString } from "ink";
+import stringWidth from "string-width";
 import { NEEDS_SCENE, ROSTER, WORK_SCENE, needsSoldiers, warTable } from "./fixture.js";
 import { tableRows } from "./tableRows.js";
 import { WarTable } from "./WarTable.js";
@@ -141,6 +142,27 @@ describe("War Table screen", () => {
     const text = box.join("").replace(/[┃\s]/g, "");
     expect(text).toContain(question);
     expect(text).toContain("npmrunlint----fix");
+  });
+  it("measures like Ink: a flag emoji keeps every drawer row at 44 columns", () => {
+    const question = `Deploy to ${Array.from({ length: 24 }, () => "🇯🇵").join(" ")} now?`;
+    const scene = { ...NEEDS_SCENE, pinned: { ...NEEDS_SCENE.pinned!, question } };
+    const out = stripVTControlCharacters(renderToString(<WarTable view={needs(44)} scene={scene} height={24} />, { columns: 44 }));
+    const lines = out.split(String.fromCharCode(10)).map((l) => l.trimEnd());
+    const box = lines.filter((l) => l.startsWith("┃") || l.startsWith("┏") || l.startsWith("┗"));
+    expect(box.length).toBeGreaterThan(3);
+    expect(box.every((l) => stringWidth(l) === 44 && /[┃┓┛]$/.test(l))).toBe(true);
+    expect(box.join("").replace(/[┃\s]/g, "")).toContain("🇯🇵");
+  });
+  it("keeps every numbered answer when a long question takes the room (VIS-3)", () => {
+    const question = Array.from({ length: 877 / 8 | 0 }, (_, i) => `word${i % 10}xx`).join(" ");
+    const scene = { ...NEEDS_SCENE, pinned: { ...NEEDS_SCENE.pinned!, question } };
+    for (const [w, h] of [[44, 24], [44, 16], [60, 16]]) {
+      const lines = screen(needs(w), scene, h);
+      const text = lines.join(" ").replace(/┃/g, " ").replace(/\s+/g, " ");
+      for (const o of scene.pinned.options.map((o, i) => `${i + 1} ${o}`)) expect(text, `${w}x${h} ${o}`).toContain(o);
+      expect(text, `${w}x${h}`).toContain("more question lines");
+      expect(lines).toHaveLength(h);
+    }
   });
   it("is exactly the asked size at every width and height, and pure ASCII on request", () => {
     const bad: string[] = [];
