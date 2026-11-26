@@ -709,12 +709,16 @@ export class PostOffice {
    */
   private async worktrees(session?: Session): Promise<Map<string, Tree>> {
     const git = this.git(this.repo);
-    const listed = await git.run(["worktree", "list", "--porcelain", "-z"], "guard");
+    // Line output: `-z` needs git 2.36, and HOST-2 supports 2.34.
+    const listed = await git.run(["worktree", "list", "--porcelain"], "guard");
     if (listed.code !== 0) throw new Error(`the repository's working trees could not be listed: ${listed.stderr.trim()}`);
     const top = slash(this.root), snaps = this.snapshots.ok ? slash(this.snapshots.root) : undefined;
     const now = new Map<string, string>(), nested = new Map<string, Tree>();
-    for (const block of listed.stdout.split("\0\0")) {
-      const fields = block.split("\0").filter(Boolean), field = (name: string) => fields.find((one) => one === name || one.startsWith(`${name} `));
+    for (const block of listed.stdout.replace(/\r\n/g, "\n").split("\n\n")) {
+      const fields = block.split("\n").filter(Boolean), field = (name: string) => fields.find((one) => one === name || one.startsWith(`${name} `));
+      // A path holding a line break splits into lines git never writes: the list can't be trusted.
+      const odd = fields.find((one) => !/^(worktree|HEAD|branch|bare|detached|locked|prunable)( |$)/.test(one));
+      if (odd !== undefined) throw new Error(`the repository's working trees could not be listed: unexpected line ${JSON.stringify(odd)}`);
       const path = field("worktree")?.slice(9), branch = field("branch")?.slice(7);
       if (!path || slash(path) === top || (snaps && slash(path).startsWith(`${snaps}/`)) || branch?.startsWith("refs/heads/shadow/")) continue;
       now.set(slash(path), path);

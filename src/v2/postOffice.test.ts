@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { armyMark } from "./snapshot.js";
+import { armyMark, type GitFactory } from "./snapshot.js";
+import { HarnessGit } from "./git/harness.js";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
@@ -737,10 +738,10 @@ describe("M1b-27 the guard waits for background work, and a backlog pauses soldi
 describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-AC4, M1-AC11)", () => {
   const two = makeRoster({ scout: { cli: "claude", model: "m", roles: ["review"], write: false }, spy: { cli: "claude", model: "m", roles: ["review"], write: false } });
   /** Fake channels: each turn runs `during` with the channel's options; `channels` keeps every one made, in order. */
-  async function fakeOffice(during: (options: ChannelOptions, text: string) => Promise<void> | void = () => {}) {
+  async function fakeOffice(during: (options: ChannelOptions, text: string) => Promise<void> | void = () => {}, gitFactory?: GitFactory) {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [], channels: ChannelOptions[] = [];
-    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: two, processOps: null, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: two, processOps: null, gitFactory, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
       channelFactory: (options): NativeChannel => {
         channels.push(options);
         return { async send(text) { await during(options, text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
@@ -793,6 +794,17 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     const guard = events.find((event) => event.type === "guard")!.data as { changes: string[] };
     expect(guard.changes.join("\n")).toMatch(/notes\/plan\.md/);
   });
+
+  it("lists working trees with no option git 2.34 lacks, so a turn passes there (HOST-2)", async () => {
+    const hooksDir = mkdtempSync(join(snapshots, "hooks-"));
+    // `git worktree list -z` arrived in git 2.36; an older git exits with this usage error.
+    const old: GitFactory = (repo) => {
+      const real = new HarnessGit({ repo, hooksDir });
+      return { run: async (args, kind, cwd) => args[0] === "worktree" && args.includes("-z") ? { code: 129, stdout: "", stderr: "error: unknown switch `z'" } : real.run(args, kind, cwd) };
+    };
+    const { office } = await fakeOffice(() => {}, old);
+    expect((await office.send("scout", "go")).status).toBe("completed");
+  }, 60_000);
 
   it("a ref made beside a branch-backed working tree is still guarded (C2)", async () => {
     const { repo, office, events } = await fakeOffice(async () => {
