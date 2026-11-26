@@ -98,7 +98,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     assistant("subagent text", { input_tokens: 99999, cache_read_input_tokens: 99999 }, { parent_tool_use_id: "agent-tool" });
     assistant("main text"); result("main text"); continue;
   }
-  if (text === "unknown-usage") { emit({ type: "result", subtype: "success", is_error: false, result: "No usage available", terminal_reason: "completed" }); current = undefined; continue; }
+  if (text === "unknown-usage") { emit({ type: "result", subtype: "success", is_error: false, result: "No usage available", terminal_reason: "completed", user_message_uuid: current?.uuid }); current = undefined; continue; }
   if (text === "inspect") {
     const args = process.argv.slice(2);
     const appendPath = args[args.indexOf("--append-system-prompt-file") + 1];

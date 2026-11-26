@@ -280,8 +280,9 @@ export class ClaudeChannel implements NativeChannel {
     // A notification or stale result cannot change another turn's usage/cost boundary.
     if (!turn || object(frame.origin)?.kind === "task-notification") return;
     // CH-2: a result ends this turn only when its uuid, or its uuid list, names this turn's message.
-    const named = [frame.user_message_uuid, ...(Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : [])].filter((value): value is string => typeof value === "string");
-    if (named.length && !named.includes(turn.id)) return;
+    // A result naming no message stays a log-only raw frame: it settles nothing and moves no baseline.
+    const named = [frame.user_message_uuid, ...(Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : [])];
+    if (!named.includes(turn.id)) return;
     const errors = Array.isArray(frame.errors) ? frame.errors.filter((value): value is string => typeof value === "string") : [];
     const text = string(frame.result) ?? (errors.length ? errors.join("\n") : turn.text);
     const failed = frame.is_error === true || string(frame.subtype)?.startsWith("error_") === true;

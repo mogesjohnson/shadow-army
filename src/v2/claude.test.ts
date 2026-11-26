@@ -218,6 +218,25 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(result.usage?.costUsd).toBeCloseTo(0.07);
   });
 
+  it("leaves a result naming no message as a log-only frame (CH-2, C10)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("earlier");
+    emit({ type: "result", subtype: "success", user_message_uuid: first.id, result: "first reply", total_cost_usd: 0.03 });
+    await first.pending;
+    const second = await send("later");
+    let settled = false;
+    void second.pending.then(() => { settled = true; });
+    emit({ type: "result", subtype: "success", result: "unbound", total_cost_usd: 0.05 });
+    emit({ type: "result", subtype: "success", user_message_uuid: "", user_message_uuids: [], result: "empty", total_cost_usd: 0.06 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    emit({ type: "result", subtype: "success", user_message_uuid: second.id, result: "true reply", total_cost_usd: 0.1 });
+    const result = await second.pending;
+    expect(result).toMatchObject({ status: "completed", text: "true reply" });
+    // Neither unbound result moved the usage baseline.
+    expect(result.usage?.costUsd).toBeCloseTo(0.07);
+  });
+
   it("marks a completed result without a cost total as a gap, not part of the next turn's estimate (C5)", async () => {
     const { emit, send } = await s6Protocol();
     const costs: (number | undefined)[] = [];
