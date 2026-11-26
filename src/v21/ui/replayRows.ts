@@ -44,10 +44,17 @@ export function replayRows(view: ArmyView, scene: TableScene, replay: Replay, he
     top: [title, focus],
     talk,
     meter: [seg("░".repeat(10), "fa"), seg(` ${UNKNOWN}`, "dm")],
+    unknown: `  ${UNKNOWN}`,
     panel: (box, edged) => [
       edged(lr([seg("briefs", "dm"), seg(`  ${counts}`)], [seg(at, "dm")], w - 4)),
       edged(lr([seg("from the records", "dm")], [seg("history only", "dm")], w - 4)),
       talk ? box[3] : edged([seg("talk", "dm"), seg("  no soldier-to-soldier message", "fa")]),
     ],
-  }, (room) => own(messageRows(then, past.messages, Math.min(room, past.messages.length + 2)), view.ascii));
+  }, (room) => {
+    // The drawer shows as many records as the room allows, and the selected one is always among them.
+    const all = past.messages, rows = Math.min(room, all.length + 2), count = Math.max(0, rows - 2);
+    const picked = all.filter((m) => m.time <= replay.at).length - 1;
+    const first = Math.max(0, Math.min(all.length - count, Math.max(0, picked)));
+    return own(messageRows(then, all.slice(first, first + count), rows), view.ascii);
+  });
 }

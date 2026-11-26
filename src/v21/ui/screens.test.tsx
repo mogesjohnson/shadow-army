@@ -150,6 +150,21 @@ it("replays no meter, window or cost, whatever the view and the scene carry", ()
   }
 });
 
+it("keeps the selected record in the message drawer whatever room is left", () => {
+  for (const h of [14, 16, 18, 20, 22, 24, 26, 28, 31, 34]) {
+    const all = text(replayRows(replayTable(110), REPLAY_SCENE, REPLAY, h)).join("|");
+    expect(all, "height " + h).toContain("14:31:40  Igris");
+  }
+});
+
+it("reads a missing measurement in the folded tree as missing, with no gauge", () => {
+  const rows = text(replayRows(replayTable(44), REPLAY_SCENE, REPLAY, 24));
+  const tree = rows.filter((r) => /^ [├└]─ /.test(r));
+  expect(tree).toHaveLength(6);
+  expect(tree.join("|")).not.toMatch(/[░▓]/);
+  for (const r of tree.filter((r) => !r.includes("not started"))) expect(r).toContain("—");
+});
+
 it("keeps the way back to live on a narrow focus line", () => {
   expect(text(replayRows(replayTable(80), REPLAY_SCENE, REPLAY, 24))[1]).toContain("esc back to live");
 });

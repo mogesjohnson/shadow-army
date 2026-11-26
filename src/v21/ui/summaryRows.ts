@@ -79,6 +79,8 @@ export interface Chrome {
   panel: (box: Row[], edged: (line: Row) => Row) => Row[];
   /** A line in place of a started soldier's context meter. */
   meter?: Row;
+  /** The folded tree's note for a started soldier whose measurement is missing; the gauge is dropped, and an unstarted soldier gets none. */
+  unknown?: string;
 }
 
 /** The War Table around a drawer: `drawer` gets the rows left under the board or the tree. */
@@ -92,6 +94,15 @@ export function drawnRows(view: ArmyView, scene: TableScene, height: number, chr
   const base = tableRows(view, { ...scene, messages: [talk] }, board ? height : Math.min(height, BOARD_HEIGHT - 1));
   const rows = [...base.slice(0, -1), ...Array.from({ length: height - base.length }, () => fit([], w)), base[base.length - 1]];
   const put = (at: number, next: Row[]) => next.forEach((r, i) => { if (at + i < height - 1) rows[at + i] = fit(r, w); });
+  if (!board && chrome.unknown) {
+    let n = 0;
+    rows.forEach((r, i) => {
+      if (!/^ [├└]─ $/.test(r[0]?.text ?? "")) return;
+      const s = view.soldiers[n++];
+      const gauge = r.findIndex((x) => /^[▓░]+$/.test(x.text));
+      if (s && gauge > 0) rows[i] = fit([...r.slice(0, gauge), ...(s.state === "off" ? [] : [seg(chrome.unknown!, "dm")])], w);
+    });
+  }
   put(0, own(chrome.top, view.ascii));
 
   // The tree is one row per soldier, so its drawer starts four rows below their count.
