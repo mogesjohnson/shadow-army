@@ -81,10 +81,10 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
   let lease: SessionLease | undefined;
   let api: OfficeServer | undefined;
   const seen = new Map<string, Seen>();
-  // Soldiers that may hold a write session: a claimless HTTP send to them is refused until they are closed.
-  const writers = new Set<string>();
-  const canWrite = (key: string) => (office.army() as { key: string; write?: boolean; roles?: string[] }[])
-    .some((spec) => spec.key === key && spec.write && spec.roles?.includes("build"));
+  // A closing office throws from `army()`: then the bookkeeping is moot, and the turn's own result must still go out.
+  const sessionExists = (key: string) => {
+    try { return (office.army() as { key: string; state?: string }[]).some((spec) => spec.key === key && spec.state !== "closed"); } catch { return true; }
+  };
   const requestShutdown = () => {
     lease?.dispose();
     if (options.onShutdown) options.onShutdown();
@@ -126,9 +126,8 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
             case "army": value = office.army(); break;
             case "open": {
               const options = turnOptions(command.claims);
-              if (options.claims && canWrite(key)) writers.add(key);
+              // Nothing is recorded until the office has opened the session: a rejected claimed open leaves no role behind.
               const opened = await office.open(key, options);
-              if (opened.branch) writers.add(key);
               const entry = seen.get(key);
               // A send that opened the session left no id; a claimless open then adopts it, still used.
               if (entry && entry.session === undefined) Object.assign(entry, { session: opened.session, writer: !!opened.branch });
@@ -138,25 +137,34 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
             case "send": {
               if (typeof command.text !== "string") throw new Error("send requires text");
               const options = turnOptions(command.claims);
-              if (!options.claims && writers.has(key)) throw new Error(`${key} may hold write claims: an HTTP send to a writer needs its claims (close its session to send read-only)`);
-              if (options.claims && canWrite(key)) writers.add(key);
               const entry = seen.get(key);
+              // The role is the open session's own (`opened.branch`), never what a request asked for.
+              if (!options.claims && entry?.writer) throw new Error(`${key} holds a write session: an HTTP send to a writer needs its claims (close its session to send read-only)`);
               // The mod opens without claims, then sends with them. A read-only session no turn has used
               // yet is replaced by the claimed writer session before this send; a used one stays and refuses.
               const replace = !!options.claims && !!entry && !entry.used && !entry.writer;
-              if (entry) entry.used = true; else seen.set(key, { writer: !!options.claims, used: true });
-              if (replace) {
-                await office.closeSession(key);
-                const opened = await office.open(key, options);
-                seen.set(key, { session: opened.session, writer: true, used: true });
+              try {
+                if (replace) {
+                  await office.closeSession(key);
+                  seen.delete(key);
+                  const opened = await office.open(key, options);
+                  seen.set(key, { session: opened.session, writer: true, used: false });
+                }
+                value = sendResponse(await office.send(key, command.text, options));
+              } finally {
+                // Settle the bookkeeping from the office's own state: a session this send created has the role it asked for.
+                const now = seen.get(key);
+                if (!sessionExists(key)) seen.delete(key);
+                else if (now) now.used = true;
+                else seen.set(key, { writer: !!options.claims, used: true });
               }
-              value = sendResponse(await office.send(key, command.text, options)); break;
+              break;
             }
             case "interrupt": await office.interrupt(key); value = { ok: true }; break;
             case "approval":
               if (typeof command.requestId !== "string") throw new Error("approval requires requestId");
               await office.approval(key, command.requestId, command.response); value = { ok: true }; break;
-            case "close": await office.closeSession(key); seen.delete(key); writers.delete(key); value = { ok: true }; break;
+            case "close": await office.closeSession(key); seen.delete(key); value = { ok: true }; break;
             case "shutdown": value = { ok: true }; break;
             default: throw new Error("unknown post office command");
           }

@@ -122,6 +122,31 @@ describe("M1 authenticated loopback command server", () => {
     expect(((await readOnly.json()) as { result: SendResponse }).result.write).toBeUndefined();
   }, 30_000);
 
+  it("C6: a rejected claimed open or send does not mark the soldier a writer; a read-only send still works", async () => {
+    const { server } = await builder(["src/a.ts"]);
+    const bad = ["../outside"];
+    for (const action of ["open", "send"]) {
+      const rejected = await command(server, { action, soldier: "tank", text: "edit", claims: bad });
+      expect(rejected.status).toBe(400);
+      const readOnly = await command(server, { action: "send", soldier: "tank", text: "look" });
+      expect(readOnly.status).toBe(200);
+      expect(((await readOnly.json()) as { result: SendResponse }).result.write).toBeUndefined();
+      expect((await command(server, { action: "close", soldier: "tank" })).status).toBe(200);
+    }
+  }, 30_000);
+
+  it("C6: a claimed send that fails against a used read-only session leaves it read-only, and a real writer still refuses a claimless send", async () => {
+    const { server } = await builder([]);
+    expect((await command(server, { action: "send", soldier: "tank", text: "look" })).status).toBe(200);
+    expect((await command(server, { action: "send", soldier: "tank", text: "edit", claims: ["src/a.ts"] })).status).toBe(400);
+    expect((await command(server, { action: "send", soldier: "tank", text: "look again" })).status).toBe(200);
+    expect((await command(server, { action: "close", soldier: "tank" })).status).toBe(200);
+    expect((await command(server, { action: "open", soldier: "tank", claims: ["src/a.ts"] })).status).toBe(200);
+    const claimless = await command(server, { action: "send", soldier: "tank", text: "look" });
+    expect(claimless.status).toBe(400);
+    expect(((await claimless.json()) as { error: string }).error).toContain("needs its claims");
+  }, 30_000);
+
   it("C3: send returns the top-level fields the card reads for applied, refused and reverted outcomes", async () => {
     const reads = (result: SendResponse): Delivery => result;
     const turn = async (writes: string[], claims: string[], prepare?: (dir: string) => Promise<void>) => {
