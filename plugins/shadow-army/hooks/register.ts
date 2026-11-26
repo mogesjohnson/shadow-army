@@ -20,6 +20,10 @@ interface Runtime {
   renewing?: symbol;
   diagnostic: string;
   finished?: Promise<void>;
+  /** PO-16: the post office's own `closed` event reached the relay, so it shut down and the sweep is not needed. */
+  shutdown?: boolean;
+  /** The mod ended the relay itself (`fail`); the post office may still run, so its end is no sign of a crash. */
+  abandoned?: boolean;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -34,7 +38,17 @@ const RENEW_WAIT_MS = 5_000;
 const KEEPS_ARMY = new Set(["clear", "resume"]);
 /** HOST-2: each `--version` run ends after 10 s, and a post office that never reports ready is ended after 60 s. */
 const VERSION_WAIT_MS = 10_000;
+/** PO-16: the sweep ends a tree within 10 s; the mod gives the whole one-shot process three times that. */
+const SWEEP_WAIT_MS = 30_000;
 const READY_WAIT_MS = 60_000;
+/** C5: how long a timed-out sweep's stop may take to confirm; until the sweep is seen to end, `unconfirmedStop` refuses every restart. */
+const STOP_WAIT_MS = 10_000;
+let unconfirmedStop: { message: string } | undefined;
+/** C5: a process's exit as its stream reports it, an exit code or a signal; anything else is no evidence that it ended. */
+const exited = (result: unknown): boolean => {
+  const { code, signal } = (result ?? {}) as { code?: unknown; signal?: unknown };
+  return (Number.isInteger(code) && signal === null) || (code === null && typeof signal === "string" && signal !== "");
+};
 const MIN_HOST = [2, 1, 294];
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 const NO_PROXY_VARIABLES = ["NO_PROXY", "no_proxy"];
@@ -101,6 +115,7 @@ function fail($: EngineInterface, runtime: Runtime, error: unknown): void {
   runtime.reject(new Error(message));
   if (active === runtime) active = undefined;
   if (!wasClosing) $.ui.log(sanitize(prefixed(message)));
+  runtime.abandoned = true;
   // The native stream owns only the relay. Returning it cannot skip the
   // detached post office's independent expiry/containment/finalization path.
   if (runtime.stream) void runtime.stream.return({ code: null, signal: null }).catch(() => {});
@@ -137,11 +152,102 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     runtime.accept();
     return;
   }
+  if (value.type === "closed" && !value.soldier) runtime.shutdown = true;
   // M1 observes the event stream without adding another model turn/context.
   // The richer pane and transcript cards belong to the later mod milestones.
   if (!runtime.closing && ["error", "channel_down", "containment_uncertain"].includes(value.type)) {
     $.ui.log(sanitize(safeText(`Shadow Army${value.soldier ? ` · ${value.soldier}` : ""}: ${JSON.stringify(value.data)}`, runtime.credential)));
   }
+}
+
+/** PO-16: a dead post office's army takes no renewal or command, and a restart waits (in `ensure`) until its sweep settles. */
+function retire(runtime: Runtime): void {
+  runtime.closing = true;
+  cancelTimers(runtime);
+  runtime.reject(new Error("the post office stopped unexpectedly"));
+  retiring.add(runtime);
+  if (active === runtime) active = undefined;
+}
+
+/**
+ * PO-16's sweep launcher, given the folder. Off in this build (Codex review 20, C1/C2): the real caller must run
+ * the vetted absolute Node path from the shared preflight (#128) and the sweep's safe cleanup (#132), and neither
+ * has landed in this stack. Until then a dead office is reported and nothing is launched; the integration that
+ * merges #128 and #132 sets the real launcher here, and tests inject a fake one.
+ */
+type SweepLauncher = (cwd: string) => HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
+let launchSweep: SweepLauncher | undefined;
+export function useSweepLauncher(launch: SweepLauncher | undefined): void { launchSweep = launch; }
+
+const counted = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
+
+/** What the one-shot sweep did, in words, from its exit and its one JSON line (the report of `src/v2/contain/sweep.ts`). */
+async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<string> {
+  if (!launchSweep) return "the sweep is off in this build, so nothing was ended; what it left is unknown";
+  const stream = launchSweep(runtime.cwd);
+  let timer: Timer | undefined;
+  const late = new Promise<"late">((done) => { timer = $.clock.after(SWEEP_WAIT_MS, () => done("late")); });
+  const read = (async () => {
+    let out = "";
+    const chunks = stream[Symbol.asyncIterator]();
+    for (;;) {
+      const next = await chunks.next();
+      if (next.done) return { out, result: next.value as ProcessSpawnResult | undefined };
+      if (next.value.stream === "stdout") out += next.value.text;
+    }
+  })();
+  /**
+   * C5/C7: the sweep was launched but its end is unknown (no answer in time, a read that failed, or one that ended with
+   * no exit code or signal), so stop it, and refuse restarts until a terminal exit from the stop or a later read proves it
+   * ended. A rejected or pending stop, or one that just echoes its argument, keeps the barrier. A launcher that throws
+   * started nothing (a confirmed launch failure), so it reaches `sweep`'s catch and needs no barrier.
+   */
+  const unknownEnd = async (what: string): Promise<string> => {
+    const barrier = { message: `Shadow Army won't restart the army: ${what} and its stop could not be confirmed, so it may still be running` };
+    unconfirmedStop = barrier;
+    const lift = (): void => { if (unconfirmedStop === barrier) unconfirmedStop = undefined; };
+    void read.then(({ result }) => { if (exited(result)) lift(); }, () => {});
+    const stop = stream.return({ code: null, signal: null })
+      .then((step) => step.done && exited(step.value) ? "stopped" as const : "unconfirmed" as const, () => "failed" as const);
+    void stop.then((how) => { if (how === "stopped") lift(); });
+    let stopTimer: Timer | undefined;
+    const stopLate = new Promise<"late">((done) => { stopTimer = $.clock.after(STOP_WAIT_MS, () => done("late")); });
+    const stopped = await Promise.race([stop, stopLate]).finally(() => stopTimer?.cancel());
+    if (stopped === "stopped") return `${what} and was stopped; what it left is unknown`;
+    if (unconfirmedStop !== barrier) return `${what} and has since exited; what it left is unknown`;
+    return `${what} and ${stopped === "failed" ? "its stop failed" : stopped === "late" ? `its stop was not confirmed in ${STOP_WAIT_MS / 1000} s` : "its stop was not confirmed"}; what it left is unknown, and the army won't restart until it is`;
+  };
+  // The deadline settles this wait even when the iterator can't settle `next()` after `return()`.
+  const outcome = await Promise.race([read.catch((error: unknown) => ({ error })), late]).finally(() => timer?.cancel());
+  if (outcome === "late") return unknownEnd(`the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s`);
+  if ("error" in outcome) return unknownEnd(`the sweep's output could not be read (${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)})`);
+  if (!exited(outcome.result)) return unknownEnd("the sweep ended without an exit code or signal");
+  const code = outcome.result?.code;
+  const lastLine = outcome.out.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
+  let report: { ended?: unknown; left?: unknown; unhandled?: unknown; error?: unknown } | undefined;
+  try { report = JSON.parse(lastLine); } catch { report = undefined; }
+  if (code === 2) return `this system can't end what it left${typeof report?.error === "string" ? ` (${report.error})` : ""}`;
+  if (code !== 0 && code !== 1) return code == null ? "the sweep was stopped before it finished; what it left is unknown" : `the sweep exited with code ${code}; what it left is unknown`;
+  if (!report || typeof report !== "object" || !Array.isArray(report.ended) || !Array.isArray(report.left) || typeof report.unhandled !== "number") {
+    return "the sweep's report could not be read";
+  }
+  // Zero ended is "found nothing" only when nothing is left either (C4).
+  const parts = [report.ended.length ? `the sweep ended ${counted(report.ended.length, "process", "processes")} it left`
+    : report.left.length ? "the sweep ended nothing" : "the sweep found nothing it left running"];
+  if (report.left.length) parts.push(`${counted(report.left.length, "process is", "processes are")} still running`);
+  if (report.unhandled) parts.push(`${counted(report.unhandled, "record", "records")} could not be handled`);
+  if (code === 1 && parts.length === 1) parts.push("the sweep says something is left");
+  return parts.join("; ");
+}
+
+/** PO-16: the post office's output ended with no shutdown event, so run the one-shot sweep for its folder and write exactly one transcript line. It never throws. */
+async function sweep($: EngineInterface, runtime: Runtime, cut: boolean): Promise<void> {
+  let outcome: string;
+  try { outcome = await sweepOutcome($, runtime); } catch (error) { outcome = `the sweep failed: ${error instanceof Error ? error.message : error}`; }
+  // PO-16 wants one transcript line, and SEC-6 keeps newlines, so fold every line break and its indent to one space first (C4).
+  const oneLine = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, " ").trim();
+  const diagnostic = oneLine(runtime.diagnostic) ? ` · ${oneLine(runtime.diagnostic).slice(-300)}` : "";
+  try { $.ui.log(sanitize(safeText(oneLine(`Shadow Army: the post office stopped unexpectedly${cut ? " mid-event" : ""}; ${outcome}${diagnostic}`), runtime.credential))); } catch { /* the line is best effort */ }
 }
 
 async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
@@ -169,6 +275,13 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
         buffer = buffer.slice(end + 1);
         if (line.trim()) event($, runtime, line);
       }
+    }
+    // PO-16: the office's own closed event, not what the mod asked for, says whether it shut down; a cut-off last event is a crash too.
+    // Only an office this relay had ready (its `url`) can crash: an end before ready, such as a lock refusal, is a refused start.
+    if (runtime.url && !runtime.shutdown && !runtime.abandoned) {
+      retire(runtime);
+      await sweep($, runtime, Boolean(buffer.trim()));
+      return;
     }
     if (buffer.trim()) throw new Error("post office ended with an incomplete event");
     if (!runtime.closing) throw new Error(`post office relay ended${runtime.diagnostic ? `: ${runtime.diagnostic}` : ""}`);
@@ -241,6 +354,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     // The end hook only requests release. A later foreground command waits for the
     // old relay/helper to finish guard finalization and release the folder marker.
     await Promise.all([...retiring].map((old) => old.finished));
+    if (unconfirmedStop) throw new Error(unconfirmedStop.message);
     // Another concurrent foreground call may have opened the army while we waited.
     if (active && !active.closing && active.cwd === cwd) {
       const shared = active;
