@@ -54,7 +54,7 @@ async function s6Protocol() {
     pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
   });
   const events: ChannelEvent[] = [];
-  const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event) });
+  const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event), command: { file: process.execPath } });
   channels.push(channel);
   // Both one-shot values are used by the constructor's version check and session spawn; later spawns are real.
   const send = async (text = "partial native work") => {
@@ -531,7 +531,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
       pid: 3, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => { throw new Error("descendants still running"); },
     });
     const events: ChannelEvent[] = [];
-    const channel = new ClaudeChannel({ cwd: tmpdir(), model: "probe", instructions: "probe", onEvent: (event) => events.push(event) });
+    const channel = new ClaudeChannel({ cwd: tmpdir(), model: "probe", instructions: "probe", onEvent: (event) => events.push(event), command: { file: process.execPath } });
     channels.push(channel);
     const result = await channel.send("hello");
     expect(result.status).toBe("interrupted");
