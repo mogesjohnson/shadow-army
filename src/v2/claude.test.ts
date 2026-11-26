@@ -431,6 +431,19 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("completed");
   }, 8_000);
 
+  windowsOnly("keeps a typed provider error and its metadata through recovery, with the diagnostic beside it (#94 C13)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+    const rate = await channel.send("malformed-rate");
+    expect(rate.status).toBe("failed");
+    expect(rate.error).toEqual({ kind: "rate_limit", message: "rate_limit_event: rejected", resetAt: new Date(1900000000 * 1000).toISOString() });
+    const login = await channel.send("malformed-login-idle");
+    expect(login.status).toBe("failed");
+    expect(login.error?.kind).toBe("login_needed");
+    const diagnostics = events.filter((event) => event.type === "error" && (event.data as NativeError).message.includes("no progress on the turn within 50 ms"));
+    expect(diagnostics).toHaveLength(2);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 15_000);
+
   windowsOnly("restarts the quiet window at each frame of the turn's own progress (#96 C6)", async () => {
     const { channel } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
     const done = await channel.send("malformed-then-progress");

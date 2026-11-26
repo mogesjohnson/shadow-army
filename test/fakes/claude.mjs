@@ -64,6 +64,16 @@ for await (const line of createInterface({ input: process.stdin })) {
     for (let i = 0; i < 20; i++) { emit({ type: "system", subtype: "status", status: null }); await new Promise((resolve) => setTimeout(resolve, 20)); }
     continue;
   }
+  // A typed provider error, then the turn's result line arrives broken: recovery must keep the typed error.
+  if (text === "malformed-rate") {
+    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } });
+    process.stdout.write("{broken JSON}\n");
+    continue;
+  }
+  if (text === "malformed-login-idle") {
+    assistant("Please login to Claude Code", undefined, { error: "authentication_failed" });
+    process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue;
+  }
   // A bad line, then only a subagent's output until the interrupt: auxiliary output is not the turn's progress.
   if (text === "malformed-auxiliary") {
     process.stdout.write("{broken JSON}\n");

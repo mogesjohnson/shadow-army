@@ -365,8 +365,11 @@ export class ClaudeChannel implements NativeChannel {
     if (this.current !== turn || turn.stopped || this.closed) return;
     const quiet = this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS;
     turn.stopped = true;
-    turn.error = { kind: "other", message: `Claude made no progress on the turn within ${quiet} ms of an unparseable line` };
-    this.emit("error", turn.error);
+    const diagnostic: NativeError = { kind: "other", message: `Claude made no progress on the turn within ${quiet} ms of an unparseable line` };
+    // A typed provider error seen earlier (a rate-limit reset, a login requirement) stays the turn's
+    // error; the recovery diagnostic is recorded beside it as its own event (#94 C13).
+    if (!turn.error || turn.error.kind === "other") turn.error = diagnostic;
+    this.emit("error", diagnostic);
     this.approvals.clear();
     let acknowledged = false;
     this.stopTimer = setTimeout(() => {
