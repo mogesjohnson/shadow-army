@@ -276,16 +276,26 @@ export class PostOffice {
     for (const entry of await readdir(subfolder, { withFileTypes: true }).catch(() => [])) {
       if (!entry.isDirectory() || await running(entry.name)) continue;
       const path = join(subfolder, entry.name);
+      let gitDir: string;
       try {
-        const gitDir = resolve(path, (await readFile(join(path, ".git"), "utf8")).replace(/^gitdir:\s*/, "").trim());
-        const status = await this.git({ gitDir, workTree: path, commonDir: this.repo.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
-        const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
-        if (files.length) this.record({ type: "read_violation", data: { session: entry.name, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
-        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+        gitDir = resolve(path, (await readFile(join(path, ".git"), "utf8")).replace(/^gitdir:\s*/, "").trim());
       } catch (error) {
         // A snapshot started but not made: removed as one that timed out (WSP-10).
         removeInside(root, path);
         this.record({ type: "snapshot", data: { session: entry.name, removed: true, made: false, reason: String(error) } });
+        continue;
+      }
+      // A made snapshot goes only once its writes are checked and logged; any failure keeps it for the owner.
+      try {
+        const status = await this.git({ gitDir, workTree: path, commonDir: this.repo.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
+        if (status.code !== 0) throw new Error(`its writes could not be checked: ${status.stderr.trim() || `git exited with ${status.code}`}`);
+        const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
+        if (files.length) this.record({ type: "read_violation", data: { session: entry.name, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
+        await this.logPending;
+        if (this.logFailure) throw this.logFailure;
+        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+      } catch (error) {
+        this.record({ type: "snapshot", data: { session: entry.name, removed: false, retained: true, reason: String(error) } });
       }
     }
     await this.logPending;

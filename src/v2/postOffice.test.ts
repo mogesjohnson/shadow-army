@@ -541,6 +541,24 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     // Two offices in one folder close one after the other, so their git calls don't race the folder's removal.
     await first.close().catch(() => {}); await second.close();
   }, 30_000);
+
+  it("keeps a left snapshot whose removal fails and logs it retained, never deleting it as unmade", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: idle() }); offices.push(first);
+    const opened = await first.open("scout");
+    await writeFile(join(opened.cwd, "soldier.txt"), "a write\n");
+    const hooksDir = mkdtempSync(join(snapshots, "hooks-"));
+    const failing: GitFactory = (r) => {
+      const real = new HarnessGit({ repo: r, hooksDir });
+      return { run: async (args, kind, cwd) => args[0] === "worktree" && args[1] === "remove" ? { code: 128, stdout: "", stderr: "locked" } : real.run(args, kind, cwd) };
+    };
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), gitFactory: failing, onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ session: opened.session, files: ["soldier.txt"] });
+    expect(events.filter((event) => event.type === "snapshot").map((event) => event.data)).toEqual([expect.objectContaining({ session: opened.session, removed: false, retained: true })]);
+    expect(existsSync(join(opened.cwd, "soldier.txt"))).toBe(true);
+    await first.close().catch(() => {}); await second.close();
+  }, 30_000);
 });
 
 describe("M1b-27 the guard waits for background work, and a backlog pauses soldiers (PO-8, WSP-11, PO-7)", () => {
