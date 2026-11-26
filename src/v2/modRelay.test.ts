@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { repoRoot } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { until } from "./fixture-main.testutil.js";
 
@@ -10,7 +12,10 @@ it("the actual mod relay exposes only a loopback endpoint and releases its detac
   const repo = makeRepo();
   const credential = "d2".repeat(32);
   const entry = fileURLToPath(new URL("../../dist/v2/modRelay.js", import.meta.url));
-  const relay = spawn(process.execPath, [entry, "--cwd", repo.dir], { cwd: repo.dir, windowsHide: true, stdio: "pipe" });
+  // C16, M1-AC25: started from a nested folder, the relay still names the canonical root the post office keeps `.shadow` in.
+  const nested = join(repo.dir, "deep", "er");
+  mkdirSync(nested, { recursive: true });
+  const relay = spawn(process.execPath, [entry, "--cwd", nested], { cwd: nested, windowsHide: true, stdio: "pipe" });
   const closed = new Promise<number | null>((done) => relay.once("close", done));
   let output = "", diagnostic = "";
   relay.stdout.on("data", (chunk) => { output += chunk; });
@@ -23,6 +28,7 @@ it("the actual mod relay exposes only a loopback endpoint and releases its detac
     expect(ready).toBeDefined();
     endpoint = ready.data.url;
     expect(endpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(ready.data.root).toBe(await repoRoot(repo.dir));
     const headers = { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" };
     const command = (action: string, session?: string) => fetch(`${endpoint}/command`, { method: "POST", headers, body: JSON.stringify({ action, session }) });
     expect((await command("army")).status).toBe(200);

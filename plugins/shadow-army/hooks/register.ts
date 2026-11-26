@@ -5,6 +5,8 @@ import type {
 interface Runtime {
   session: string;
   cwd: string;
+  /** The canonical repository root the relay reports; the post office keeps `.shadow` there (M1-AC25). */
+  root?: string;
   credential: string;
   closing: boolean;
   ready: Promise<void>;
@@ -97,7 +99,10 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     if (runtime.url) throw new Error("post office sent ready more than once");
     const url = value.data?.url ?? value.url;
     if (typeof url !== "string" || !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):\d+$/.test(url)) throw new Error("invalid post office loopback endpoint");
+    const root = value.data?.root;
+    if (typeof root !== "string" || !root) throw new Error("post office sent no repository root");
     runtime.url = url;
+    runtime.root = root;
     runtime.deadline?.cancel();
     runtime.deadline = undefined;
     if (runtime.closing) {
@@ -242,7 +247,7 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
   const opened = await post($, runtime, { action: "open", soldier: soldier.key }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief }) as Delivery;
-  return card(soldier, delivery, `${runtime.cwd}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
+  return card(soldier, delivery, `${runtime.root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
 
 export const register: Register = (on) => {

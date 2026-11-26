@@ -9,7 +9,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), relay: { before?: any[]; after?: any[]; ready?: boolean } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), relay: { before?: any[]; after?: any[]; ready?: boolean; cwd?: string; root?: string } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -23,7 +23,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), relay: { bef
   const logs: string[] = [];
   const registered: any[] = [];
   const $ = {
-    session: { id: async () => "session-1", cwd: async () => "/repo" },
+    session: { id: async () => "session-1", cwd: async () => relay.cwd ?? "/repo" },
     plugin: { root: "/x/plugins/shadow-army" },
     fs: { exists: async () => true },
     clock: { every: () => ({ cancel() {} }), after: () => ({ cancel() {} }) },
@@ -38,7 +38,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), relay: { bef
           async *[Symbol.asyncIterator]() {
             for (const chunk of relay.before ?? []) yield chunk;
             if (relay.ready === false) return;
-            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
+            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: relay.root ?? "/repo" } })}\n` };
             for (const chunk of relay.after ?? []) yield chunk;
             await closed;
           },
@@ -134,6 +134,18 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
     const { send } = await mod(() => ({ status: "completed", summary, applied: ["src/a.ts", "src/b.ts"] }));
     const row = await send("claude-sonnet go");
     expect(row).toBe(`Shadow Army · Tank · completed\n1\n2\n3\n4\n5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nApplied: src/a.ts, src/b.ts`);
+  });
+
+  it("names the log under the office's canonical root, not the command's nested cwd (C16, M1-AC25)", async () => {
+    const { send, spawns } = await mod(() => ({ status: "completed", summary: "s" }), { cwd: "/repo/src/deep", root: "/repo" });
+    expect(await send("claude-sonnet go")).toContain("\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\n");
+    expect(spawns[0].cwd).toBe("/repo/src/deep");
+  });
+
+  it("refuses a relay that reports no repository root rather than guessing the log path (C16)", async () => {
+    const { send, commands } = await mod(() => ({ status: "completed" }), { root: "" });
+    expect(await send("claude-sonnet go")).toContain("post office sent no repository root");
+    expect(commands.some((c) => c.action === "send")).toBe(false);
   });
 
   it("gives the reason when nothing was applied, and names a reverted file", async () => {
