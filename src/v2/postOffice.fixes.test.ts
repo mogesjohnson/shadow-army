@@ -165,6 +165,21 @@ describe("post office fixes from the M1a pre-review", () => {
     await o.open("tank", { claims: ["src/a.ts"] });
   }, 30_000);
 
+  it("#99 C8: a channel factory that throws frees the claims and the heartbeat, so the same claims open again", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const repo = makeRepo({ "README.md": "hello\n", "src/a.ts": "a\n" }); repos.push(repo);
+    let fail = true;
+    const o = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (): NativeChannel => {
+      if (fail) throw new Error("factory failed");
+      return { async send() { return { status: "completed", text: "done", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(o);
+    await expect(o.open("tank", { claims: ["src/**"] })).rejects.toThrow("factory failed");
+    expect(vi.getTimerCount()).toBe(0);
+    expect(JSON.parse(JSON.stringify(o.army())).find((s: { key: string }) => s.key === "tank").state).toBe("closed");
+    fail = false;
+    await o.open("medic", { claims: ["src/**"] });
+  }, 30_000);
+
   it("#90 C7: two matching sends at once run one turn; the other is refused before any brief", async () => {
     const steps: Record<string, Step[]> = { tank: [async (cwd) => { await put(cwd, "src/a.ts", "one\n"); return "completed"; }, async () => "completed"] };
     const { office: o } = await office(steps);

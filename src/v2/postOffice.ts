@@ -197,8 +197,14 @@ export class PostOffice {
     try {
       if (ws) await this.holdLease(session);
       if (this.closed) throw new Error("post office closed while opening session");
-    } catch (error) { session.down = true; await this.releaseWrite(session); throw error; }
-    this.start(session);
+      // #99 C8: a factory that throws synchronously rolls back too, so no claims or heartbeat stay behind.
+      this.start(session);
+    } catch (error) {
+      session.down = true;
+      await session.channel?.close().catch(() => {});
+      await this.releaseWrite(session);
+      throw error;
+    }
     this.sessions.set(key, session);
     this.record({ soldier: key, type: "opened", data: { session: id, cwd, ...(ws ? { branch: ws.branch, claims: session.write!.claims } : {}) } }, session);
     return session;
