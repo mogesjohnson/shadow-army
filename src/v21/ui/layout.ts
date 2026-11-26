@@ -1,35 +1,53 @@
 // Pure layout for the War Table: rows of styled segments, exactly `w` cells wide. No Ink, so the mod can reuse it.
-import { STATES, WORD, safeText, toAscii, type ArmyView, type Soldier, type Tone } from "./model.js";
+import stringWidth from "string-width";
+import { STATES, WORD, needs, safeText, toAscii, type ArmyView, type Soldier, type Tone } from "./model.js";
 
 export interface Seg { text: string; tone?: Tone; bold?: boolean }
 export type Row = Seg[];
 
 const seg = (text: string, tone?: Tone, bold?: boolean): Seg => ({ text, tone, bold });
-const cells = (s: string): number => Array.from(s).length;
+/** Terminal cells, the same measure Ink uses (wide CJK and emoji are two, combining marks none). */
+const cells = (s: string): number => stringWidth(s);
+const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+/** The longest grapheme prefix of s that is at most max cells wide. */
+function takeCells(s: string, max: number): string {
+  let out = "", used = 0;
+  for (const { segment } of segmenter.segment(s)) {
+    const c = cells(segment);
+    if (used + c > max) break;
+    out += segment;
+    used += c;
+  }
+  return out;
+}
 export const rowWidth = (r: Row): number => r.reduce((n, s) => n + cells(s.text), 0);
 export const plain = (r: Row): string => r.map((s) => s.text).join("");
 
 /** Clip to w cells with an ellipsis, then pad. */
 export function fit(r: Row, w: number): Row {
+  if (w <= 0) return [];
   const n = rowWidth(r);
   if (n <= w) return n < w ? [...r, seg(" ".repeat(w - n))] : r;
   const out: Row = [];
   let used = 0;
   for (const s of r) {
-    const cs = Array.from(s.text);
-    if (used + cs.length <= w - 1) { out.push(s); used += cs.length; continue; }
-    const keep = cs.slice(0, Math.max(0, w - 1 - used)).join("");
+    const sw = cells(s.text);
+    if (used + sw <= w - 1) { out.push(s); used += sw; continue; }
+    const keep = takeCells(s.text, Math.max(0, w - 1 - used));
     out.push({ ...s, text: keep + "…" });
+    used += cells(keep) + 1;
     break;
   }
-  return out;
+  return used < w ? [...out, seg(" ".repeat(w - used))] : out;
 }
 
-/** Left and right parts, padded between so the row is w cells. */
+/** Left and right parts, padded between so the row is w cells. When they do not fit, the left is clipped and the right stays whole. */
 export function lr(l: Row, r: Row, w: number): Row {
-  const gap = w - rowWidth(l) - rowWidth(r);
-  if (gap < 1) return fit([...l, seg(" "), ...r], w);
-  return [...l, seg(" ".repeat(gap)), ...r];
+  const rw = rowWidth(r);
+  const gap = w - rowWidth(l) - rw;
+  if (gap >= 1) return [...l, seg(" ".repeat(gap)), ...r];
+  if (w - rw - 1 < 1) return fit(r, w);
+  return [...fit(l, w - rw - 1), seg(" "), ...r];
 }
 
 const asciiRow = (r: Row, ascii: boolean): Row => (ascii ? r.map((s) => ({ ...s, text: toAscii(s.text) })) : r);
@@ -60,26 +78,51 @@ function stripItem(s: Soldier, mode: StripMode): Row {
   return row;
 }
 
-function stripAt(view: ArmyView, mode: StripMode): Row {
+function stripAt(soldiers: Soldier[], mode: StripMode, ascii: boolean, marker: Row = []): Row {
   const row: Row = [seg(" "), seg("army", "ac", true), seg("  ")];
-  view.soldiers.forEach((s, i) => {
+  soldiers.forEach((s, i) => {
     if (i) row.push(seg("  "));
-    row.push(...stripItem(s, mode));
+    row.push(...asciiRow(stripItem(s, mode), ascii));
   });
+  if (marker.length) row.push(...(soldiers.length ? [seg("  ")] : []), ...marker);
   return row;
 }
 
 /**
  * HOST-6: one line in roster order. It steps down full -> tokens -> names -> tag as the width shrinks;
- * only needs-you states carry a word.
+ * only needs-you states carry a word. Past tags it folds: soldiers that need nothing first, as `+N more`,
+ * then owner-attention overflow, as `+N · /decisions`. The right-hand segment is always kept.
  */
 export function stripRow(view: ArmyView, right: Row = []): Row {
-  const w = view.width;
+  const w = view.width, ascii = view.ascii;
+  const rightRow = asciiRow(right, ascii);
+  const room = w - rowWidth(rightRow) - 1;
+  const done = (row: Row): Row => asciiRow(lr(row, rightRow, w), ascii);
   for (const mode of MODES) {
-    const row = stripAt(view, mode);
-    if (rowWidth(row) + rowWidth(right) + 1 <= w) return asciiRow(lr(row, right, w), view.ascii);
+    const row = stripAt(view.soldiers, mode, ascii);
+    if (rowWidth(row) <= room) return done(row);
   }
-  return asciiRow(fit(stripAt(view, "tag"), w), view.ascii);
+  const shown = [...view.soldiers];
+  const folded: Soldier[] = [];
+  const markers = (): Row[] => {
+    const owner = folded.filter((s) => needs(s.state)).length;
+    const more = folded.length - owner;
+    const m = (t: string, tone: Tone): Row => [seg(t, tone, true)];
+    const decisions = m(`+${owner} · /decisions`, "wn");
+    if (!owner) return [m(`+${more} more`, "dm")];
+    return more ? [[...m(`+${more} more`, "dm"), seg("  "), ...decisions], decisions] : [decisions];
+  };
+  // Fold the last soldier that needs nothing; once only owner-attention soldiers remain, fold from the end.
+  while (shown.length) {
+    let at = -1;
+    for (let i = shown.length - 1; i >= 0; i--) if (!needs(shown[i].state)) { at = i; break; }
+    folded.unshift(...shown.splice(at < 0 ? shown.length - 1 : at, 1));
+    for (const marker of markers()) {
+      const row = stripAt(shown, "tag", ascii, marker);
+      if (rowWidth(row) <= room) return done(row);
+    }
+  }
+  return done(stripAt([], "tag", ascii, markers()[0]));
 }
 
 /**
@@ -89,10 +132,14 @@ export function stripRow(view: ArmyView, right: Row = []): Row {
 export function headerRows(s: Soldier, w: number, ascii = false): Row[] {
   const look = STATES[s.state];
   const name = safeText(s.name), host = safeText(s.host), model = safeText(s.model);
+  // The chosen profile is measured before padding: ASCII turns wide characters into one cell each.
+  const prof = (t: string): string => (ascii ? toAscii(t) : t);
   const state: Row = [seg(look.glyph, look.tone, look.bold), seg(" "), seg(`${look.word} `, look.tone, look.bold)];
-  const lead: Row = [seg(" "), seg(name, s.colour, true)];
-  if (w >= 50) return [asciiRow(lr([...lead, seg(` · ${host} · ${model}`, "dm")], state, w), ascii)];
-  const room = Math.max(4, w - cells(host) - 5);
-  const cut = cells(model) > room ? Array.from(model).slice(0, room - 1).join("") + "…" : model;
-  return [lr(lead, state, w), fit([seg(" "), seg(`${host} · ${cut}`, "dm")], w)].map((r) => asciiRow(r, ascii));
+  const lead: Row = [seg(" "), seg(prof(name), s.colour, true)];
+  const done = (r: Row): Row => asciiRow(r, ascii);
+  if (w >= 50) return [done(lr([...lead, seg(` · ${prof(host)} · ${prof(model)}`, "dm")], asciiRow(state, ascii), w))];
+  const room = Math.max(4, w - cells(prof(host)) - 5);
+  const m = prof(model);
+  const cut = cells(m) > room ? takeCells(m, room - 1) + "…" : m;
+  return [lr(lead, asciiRow(state, ascii), w), fit([seg(" "), seg(`${prof(host)} · ${cut}`, "dm")], w)].map(done);
 }
