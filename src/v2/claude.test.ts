@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import * as managedProcesses from "./processTree.js";
-import type { ChannelEvent, NativeError } from "./channel.js";
+import type { ChannelEvent, NativeError, TurnUsage } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, resolveClaudeLaunch, VERSION_TIMEOUT_MS } from "./claude.js";
 
 const channels: ClaudeChannel[] = [];
@@ -30,7 +30,7 @@ async function until(check: () => boolean): Promise<void> {
  * Owner's Claude 2.1.296 probe observed error_during_execution/is_error with zero usage
  * after interrupt. Streaming usage shapes follow the vendor SDK/API documentation.
  */
-async function s6Protocol() {
+async function s6Protocol(autonomy?: "supervised" | "auto" | "full") {
   const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
   const sent: Record<string, unknown>[] = [];
   let buffer = "";
@@ -54,7 +54,7 @@ async function s6Protocol() {
     pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
   });
   const events: ChannelEvent[] = [];
-  const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event), command: { file: process.execPath } });
+  const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", autonomy, onEvent: (event) => events.push(event), command: { file: process.execPath } });
   channels.push(channel);
   // Both one-shot values are used by the constructor's version check and session spawn; later spawns are real.
   const send = async (text = "partial native work") => {
@@ -62,7 +62,7 @@ async function s6Protocol() {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send, sent };
+  return { channel, events, emit, send, sent, spawned: () => injected.mock.calls.map(([options]) => options) };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -101,7 +101,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(result.status).toBe("interrupted");
     expect(result.error).toBeUndefined();
     expect(result.contextTokens).toBe(43);
-    expect(result.usage).toMatchObject({ inputTokens: 50, cachedInputTokens: 16, outputTokens: 14, raw: { source: "assistant_and_stream", terminal: { ...zeroUsage, total_cost_usd: 0, modelUsage: {} } } });
+    expect(result.usage).toMatchObject({ inputTokens: 50, cachedInputTokens: 16, outputTokens: undefined, raw: { source: "assistant_and_stream", terminal: { ...zeroUsage, total_cost_usd: 0, modelUsage: {} } } });
     expect(result.usage?.costUsd).toBeUndefined();
     expect(result.usage?.costSource).toBeUndefined();
     expect((result.usage?.raw.mainMessages as unknown[])).toHaveLength(2);
@@ -126,7 +126,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens: 5 } } });
     await channel.interrupt();
     emit(interruptedResult(streamed.id));
-    expect((await streamed.pending).usage).toMatchObject({ inputTokens: 21, cachedInputTokens: 8, outputTokens: 5 });
+    expect((await streamed.pending).usage).toMatchObject({ inputTokens: 21, cachedInputTokens: 8, outputTokens: undefined });
     const assistantOnly = await send("assistant-only work");
     emit({ type: "assistant", parent_tool_use_id: null, message: { id: "assistant-only", usage: { input_tokens: 11, cache_read_input_tokens: 2, output_tokens: 1 } } });
     await channel.interrupt();
@@ -156,7 +156,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await next.pending).usage?.costUsd).toBeUndefined();
   });
 
-  it("retains a usable native dollar estimate independently of stopped-turn token counters", async () => {
+  it("reports no cost for a stopped turn but keeps its totals as the next baseline (CH-2)", async () => {
     const { channel, emit, send } = await s6Protocol();
     const first = await send("known previous cost");
     emit({ type: "result", subtype: "success", user_message_uuid: first.id, result: "done", total_cost_usd: 0.03 });
@@ -169,8 +169,176 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(result.status).toBe("interrupted");
     expect(result.usage?.inputTokens).toBe(20);
     expect(result.usage?.outputTokens).toBeUndefined();
-    expect(result.usage?.costUsd).toBeCloseTo(0.02);
-    expect(result.usage?.costSource).toBe("native_cli_estimate");
+    // CH-2: a stopped turn's cost reads "not reported" even where its totals grew; the totals are the next baseline.
+    expect(result.usage?.costUsd).toBeUndefined();
+    const next = await send("after the stop");
+    emit({ type: "result", subtype: "success", user_message_uuid: next.id, result: "done", usage: { input_tokens: 4, output_tokens: 2 }, total_cost_usd: 0.06 });
+    expect((await next.pending).usage?.costUsd).toBeCloseTo(0.01);
+  });
+
+  // CH-2: usage figures per turn, from the result's running totals.
+  it("takes a turn's cost from its totals less the result before it; /clear and a total below the baseline start over", async () => {
+    const { emit, send } = await s6Protocol();
+    const turn = async (text: string, total: number | undefined) => {
+      const sent = await send(text);
+      emit({ type: "result", subtype: "success", user_message_uuid: sent.id, result: "ok", usage: { input_tokens: 3, output_tokens: 1 }, total_cost_usd: total });
+      return (await sent.pending).usage?.costUsd;
+    };
+    expect(await turn("first", 0.1)).toBeCloseTo(0.1);
+    expect(await turn("second", 0.25)).toBeCloseTo(0.15);
+    // /clear (also /reset and /new): claude's totals start over, so the result's own totals are the turn's figures.
+    expect(await turn("/clear", 0.02)).toBeCloseTo(0.02);
+    expect(await turn("after the clear", 0.05)).toBeCloseTo(0.03);
+    expect(await turn("/new", 0.01)).toBeCloseTo(0.01);
+    // A total above zero but below the baseline has started over without a command.
+    expect(await turn("quiet restart", 0.002)).toBeCloseTo(0.002);
+    expect(await turn("then", 0.012)).toBeCloseTo(0.01);
+  });
+
+  it("never takes a zero total as a baseline: the next result reports no cost and becomes the baseline", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("first");
+    emit({ type: "result", subtype: "success", user_message_uuid: first.id, result: "ok", usage: { input_tokens: 3, output_tokens: 1 }, total_cost_usd: 0.1 });
+    await first.pending;
+    const free = await send("zero cost");
+    emit({ type: "result", subtype: "success", user_message_uuid: free.id, result: "ok", usage: { input_tokens: 5, output_tokens: 2 }, total_cost_usd: 0 });
+    const zero = (await free.pending).usage;
+    expect(zero?.costUsd).toBeUndefined();
+    expect(zero?.inputTokens).toBe(5);
+    const after = await send("after zero");
+    // CH-2: with no result before it, input and cache are the main-loop messages' sums and output is the result's.
+    emit({ type: "assistant", parent_tool_use_id: null, message: { id: "after-a", usage: { input_tokens: 4, cache_read_input_tokens: 2, output_tokens: 1 } } });
+    emit({ type: "assistant", parent_tool_use_id: null, message: { id: "after-b", usage: { input_tokens: 3, cache_read_input_tokens: 1, output_tokens: 1 } } });
+    emit({ type: "result", subtype: "success", user_message_uuid: after.id, result: "ok", usage: { input_tokens: 6, output_tokens: 2 }, total_cost_usd: 0.4 });
+    const next = (await after.pending).usage;
+    expect(next?.costUsd).toBeUndefined();
+    expect(next).toMatchObject({ inputTokens: 7, cachedInputTokens: 3, outputTokens: 2 });
+    expect(next?.raw.models).toBeUndefined();
+    const later = await send("later");
+    emit({ type: "result", subtype: "success", user_message_uuid: later.id, result: "ok", usage: { input_tokens: 6, output_tokens: 2 }, total_cost_usd: 0.45 });
+    expect((await later.pending).usage?.costUsd).toBeCloseTo(0.05);
+  });
+
+  it("reads input, cache and cost, and no output, for an all-zero result that is not a stop", async () => {
+    const { emit, send } = await s6Protocol();
+    const crashed = await send("crashed");
+    emit({ type: "assistant", parent_tool_use_id: null, message: { id: "m1", usage: { input_tokens: 30, cache_read_input_tokens: 10, output_tokens: 1 } } });
+    emit({ type: "result", subtype: "success", user_message_uuid: crashed.id, result: "", usage: zeroUsage, total_cost_usd: 0, modelUsage: {} });
+    const usage = (await crashed.pending).usage;
+    expect(usage).toMatchObject({ inputTokens: 30, cachedInputTokens: 10, outputTokens: undefined });
+    expect(usage?.costUsd).toBeUndefined();
+  });
+
+  it("treats a result whose modelUsage counters are all zero as a zero result (CH-2)", async () => {
+    const { emit, send } = await s6Protocol();
+    const crashed = await send("zero counters");
+    emit({ type: "assistant", parent_tool_use_id: null, message: { id: "z1", usage: { input_tokens: 12, cache_read_input_tokens: 4, output_tokens: 1 } } });
+    emit({ type: "result", subtype: "success", user_message_uuid: crashed.id, result: "", usage: zeroUsage, total_cost_usd: 0, modelUsage: { "fake-claude": { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, costUSD: 0, contextWindow: 200000 } } });
+    const usage = (await crashed.pending).usage;
+    expect(usage).toMatchObject({ inputTokens: 12, cachedInputTokens: 4, outputTokens: undefined });
+    expect(usage?.costUsd).toBeUndefined();
+  });
+
+  it("reports no output for a stopped turn whose stream closes before its result (CH-2)", async () => {
+    const { channel, emit, send } = await s6Protocol();
+    const stopped = await send("stopped");
+    emit({ type: "assistant", parent_tool_use_id: null, message: { id: "s1", usage: { input_tokens: 9, cache_read_input_tokens: 3, output_tokens: 1 } } });
+    emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { id: "s1", usage: { input_tokens: 9 } } } });
+    emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens: 7 } } });
+    await channel.interrupt();
+    await channel.close();
+    const usage = (await stopped.pending).usage;
+    expect(usage).toMatchObject({ inputTokens: 9, cachedInputTokens: 3 });
+    expect(usage?.outputTokens).toBeUndefined();
+  });
+
+  it("does not take a lower total after a gap for a new session; only /clear starts over then (CH-2)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("first");
+    emit({ type: "result", subtype: "success", user_message_uuid: first.id, result: "ok", usage: { input_tokens: 3, output_tokens: 1 }, total_cost_usd: 0.5 });
+    await first.pending;
+    const gap = await send("gap");
+    emit({ type: "result", subtype: "success", user_message_uuid: gap.id, result: "ok", usage: { input_tokens: 3, output_tokens: 1 } });
+    await gap.pending;
+    const lower = await send("lower");
+    emit({ type: "result", subtype: "success", user_message_uuid: lower.id, result: "ok", usage: { input_tokens: 3, output_tokens: 1 }, total_cost_usd: 0.2 });
+    expect((await lower.pending).usage?.costUsd).toBeUndefined();
+    const gap2 = await send("gap again");
+    emit({ type: "result", subtype: "success", user_message_uuid: gap2.id, result: "ok", usage: { input_tokens: 3, output_tokens: 1 }, total_cost_usd: 0 });
+    await gap2.pending;
+    const cleared = await send("/clear");
+    emit({ type: "result", subtype: "success", user_message_uuid: cleared.id, result: "", usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.01 });
+    expect((await cleared.pending).usage?.costUsd).toBeCloseTo(0.01);
+  });
+
+  it("gives each turn its own per-model figures, subagent models included, which add up to the last result (CH-2, M1-AC3)", async () => {
+    const { emit, send } = await s6Protocol();
+    const totals = [
+      { main: { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 50, costUSD: 0.1, contextWindow: 200000 } },
+      { main: { inputTokens: 250, outputTokens: 30, cacheReadInputTokens: 120, costUSD: 0.25, contextWindow: 200000 }, sub: { inputTokens: 400, outputTokens: 40, costUSD: 0.05 } },
+      { main: { inputTokens: 300, outputTokens: 35, cacheReadInputTokens: 200, costUSD: 0.3, contextWindow: 200000 }, sub: { inputTokens: 900, outputTokens: 90, costUSD: 0.1 } },
+    ];
+    const turns: Record<string, Record<string, number>>[] = [];
+    const costs: number[] = [];
+    const firstClass: TurnUsage["models"][] = [];
+    for (const [index, modelUsage] of totals.entries()) {
+      const turn = await send(`turn ${index}`);
+      const total = Object.values(modelUsage).reduce((sum, entry) => sum + entry.costUSD, 0);
+      emit({ type: "result", subtype: "success", user_message_uuid: turn.id, result: "ok", usage: { input_tokens: 5, output_tokens: 1 }, total_cost_usd: total, modelUsage });
+      const usage = (await turn.pending).usage!;
+      turns.push(usage.raw.models as Record<string, Record<string, number>>);
+      firstClass.push(usage.models);
+      costs.push(usage.costUsd!);
+    }
+    expect(turns[1]).toEqual({ main: { inputTokens: 150, outputTokens: 20, cacheReadInputTokens: 70, costUSD: expect.closeTo(0.15) }, sub: { inputTokens: 400, outputTokens: 40, costUSD: 0.05 } });
+    // #124 C1: the same figures as TurnUsage's own per-model field, in its names.
+    expect(firstClass[1]).toEqual({ main: { inputTokens: 150, outputTokens: 20, cachedInputTokens: 70, costUsd: expect.closeTo(0.15) }, sub: { inputTokens: 400, outputTokens: 40, costUsd: 0.05 } });
+    for (const model of ["main", "sub"]) expect(firstClass.reduce((sum, models) => sum + (models?.[model]?.inputTokens ?? 0), 0)).toBe((totals[2] as Record<string, Record<string, number>>)[model].inputTokens);
+    for (const model of ["main", "sub"]) for (const key of ["inputTokens", "outputTokens", "costUSD"]) {
+      const sum = turns.reduce((total, models) => total + (models[model]?.[key] ?? 0), 0);
+      expect(sum).toBeCloseTo((totals[2] as Record<string, Record<string, number>>)[model][key]);
+    }
+    expect(costs.reduce((sum, cost) => sum + cost, 0)).toBeCloseTo(0.4);
+    // A stopped turn reports no per-model figures, and its totals are the next baseline.
+    const stopped = await send("stopped");
+    emit({ type: "result", subtype: "error_during_execution", is_error: true, errors: [], user_message_uuid: stopped.id, terminal_reason: "aborted_tools", usage: zeroUsage, total_cost_usd: 0.5, modelUsage: { main: { inputTokens: 350, outputTokens: 40, costUSD: 0.4 }, sub: { inputTokens: 900, outputTokens: 90, costUSD: 0.1 } } });
+    const stoppedUsage = (await stopped.pending).usage;
+    expect(stoppedUsage?.raw.models).toBeUndefined();
+    expect(stoppedUsage?.models).toBeUndefined();
+    const after = await send("after stop");
+    emit({ type: "result", subtype: "success", user_message_uuid: after.id, result: "ok", usage: { input_tokens: 5, output_tokens: 1 }, total_cost_usd: 0.6, modelUsage: { main: { inputTokens: 360, outputTokens: 41, costUSD: 0.5 }, sub: { inputTokens: 900, outputTokens: 90, costUSD: 0.1 } } });
+    expect((await after.pending).usage?.raw.models).toEqual({ main: { inputTokens: 10, outputTokens: 1, costUSD: expect.closeTo(0.1) }, sub: { inputTokens: 0, outputTokens: 0, costUSD: 0 } });
+    // /clear starts the totals over: that turn's own totals are its figures.
+    const cleared = await send("/clear");
+    emit({ type: "result", subtype: "success", user_message_uuid: cleared.id, result: "", usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.01, modelUsage: { main: { inputTokens: 1, outputTokens: 1, costUSD: 0.01 } } });
+    const clearedUsage = (await cleared.pending).usage;
+    expect(clearedUsage?.raw.models).toEqual({ main: { inputTokens: 1, outputTokens: 1, costUSD: 0.01 } });
+    expect(clearedUsage?.models).toEqual({ main: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 } });
+  });
+
+  // M1-AC14 (unit part): the live run is the owner's.
+  it("starts every claude process with auto memory off, in its environment and in --settings, over an inherited 0", async () => {
+    const before = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "0";
+    try {
+      // Each mode starts twice: a post-office restart builds a new channel through the same launches.
+      let spawned: () => managedProcesses.ManagedProcessOptions[] = () => [];
+      for (const autonomy of ["supervised", "auto", "full", "full"] as const) {
+        const before = spawned().length;
+        ({ spawned } = await s6Protocol(autonomy));
+        await until(() => spawned().length >= before + 2);
+      }
+      // The version probe and the session, for every start: both settings values on each.
+      expect(spawned()).toHaveLength(8);
+      for (const call of spawned()) {
+        expect(call.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+        expect(JSON.parse(call.args![call.args!.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
+      }
+      expect(spawned().filter((call) => call.args?.includes("--version"))).toHaveLength(4);
+    } finally {
+      if (before === undefined) delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY; else process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = before;
+    }
+    for (const autonomy of ["supervised", "auto", "full"] as const) expect(claudeChannelArgs({ cwd: ".", model: "fake", instructions: "", autonomy, onEvent: () => {} })).toContain("--settings");
   });
 
   it.each([["rate_limit", "rate_limit", "API Error: rate limit"], ["invalid_request", "context_overflow", "API Error: prompt is too long"]])("does not let stop hide an earlier %s failure", async (code, kind, text) => {

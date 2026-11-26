@@ -1,11 +1,13 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
+import { ClaudeChannel } from "./claude.js";
+import * as managedProcesses from "./processTree.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
@@ -168,6 +170,35 @@ describe("M1 office integration with synthetic native processes", () => {
     await expect(office.send("scout", "must not replay")).rejects.toThrow("reconnect explicitly");
     await office.open("scout"); expect(channels).toHaveLength(5);
     expect(channels[4]!.sent).toEqual([]);
+  }, 30_000);
+
+  // #124 C4, M1-AC14: a restart the post office makes launches claude with auto memory off, like the first start.
+  windowsOnly("restarts a crashed claude with auto memory off in its environment and --settings, probe included", async () => {
+    const inherited = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "0";
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess");
+    try {
+      const repo = makeRepo(); repos.push(repo);
+      const events: OfficeEvent[] = [];
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
+        channelFactory: (options) => new ClaudeChannel({ ...options, command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs")] } }) });
+      offices.push(office);
+      expect((await office.send("scout", "cutoff")).status).not.toBe("completed");
+      await until(() => events.some((event) => event.type === "restarted"));
+      expect((await office.send("scout", "hello")).status).toBe("completed");
+      const launches = spawn.mock.calls.map(([options]) => options);
+      // Two starts, each a --version probe and a session.
+      expect(launches).toHaveLength(4);
+      expect(launches.filter((options) => options.args?.includes("--version"))).toHaveLength(2);
+      for (const options of launches) {
+        expect(options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+        expect(JSON.parse(options.args![options.args!.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
+      }
+      expect(office.army()).toEqual([expect.objectContaining({ restarts: 1 })]);
+    } finally {
+      spawn.mockRestore();
+      if (inherited === undefined) delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY; else process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = inherited;
+    }
   }, 30_000);
 
   it("marks a refused start down and never restarts it (#111 C3)", async () => {

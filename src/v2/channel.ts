@@ -7,12 +7,23 @@ export interface NativeError {
   message: string;
   resetAt?: string;
 }
+/** One model's own figures for a turn, subagent models included (CH-2, OBS-3). */
+export interface ModelUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  outputTokens?: number;
+  webSearchRequests?: number;
+  costUsd?: number;
+}
 export interface TurnUsage {
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
   costUsd?: number;
   costSource?: "native_cli_estimate";
+  /** The turn's figures by model, where the CLI reports them; absent where it gives only main-loop figures. */
+  models?: Record<string, ModelUsage>;
   raw: Record<string, unknown>;
 }
 /** What a turn with claims leaves in the soldier's worktree for the apply (B4) and the card. */
