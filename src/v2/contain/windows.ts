@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import { access, lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -475,6 +475,8 @@ public static class ShadowSweep {
   [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr handle,int type,uint info,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl,out IntPtr descriptor);
   [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
   [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandleEx(IntPtr file,int infoClass,out FILEID info,uint size);
+  [StructLayout(LayoutKind.Sequential)] struct FILEID { public ulong volume,idLow,idHigh; }
   [StructLayout(LayoutKind.Sequential)] struct FILEINFO { public uint attributes,c1,c2,a1,a2,w1,w2,volume,sizeHigh,sizeLow,links,indexHigh,indexLow; }
   // Write data, append, write EA, delete child, write attributes, DELETE, WRITE_DAC, WRITE_OWNER, MAXIMUM_ALLOWED, GENERIC_ALL, GENERIC_WRITE.
   const int WriteRights=0x520D0156;
@@ -499,7 +501,11 @@ public static class ShadowSweep {
         string sid=rule.SecurityIdentifier.Value;
         if(!rule.SecurityIdentifier.Equals(me) && sid!="S-1-5-18" && sid!="S-1-5-32-544" && sid!="S-1-3-4") return "other";
       }
-      return "owned "+info.volume.ToString(CultureInfo.InvariantCulture)+" "+(((ulong)info.indexHigh<<32)|info.indexLow).ToString(CultureInfo.InvariantCulture);
+      ulong index=((ulong)info.indexHigh<<32)|info.indexLow;
+      // The volume's 128-bit file ID (FileIdInfo), where it has one, must be that 64-bit index: on ReFS it may not be,
+      // and the index Node reads then proves nothing about which file the caller opened (C6).
+      FILEID id; if(GetFileInformationByHandleEx(file,18,out id,24) && (id.idHigh!=0 || id.idLow!=index || (uint)id.volume!=info.volume)) return "other";
+      return "owned "+info.volume.ToString(CultureInfo.InvariantCulture)+" "+index.ToString(CultureInfo.InvariantCulture);
     } finally { if(descriptor!=IntPtr.Zero) LocalFree(descriptor); CloseHandle(file); }
   }
   public static string Probe(uint pid) {
@@ -722,10 +728,10 @@ export async function probeWindowsProcess(pid: number, session?: SweepSession, u
  * Whether this user owns the path and no one else can write it (C6). The helper checks the object it opened, and
  * answers that object's volume and file index: they must be `opened`'s, the handle the caller read, or it is no proof.
  */
-export async function ownedByCurrentUser(path: string, opened: Pick<Stats, "dev" | "ino">, session?: SweepSession, until?: number): Promise<boolean> {
+export async function ownedByCurrentUser(path: string, opened: Pick<BigIntStats, "dev" | "ino">, session?: SweepSession, until?: number): Promise<boolean> {
   const answer = /^owned (\d{1,10}) (\d{1,20})$/.exec(await ask(session, `owned ${Buffer.from(path, "utf8").toString("base64")}`, until));
-  // Node reads a 64-bit file index as the nearest double: the helper's is rounded the same way.
-  return answer !== null && Number(answer[1]) === opened.dev && Number(BigInt(answer[2]!)) === opened.ino;
+  // Compared whole, as integers: a rounded file index could take another file's for the one read (C6).
+  return answer !== null && BigInt(answer[1]!) === opened.dev && BigInt(answer[2]!) === opened.ino;
 }
 
 const isFiletimeText = (value: string | undefined): value is string => value !== undefined && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) < 2n ** 63n;

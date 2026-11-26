@@ -293,10 +293,10 @@ describe("the sweep's owner check on Windows (PO-16, C6)", () => {
     const folder = await ownFolder();
     const file = join(folder, "t.jsonl");
     await writeFile(file, "{}");
-    expect([await ownedByCurrentUser(folder, await lstat(folder)), await ownedByCurrentUser(file, await lstat(file))]).toEqual([true, true]);
+    expect([await ownedByCurrentUser(folder, await lstat(folder, { bigint: true })), await ownedByCurrentUser(file, await lstat(file, { bigint: true }))]).toEqual([true, true]);
     const system = join(process.env.SystemRoot ?? "C:/Windows", "System32");
-    expect(await ownedByCurrentUser(system, await lstat(system))).toBe(false);
-    expect(await ownedByCurrentUser(join(folder, "missing' ; exit 0 ; '"), await lstat(file))).toBe(false); // A failed check, never ownership.
+    expect(await ownedByCurrentUser(system, await lstat(system, { bigint: true }))).toBe(false);
+    expect(await ownedByCurrentUser(join(folder, "missing' ; exit 0 ; '"), await lstat(file, { bigint: true }))).toBe(false); // A failed check, never ownership.
   }, 60_000);
 
   windowsOnly("refuses a file others may write, a second link, a junction, and an answer about another file than the one read", async () => {
@@ -304,14 +304,14 @@ describe("the sweep's owner check on Windows (PO-16, C6)", () => {
     const [file, other, shared, linked, junction] = ["t.jsonl", "u.jsonl", "s.jsonl", "l.jsonl", "j"].map((name) => join(folder, name)) as [string, string, string, string, string];
     for (const path of [file, other, shared, linked]) await writeFile(path, "{}");
     execFileSync("icacls", [shared, "/grant", "*S-1-1-0:(W)"], { stdio: "ignore" }); // Everyone may write it.
-    expect(await ownedByCurrentUser(shared, await lstat(shared))).toBe(false);
+    expect(await ownedByCurrentUser(shared, await lstat(shared, { bigint: true }))).toBe(false);
     await link(linked, join(folder, "l2.jsonl"));
-    expect(await ownedByCurrentUser(linked, await lstat(linked))).toBe(false);
+    expect(await ownedByCurrentUser(linked, await lstat(linked, { bigint: true }))).toBe(false);
     await symlink(folder, junction, "junction");
-    expect(await ownedByCurrentUser(junction, await lstat(junction))).toBe(false);
+    expect(await ownedByCurrentUser(junction, await lstat(junction, { bigint: true }))).toBe(false);
     // The helper's answer is about the object it opened: it must be the one the caller read.
-    expect(await ownedByCurrentUser(file, await lstat(other))).toBe(false);
-    expect(await ownedByCurrentUser(file, await lstat(file))).toBe(true);
+    expect(await ownedByCurrentUser(file, await lstat(other, { bigint: true }))).toBe(false);
+    expect(await ownedByCurrentUser(file, await lstat(file, { bigint: true }))).toBe(true);
   }, 60_000);
 
   windowsOnly("finds PowerShell from the folder Windows loaded ntdll.dll from, never from the environment", async () => {
@@ -332,7 +332,7 @@ describe("the sweep's one helper session on Windows (C10)", () => {
       expect(self).toMatch(/^[1-9]\d{17}$/);
       const helper = session.pid!;
       expect(await probeWindowsProcess(helper, session)).toMatch(/^[1-9]\d{17}$/); // The helper itself, still running.
-      expect(await ownedByCurrentUser(folder, await lstat(folder), session)).toBe(true);
+      expect(await ownedByCurrentUser(folder, await lstat(folder, { bigint: true }), session)).toBe(true);
       expect(await Promise.all([probeWindowsProcess(process.pid, session), probeWindowsProcess(2 ** 31 - 2, session)])).toEqual([self, undefined]);
       expect(session.pid).toBe(helper);
     } finally { session.close(); }
@@ -342,7 +342,7 @@ describe("the sweep's one helper session on Windows (C10)", () => {
     const session = openSweepSession(1); // Too short for PowerShell to start.
     const began = performance.now();
     expect(await probeWindowsProcess(process.pid, session)).toBeNull();
-    expect(await ownedByCurrentUser(".", await lstat("."), session)).toBe(false);
+    expect(await ownedByCurrentUser(".", await lstat(".", { bigint: true }), session)).toBe(false);
     expect(performance.now() - began).toBeLessThan(5_000);
     session.close();
   }, 60_000);
@@ -405,4 +405,16 @@ describe("the sweep's one helper session on Windows (C10)", () => {
     stray.splice(stray.indexOf(child), 1);
     expect(await windowsLeft(parent.pid!, exact)).toBe(0);
   }, 60_000);
+});
+
+describe("the owner check's file identity (C6)", () => {
+  it("compares the volume serial and the 64-bit file index whole, never as rounded doubles", async () => {
+    const answering = (answer: string) => ({ call: async () => answer, pid: undefined, close: () => {} });
+    // 2^53 + 1 and 2^53 are one double apart from nothing: rounded, the other file would pass for the one read.
+    const read = { dev: 7n, ino: 2n ** 53n };
+    expect(await ownedByCurrentUser("x", read, answering(`owned 7 ${2n ** 53n + 1n}`))).toBe(false);
+    expect(await ownedByCurrentUser("x", read, answering("owned 8 9007199254740992"))).toBe(false);
+    expect(await ownedByCurrentUser("x", read, answering("owned 7 9007199254740992"))).toBe(true);
+    expect(await ownedByCurrentUser("x", { dev: 7n, ino: 2n ** 64n - 1n }, answering(`owned 7 ${2n ** 64n - 1n}`))).toBe(true);
+  });
 });

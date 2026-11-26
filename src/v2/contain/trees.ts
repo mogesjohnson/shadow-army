@@ -1,4 +1,4 @@
-import { constants, type Stats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "../logs.js";
@@ -79,26 +79,27 @@ export function parseTreeFile(text: string): TreeLine[] {
 }
 
 /** Whether this user owns a path (and, on POSIX, no one else can write it). The sweep acts only on records that pass (PO-16). */
-export type OwnerCheck = (path: string, stats: Stats) => Promise<boolean>;
+export type OwnerCheck = (path: string, stats: BigIntStats) => Promise<boolean>;
 
 /** POSIX's check: owned by this user, and not writable by its group or others. */
-export const posixOwned: OwnerCheck = async (_path, stats) => stats.uid === process.getuid?.() && (stats.mode & 0o022) === 0;
+export const posixOwned: OwnerCheck = async (_path, stats) => process.getuid !== undefined && stats.uid === BigInt(process.getuid()) && (stats.mode & 0o022n) === 0n;
 
 /** A tree file, and whether its folders and the opened file itself were verified as this user's own (PO-16). */
 export interface TreeFile { id: string; lines: TreeLine[]; verified: boolean }
 
 /** A real folder, not a link, that this user owns. */
 async function ownFolder(path: string, owned: OwnerCheck): Promise<boolean> {
-  try { const stats = await lstat(path); return stats.isDirectory() && !stats.isSymbolicLink() && await owned(path, stats); } catch { return false; }
+  try { const stats = await lstat(path, { bigint: true }); return stats.isDirectory() && !stats.isSymbolicLink() && await owned(path, stats); } catch { return false; }
 }
 
 /** Reads a file through one handle, and verifies that handle: the same file as the name (not a link), one link, this user's. */
 async function readOwnFile(path: string, owned: OwnerCheck): Promise<{ text: string; verified: boolean }> {
-  const named = await lstat(path);
+  // Read as integers, never doubles: a 64-bit file index is compared whole (C6).
+  const named = await lstat(path, { bigint: true });
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
-    const opened = await handle.stat();
-    const verified = !named.isSymbolicLink() && opened.isFile() && opened.nlink === 1 && opened.dev === named.dev && opened.ino === named.ino
+    const opened = await handle.stat({ bigint: true });
+    const verified = !named.isSymbolicLink() && opened.isFile() && opened.nlink === 1n && opened.dev === named.dev && opened.ino === named.ino
       && await owned(path, opened).catch(() => false);
     return { text: await handle.readFile("utf8"), verified };
   } finally { await handle.close(); }
