@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { canonicalPath } from "../workspace/git.js";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 import { OfficeClient } from "./client.js";
 import type { OfficeEvent } from "./postOffice.js";
 import type { TurnResult } from "./channel.js";
@@ -70,14 +71,14 @@ describe("W11-4 long sends", () => {
   }, 15_000);
 });
 describe("M1 caller subprocess contract", () => {
-  it("resolves a relative repository folder once before spawning the helper", async () => {
+  windowsOnly("resolves a relative repository folder once before spawning the helper", async () => {
     const repo = makeRepo(); repos.push(repo);
     const client = new OfficeClient({ cwd: relative(process.cwd(), repo.dir), command: { file: process.execPath, args: runtimeArgs } }); clients.push(client);
     const opened = await client.request<{ cwd: string }>({ action: "open", soldier: "scout" });
     expect(relative(canonicalPath(repo.dir), canonicalPath(opened.cwd))).toMatch(/^\.shadow[\\/]v2[\\/]worktrees[\\/]session-/);
     expect((await client.request<TurnResult>({ action: "send", soldier: "scout", text: "inspect" })).status).toBe("completed");
   }, 30_000);
-  it("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children while retaining partial work", async () => {
+  windowsOnly("bootstraps on stdin, reuses the native process and authenticated shutdown closes active children while retaining partial work", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];
     const client = new OfficeClient({ cwd: repo.dir, onEvent: (event) => events.push(event), command: { file: process.execPath, args: ["--import", new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url).href, fileURLToPath(new URL("./fixture-main.testutil.ts", import.meta.url))] } }); clients.push(client);
@@ -96,7 +97,7 @@ describe("M1 caller subprocess contract", () => {
     await expect(client.request({ action: "army" })).rejects.toThrow("closed");
   }, 40_000);
 
-  it("accepts a one-shot credential pipe, keeps serving after EOF, and exits on authenticated shutdown", async () => {
+  windowsOnly("accepts a one-shot credential pipe, keeps serving after EOF, and exits on authenticated shutdown", async () => {
     const repo = makeRepo(); repos.push(repo);
     const runtime = launch(repo.dir);
     runtime.child.stdin.end(`${JSON.stringify({ credential })}\n`);
@@ -114,7 +115,7 @@ describe("M1 caller subprocess contract", () => {
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
 
-  it("detects an abruptly exited launcher after bootstrap EOF and closes its native child while retaining partial work", async () => {
+  windowsOnly("detects an abruptly exited launcher after bootstrap EOF and closes its native child while retaining partial work", async () => {
     const repo = makeRepo(); repos.push(repo);
     const runtime = launch(repo.dir, ["--launcher"]);
     await until(() => runtime.events.some((event) => event.type === "ready"));
