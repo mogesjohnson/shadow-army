@@ -52,7 +52,10 @@ interface Persisted {
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const slash = (path: string) => path.replace(/\\/g, "/");
 const real = (path: string) => { try { return realpathSync.native(path); } catch { return resolve(path); } };
-const keyOf = (repo: GitRepo) => { const path = slash(real(repo.gitDir)); return process.platform === "linux" ? path : path.toLowerCase(); };
+const canon = (path: string) => { const out = slash(real(path)); return process.platform === "linux" ? out : out.toLowerCase(); };
+const keyOf = (repo: GitRepo) => canon(repo.gitDir);
+/** One repository is the whole tuple git is given: its administration folder, working tree and common folder (C9). */
+const same = (a: GitRepo, b: GitRepo) => keyOf(a) === keyOf(b) && canon(a.workTree) === canon(b.workTree) && canon(a.commonDir) === canon(b.commonDir);
 const flat = (byRepo: Record<string, TrustedState>): TrustedState => Object.assign({}, ...Object.values(byRepo));
 const uncounted = /^(branch|remote)\./i;
 const LIMITS = { entries: 10_000, bytes: 16 * 1024 * 1024, repos: 1_000 };
@@ -272,7 +275,8 @@ export class HarnessHold {
   private trusted: Record<string, TrustedState> | undefined;
   private files: string[] | undefined;
   private turnOpen = false;
-  private running = false;
+  /** Harness git commands started whose after-check hasn't finished: the record says `running` while any is (C10). */
+  private active = 0;
   private timeout: string | undefined;
   /** Submodule names, at any depth, from the last scan. */
   private names: string[] = [];
@@ -321,7 +325,9 @@ export class HarnessHold {
 
   /** A snapshot or worktree this army made: its state as it is now is trusted, and harness git may run in it. */
   async register(repo: GitRepo): Promise<void> {
-    if (!this.repos.some((other) => keyOf(other) === keyOf(repo))) this.repos.push(repo);
+    const known = this.repos.find((other) => keyOf(other) === keyOf(repo));
+    if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
+    if (!known) this.repos.push(repo);
     const { state, problems } = await readState(this.options.repo, repo, this.options.gitFor, this.options.limits);
     if (problems.length) throw new Uninspectable(problems.join(", "), "the repository can't be trusted");
     this.trusted = { ...this.trusted, [keyOf(repo)]: state };
@@ -331,8 +337,8 @@ export class HarnessHold {
 
   /** Shadow Army's own command removed it. */
   async unregister(repo: GitRepo): Promise<void> {
-    if (keyOf(repo) === keyOf(this.options.repo)) return;
-    this.repos = this.repos.filter((other) => keyOf(other) !== keyOf(repo));
+    if (keyOf(repo) === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo))) return;
+    this.repos = this.repos.filter((other) => !same(other, repo));
     if (this.trusted) delete this.trusted[keyOf(repo)];
     this.save();
   }
@@ -341,25 +347,27 @@ export class HarnessHold {
   retry() { this.timeout = undefined; this.save(); }
 
   /**
-   * Run harness git in `repo`, one this hold covers, between a check before and one after. The after-check runs
+   * Run harness git in `repo`, one this hold covers (all three paths), with the paths it was registered with,
+   * between a check before and one after. The after-check runs
    * whether the command succeeded or not, and a change on either side holds; the command's own error is the one thrown.
    */
   async run(repo: GitRepo, args: string[], kind: HarnessKind = "other"): Promise<GitResult> {
-    if (!this.repos.some((other) => keyOf(other) === keyOf(repo))) throw new Error(`harness git: ${repo.gitDir} isn't a repository this hold covers`);
+    const covered = this.repos.find((other) => same(other, repo));
+    if (!covered) throw new Error(`harness git: ${repo.gitDir} isn't a repository this hold covers`);
     if (this.timeout) throw new HarnessGitHeld(this.timeout);
     const before = await this.check();
     if (before.held) throw new HarnessGitHeld(before.line);
     // A guard command sees into every submodule: no `ignore`, in a config or a `.gitmodules`, at any depth (WSP-10).
     const config: [string, string][] = kind !== "guard" ? []
       : [["diff.ignoreSubmodules", "none"], ...this.names.map((name): [string, string] => [`submodule.${name}.ignore`, "none"])];
-    this.running = true; this.save();
+    this.active++; this.save();
     let result: GitResult | undefined, failure: unknown;
-    try { result = await this.options.gitFor(repo, config).run(args, kind); } catch (error) {
+    try { result = await this.options.gitFor(covered, config).run(args, kind); } catch (error) {
       failure = error;
       if (error instanceof HarnessGitHeld) this.timeout = error.reason;
     }
     const after = await this.check();
-    this.running = false; this.save();
+    this.active--; this.save();
     if (failure !== undefined) throw failure;
     if (after.held) throw new HarnessGitHeld(after.line);
     return result!;
@@ -428,7 +436,7 @@ export class HarnessHold {
     if (this.unverified || !this.trusted) return;
     const record: Persisted = { version: 2, repos: this.repos, trusted: this.trusted,
       ...(this.files ? { held: { files: this.files } } : {}), ...(this.turnOpen ? { turnOpen: true } : {}),
-      ...(this.running ? { running: true } : {}), ...(this.timeout ? { timeout: this.timeout } : {}) };
+      ...(this.active > 0 ? { running: true } : {}), ...(this.timeout ? { timeout: this.timeout } : {}) };
     const path = this.options.statePath, temp = `${path}.${process.pid}.tmp`;
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(temp, JSON.stringify(record));

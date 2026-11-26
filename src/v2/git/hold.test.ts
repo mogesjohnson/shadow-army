@@ -130,6 +130,43 @@ describe("the command's own repository (C2)", () => {
   }, 60_000);
 });
 
+describe("a repository's whole identity (C9)", () => {
+  it("runs only in a registered repository's own working tree and common folder, with the paths it registered", async () => {
+    const { base, repo, main, open } = setup(), given: GitRepo[] = [];
+    const hold = open((where, runner) => ({ run: async (args, kind) => { if (args[0] === "status") given.push(where); return runner.run(args, kind); } }));
+    await hold.start();
+    const tree = join(base, "snap");
+    plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "worktree", "add", "-q", "--detach", tree);
+    const snap: GitRepo = { gitDir: join(repo.gitDir, "worktrees", "snap"), workTree: tree, commonDir: repo.gitDir };
+    await hold.register(snap);
+    await expect(hold.run({ ...snap, workTree: repo.root }, ["status"])).rejects.toThrow("isn't a repository this hold covers");
+    await expect(hold.run({ ...main, commonDir: snap.gitDir }, ["status"])).rejects.toThrow("isn't a repository this hold covers");
+    await expect(hold.register({ ...snap, workTree: repo.root })).rejects.toThrow("already registered");
+    given.length = 0;
+    await hold.run({ ...snap, workTree: join(tree, "..", "snap", ".") + "/" }, ["status", "--porcelain"]);
+    expect(given).toEqual([snap]); expect(given[0]).toBe(snap); // the stored tuple, not the caller's spelling
+  }, 60_000);
+});
+
+describe("commands that overlap (C10)", () => {
+  it("keeps the interrupted-command marker until the last command's after-check", async () => {
+    const { main, statePath, open } = setup();
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>((done) => { release = done; }), waiting = new Promise<void>((done) => { started = done; });
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      if (args[0] === "log") { started(); await gate; }
+      return runner.run(args, kind);
+    } }));
+    await hold.start();
+    const slow = hold.run(main, ["log", "-1", "--oneline"]);
+    await waiting;
+    await hold.run(main, ["status", "--porcelain"]);
+    expect(JSON.parse(readFileSync(statePath, "utf8"))).toMatchObject({ running: true });
+    release(); await slow;
+    expect(JSON.parse(readFileSync(statePath, "utf8")).running).toBeUndefined();
+  }, 60_000);
+});
+
 describe("the hold's own record (C3, C4)", () => {
   it("holds when the last record exists but can't be read, until the owner accepts", async () => {
     const { statePath, open } = setup();
