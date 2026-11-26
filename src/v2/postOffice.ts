@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
+import type { AppliedFile } from "../workspace/apply.js";
 import { captureState, diffState, type RepoState } from "../workspace/guard.js";
 import { Locks } from "../workspace/locks.js";
 import { git, repoRoot } from "../workspace/git.js";
@@ -55,6 +56,8 @@ interface Session {
 }
 
 /** The blob `rev:path` names, or undefined when the path is absent there. */
+/** An index entry as `git add -N` writes it: the empty blob (SHA-1 or SHA-256) at stage 0. */
+const INTENT_TO_ADD = /^100(644|755) (e69de29bb2d1d6434b8b29ae775ad8c2e48c5391|473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813) 0\n$/;
 const blob = (root: string, rev: string, path: string) => git(root, ["rev-parse", "--verify", "-q", `${rev}:${path}`]).then((out) => out.trim() || undefined, () => undefined);
 
 /**
@@ -62,19 +65,22 @@ const blob = (root: string, rev: string, path: string) => git(root, ["rev-parse"
  * started with is now expected in its applied state. A path the turn had already seen change is left, so the guard still names it.
  * C4: only a path the folder holds as the apply wrote it (the commit's blob, or absent) moves; any other bytes are someone
  * else's change, so the guard still names that path.
+ * #99 C7: the worktree and the index are reconciled independently. The apply's only index effect is the intent-to-add
+ * entry of a file it added, so only that entry moves; any other index change (an owner's staging) is still named.
  */
-async function carryApply(root: string, sessions: Session[], before: RepoState, after: RepoState, paths: string[], commit: string): Promise<void> {
-  const own: string[] = [];
-  for (const path of paths) {
+async function carryApply(root: string, sessions: Session[], before: RepoState, after: RepoState, files: AppliedFile[], commit: string): Promise<void> {
+  const own = { dirty: [] as string[], index: [] as string[] };
+  for (const { path, change } of files) {
     const entry = after.dirty.get(path);
     const hash = entry === undefined ? await blob(root, "HEAD", path) : entry.slice(entry.lastIndexOf(" ") + 1);
-    if (hash !== "" && (hash === "gone" ? undefined : hash) === await blob(root, commit, path)) own.push(path);
+    if (hash !== "" && (hash === "gone" ? undefined : hash) === await blob(root, commit, path)) own.dirty.push(path);
+    if (change === "A" && INTENT_TO_ADD.test(after.index.get(path) ?? "")) own.index.push(path);
   }
   for (const session of sessions) {
     const base = session.guardBase;
     if (!base) continue;
     for (const key of ["dirty", "index"] as const) {
-      for (const path of own) {
+      for (const path of own[key]) {
         if (base[key].get(path) !== before[key].get(path)) continue;
         const now = after[key].get(path);
         if (now === undefined) base[key].delete(path); else base[key].set(path, now);
@@ -387,7 +393,7 @@ export class PostOffice {
         const before = others.length ? await captureState(this.root) : undefined;
         const applied = await applyAudited(this.root, audited);
         // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
-        if (before && applied.applied && applied.files.length) await carryApply(this.root, others, before, await captureState(this.root), applied.files.map((file) => file.path), audited.tip!);
+        if (before && applied.applied && applied.files.length) await carryApply(this.root, others, before, await captureState(this.root), applied.files, audited.tip!);
         return applied;
       });
       write = { ...write, apply };

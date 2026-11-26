@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -132,6 +133,35 @@ describe("post office fixes from the M1a pre-review", () => {
     await o.send("tank", "a");
     release();
     expect((await medic).error?.message).toContain("src/a.ts");
+  }, 30_000);
+
+  it("#99 C7: an owner's staging of a path another soldier just applied fails the guard, though the bytes match", async () => {
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void; const medicStarted = new Promise<void>((resolve) => { started = resolve; });
+    const { repo, office: o } = await office({
+      tank: [async (cwd) => { await medicStarted; await put(cwd, "src/a.ts", "tank\n"); return "completed"; }],
+      medic: [async () => { started(); await gate; return "completed"; }],
+    });
+    await o.open("tank", { claims: ["src/a.ts"] }); await o.open("medic", { claims: ["src/b.ts"] });
+    const medic = o.send("medic", "b");
+    hooks.afterApply = () => { hooks.afterApply = undefined; execFileSync("git", ["add", "src/a.ts"], { cwd: repo.dir }); };
+    expect((await o.send("tank", "a")).write?.apply?.applied).toBe(true);
+    release();
+    expect((await medic).error?.message).toContain("src/a.ts");
+  }, 30_000);
+
+  it("#99 C7: a file another soldier adds does not fail a running turn's guard", async () => {
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    let started!: () => void; const medicStarted = new Promise<void>((resolve) => { started = resolve; });
+    const { office: o } = await office({
+      tank: [async (cwd) => { await medicStarted; await put(cwd, "src/new.ts", "new\n"); return "completed"; }],
+      medic: [async () => { started(); await gate; return "completed"; }],
+    });
+    await o.open("tank", { claims: ["src/new.ts"] }); await o.open("medic", { claims: ["src/b.ts"] });
+    const medic = o.send("medic", "b");
+    expect((await o.send("tank", "a")).write?.apply).toMatchObject({ applied: true, files: [{ change: "A", path: "src/new.ts" }] });
+    release();
+    expect((await medic).status).toBe("completed");
   }, 30_000);
 
   it("C1: a moved tip whose apply was refused takes the session down, so a later no-op cannot carry it in", async () => {
