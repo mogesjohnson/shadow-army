@@ -338,9 +338,10 @@ const isBarred = (real: string, barred: string[]): boolean => {
  * An executable by its absolute path on `PATH` alone, as CH-1 finds each CLI: never one in the folder, the repository, its worktrees or a snapshot,
  * and never through a relative or empty entry. The current folder is not searched on Windows, because only the listed entries are (HOST-2).
  * Each entry and the executable are compared by real path, so a link, a junction, an 8.3 name or another case cannot pass a barred one off as
- * eligible; an entry or executable that does not resolve is dropped. The result is the real path of the executable, the one that was vetted.
+ * eligible; an entry or executable that does not resolve is dropped. So is one under any checkout of the repository that `barred` cannot name
+ * (`inCheckout`). The result is the real path of the executable, the one that was vetted.
  */
-async function findOnPath($: EngineInterface, name: string, path: string, barred: string[]): Promise<string | undefined> {
+async function findOnPath($: EngineInterface, name: string, path: string, { folders: barred, common }: Barred): Promise<string | undefined> {
   const file = process.platform === "win32" ? `${name}.exe` : name;
   for (const raw of path.split(process.platform === "win32" ? ";" : ":")) {
     const entry = raw.trim().replace(/^"(.*)"$/, "$1").replace(/[\\/]+$/, "");
@@ -348,9 +349,36 @@ async function findOnPath($: EngineInterface, name: string, path: string, barred
     const folder = await realPathOf($, entry);
     if (!folder || isBarred(folder, barred)) continue;
     const found = await realPathOf($, `${entry}${entry.includes("\\") ? "\\" : "/"}${file}`);
-    if (found && !isBarred(found, barred)) return found;
+    if (!found || isBarred(found, barred)) continue;
+    if (common && (await inCheckout($, entry, common) || await inCheckout($, folder, common) || await inCheckout($, parentOf(found), common))) continue;
+    return found;
   }
   return undefined;
+}
+
+const parentOf = (path: string): string => path.replace(/[\\/][^\\/]*$/, "");
+
+/** Whether `<checkout>/.git` leads into the repository whose common git folder is `common` (a `normal` real path). One that is there and cannot be followed counts. */
+async function leadsTo($: EngineInterface, checkout: string, common: string): Promise<boolean> {
+  let kind: string;
+  try { kind = (await $.fs.stat(`${checkout}/.git`)).kind; } catch (error) { return !isMissing(error); }
+  const named = kind === "directory" ? `${checkout}/.git` : await adminOf($, checkout);
+  const real = named ? await realPathOf($, named) : undefined;
+  return !real || normal(real) === common || normal(real).startsWith(`${common}/`);
+}
+
+/**
+ * Whether a folder is in a checkout of this repository, or in the worktrees folder beside one, judged from the folder's side: each folder above it
+ * is asked where its own `.git` leads. This finds a primary checkout that the common git folder keeps no record of, as with
+ * `git init --separate-git-dir <elsewhere>/.git` (C9, reviews 35 and 45; C13).
+ */
+async function inCheckout($: EngineInterface, folder: string, common: string): Promise<boolean> {
+  // Up to and including the drive root, `/` or a network share, which can be a checkout too.
+  for (let dir = folder.replace(/\\/g, "/").replace(/\/+$/, "");; dir = parentOf(dir)) {
+    if (await leadsTo($, dir, common)) return true;
+    if (dir.endsWith("-worktrees") && await leadsTo($, dir.slice(0, -"-worktrees".length), common)) return true;
+    if (parentOf(dir) === dir || /^\/\/[^/]+\/[^/]+$/.test(dir)) return false;
+  }
 }
 
 /** Whether a host file call rejected because the path is not there. */
@@ -415,22 +443,40 @@ async function movable($: EngineInterface, common: string): Promise<boolean> {
 }
 
 /**
- * Every checkout of the repository, read from git's own files before anything runs (HOST-2, CH-1; C9, reviews 21, 24, 35 and 45): the nearest
- * checkout, which must hold its git folder as a `.git` folder and so is the primary checkout itself, and each registered worktree
- * (`.git/worktrees/<name>/gitdir`). From a linked checkout nothing proves which folder is the primary: git keeps no record of it, and git's own
- * `git worktree list` only drops `/.git` from the common folder's name, as a separated git folder (`--separate-git-dir`) would also give. So a
- * linked checkout, a `.git` file, or a config that may move the work tree leaves the layout unknown, and nothing starts. Each registered
- * worktree whose checkout is there must name its own git folder back; one whose checkout is gone is still barred.
+ * A linked checkout's common git folder, when its registry agrees: `.git` names an admin folder directly in `<common>/worktrees`, whose
+ * `commondir` leads to `<common>` and whose `gitdir` names this checkout back, and `<common>` is a folder named `.git` (C13). A common folder
+ * under another name (a submodule's, a separated one's) is not verified, nor is an admin config that may move the work tree.
  */
-async function checkouts($: EngineInterface, root: string): Promise<string[] | { refusal: string }> {
+async function linkedCommon($: EngineInterface, root: string): Promise<string | undefined> {
+  const admin = await adminOf($, root);
+  const shared = admin ? await gitValue($, `${admin}/commondir`) : undefined;
+  if (!admin || !shared) return undefined;
+  const common = joined(admin, shared);
+  const back = await gitValue($, `${admin}/gitdir`);
+  if (!/\/\.git$/.test(common) || !back || await movable($, admin)) return undefined;
+  const agrees = await sameReal($, joined(admin, back), `${root}/.git`) && await sameReal($, parentOf(admin), `${common}/worktrees`);
+  return agrees ? common : undefined;
+}
+
+/**
+ * Every checkout of the repository that git's own files name, read before anything runs (HOST-2, CH-1; C9, reviews 21, 24, 35 and 45; C13): the
+ * nearest checkout; from a linked one, the folder that holds the common `.git` folder; and each registered worktree
+ * (`<common>/worktrees/<name>/gitdir`). Git keeps no record of the primary checkout, which a separated git folder can put elsewhere, so these
+ * names alone do not bar it: `findOnPath` also asks each executable's own folders where their `.git` leads (`inCheckout`). A layout that cannot
+ * be verified, or a config that may move the work tree, starts nothing. Each registered worktree whose checkout is there must name its own git
+ * folder back; one whose checkout is gone is still barred.
+ */
+async function checkouts($: EngineInterface, root: string): Promise<{ folders: string[]; common?: string } | { refusal: string }> {
   const refusal = { refusal: `Shadow Army: the git worktrees of ${root} cannot be verified · nothing started` };
   const dotGit = `${root}/.git`;
   let kind: string;
-  try { kind = (await $.fs.stat(dotGit)).kind; } catch (error) { return isMissing(error) ? [root] : refusal; }
-  if (kind === "file") return { refusal: `Shadow Army: ${root} is a linked worktree, and nothing proves which folder is its primary checkout · start the army from the primary checkout · nothing started` };
-  const common = joined(root, ".git");
-  if (kind !== "directory" || await movable($, common)) return refusal;
-  const found = [root];
+  try { kind = (await $.fs.stat(dotGit)).kind; } catch (error) { return isMissing(error) ? { folders: [root] } : refusal; }
+  const common = kind === "file" ? await linkedCommon($, root) : kind === "directory" ? joined(root, ".git") : undefined;
+  const real = common ? await realPathOf($, common) : undefined;
+  if (!common || !real || await movable($, common)) return refusal;
+  const found = kind === "file" ? [root, parentOf(common)] : [root];
+  // A linked checkout starts only when the registry itself lists it.
+  let registered = kind !== "file";
   let names: string[] = [];
   try { names = (await $.fs.list(`${common}/worktrees`)).filter((entry) => entry.kind === "directory").map((entry) => entry.name); }
   catch (error) { if (!isMissing(error)) return refusal; }
@@ -441,9 +487,10 @@ async function checkouts($: EngineInterface, root: string): Promise<string[] | {
     const checkout = joined(entry, back).replace(/\/\.git$/, "");
     const named = await adminOf($, checkout);
     if (named === undefined || (named !== null && !await sameReal($, named, entry))) return refusal;
+    registered ||= await sameReal($, `${checkout}/.git`, dotGit);
     found.push(checkout);
   }
-  return found;
+  return registered ? { folders: found, common: normal(real) } : refusal;
 }
 
 /**
@@ -460,18 +507,21 @@ async function snapshotRoots($: EngineInterface, settings: Record<string, unknow
   return [joined(home, ".shadow-army/snapshots"), ...moved];
 }
 
+/** The barred folders in `normal` form, and the repository's common git folder when there is one. */
+interface Barred { folders: string[]; common?: string }
+
 /**
  * The barred folders as compared: the working folder, every checkout of the repository (C9), the worktrees folder beside each checkout and the
  * snapshot roots (C10), each in its own spelling and by its own real path, so a link or junction on any of them is followed (C1). The working
  * folder and the nearest checkout must resolve; another may be absent, but one that is there and does not resolve stops the start.
  */
-async function barredFolders($: EngineInterface, cwd: string, root: string, settings: Record<string, unknown>): Promise<string[] | { refusal: string }> {
+async function barredFolders($: EngineInterface, cwd: string, root: string, settings: Record<string, unknown>): Promise<Barred | { refusal: string }> {
   const refusal = (path: string) => ({ refusal: `Shadow Army: ${path} does not resolve to a real path · nothing started` });
   const [cwdReal, rootReal] = [await rootIdentity($, cwd), await rootIdentity($, root)];
   if (typeof cwdReal !== "string") return refusal(cwd);
   if (typeof rootReal !== "string") return refusal(root);
   const [layout, snapshots] = [await checkouts($, root), await snapshotRoots($, settings)];
-  if (!Array.isArray(layout)) return layout;
+  if ("refusal" in layout) return layout;
   if (!Array.isArray(snapshots)) return snapshots;
   const folders = [cwd, cwdReal];
   const add = async (paths: Iterable<string>): Promise<string | undefined> => {
@@ -482,17 +532,17 @@ async function barredFolders($: EngineInterface, cwd: string, root: string, sett
     }
     return undefined;
   };
-  const unresolved = await add([root, rootReal, ...layout])
+  const unresolved = await add([root, rootReal, ...layout.folders])
     ?? await add(folders.slice(2).map((checkout) => `${checkout.replace(/[\\/]+$/, "")}-worktrees`))
     ?? await add(snapshots);
-  return unresolved === undefined ? [...new Set(folders.map(normal))] : refusal(unresolved);
+  return unresolved === undefined ? { folders: [...new Set(folders.map(normal))], common: layout.common } : refusal(unresolved);
 }
 
 /** Node.js's and git's absolute paths, found before either is run (HOST-2), or the line to show when one is missing. */
 async function resolveTools($: EngineInterface, cwd: string, settings: Record<string, unknown>): Promise<{ node: string; git: string } | { refusal: string }> {
   const path = (await $.env.get("PATH")) ?? (await $.env.get("Path")) ?? "";
   const barred = await barredFolders($, cwd, await repoRoot($, cwd), settings);
-  if (!Array.isArray(barred)) return barred;
+  if ("refusal" in barred) return barred;
   const node = await findOnPath($, "node", path, barred);
   if (!node) return { refusal: "Shadow Army needs Node.js 22.0 or later on PATH; none was found" };
   const git = await findOnPath($, "git", path, barred);
