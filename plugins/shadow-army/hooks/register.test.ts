@@ -91,9 +91,17 @@ describe("a log failure in the owner's transcript (PO-5)", () => {
     const { send, emit, logs, spawns } = await mod(() => ({ status: "completed", summary: "ok" }));
     await send("claude-sonnet --claim a go");
     const { credential } = JSON.parse(spawns[0].input);
-    emit(failed(`EACCES ${credential.toUpperCase()}\nShadow Army: forged\r\n\u001b[2J‮ Bearer abc.def ${"a1".repeat(32)}`));
+    emit(failed(`EACCES ${credential.toUpperCase()}\nShadow Army: forged\r\n\u001b[2J\u202e Bearer abc.def ${"a1".repeat(32)}`));
     await shown(logs, 1);
-    expect(logs).toEqual(["Shadow Army: logs not written · EACCES [redacted] Shadow Army: forged \\u{1b}[2J\\u{202e} Bearer [redacted] [redacted]"]);
+    expect(logs).toEqual(["Shadow Army: logs not written · EACCES [redacted] Shadow Army: forged\\u{d} \\u{1b}[2J\\u{202e} Bearer [redacted] [redacted]"]);
+  });
+
+  it("shows every Cc and Cf character but newline and tab as its placeholder, also those that count as space (SEC-6)", async () => {
+    const { send, emit, logs } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a go");
+    emit(failed("\ufeffa\rb\u000bc\u000cd\u00a0e\u2028f\n\tg\r"));
+    await shown(logs, 1);
+    expect(logs).toEqual(["Shadow Army: logs not written · \\u{feff}a\\u{d}b\\u{b}c\\u{c}d\u00a0e f g\\u{d}"]);
   });
 
   it("still shows it while the office closes, when the last lines are the ones being lost", async () => {
