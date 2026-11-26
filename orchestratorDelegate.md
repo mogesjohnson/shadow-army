@@ -7,9 +7,6 @@ monarch:
   default: codex-astra
   fallback: claude-opus
 soldiers:
-  codex-astra:
-    roles: [orchestrate]
-    cost: 3
   codex-sol:
     roles: [build]
     cost: 2
@@ -17,6 +14,10 @@ soldiers:
     roles: [orchestrate, review, build]
     cost: 3
     buildFor: [hard]          # high-effort work-horse for hard problems only
+  codex-astra:                # Bellion; after claude-opus, so v1's router still ranks claude-opus first
+    roles: [orchestrate, review, build]   # orchestrate: v1 only (monarch.default); v2 ignores it
+    cost: 3
+    buildFor: [hard]
   claude-sonnet:
     roles: [build]
     cost: 1

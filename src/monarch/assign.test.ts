@@ -38,11 +38,11 @@ describe("assignTasks", () => {
   });
 
   it("never lets a soldier review work it built, at any depth", () => {
-    // claude-opus is the only reviewer and builds hard tasks; if it built anything upstream, nobody may review.
+    // claude-opus and codex-astra are the only reviewers and both build hard tasks; if both built upstream, nobody may review.
     const r = assignTasks(
       checked([
         build("a", { difficulty: "hard", soldier: "claude-opus" }),
-        build("b", { dependsOn: ["a"] }),
+        build("b", { difficulty: "hard", soldier: "codex-astra", dependsOn: ["a"] }),
         { id: "r", title: "review", role: "review", dependsOn: ["b"], brief: "b" },
       ]),
       roster,
