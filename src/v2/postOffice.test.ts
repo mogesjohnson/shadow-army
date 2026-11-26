@@ -491,7 +491,8 @@ describe("M1b-26 harness git and outside snapshots", () => {
     // Three dirty files are hashed in one call per guard read, not one call each.
     expect(calls.filter((args) => args[0] === "hash-object")).toHaveLength(2);
     // Was 34 (one hash-object per dirty file per read, and a hold check twice in a row after the turn).
-    expect(calls.length).toBeLessThanOrEqual(28);
+    // 28 before #120's repaired audit (review 15 C9), which adds a config, a diff and an ls-files call per turn.
+    expect(calls.length).toBeLessThanOrEqual(31);
   }, 60_000);
 
   it("puts no ignore file back through a link out of the snapshot on a live turn, and reports it (review 15 C9)", async () => {
