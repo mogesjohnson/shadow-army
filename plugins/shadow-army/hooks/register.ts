@@ -20,8 +20,10 @@ interface Runtime {
   renewing?: symbol;
   diagnostic: string;
   finished?: Promise<void>;
-  /** ARM-7: the folder's latest trust card, kept after its answer: a use whose request was in flight when it was drawn takes its answer too. */
+  /** ARM-7: the folder's latest trust card; a use that meets it while it is open waits on its answer. */
   card?: Card;
+  /** C3: the requests now in flight, each with the first card drawn while it was, whose answer it takes. */
+  uses: Set<{ met?: Card }>;
 }
 
 // These values stay in this module's private environment. $.store writes a file,
@@ -257,7 +259,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     runtime = {
       session, cwd, credential: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""),
-      closing: false, ready, accept, reject, diagnostic: "",
+      closing: false, ready, accept, reject, diagnostic: "", uses: new Set(),
     };
     active = runtime;
     const owned = runtime;
@@ -403,26 +405,28 @@ async function gated($: EngineInterface, runtime: Runtime, command: Record<strin
     if (open && !open.settled) {
       const outcome = await open.outcome;
       if (!outcome.accepted) return { held: outcome.reason };
-      if (runtime.closing) throw new Error("The army ended before the command could run");
     }
-    const seen = runtime.card;
-    const value = await post($, runtime, command);
+    // C9: Claude Code may retire the army at any step (HOST-2); nothing is posted after that, retries included.
+    if (runtime.closing) throw new Error("The army ended before the command could run");
+    // C3: the first card drawn while this request is in flight answers this use, even after a later card replaced it.
+    const use: { met?: Card } = {};
+    runtime.uses.add(use);
+    let value: unknown;
+    try { value = await post($, runtime, command); } finally { runtime.uses.delete(use); }
     const rows = trustRows(value);
     if (!rows) return { value };
-    // C3: a card drawn while this request was in flight answers this use too, even when it was answered before the reply came.
-    const met = runtime.card;
-    if (met && met !== seen) {
-      const outcome = await met.outcome;
+    if (use.met) {
+      const outcome = await use.met.outcome;
       if (!outcome.accepted) return { held: outcome.reason };
-      if (runtime.closing) throw new Error("The army ended before the command could run");
       continue;
     }
     if (refused && refused.key === cardKey(rows)) return { held: refused.reason };
     const card: Card = { outcome: showCard($, runtime, rows, refused !== undefined), settled: false };
     card.outcome = card.outcome.finally(() => { card.settled = true; });
     runtime.card = card;
+    for (const other of runtime.uses) other.met ??= card;
     const outcome = await card.outcome;
-    if (outcome.accepted) { if (runtime.closing) throw new Error("The army ended before the command could run"); refused = undefined; continue; }
+    if (outcome.accepted) { refused = undefined; continue; }
     if (outcome.failed === undefined) return { held: outcome.reason };
     refused = { key: outcome.failed, reason: outcome.reason };
   }

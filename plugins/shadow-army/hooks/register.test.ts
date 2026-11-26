@@ -548,6 +548,52 @@ describe("the mod's trust dialog (ARM-7, M1-AC13)", () => {
     expect(state).toMatchObject({ accepted: [], opened: 0, sent: 0 });
   });
 
+  it("keeps a delayed use's decline when a later owner's card is accepted before its reply (C3)", async () => {
+    const { state, respond } = office();
+    const slow = deferred(), owner = deferred();
+    let opens = 0;
+    const env: { answer: string | Promise<string>; ownOpen: boolean } = { answer: owner.promise, ownOpen: true };
+    // The second use's reply is the card as it stood when the request reached the post office.
+    const { send, asks } = await mod((c) => { if (c.action !== "open" || ++opens !== 2) return respond(c); const reply = respond(c); return slow.promise.then(() => reply); }, env);
+    const first = send(run), second = send(run);
+    for (let i = 0; i < 10; i++) await later();
+    expect(asks).toHaveLength(1);
+    owner.answer("Not now");
+    expect(await first).toMatch(/Nothing started: the army waits for you/);
+    env.answer = "Trust these files";
+    expect(await send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(asks).toHaveLength(2);
+    slow.answer("");
+    expect(await second).toMatch(/Nothing started: the army waits for you/);
+    expect(asks).toHaveLength(2);
+    expect(state).toMatchObject({ opened: 1, sent: 1 });
+  });
+
+  it("posts nothing once Claude Code retires the army while a stale accept is handled (C9, HOST-2)", async () => {
+    for (let hops = 0; hops < 20; hops++) {
+      let retire = () => {};
+      const { respond } = office((hashes, live) => {
+        if (hashes[1] !== B) return { ok: true };
+        live.rows = ROWS.map((row) => row.name === "agent.md" ? { ...row, hash: C } : row);
+        env.refuseOn = "renew";
+        let wait = Promise.resolve();
+        for (let i = 0; i < hops; i++) wait = wait.then(() => {});
+        void wait.then(() => retire());
+        throw new Error(STALE);
+      });
+      const env: { answer: string; ownOpen: boolean; refuseOn?: string } = { answer: "Trust these files", ownOpen: true };
+      const { send, commands, heartbeat, $ } = await mod(respond, env);
+      retire = () => heartbeat()!.run();
+      // The moment the army retires is the one its refusal line is logged; every post must come before it.
+      let retired = -1;
+      const log = $.ui.log;
+      $.ui.log = (line: string) => { if (line.includes("refused the request")) retired = commands.length; return log(line); };
+      expect(await send(run)).toMatch(/Nothing started|army ended/);
+      expect(retired).toBeGreaterThan(0);
+      expect(commands.length).toBe(retired);
+    }
+  });
+
   it("posts nothing more when Claude Code refuses the accept's fetch (C9, HOST-2)", async () => {
     const { state, respond } = office();
     const { send, asks, commands } = await mod(respond, { answer: "Trust these files", ownOpen: true, refuseOn: "trust" });
