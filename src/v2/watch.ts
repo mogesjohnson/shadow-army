@@ -1,4 +1,5 @@
-import type { Writable } from "node:stream";
+import { Writable } from "node:stream";
+import { Worker } from "node:worker_threads";
 
 /** PO-1's creation stamp of a process, or null when no process has the pid. */
 export type StampOf = (pid: number) => Promise<string | null>;
@@ -48,6 +49,48 @@ export function watchStarter(options: StarterWatchOptions): { stop(): void } {
     }, () => {}).finally(() => { reading = false; });
   });
   return { stop() { done = true; cancel(); } };
+}
+
+// The worker's whole job: blocking writes to the output, one reply per chunk (null, or the failure).
+const OUTPUT_WORKER = `const { parentPort, workerData } = require("node:worker_threads");
+const { writeSync } = require("node:fs");
+const nap = new Int32Array(new SharedArrayBuffer(4));
+parentPort.on("message", (bytes) => {
+  try {
+    for (let at = 0; at < bytes.length;) {
+      try { at += writeSync(workerData.fd, bytes, at); }
+      catch (error) { if (error.code !== "EAGAIN") throw error; Atomics.wait(nap, 0, 0, 5); }
+    }
+    parentPort.postMessage(null);
+  } catch (error) { parentPort.postMessage({ code: error.code, message: String(error.message) }); }
+});`;
+
+/**
+ * PO-7's nonblocking event transport. Node makes a pipe on stdout blocking on Windows, so a reader that stops
+ * reading would hold the whole event loop (renewals, the watch, every soldier). Here a worker thread does the
+ * blocking writes. A chunk's callback runs only once its bytes reached the output, so `writableLength` counts
+ * every byte not yet written, which is the queue `eventWriter` budgets. The worker keeps the process alive only
+ * while bytes wait, so a shutdown still flushes what was written before it.
+ */
+export function outputTransport(fd: number): Writable {
+  // No inherited flags: `--input-type=module` or a loader would make this CommonJS script fail to start.
+  const worker = new Worker(OUTPUT_WORKER, { eval: true, workerData: { fd }, execArgv: [] });
+  worker.unref();
+  const waiting: ((error?: Error | null) => void)[] = [];
+  const failAll = (error: Error) => { for (const done of waiting.splice(0)) done(error); };
+  worker.on("message", (failure: { code?: string; message: string } | null) => {
+    const done = waiting.shift();
+    if (!waiting.length) worker.unref();
+    done?.(failure ? Object.assign(new Error(failure.message), { code: failure.code }) : null);
+  });
+  worker.on("error", failAll);
+  worker.on("exit", () => failAll(new Error("event output worker ended")));
+  const send = (bytes: Buffer, done: (error?: Error | null) => void) => { waiting.push(done); worker.ref(); worker.postMessage(bytes); };
+  return new Writable({
+    write(chunk: Buffer, _encoding, done) { send(chunk, done); },
+    writev(chunks, done) { send(Buffer.concat(chunks.map(({ chunk }) => chunk as Buffer)), done); },
+    destroy(error, done) { void worker.terminate(); done(error); },
+  });
 }
 
 /** PO-7: past 16 MiB of events not yet written, the post office stops reading its soldiers' output. */

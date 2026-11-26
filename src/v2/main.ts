@@ -2,7 +2,7 @@ import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processStartTime, startOfficeServer, type OfficeServer, type ServerOptions } from "./server.js";
-import { eventWriter, watchStarter } from "./watch.js";
+import { eventWriter, outputTransport, watchStarter } from "./watch.js";
 import { redact } from "./logs.js";
 import { memoryProtection, readBootstrap } from "./credential.js";
 
@@ -30,7 +30,8 @@ export async function runPostOffice(settings: Partial<Omit<ServerOptions, "crede
   })();
   // PO-7: a write that fails, as with EPIPE once Claude Code was killed, stops the writing only; the watch or the
   // lease starts the shutdown. The loss is logged once (before the office exists there is no log to write it to).
-  const events = eventWriter(process.stdout, {
+  // PO-7: fd 1 through a worker thread, never process.stdout, whose pipe writes block on Windows.
+  const events = eventWriter(outputTransport(1), {
     onLost: (error) => office?.office.logRecord({ type: "events_lost", reason: (error as NodeJS.ErrnoException).code ?? String(error) }),
     onBacklog: (full) => {
       office?.office.logRecord({ type: "events_backlog", full });
@@ -59,6 +60,8 @@ export async function runPostOffice(settings: Partial<Omit<ServerOptions, "crede
       onEvent: (event) => events.write(`${JSON.stringify(event)}\n`),
       onShutdown: () => { void stop(); },
     });
+    // A backlog that filled while the office was starting had no office to pause: apply it now.
+    if (events.full) office.office.backlog(true);
     await stamped;
     if (ended) await office.close();
     else events.write(`${JSON.stringify({ type: "ready", data: { url: office.url, pid: process.pid } })}\n`);
