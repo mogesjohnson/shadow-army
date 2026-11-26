@@ -501,6 +501,8 @@ export class PostOffice {
       session.restarts = session.crashes.length;
       // WSP-11: a restart opens a fresh session, so it gets a new snapshot; the old one's writes are reported before it goes.
       if (session.snapshot && this.snapshots.ok) {
+        // C4: the swap is logged before anything goes (reportWrites waits for the log), so an interrupted one can be finished from it.
+        this.record({ soldier: session.spec.key, type: "restarting", data: { attempt: session.restarts, session: session.id, snapshot: session.snapshot.path, entry: session.snapshot.gitDir } }, session);
         await this.reportWrites(session, "before its restart");
         await removeSnapshot(session.snapshot, this.snapshots.root, this.repo, this.git);
         session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: session.id, repo: this.repo, git: this.git });

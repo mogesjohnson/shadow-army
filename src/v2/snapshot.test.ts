@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HarnessGit } from "./git/harness.js";
 import {
-  armyMark, beginTurn, closeSnapshot, discardWrites, findWrites, FOLDER_FILE, ignoredEntries, openSnapshot, removeInside,
+  armyMark, beginTurn, closeSnapshot, discardWrites, findWrites, FOLDER_FILE, ignoredEntries, openSnapshot, removeInside, removeSnapshot,
   snapshotSubfolder, sweepOrphans, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type Orphan,
 } from "./snapshot.js";
 
@@ -138,6 +138,21 @@ describe("a snapshot's life", () => {
     await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "s3", repo: r.repo, git: factory, ref: "nope" })).rejects.toThrow(/snapshot could not be made/);
     await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "../x", repo: r.repo, git: factory })).rejects.toThrow(/bad session id/);
   });
+  it("removes only its own worktree entry, fails on a git error, and finishes a removal the folder already left (C4)", async () => {
+    const r = makeRepo(), stale = join(temp(), "stale");
+    git(r.folder, "worktree", "add", "-q", "--detach", stale);
+    rmSync(stale, { recursive: true, force: true });                         // another worktree's stale entry: not ours to prune
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s4", repo: r.repo, git: factory });
+    const failing: GitFactory = (repo) => ({ run: async (args, kind, cwd) => (args[1] === "remove" ? { code: 128, stdout: "", stderr: "boom" } : factory(repo).run(args, kind, cwd)) });
+    await expect(removeSnapshot(snap, r.root, r.repo, failing)).rejects.toThrow(/boom/);
+    expect(existsSync(snap.path)).toBe(true);
+    await removeSnapshot(snap, r.root, r.repo, factory);
+    expect([existsSync(snap.path), existsSync(snap.gitDir), existsSync(join(r.repo.commonDir, "worktrees", "stale"))]).toEqual([false, false, true]);
+    const again = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s5", repo: r.repo, git: factory });
+    rmSync(again.path, { recursive: true, force: true });                     // an interrupted removal: the folder went, the entry stayed
+    await removeSnapshot(again, r.root, r.repo, factory);
+    expect([existsSync(again.gitDir), existsSync(join(r.repo.commonDir, "worktrees", "stale"))]).toEqual([false, true]);
+  }, 60_000);
   it("lists ignored entries outside .shadow/ (W12-4)", async () => {
     const r = makeRepo();
     put(join(r.folder, "dist", "a.js"), "x"); put(join(r.folder, ".shadow", "v2", "log"), "x");

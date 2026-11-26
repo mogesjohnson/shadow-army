@@ -829,6 +829,8 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     await untilRestart(() => events.some((event) => event.type === "restarted"));
     const types = events.map((event) => event.type);
     expect(types.indexOf("read_violation")).toBeLessThan(types.indexOf("restarted"));
+    expect(types.indexOf("restarting")).toBeGreaterThan(-1);                 // C4: the swap is logged before the old snapshot goes
+    expect(types.indexOf("restarting")).toBeLessThan(types.indexOf("read_violation"));
     expect(lines(events, "read_violation")).toEqual([expect.stringMatching(/read-only snapshot had writes before its restart: note.txt$/)]);
     expect(lines(events, "restarted")[0]).toContain("this is a new session, and its earlier context is gone");
     expect(channels[1]!.cwd).toBe(cwd);

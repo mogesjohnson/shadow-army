@@ -55,11 +55,16 @@ export function validateSnapshotRoot(value: string | undefined, ctx: { home: str
 }
 /** Deletes `path` only if it lies strictly inside `root` once links are resolved, and is no link itself. A path already gone is no error. */
 export function removeInside(root: string, path: string) {
+  const real = insidePath(root, path);
+  if (real !== undefined) rmSync(real, { recursive: true, force: true, maxRetries: 3 });
+}
+/** `path`'s real path if it exists strictly inside `root` and is no link; `undefined` if it is gone; throws otherwise. */
+function insidePath(root: string, path: string) {
   const link = (() => { try { return lstatSync(path).isSymbolicLink(); } catch { return undefined; } })();
-  if (link === undefined) return;
+  if (link === undefined) return undefined;
   const real = realish(path);
   if (link || real === realish(root) || !within(realish(root), real)) throw new SnapshotError(`refusing to remove ${path}: not a folder inside ${root}`);
-  rmSync(real, { recursive: true, force: true, maxRetries: 3 });
+  return real;
 }
 export interface Snapshot { path: string; subfolder: string; gitDir: string; commonDir: string }
 export interface OpenOptions { root: string; folder: string; sessionId: string; repo: { gitDir: string; workTree: string; commonDir: string }; git: GitFactory; ref?: string }
@@ -209,10 +214,20 @@ export async function discardWrites(snapshot: Snapshot, start: TurnStart, git: G
   }
 }
 
-/** Removes the snapshot, and its subfolder once nothing but the path file is left. */
+/**
+ * Removes the snapshot's own worktree entry, never by a repository-wide prune that would touch other worktrees'
+ * entries, then its subfolder once nothing but the path file is left. A git failure throws and keeps the snapshot;
+ * a removal interrupted after the folder went is finished by deleting its own entry.
+ */
 export async function removeSnapshot(snapshot: Snapshot, root: string, repo: OpenOptions["repo"], git: GitFactory) {
+  const entries = realish(join(snapshot.commonDir, "worktrees")), entry = realish(snapshot.gitDir);
+  if (fold(entry) === fold(entries) || !within(entries, entry)) throw new SnapshotError(`refusing to remove ${snapshot.gitDir}: not a worktree entry`);
+  if (insidePath(root, snapshot.path) !== undefined) {
+    const result = await runIn(git, repo)(["worktree", "remove", "--force", "--force", snapshot.path], "other");
+    if (result.code !== 0) throw new SnapshotError(`snapshot could not be removed: ${result.stderr.trim() || `git exited with ${result.code}`}`);
+  }
+  rmSync(entry, { recursive: true, force: true, maxRetries: 3 });
   removeInside(root, snapshot.path);
-  await runIn(git, repo)(["worktree", "prune"], "other");
   dropEmptySubfolder(snapshot.subfolder);
 }
 function dropEmptySubfolder(subfolder: string) {
