@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startTimeFromStat, sweepTrees, systemOps, type SweepOps } from "./sweep.js";
+import { markerFiles, startTimeFromStat, sweepTrees, systemOps, type SweepOps } from "./sweep.js";
 import { probeWindowsProcess } from "./windows.js";
 import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
@@ -179,6 +179,56 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(await sweepTrees(root, unwritable)).toMatchObject({ swept: 0, left: [{ pid: 8 }] });
     expect(calls).toEqual([]);
     expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["git"]);
+  });
+
+  it("replaces the marker whole or not at all: a failed replacement keeps the last committed one (C9)", async () => {
+    const marker = join(root, "m.incomplete");
+    const temporary = `${marker}.${process.pid}.tmp`;
+    writeFileSync(marker, "old\n");
+    mkdirSync(temporary); // The replacement can't be written.
+    await expect(markerFiles.replace(marker, "new\n")).rejects.toThrow();
+    expect(readFileSync(marker, "utf8")).toBe("old\n");
+    rmSync(temporary, { recursive: true });
+    await markerFiles.replace(marker, "new\n");
+    expect([readFileSync(marker, "utf8"), existsSync(temporary)]).toEqual(["new\n", false]);
+    // In a sweep: a tree whose marker can't be replaced is never ended, and the marker keeps what it named.
+    const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
+    await record.add({ kind: "git", pid: 9, startTime: 90 });
+    const committed = `${JSON.stringify({ kind: "git", pid: 8, startTime: 80 })}\n`;
+    writeFileSync(join(treesDir(root), "git.incomplete"), committed);
+    const { ops, calls } = fakeOps({ 9: 90 });
+    const failing: SweepOps = { ...ops, marker: { ...markerFiles, replace: async () => { throw new Error("disk full"); } } };
+    const report = await sweepTrees(root, failing);
+    expect([report.swept, report.left.map((process) => process.pid).sort()]).toEqual([0, [8, 9]]);
+    expect([calls, readFileSync(join(treesDir(root), "git.incomplete"), "utf8")]).toEqual([[], committed]);
+  });
+
+  it("reads an empty or cut-off marker as damaged, never as an empty list (C9)", async () => {
+    const line = JSON.stringify({ kind: "git", pid: 8, startTime: 80 });
+    for (const damaged of ["", "\n", line]) {
+      await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
+      writeFileSync(join(treesDir(root), "git.incomplete"), damaged);
+      expect(await sweepTrees(root, { ...fakeOps({}).ops, leftOf: async () => 0 })).toMatchObject({ swept: 0, unhandled: 1 });
+      expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["git"]);
+      rmSync(treesDir(root), { recursive: true, force: true });
+    }
+  });
+
+  it("bounds the marker's read and writes by the tree's deadline, final persistence included (C10)", async () => {
+    const never = () => new Promise<never>(() => {});
+    for (const stall of ["read", "replace", "remove"] as const) {
+      const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
+      await record.add({ kind: "git", pid: 8, startTime: 80 });
+      const { ops, calls } = fakeOps({ 8: 80 });
+      let writes = 0;
+      const marker = { ...markerFiles, [stall]: () => { if (stall !== "read") writes++; return never(); } };
+      // A stalled read or write of the marker: the sweep returns by its deadline, ends nothing it couldn't record, and
+      // keeps the entry; after a stalled write it makes no other.
+      expect(await sweepTrees(root, { ...ops, marker }, 50)).toMatchObject({ swept: 0 });
+      expect(calls).toEqual(stall === "remove" ? ["tree 8"] : []);
+      expect([writes, (await readTrees(root)).map((tree) => tree.id)]).toEqual([stall === "read" ? 0 : 1, ["git"]]);
+      rmSync(treesDir(root), { recursive: true, force: true });
+    }
   });
 
   it("starts no operation past its deadline, and gives each one the deadline it must stop by (C10)", async () => {

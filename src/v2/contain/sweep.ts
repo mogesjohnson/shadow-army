@@ -1,4 +1,4 @@
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { open, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "../logs.js";
 import { parseStat } from "./linux.js";
@@ -36,6 +36,8 @@ export interface SweepOps {
   wait(ms: number): Promise<void>;
   /** A monotonic clock in milliseconds (`performance.now` by default): each tree's deadline is read on it. */
   now?(): number;
+  /** The `.incomplete` marker's file operations: the real files by default. */
+  marker?: MarkerFiles;
   /** Releases what the operations hold (Windows's one helper session), once the sweep is over. */
   close?(): void | Promise<void>;
 }
@@ -88,18 +90,47 @@ function boundedBy(now: () => number) {
     now() < until ? within(Promise.resolve(until).then(work), fallback, until, now) : Promise.resolve(fallback);
 }
 
-/** Identities an earlier sweep couldn't confirm the descendants of; `null` when that file can't be read (kept). */
-async function readIncomplete(path: string): Promise<Identity[] | null> {
+/** The file operations on a tree's `.incomplete` marker: injected, so a failed or stalled one can be tested (C9, C10). */
+export interface MarkerFiles {
+  read(path: string): Promise<string>;
+  /** Replaces the marker whole, or not at all: a failed or interrupted replacement leaves the last committed one (C9). */
+  replace(path: string, text: string): Promise<void>;
+  /** Removes it; one already gone is removed. */
+  remove(path: string): Promise<void>;
+}
+
+export const markerFiles: MarkerFiles = {
+  read: (path) => readFile(path, "utf8"),
+  // Written and flushed beside the marker, then renamed over it: the marker is always the old text or the new.
+  replace: async (path, text) => {
+    const temporary = `${path}.${process.pid}.tmp`;
+    try {
+      const file = await open(temporary, "w", 0o600);
+      try { await file.writeFile(text, "utf8"); await file.sync(); } finally { await file.close(); }
+      await rename(temporary, path);
+    } catch (error) { await unlink(temporary).catch(() => {}); throw error; }
+  },
+  remove: (path) => unlink(path).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }),
+};
+
+/**
+ * Identities an earlier sweep couldn't confirm the descendants of: none without a marker, `null` (unresolved, kept)
+ * when it can't be read or is damaged. The sweep removes a marker rather than empty it, and ends every line with a
+ * newline: an empty or cut-off one is damaged, never an empty list (C9).
+ */
+async function readIncomplete(path: string, files: MarkerFiles): Promise<Identity[] | null> {
   let text: string;
-  try { text = await readFile(path, "utf8"); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : null; }
+  try { text = await files.read(path); } catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : null; }
+  if (!text.endsWith("\n")) return null;
   const lines = text.split("\n").filter((line) => line.trim() !== "").map(parseTreeLine);
-  return lines.every((line): line is Extract<TreeLine, Identity> => line !== undefined && isProcess(line)) ? lines : null;
+  return lines.length > 0 && lines.every((line): line is Extract<TreeLine, Identity> => line !== undefined && isProcess(line)) ? lines : null;
 }
 
 async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<SweepReport> {
   const now = ops.now ?? (() => performance.now());
   const report: SweepReport = { running: 0, swept: 0, ended: [], left: [], unhandled: 0, unverified: 0 };
   const bounded = boundedBy(now);
+  const files = ops.marker ?? markerFiles;
   // Reading and verifying the records has a limit of its own, like each tree, its file reads included (C10): a
   // listing not done by then ends nothing, and every record stays for the next sweep.
   const readUntil = now() + limitMs;
@@ -130,12 +161,18 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
     const named = new Map<number, string | undefined>();
     // A tree an earlier sweep left incomplete stays unresolved, its entry kept, until this sweep ends it whole or
     // nothing it may have left still runs: its parent having gone proves nothing about its descendants (C9).
+    // Its reads and writes are bounded by the tree's deadline too: a stalled one reads as unreadable or unwritten (C10).
     const marker = join(treesDir(root), `${id}.incomplete`);
-    const earlier = await readIncomplete(marker);
-    const save = (targets: Iterable<Identity>) => {
+    const earlier = await bounded(() => readIncomplete(marker, files), null, deadline);
+    // After a write that didn't finish in time, none other is made in this sweep: it may still land, and must never
+    // land over a later one. The marker then keeps what it held, a superset of what must be kept.
+    let stalled = false;
+    const save = async (targets: Iterable<Identity>, until: number) => {
       const text = [...targets].map((target) => `${JSON.stringify({ kind: "git", pid: target.pid, startTime: target.startTime, ...(target.creationTime === undefined ? {} : { creationTime: target.creationTime }) })}\n`).join("");
-      const saved = text !== "" ? writeFile(marker, text, { mode: 0o600 }) : unlink(marker).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
-      return saved.then(() => true, () => false);
+      if (stalled) return false;
+      const saved = await bounded<boolean | undefined>(() => (text !== "" ? files.replace(marker, text) : files.remove(marker)).then(() => true, () => false), undefined, until);
+      if (saved === undefined) stalled = true;
+      return saved === true;
     };
     // The trees the marker on disk names. A tree is added before its end starts, so a crash or a failed write after
     // that start never leaves the next sweep with only its vanished parent's record (C9).
@@ -152,7 +189,7 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
         const tree = target.kind === "git";
         if (tree && !recorded.has(target.pid)) {
           // No end starts on a tree the next sweep might not know of: it is kept, running, and reported.
-          if (unsaved.has(target.pid) || earlier === null || !await save([...recorded.values(), target])) { if (!unsaved.has(target.pid)) { unsaved.add(target.pid); unhandled++; } continue; }
+          if (unsaved.has(target.pid) || earlier === null || !await save([...recorded.values(), target], deadline)) { if (!unsaved.has(target.pid)) { unsaved.add(target.pid); unhandled++; } continue; }
           recorded.set(target.pid, target);
         }
         const result = await bounded((until) => ops.endProcess(target, tree, until).catch(() => "incomplete" as const), "incomplete" as const, deadline);
@@ -176,10 +213,13 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
     if (earlier !== null) {
       // Kept for the next sweep. A marker that can't be written leaves the entry unhandled and the marker as it was,
       // naming every tree whose end started: never forgotten.
-      if (!await save(unresolved.values())) unhandled++;
+      if (!await save(unresolved.values(), lastUntil)) unhandled++;
     }
     report.unhandled += unhandled;
-    if (left.size === 0 && unhandled === 0) { await unlink(join(treesDir(root), `${id}.jsonl`)).catch(() => {}); report.swept++; }
+    if (left.size === 0 && unhandled === 0) {
+      // The entry's removal has the same bound: one not done in time is unhandled, and the next sweep finds it again.
+      if (await bounded(() => unlink(join(treesDir(root), `${id}.jsonl`)).then(() => true, (error) => (error as NodeJS.ErrnoException).code === "ENOENT"), false, lastUntil)) report.swept++; else report.unhandled++;
+    }
   }
   return report;
 }
