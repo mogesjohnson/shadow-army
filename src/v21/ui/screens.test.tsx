@@ -1,6 +1,10 @@
+import React from "react";
+import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
+import { renderToString } from "ink";
 import { FINISHED_SCENE, SUMMARY, finishedTable } from "./fixture.js";
 import { summaryRows } from "./summaryRows.js";
+import { Summary } from "./Summary.js";
 import { plain, rowWidth, type Row } from "./layout.js";
 import type { ArmyView } from "./model.js";
 
@@ -39,11 +43,11 @@ const SUMMARY_110 = String.raw`
  army  ○ Iron 58k  ○ Igris 142k  ○ Beru 71k  ○ Tusk 38k  ○ Kaisel 64k  · Bellion`.slice(1).split("\n");
 
 const text = (rows: Row[]) => rows.map((r) => plain(r).trimEnd());
-const SCREENS: [string, (view: ArmyView, h: number) => Row[], string[]][] = [
-  ["summary", (v, h) => summaryRows(v, FINISHED_SCENE, SUMMARY, h), SUMMARY_110],
+const SCREENS: [string, (view: ArmyView, h: number) => Row[], (view: ArmyView) => React.ReactElement, string[]][] = [
+  ["summary", (v, h) => summaryRows(v, FINISHED_SCENE, SUMMARY, h), (v) => <Summary view={v} scene={FINISHED_SCENE} summary={SUMMARY} height={31} />, SUMMARY_110],
 ];
 
-describe.each(SCREENS)("%s screen", (_name, rowsOf, frame) => {
+describe.each(SCREENS)("%s screen", (_name, rowsOf, element, frame) => {
   it("matches the 110 frame", () => {
     expect(text(rowsOf(finishedTable(110), 31))).toEqual(frame);
   });
@@ -56,4 +60,8 @@ describe.each(SCREENS)("%s screen", (_name, rowsOf, frame) => {
     }
     expect(bad.slice(0, 5)).toEqual([]);
   }, 60_000);
+  it("renders through Ink as the plain rows", () => {
+    const out = renderToString(element(finishedTable(110)), { columns: 110 });
+    expect(stripVTControlCharacters(out).split("\n").map((l) => l.trimEnd())).toEqual(frame);
+  });
 });
