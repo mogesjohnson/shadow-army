@@ -52,7 +52,7 @@ const asOfficeOps = (ops: SweepOps | OfficeOps): OfficeOps => "probe" in ops && 
 };
 const run = promisify(execFile);
 /** Windows' own PowerShell and taskkill by absolute path, never a PATH lookup. */
-const system32 = (...parts: string[]) => join(process.env.SystemRoot ?? "C:\Windows", "System32", ...parts);
+const system32 = (...parts: string[]) => join(process.env.SystemRoot ?? "C:\\Windows", "System32", ...parts);
 /** The script goes as `-EncodedCommand` (UTF-16LE base64), so its quotes reach PowerShell unchanged. */
 async function powershell(script: string): Promise<string> {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
@@ -70,6 +70,8 @@ const windowsIdentity = (pid: number) => [
   `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
   "if ($null -eq $p) { 'gone'; exit 0 }",
   "$h = $p.Handle; $c = 0L; $e = 0L; $k = 0L; $u = 0L",
+  // Exited, but kept by another handle: its pid can't be reused while held, and it runs nothing.
+  "if ($p.HasExited) { 'gone'; exit 0 }",
   "if (-not [SaProcessTimes]::GetProcessTimes($h, [ref]$c, [ref]$e, [ref]$k, [ref]$u)) { throw 'GetProcessTimes failed' }",
   `$t = $c - ${FILETIME_2020}`,
   "if ($t -lt 0) { throw 'creation time before 2020' }",
@@ -108,7 +110,7 @@ export function machineOps(platform: NodeJS.Platform = process.platform): Office
     // The handle opened before the check stays open through the end, so the pid can't pass to another process between.
     return { ...base, probe, startTimeOf: async (pid) => { const found = await probe(pid); return found === "gone" ? undefined : found; },
       endIdentity: async ({ pid, startTime }, tree = false) => {
-        const end = tree ? `& '${system32("taskkill.exe")}' /t /f /pid ${pid} | Out-Null` : "$p.Kill()";
+        const end = tree ? `& '${system32("taskkill.exe")}' /t /f /pid ${pid} | Out-Null` : "try { $p.Kill() } catch { if (-not $p.HasExited) { throw } }";
         await powershell(`${windowsIdentity(pid)}\nif ($t -eq ${startTime}) { ${end} }`);
       } };
   }
