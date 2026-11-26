@@ -316,3 +316,19 @@ describe("Codex review 14", () => {
     expect(readFileSync(join(snap.path, ".gitignore"), "utf8")).toBe("dist/\n.claude/settings.local.json\n");
   }, 60_000);
 });
+describe("Codex review 31", () => {
+  it("C9: a registration that can't be read keeps the snapshot folder", async () => {
+    const r = makeRepo();
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    rmSync(join(snap.gitDir, "gitdir")); mkdirSync(join(snap.gitDir, "gitdir"));
+    await expect(removeSnapshot(snap, r.root, r.repo, factory)).rejects.toThrow(/can't read/);
+    expect(existsSync(join(snap.path, "src.txt"))).toBe(true);
+  }, 60_000);
+  it("C11: worktree removal runs on the five-minute limit", async () => {
+    const r = makeRepo(), kinds: (string | undefined)[] = [];
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    const spy: GitFactory = (repo) => { const real = factory(repo); return { run: (args, kind, cwd) => { if (args[1] === "remove") kinds.push(kind); return real.run(args, kind, cwd); } }; };
+    await removeSnapshot(snap, r.root, r.repo, spy);
+    expect(kinds).toEqual(["other"]);
+  }, 60_000);
+});

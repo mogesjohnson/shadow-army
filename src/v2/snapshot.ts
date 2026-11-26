@@ -72,26 +72,33 @@ function plainChild(parent: string, path: string) {
 export interface Snapshot { path: string; subfolder: string; gitDir: string; commonDir: string }
 export interface OpenOptions { root: string; folder: string; sessionId: string; repo: { gitDir: string; workTree: string; commonDir: string }; git: GitFactory; ref?: string }
 const gitDirOf = (path: string) => resolve(path, readFileSync(join(path, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim());
-/** The registrations under `<commonDir>/worktrees` whose `gitdir` file names `path`'s `.git`. */
+const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === "ENOENT";
+/**
+ * The registrations under `<commonDir>/worktrees` whose `gitdir` file names `path`'s `.git`. A missing folder or
+ * `gitdir` file is no registration; any other read failure throws, since then registration can't be established.
+ */
 function registrationsOf(commonDir: string, path: string) {
   const base = join(commonDir, "worktrees"), want = fold(realish(join(path, ".git")));
+  const cannot = (what: string, error: unknown) => new SnapshotError(`can't read ${what}: ${error instanceof Error ? error.message : String(error)}`);
   let names: string[] = [];
-  try { names = readdirSync(base); } catch { return []; }
+  try { names = readdirSync(base); } catch (error) { if (missing(error)) return []; throw cannot(base, error); }
   return names.map((n) => join(base, n)).filter((admin) => {
-    try { return fold(realish(readFileSync(join(admin, "gitdir"), "utf8").trim())) === want; } catch { return false; }
+    const file = join(admin, "gitdir");
+    try { return fold(realish(readFileSync(file, "utf8").trim())) === want; } catch (error) { if (missing(error)) return false; throw cannot(file, error); }
   });
 }
 /**
  * Removes one worktree (WSP-10): while its folder exists, a real folder inside `root`, through `git worktree remove --force --force`;
  * once the folder is gone, only its own registration. An unregistered folder (a failed add's leftover) is deleted inside `root`.
- * Then checks git no longer lists it. Nothing else is pruned.
+ * Then checks git no longer lists it. Nothing else is pruned. Removal is an `other` command: WSP-10's five-minute limit.
+ * A registration that can't be read deletes nothing.
  */
 async function dropWorktree(root: string, repo: OpenOptions["repo"], git: GitFactory, path: string) {
   const info = lstatSync(path, { throwIfNoEntry: false });
   if (info && registrationsOf(repo.commonDir, path).length > 0) {
     const real = realish(path);
     if (info.isSymbolicLink() || !info.isDirectory() || real === realish(root) || !within(realish(root), real)) throw new SnapshotError(`refusing to remove ${path}: not a folder inside ${root}`);
-    const removed = await runIn(git, repo)(["worktree", "remove", "--force", "--force", path], "snapshot");
+    const removed = await runIn(git, repo)(["worktree", "remove", "--force", "--force", path], "other");
     if (removed.code !== 0) throw new SnapshotError(`git worktree remove failed: ${removed.stderr.trim() || `exit ${removed.code}`}`);
   } else if (info) removeInside(root, path);
   if (lstatSync(path, { throwIfNoEntry: false })) throw new SnapshotError(`snapshot ${path} is still there`);
@@ -318,7 +325,9 @@ export async function sweepOrphans(options: { roots: string[]; folder: string; r
         const path = join(subfolder, session.name);
         let gitDir: string;
         try { gitDir = gitDirOf(path); } catch { continue; }
-        if (!registrationsOf(options.repo.commonDir, path).some((admin) => fold(realish(admin)) === fold(realish(gitDir)))) continue; // not this repository's
+        let ours: boolean;
+        try { ours = registrationsOf(options.repo.commonDir, path).some((admin) => fold(realish(admin)) === fold(realish(gitDir))); } catch { unreadable.push(path); continue; }
+        if (!ours) continue; // not this repository's
         const run = runIn(options.git, { gitDir, workTree: path, commonDir: options.repo.commonDir });
         const head = await headOf(run);
         await options.report({ folder: armyFolder, snapshot: path, files: await changedPaths(run), head });
