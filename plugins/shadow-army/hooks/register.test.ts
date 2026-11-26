@@ -172,6 +172,14 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
     expect(row).toContain("Reverted, outside its claims: docs/x.md");
   });
 
+  it("warns, with every affected path, when taking the edits back out failed (#94 C9)", async () => {
+    const reason = "index.lock exists; taking the edits back out failed too";
+    const { send } = await mod(() => turn("s", { apply: { applied: false, reason, clashes: [], left: ["run.log", "src/a.ts"] } }));
+    const row = await send("claude-sonnet --claim src/** go");
+    expect(row).not.toContain("Not applied");
+    expect(row).toContain(`Warning: your folder was NOT put back (${reason}). These files may still carry the soldier's edits: run.log, src/a.ts`);
+  });
+
   it("shows each Cc and Cf character as a placeholder and keeps newline and tab", async () => {
     const hostile = "a\u001b[31mred‮drawer​z\ttab\nnext\u0007";
     const { send } = await mod(() => turn(hostile, { apply: { applied: true, files: [{ change: "A", path: "we‮ird.ts" }] } }));

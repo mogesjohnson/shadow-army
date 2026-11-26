@@ -248,7 +248,9 @@ export function card(soldier: Soldier, delivery: Delivery, log: string, credenti
   const error = why && text ? `\nError: ${why}` : "";
   const apply = delivery.write?.apply;
   // M1-AC27: a failed turn's error (a guard or audit failure names the path) is the reason even after partial text.
+  // #94 C9: a failed rollback may leave the edits in the owner's folder, so the card warns and lists every path #101 names.
   const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`
+    : apply && !apply.applied && apply.left ? `Warning: your folder was NOT put back (${apply.reason}). These files may still carry the soldier's edits: ${apply.left.join(", ")}`
     : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || why || "no change was applied"}`;
   const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];
   const reverted = outside.length ? `
