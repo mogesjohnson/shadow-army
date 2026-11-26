@@ -137,6 +137,27 @@ export async function beginTurn(snapshot: Snapshot, git: GitFactory): Promise<Tu
 }
 
 /**
+ * `beginTurn` for a snapshot `openSnapshot` has just made, before anything ran in it: a fresh checkout is clean,
+ * so its start is read from the files alone (HEAD, every `.gitignore`, ARM-6's files) and costs no git process.
+ */
+export function freshStart(snapshot: Snapshot): TurnStart {
+  const head = readFileSync(join(snapshot.gitDir, "HEAD"), "utf8").trim();
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head)) throw new SnapshotError(`snapshot is not detached at a commit: ${head}`);
+  const ignores: Record<string, string> = {};
+  const walk = (rel: string) => {
+    for (const entry of readdirSync(join(snapshot.path, rel), { withFileTypes: true })) {
+      const path = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && entry.name !== ".git") walk(path);
+      else if (entry.isFile() && entry.name === ".gitignore") ignores[path] = readFileSync(join(snapshot.path, path)).toString("base64");
+    }
+  };
+  walk("");
+  const prints: Record<string, string> = {};
+  for (const path of hashedPaths(snapshot.path)) prints[path] = hashOf(join(snapshot.path, path));
+  return { head, ignores, prints };
+}
+
+/**
  * The turn's writes: files git doesn't ignore by the rules the turn began with, ARM-6's paths even where
  * git ignores them, and a moved HEAD. Rules the turn changed or added are put back first, so they hide nothing.
  * Other ignored output is not a write.

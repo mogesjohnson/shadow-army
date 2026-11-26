@@ -10,7 +10,7 @@ import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { HarnessGit } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
-import { openSnapshot, posixInspect, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, type GitFactory, type Snapshot } from "./snapshot.js";
+import { findWrites, freshStart, openSnapshot, posixInspect, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, type GitFactory, type Snapshot, type TurnStart } from "./snapshot.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
@@ -135,6 +135,8 @@ interface Session {
   active?: Promise<TurnResult>;
   restart?: Promise<void>;
   restartPending: boolean;
+  /** WSP-11: the read-only snapshot as it opened (HEAD, ignore rules, audited files); its close and restart report against it. */
+  snapshotStart?: TurnStart;
   stopRequested?: boolean;
   containmentFailed?: boolean;
   /** WSP-11's throwaway snapshot of HEAD, outside the folder; a read-only session's working directory. */
@@ -366,16 +368,17 @@ export class PostOffice {
     const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS }) : undefined;
     const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
-    let snapshot: Snapshot | undefined, tree: TreeRecord | undefined;
+    let snapshot: Snapshot | undefined, tree: TreeRecord | undefined, snapshotStart: TurnStart | undefined;
     try {
       // PO-16: the tree's record exists before anything of the session does; one that can't be written starts nothing (PO-15).
       tree = await this.treeRecord(key, id);
       // WSP-11: a soldier whose snapshot can't be made does not start, and never runs in the folder itself.
       if (!ws && !this.snapshots.ok) throw new Error(`${key} can't start: ${this.snapshots.reason}`);
       if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
+      if (snapshot) snapshotStart = freshStart(snapshot);
     } catch (error) { await tree?.remove().catch(() => {}); await ws?.release(); throw error; }
     const cwd = ws ? ws.cwd : snapshot!.path;
-    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, tasks: new Set(), ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
+    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot, snapshotStart } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, tasks: new Set(), ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
     if (ws) await this.holdLease(session);
     if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
@@ -501,6 +504,7 @@ export class PostOffice {
         await this.reportWrites(session, "before its restart");
         await removeSnapshot(session.snapshot, this.snapshots.root, this.repo, this.git);
         session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: session.id, repo: this.repo, git: this.git });
+        session.snapshotStart = freshStart(session.snapshot);
         session.cwd = session.snapshot.path;
         if (this.closed || session.down) return;
       }
@@ -733,13 +737,28 @@ export class PostOffice {
     return back && slash(resolve(admin, back)) === slash(dotGit) ? admin : undefined;
   }
 
-  /** WSP-11: a read-only snapshot's writes are reported before it is removed; one that can't be read is not removed. */
+  /**
+   * WSP-11: a read-only snapshot's writes since it opened (a moved HEAD and ignored ARM-6 files included) are
+   * logged durably before it is removed (PO-5); one that can't be read, or whose report can't be logged, is kept.
+   */
   private async reportWrites(session: Session, when: string): Promise<void> {
-    const { path, gitDir, commonDir } = session.snapshot!;
-    const status = await this.git({ gitDir, workTree: path, commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
-    if (status.code !== 0) throw new Error(`the snapshot's writes could not be read: ${status.stderr.trim()}`);
-    const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
-    if (files.length) this.record({ soldier: session.spec.key, type: "read_violation", data: { session: session.id, files, line: `${shadowName(session.spec.key)}'s read-only snapshot had writes ${when}: ${files.join(", ")}` } }, session);
+    const strict: GitFactory = (repo) => {
+      const handle = this.git(repo);
+      return { run: async (args, kind, cwd) => {
+        const result = await handle.run(args, kind, cwd);
+        if (result.code !== 0) throw new Error(`the snapshot's writes could not be read: ${result.stderr.trim()}`);
+        return result;
+      } };
+    };
+    if (!session.snapshotStart) throw new Error("the snapshot's writes could not be read: no record of how it opened");
+    const found = await findWrites(session.snapshot!, session.snapshotStart, strict);
+    if (found) {
+      const moved = found.head ? `${found.files.length ? "; " : ""}HEAD moved from ${found.head.from.slice(0, 12)} to ${found.head.to.slice(0, 12)}` : "";
+      this.record({ soldier: session.spec.key, type: "read_violation", data: { session: session.id, files: found.files, ...(found.head ? { head: found.head } : {}),
+        line: `${shadowName(session.spec.key)}'s read-only snapshot had writes ${when}: ${found.files.join(", ")}${moved}` } }, session);
+    }
+    await this.logPending;
+    if (this.logFailure) throw new Error(`the snapshot's report could not be logged: ${this.logFailure.message}`);
   }
 
   /** PO-11: the channel's tree listing, `undefined` for a channel that can't list; a failed list says why. */

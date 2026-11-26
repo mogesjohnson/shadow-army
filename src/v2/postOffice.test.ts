@@ -839,4 +839,27 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     expect(lines(events, "read_violation")[1]).toMatch(/read-only snapshot had writes at its close: late.txt$/);
     expect(existsSync(cwd)).toBe(false);
   }, 120_000);
+
+  it("a close reports a moved snapshot HEAD and a write its own new ignore rule hides (C3)", async () => {
+    const { office, events } = await fakeOffice();
+    const { cwd } = await office.open("scout");
+    await writeFile(join(cwd, ".gitignore"), "hidden.txt\n");
+    await writeFile(join(cwd, "hidden.txt"), "x\n");
+    await git(cwd, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "moved"]);
+    await office.closeSession("scout");
+    const data = events.find((event) => event.type === "read_violation")?.data as { files: string[]; head?: { from: string; to: string } };
+    expect(data.files).toEqual([".gitignore", "hidden.txt"]);
+    expect(data.head?.from).not.toBe(data.head?.to);
+    expect(existsSync(cwd)).toBe(false);
+  }, 120_000);
+
+  it("a close whose report can't be logged keeps the snapshot (C3)", async () => {
+    const { repo, office } = await fakeOffice();
+    const { cwd, session } = await office.open("scout");
+    await writeFile(join(cwd, "note.txt"), "x\n");
+    const log = join(repo.dir, ".shadow", "v2", "logs", `${session}.jsonl`);
+    rmSync(log, { force: true }); await mkdir(log, { recursive: true });
+    await office.closeSession("scout").catch(() => {});
+    expect(existsSync(join(cwd, "note.txt"))).toBe(true);
+  }, 120_000);
 });
