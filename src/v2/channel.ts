@@ -53,7 +53,11 @@ export interface TurnResult {
   /** Office summaries are bounded independently of the native full reply retained in logs. */
   summary?: string;
   write?: WriteOutcome;
-  /** The session log could not be written after the apply had already changed the owner's folder: `write.apply` still says what it changed. */
+  /**
+   * Something failed after the apply had already changed the owner's folder, so the turn is reported instead of thrown:
+   * the session log could not be written, a later record step failed, or the other running turns' guards were not moved
+   * past the apply. Reasons are joined with "; ". `write.apply` still says what the apply changed.
+   */
   logFailure?: string;
 }
 export interface ChannelEvent {
