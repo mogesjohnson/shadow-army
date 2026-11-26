@@ -1,4 +1,6 @@
+import { existsSync, mkdtempSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { git } from "../workspace/git.js";
@@ -6,7 +8,9 @@ import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import type { ChannelOptions, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { applyAudited } from "./apply.js";
-import { PostOffice, type OfficeEvent } from "./postOffice.js";
+import { HarnessGit } from "./git/harness.js";
+import type { RunGit } from "./snapshot.js";
+import { findRepo, PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, until } from "./fixture-main.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 
@@ -116,7 +120,34 @@ describe("M1-AC28: the audited change lands in the owner's folder, uncommitted",
 
   it("applyAudited refuses a non-applicable outcome without touching git", async () => {
     const write = { applicable: false, reason: "the turn failed", base: "x", branch: "y" } as WriteOutcome;
-    expect(await applyAudited("/does/not/exist", write)).toEqual({ applied: false, reason: "the turn failed", clashes: [] });
-    expect(await applyAudited("/does/not/exist", { ...write, reason: undefined })).toMatchObject({ applied: false });
+    const run = () => { throw new Error("git ran"); };
+    expect(await applyAudited(run, write)).toEqual({ applied: false, reason: "the turn failed", clashes: [] });
+    expect(await applyAudited(run, { ...write, reason: undefined })).toMatchObject({ applied: false });
   });
+
+  it("applies the audited commit by its id through harness git, not the branch, which moved after the audit (review 15 C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const base = repo.git("rev-parse", "HEAD"), wt = mkdtempSync(join(tmpdir(), "sa-apply-wt-"));
+    repo.git("worktree", "add", "-q", "-b", "shadow/tank/t1", wt, base);
+    await writeFile(join(wt, "src/a.ts"), "audited\n");
+    await git(wt, ["commit", "-qam", "audited"]);
+    const audited = (await git(wt, ["rev-parse", "HEAD"])).trim();
+    await writeFile(join(wt, "src/a.ts"), "moved on\n");
+    await writeFile(join(wt, "src/c.ts"), "later\n");
+    await git(wt, ["add", "-A"]);
+    await git(wt, ["commit", "-qm", "after the audit"]);
+    const harness = new HarnessGit({ repo: findRepo(repo.dir), hooksDir: mkdtempSync(join(tmpdir(), "sa-apply-hooks-")) });
+    const ran: string[] = [];
+    const run: RunGit = (args, kind, cwd) => { ran.push(args[0]!); return harness.run(args, kind, cwd); };
+    const write = { applicable: true, base, commit: audited, branch: "shadow/tank/t1" } as WriteOutcome;
+    // A changed id refuses before anything is applied: an abbreviation, or an id no commit has.
+    for (const commit of [audited.slice(0, 12), "0".repeat(40)]) {
+      expect(await applyAudited(run, { ...write, commit })).toMatchObject({ applied: false, reason: expect.stringContaining("is not a commit in the repository") });
+    }
+    expect(await applyAudited(run, write)).toEqual({ applied: true, files: [{ change: "M", path: "src/a.ts" }] });
+    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("audited\n");
+    expect(existsSync(join(repo.dir, "src/c.ts"))).toBe(false);
+    expect(ran).toContain("apply");
+    repo.git("worktree", "remove", "--force", wt);
+  }, 30_000);
 });

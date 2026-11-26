@@ -8,7 +8,7 @@ import { diffState, MAX_HASHED, type RepoState } from "../workspace/guard.js";
 import { splitZ } from "../workspace/git.js";
 import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type SessionGit, type WriteSession } from "../workspace/session.js";
-import { HarnessGit, HarnessGitHeld } from "./git/harness.js";
+import { HarnessGit } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
 import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, realish, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
 import { platformInspect } from "./winAcl.js";
@@ -173,11 +173,16 @@ export class PostOffice {
   private hold?: HarnessHold;
   /** One harness git for the folder, so a guard timed out twice stays held (WSP-10). */
   private readonly officeGit: { run: RunGit };
+  /** WSP-10: harness git for any repository, each command between a hold check before and one after (once the hold is set). */
+  private readonly held: GitFactory = (repo) => {
+    const git = this.git(repo);
+    return { run: (args, kind, cwd) => (this.hold ? this.hold.run(git, args, kind, cwd) : git.run(args, kind, cwd)) };
+  };
 
   private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
     private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
     this.root = root;
-    this.officeGit = git(repo);
+    this.officeGit = this.held(repo);
     this.roster = options.roster ?? loadRoster(root);
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
@@ -216,41 +221,21 @@ export class PostOffice {
     return office;
   }
 
-  /** Throws while WSP-10's hold is on: nothing office-side runs git then. */
-  private async unheld(): Promise<void> {
-    const state = await this.hold?.check();
-    if (state?.held) throw new HarnessGitHeld(state.line);
-  }
-
-  /** Runs `fn`'s harness git calls between two hold checks (WSP-10). */
-  private async underHold<T>(fn: () => Promise<T>): Promise<T> {
-    await this.unheld();
-    const value = await fn();
-    await this.unheld();
-    return value;
-  }
-
   /** Harness git for a write session: the folder's own, and each worktree's bound to the identity read as it is made. */
   private sessionGit(): SessionGit {
     return {
       repo: (args, kind) => this.officeGit.run(args, kind),
-      worktree: (path) => { const git = this.git(findRepo(path)); return (args, kind) => git.run(args, kind, path); },
+      worktree: (path) => { const git = this.held(findRepo(path)); return (args, kind) => git.run(args, kind, path); },
     };
   }
 
-  /**
-   * The folder's checkout state for the guard, by harness git between two hold checks (WSP-10).
-   * `closeCheck: false` only where the caller's very next step is a hold check, which then closes this read.
-   */
-  private async guardState(closeCheck = true): Promise<RepoState> {
-    await this.unheld();
-    const state = await harnessState(async (args) => {
+  /** The folder's checkout state for the guard, by harness git, each command between two hold checks (WSP-10). */
+  private async guardState(): Promise<RepoState> {
+    return harnessState(async (args) => {
       const result = await this.officeGit.run(args, "guard");
       if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
       return result.stdout;
     }, this.root);
-    if (closeCheck) await this.unheld();
-    return state;
   }
 
   private check(): void {
@@ -330,9 +315,7 @@ export class PostOffice {
     if (claims?.length && (!spec.write || !spec.roles.includes("build"))) throw new Error(`${key} cannot write: claims need the build role and write access in the roster`);
     // Bad or overlapping claims throw here, naming the holder, before any process starts (WSP-2).
     // WSP-10: the worktree is made by harness git under the hold, and its identity is recorded as it is made.
-    if (claims?.length) await this.unheld();
     const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS, git: this.sessionGit() }) : undefined;
-    if (ws) await this.unheld().catch(async (error: unknown) => { await ws.release(); throw error; });
     const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
     let snapshot: Snapshot | undefined;
@@ -342,8 +325,7 @@ export class PostOffice {
       if (ws) wsRepo = findRepo(ws.cwd);
       // WSP-11: a soldier whose snapshot can't be made does not start, and never runs in the folder itself.
       if (!ws && !this.snapshots.ok) throw new Error(`${key} can't start: ${this.snapshots.reason}`);
-      if (!ws && this.snapshots.ok) await this.unheld();
-      if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
+      if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.held });
     } catch (error) { await ws?.release(); throw error; }
     const cwd = ws ? ws.cwd : snapshot!.path;
     const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, ...(ws ? { write: { ws, repo: wsRepo!, claims: [...claims!] } } : {}) };
@@ -438,8 +420,7 @@ export class PostOffice {
         if (!await this.dropSnapshot(session)) throw new Error(`the old snapshot ${session.snapshot.path} could not be removed; reconnect explicitly`);
         // Removed, so no longer this session's: a failed open below leaves nothing for reconnect to remove again.
         session.snapshot = undefined;
-        await this.unheld();
-        session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: `${session.id}-r${session.restarts}`, repo: this.repo, git: this.git });
+        session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: `${session.id}-r${session.restarts}`, repo: this.repo, git: this.held });
         session.cwd = session.snapshot.path;
       }
       this.start(session);
@@ -476,7 +457,7 @@ export class PostOffice {
     // WSP-11: a read-only turn begins with its snapshot's HEAD, ignore rules and audited hashes; its writes are found against them.
     let startFailure: string | undefined;
     if (session.snapshot) {
-      session.turnStart = await this.unheld().then(() => beginTurn(session.snapshot!, this.git)).catch((error: unknown) => { startFailure = String(error); return undefined; });
+      session.turnStart = await beginTurn(session.snapshot!, this.held).catch((error: unknown) => { startFailure = String(error); return undefined; });
     }
     session.guardBase = await this.exclusive(() => this.guardState()).catch((error: unknown) => { startFailure ??= String(error); return undefined; });
     // Nothing is sent without both baselines: a turn the guard can't cover never runs.
@@ -495,27 +476,24 @@ export class PostOffice {
     const changes: string[] = startFailure ? [`checkout guard could not start: ${startFailure}`] : [];
     const start = session.turnStart;
     session.turnStart = undefined;
-    const snapshotTurn = Boolean(session.snapshot && start);
     try {
-      // A snapshot turn's hold check before findWrites, next, also closes this guard read (one check, not two back to back).
       // The baseline is read and cleared under the lock, so an apply queued ahead of this guard still carries into it (W12-3).
       if (session.guardBase) changes.push(...await this.exclusive(async () => {
         const base = session.guardBase;
         session.guardBase = undefined;
-        return base ? diffState(base, await this.guardState(!snapshotTurn)) : [];
+        return base ? diffState(base, await this.guardState()) : [];
       }));
     } catch (error) { changes.push(`checkout guard could not complete: ${String(error)}`); }
     // WSP-11: the snapshot's writes are a read-violation, reported, then discarded before its next turn.
     // A failed guard keeps them instead, as the partial work its line names.
     if (session.snapshot && start) {
       try {
-        await this.unheld();
-        const violation = await findWrites(session.snapshot, start, this.git);
+        const violation = await findWrites(session.snapshot, start, this.held);
         if (violation) {
           const lines = [...violation.files.map((file) => `read-only snapshot: wrote ${file}`), ...(violation.head ? [`read-only snapshot: HEAD moved from ${violation.head.from} to ${violation.head.to}`] : [])];
           this.record({ soldier: session.spec.key, type: "read_violation", data: { ...violation, cwd: session.cwd } }, session);
           if (changes.length) changes.push(...lines);
-          else { await this.logPending; await this.unheld(); await discardWrites(session.snapshot, start, this.git); }
+          else { await this.logPending; await discardWrites(session.snapshot, start, this.held); }
         }
       } catch (error) { changes.push(`read-only snapshot could not be checked or put back: ${String(error)}`); }
     }
@@ -550,7 +528,7 @@ export class PostOffice {
       const apply = await this.exclusive(async () => {
         const others = [...this.sessions.values()].filter((other) => other !== session && other.guardBase);
         const before = others.length ? await this.guardState() : undefined;
-        const applied = await applyAudited(this.root, audited, session.write!.applied);
+        const applied = await applyAudited(this.officeGit.run, audited, session.write!.applied);
         // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
         if (before && applied.applied && applied.files.length) carryApply(others, before, await this.guardState(), applied.files.map((file) => file.path));
         return applied;
@@ -570,12 +548,11 @@ export class PostOffice {
 
   /** v1's claim audit: revert edits outside the claims, commit the rest on the soldier's branch, and hand B4 the audited diff. */
   private async audit(session: Session, result: TurnResult, guardChanges: string[]): Promise<WriteOutcome> {
-    const info = await this.underHold(() => session.write!.ws.finish(`${session.spec.key}: turn`));
+    const info = await session.write!.ws.finish(`${session.spec.key}: turn`);
     // WSP-10: the worktree's git identity recorded at open, the audit's timeout policy, and the commit the audit made, not a HEAD read now.
     let diff = "";
     if (info.commit) {
-      await this.unheld();
-      const result = await this.git(session.write!.repo).run(["diff", info.base, info.commit], "guard");
+      const result = await this.held(session.write!.repo).run(["diff", info.base, info.commit], "guard");
       if (result.code !== 0) throw new Error(`git diff of the audited commit failed: ${result.stderr.trim() || `exit ${result.code}`}`);
       diff = result.stdout;
     }
@@ -646,7 +623,6 @@ export class PostOffice {
       if (lstatSync(snapshot.path, { throwIfNoEntry: false })?.isSymbolicLink() || real === realish(root) || !within(realish(root), real)) throw new Error(`refusing to remove ${snapshot.path}: not a folder inside ${root}`);
       note({ removing: true });
       await this.logPending;
-      await this.unheld();
       const result = await this.officeGit.run(["worktree", "remove", "--force", snapshot.path], "snapshot");
       if (result.code !== 0) throw new Error(`git worktree remove failed: ${result.stderr.trim() || `exit ${result.code}`}`);
       try {
