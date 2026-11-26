@@ -1,6 +1,10 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { armyMark, type GitFactory } from "./snapshot.js";
+import { HarnessGit } from "./git/harness.js";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
@@ -9,19 +13,24 @@ import type { ChannelOptions, NativeChannel } from "./channel.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
+// WSP-11: snapshots go outside the folder; these tests keep theirs in a folder of their own in the home.
+const snapshots = mkdtempSync(join(homedir(), ".sa-test-snapshots-"));
+process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
+afterAll(() => rmSync(snapshots, { recursive: true, force: true }));
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
-async function setup() {
+async function setup(onSend?: (text: string, repo: ReturnType<typeof makeRepo>) => void) {
   const repo = makeRepo(); repos.push(repo);
   repo.write("src/a.ts", "owner's uncommitted work\n");
   const events: OfficeEvent[] = [];
   const deliveries: string[] = [];
+  const responses: unknown[] = [];
   const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options) => {
     const native = factory(options);
-    return { send(text) { deliveries.push(text); return native.send(text); }, interrupt: () => native.interrupt(), respondApproval: (id, response) => native.respondApproval(id, response), close: () => native.close() };
+    return { send(text) { deliveries.push(text); onSend?.(text, repo); return native.send(text); }, interrupt: () => native.interrupt(), respondApproval: (id, response) => { responses.push(response); return native.respondApproval(id, response); }, close: () => native.close() };
   }, onEvent: (event) => events.push(event) });
   offices.push(office);
-  return { repo, office, events, deliveries };
+  return { repo, office, events, deliveries, responses };
 }
 afterEach(async () => {
   await Promise.all(offices.splice(0).map((office) => office.close()));
@@ -77,7 +86,8 @@ describe("M1 office integration with synthetic native processes", () => {
   }, 30_000);
 
   windowsOnly("retains a successful Edit followed by provider failure and requires an explicit fresh retry without replay", async () => {
-    const { office, events, deliveries } = await setup();
+    // WSP-11: a read-only snapshot's own write is discarded, not a guard failure; the owner's change to the checkout during the turn is.
+    const { office, events, deliveries } = await setup((text, repo) => { if (text === "partial-success-fail") repo.write("src/b.ts", "owner's change during the turn\n"); });
     const opened = await office.open("scout");
     const result = await office.send("scout", "partial-success-fail");
     expect(events.filter((event) => event.type === "tool_call")).toHaveLength(1);
@@ -85,6 +95,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(events.find((event) => event.type === "error")?.data).toMatchObject({ kind: "rate_limit" });
     expect(result.status).toBe("failed");
     expect(result.error?.message).toContain("partial work is retained");
+    expect(result.error?.message).toContain("read-only snapshot: wrote partial.txt");
     // W11-1, PO-8: the CLI's own kind and words survive the guard failure.
     expect(result.error?.kind).toBe("rate_limit");
     expect(result.error?.message).toContain("API Error after successful Edit: rate limit");
@@ -122,16 +133,19 @@ describe("M1 office integration with synthetic native processes", () => {
   }, 30_000);
 
   windowsOnly("rejects a credential inside an approval response without consuming the native owner request", async () => {
-    const { office, events } = await setup();
+    const { office, events, responses } = await setup();
     const opened = await office.open("scout");
     const pending = office.send("scout", "approval");
     await until(() => events.some((event) => event.type === "approval"));
     const requestId = (events.find((event) => event.type === "approval")!.data as { request_id: string }).request_id;
     await expect(office.approval("scout", requestId, { behavior: "allow", note: credential.toUpperCase() })).rejects.toThrow("cannot be forwarded");
     await expect(readFile(join(opened.cwd, "approval-response.json"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(responses).toEqual([]);
     await office.approval("scout", requestId, { behavior: "deny", message: "Owner denied" });
-    await pending;
-    expect(JSON.parse(await readFile(join(opened.cwd, "approval-response.json"), "utf8"))).toEqual({ behavior: "deny", message: "Owner denied" });
+    // The fake's record of the response is a snapshot write, discarded at the turn's end (WSP-11); the forwarded response and the CLI's answer show it arrived.
+    expect((await pending).text).toBe("Explicit owner denied");
+    expect(responses).toEqual([{ behavior: "deny", message: "Owner denied" }]);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ files: ["approval-response.json"] });
   }, 30_000);
 
   it("provides a five-line delivery summary while retaining the full native answer in its audit log", async () => {
@@ -200,7 +214,8 @@ describe("M1 office integration with synthetic native processes", () => {
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options): NativeChannel => {
       channels.push(options);
       return {
-        async send() { await writeFile(join(options.cwd, "partial.txt"), "retained partial\n"); return { status: "completed", text: "edit completed", refusal: false }; },
+        // WSP-11: a snapshot write alone is a reported, discarded read-violation; only a change in the owner's folder fails the guard and keeps the partial work.
+        async send() { await writeFile(join(options.cwd, "partial.txt"), "retained partial\n"); await writeFile(join(repo.dir, "stray.txt"), "owner folder change\n"); return { status: "completed", text: "edit completed", refusal: false }; },
         async interrupt() {}, async respondApproval() {},
         async close() { options.onEvent({ type: "closed", data: { containmentStopped: false } }); },
       };
@@ -355,6 +370,39 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(second.write?.applicable).toBe(true);
   }, 30_000);
 
+  it("carries an apply queued ahead of a finishing turn's guard into that turn's baseline (review 15 C7)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let releaseMedic!: () => void;
+    const medicGate = new Promise<void>((done) => { releaseMedic = done; });
+    let medicSending = false;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, channelFactory: (options): NativeChannel => {
+      return { async send(text) {
+        if (text.includes("edit b")) { medicSending = true; await medicGate; await writeFile(join(options.cwd, "src", "b.ts"), "medic\n"); }
+        else await writeFile(join(options.cwd, "src", "a.ts"), "tank\n");
+        return { status: "completed", text: "done", refusal: false };
+      }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    // Opening a write session can outlast `until`'s 6 s on a loaded Windows machine; the test's own timeout bounds this wait.
+    const settle = async (check: () => boolean) => { while (!check()) await new Promise((done) => setTimeout(done, 10)); };
+    // Exclusive calls: medic's start (1), tank's start (2), tank's guard (3), tank's apply (4), medic's guard (5).
+    // Tank's apply waits until medic's turn has returned and queued its guard, so medic's guard runs after the apply.
+    const inner = office as unknown as { exclusive: <T>(fn: () => Promise<T>) => Promise<T> };
+    const exclusive = inner.exclusive.bind(office);
+    let calls = 0;
+    inner.exclusive = (fn) => {
+      const call = ++calls;
+      return exclusive(async () => { if (call === 4) { releaseMedic(); await settle(() => calls >= 5); } return fn(); });
+    };
+    const medic = office.send("medic", "edit b", { claims: ["src/b.ts"] });
+    await settle(() => medicSending);
+    const tank = await office.send("tank", "edit a", { claims: ["src/a.ts"] }).finally(releaseMedic);
+    expect(tank.write?.apply?.applied).toBe(true);
+    const result = await medic;
+    expect(result.error?.message ?? "").not.toContain("src/a.ts");
+    expect(result.status).toBe("completed");
+    expect(result.write?.applicable).toBe(true);
+  }, 120_000);
+
   it("refuses overlapping claims naming the holder, and claims for a soldier that cannot write, starting nothing", async () => {
     const { office, started } = await writer({ "src/a.ts": "x\n" });
     await office.open("tank", { claims: ["src/**"] });
@@ -401,4 +449,203 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
       else expect(failed).toBeUndefined();
     } finally { await office.close().catch(() => {}); }
   }, 30_000);
+});
+
+describe("M1b-26 harness git and outside snapshots", () => {
+  it("opens a read-only session in a snapshot outside the folder, under the army's mark, and removes it at close", async () => {
+    const { repo, office, events } = await setup();
+    const opened = await office.open("scout");
+    const subfolder = join(snapshots, `${office.root.split("/").at(-1)}-${armyMark(office.root)}`);
+    expect(opened.cwd).toBe(join(subfolder, opened.session));
+    expect(opened.cwd.startsWith(repo.dir)).toBe(false);
+    expect(readdirSync(opened.cwd)).toContain("README.md");
+    await office.closeSession("scout");
+    expect(existsSync(opened.cwd)).toBe(false);
+    expect(existsSync(subfolder)).toBe(false);
+    expect(events.find((event) => event.type === "session_closed")?.data).toMatchObject({ retained: false });
+  }, 30_000);
+
+  it("starts no soldier when SHADOW_ARMY_SNAPSHOTS is bad, and never runs it in the folder", async () => {
+    process.env.SHADOW_ARMY_SNAPSHOTS = "relative/path";
+    try {
+      const { office } = await setup();
+      await expect(office.open("scout")).rejects.toThrow("SHADOW_ARMY_SNAPSHOTS must be an absolute path");
+    } finally { process.env.SHADOW_ARMY_SNAPSHOTS = snapshots; }
+  });
+
+  it("keeps a read-only turn's harness git calls, hold checks included, to a fixed count (each costs ~440 ms on Windows)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    for (const name of ["a", "b", "c"]) repo.write(`src/${name}.ts`, "owner's uncommitted work\n");
+    const calls: string[][] = [];
+    const counting: GitFactory = (target) => {
+      const harness = new HarnessGit({ repo: target, hooksDir: join(repo.dir, ".shadow", "v2", "hooks") });
+      return { run: (args, kind, cwd) => { calls.push(args); return harness.run(args, kind, cwd); } };
+    };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, gitFactory: counting,
+      channelFactory: (): NativeChannel => ({ async send() { return { status: "completed", text: "ok", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(office);
+    await office.open("scout");
+    calls.length = 0;
+    expect((await office.send("scout", "look")).status).toBe("completed");
+    console.log(`read-only turn: ${calls.length} harness git calls: ${calls.map((args) => args[0]).join(" ")}`);
+    // Three dirty files are hashed in one call per guard read, not one call each.
+    expect(calls.filter((args) => args[0] === "hash-object")).toHaveLength(2);
+    // Was 34 (one hash-object per dirty file per read, and a hold check twice in a row after the turn).
+    // 28 before #120's repaired audit (review 15 C9), which adds a config, a diff and an ls-files call per turn.
+    expect(calls.length).toBeLessThanOrEqual(31);
+  }, 60_000);
+
+  it("puts no ignore file back through a link out of the snapshot on a live turn, and reports it (review 15 C9)", async () => {
+    const repo = makeRepo({ "README.md": "hello\n", ".gitignore": "*.tmp\n", "sub/.gitignore": "*.log\n" }); repos.push(repo);
+    const outside = mkdtempSync(join(homedir(), ".sa-test-outside-"));
+    const events: OfficeEvent[] = [];
+    try {
+      await mkdir(join(outside, "sub")); await writeFile(join(outside, "sub", ".gitignore"), "outside\n"); await writeFile(join(outside, "hard"), "outside\n"); await writeFile(join(outside, "sub", "keep"), "keep\n");
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+        channelFactory: (options): NativeChannel => ({ async send() {
+          rmSync(join(options.cwd, "sub"), { recursive: true }); symlinkSync(join(outside, "sub"), join(options.cwd, "sub"), process.platform === "win32" ? "junction" : "dir");
+          rmSync(join(options.cwd, ".gitignore")); linkSync(join(outside, "hard"), join(options.cwd, ".gitignore"));
+          return { status: "completed", text: "ok", refusal: false };
+        }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+      offices.push(office);
+      const opened = await office.open("scout");
+      await office.send("scout", "look");
+      expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ files: expect.arrayContaining([".gitignore", "sub/.gitignore"]) });
+      expect([await readFile(join(outside, "sub", ".gitignore"), "utf8"), await readFile(join(outside, "hard"), "utf8")]).toEqual(["outside\n", "outside\n"]);
+      // Putting the snapshot back unlinks the link first: git's clean would otherwise delete the outside folder's files.
+      expect(existsSync(join(outside, "sub", "keep"))).toBe(true);
+      expect(await readFile(join(opened.cwd, "sub", ".gitignore"), "utf8")).toBe("*.log\n");
+    } finally { rmSync(outside, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it("refuses a folder outside any git working tree", async () => {
+    const outside = mkdtempSync(join(homedir(), ".sa-test-nogit-"));
+    try { await expect(PostOffice.create({ cwd: outside, credential, roster })).rejects.toThrow("the army runs only inside a git working tree"); }
+    finally { rmSync(outside, { recursive: true, force: true }); }
+  });
+});
+
+describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {
+  const builders = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true }, scout: { cli: "claude", model: "synthetic", roles: ["review"], write: false } });
+  /** Harness git that records each call's repository and arguments, and can fail `worktree remove` or `worktree add`. */
+  function spyGit(dir: string, calls: string[][], failRemove: { on: boolean; add?: boolean }): GitFactory {
+    return (repo) => {
+      const harness = new HarnessGit({ repo, hooksDir: join(dir, ".shadow", "v2", "hooks") });
+      return { run: async (args, kind, cwd) => {
+        calls.push([resolve(repo.workTree), ...args]);
+        if (failRemove.on && args[0] === "worktree" && args[1] === "remove") return { code: 1, stdout: "", stderr: "locked" };
+        if (failRemove.add && args[0] === "worktree" && args[1] === "add") return { code: 1, stdout: "", stderr: "add failed" };
+        return harness.run(args, kind, cwd);
+      } };
+    };
+  }
+  async function office(failRemove = { on: false }) {
+    const repo = makeRepo(); repos.push(repo);
+    const calls: string[][] = [];
+    const channels: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const created = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory: spyGit(repo.dir, calls, failRemove), onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return { async send() { await writeFile(join(options.cwd, "src", "a.ts"), "claimed\n").catch(() => {}); return { status: "completed", text: "done", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(created);
+    return { repo, office: created, calls, channels, events };
+  }
+
+  it("opens no write worktree while harness git is held, then makes, audits and commits it through harness git", async () => {
+    const { repo, office: post, calls } = await office();
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    await writeFile(hook, "#!/bin/sh\n");
+    await expect(post.open("tank", { claims: ["src/a.ts"] })).rejects.toThrow(/harness git held/);
+    expect(existsSync(join(repo.dir, ".shadow", "worktrees"))).toBe(false);
+    rmSync(hook);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.write?.applicable).toBe(true);
+    expect(calls.some((call) => call[1] === "worktree" && call[2] === "add")).toBe(true);
+    const inWorktree = calls.filter((call) => call[0] === resolve(result.write!.worktree)).map((call) => call.slice(1).find((arg) => !arg.startsWith("-") && !arg.includes("=")));
+    expect(inWorktree).toEqual(expect.arrayContaining(["diff", "ls-files", "add", "commit"]));
+  }, 60_000);
+
+  it("removes the worktree when the hold fires on the check after `worktree add`, and releases the claims (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    const inner = spyGit(repo.dir, [], { on: false });
+    let fire = true;
+    const gitFactory: GitFactory = (target) => {
+      const git = inner(target);
+      return { run: async (args, kind, cwd) => {
+        const result = await git.run(args, kind, cwd);
+        if (fire && args[0] === "worktree" && args[1] === "add") { fire = false; await writeFile(hook, "#!/bin/sh\n"); }
+        return result;
+      } };
+    };
+    const post = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory, channelFactory: (): NativeChannel => ({
+      async send() { return { status: "completed", text: "done", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(post);
+    await expect(post.open("tank", { claims: ["src/a.ts"] })).rejects.toThrow(/harness git held/);
+    const folder = join(repo.dir, ".shadow", "worktrees");
+    expect(existsSync(folder) ? readdirSync(folder) : []).toEqual([]);
+    expect(existsSync(join(repo.dir, ".git", "worktrees")) ? readdirSync(join(repo.dir, ".git", "worktrees")) : []).toEqual([]);
+    rmSync(hook);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.status).toBe("completed");
+  }, 60_000);
+
+  it("keeps a down session and its snapshot when reconnecting can't remove it, and the next reconnect does", async () => {
+    const failRemove = { on: true };
+    const { office: post, channels, events } = await office(failRemove);
+    const first = await post.open("scout");
+    channels[0]!.onEvent({ type: "error", data: { kind: "login_needed" } });
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "down"));
+    await expect(post.open("scout")).rejects.toThrow("could not be removed");
+    expect(existsSync(first.cwd)).toBe(true);
+    failRemove.on = false;
+    const second = await post.open("scout");
+    expect(second.cwd).not.toBe(first.cwd);
+    expect(existsSync(first.cwd)).toBe(false);
+  }, 60_000);
+
+  it("lets reconnect start fresh after a restart removed the old snapshot but could not open a new one (review 15 C8)", async () => {
+    const failRemove = { on: false, add: false };
+    const { office: post, channels, events } = await office(failRemove);
+    const first = await post.open("scout");
+    failRemove.add = true;
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "down"));
+    expect(existsSync(first.cwd)).toBe(false);
+    failRemove.add = false;
+    const second = await post.open("scout");
+    expect(second.cwd).not.toBe(first.cwd);
+    expect(existsSync(second.cwd)).toBe(true);
+  }, 60_000);
+
+  it("reports the applied edits and the hold when the hold fires after an apply while another turn runs (w168 note)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    const inner = spyGit(repo.dir, [], { on: false });
+    const gitFactory: GitFactory = (target) => {
+      const git = inner(target);
+      return { run: async (args, kind, cwd) => {
+        const result = await git.run(args, kind, cwd);
+        if (args[0] === "apply" && !args.includes("--check") && !args.includes("-R")) await writeFile(hook, "#!/bin/sh\n");
+        return result;
+      } };
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    const post = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory, channelFactory: (options): NativeChannel => ({
+      async send() {
+        if (options.cwd.includes("worktrees")) await writeFile(join(options.cwd, "src", "a.ts"), "claimed\n");
+        else await gate;
+        return { status: "completed", text: "done", refusal: false };
+      }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(post);
+    const scout = post.send("scout", "look");
+    await until(() => (post as unknown as { sessions: Map<string, { guardBase?: unknown }> }).sessions.get("scout")?.guardBase !== undefined);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] }).finally(release);
+    expect(result.write?.apply).toMatchObject({ applied: true, files: [expect.objectContaining({ path: "src/a.ts" })] });
+    expect(result.write?.reason).toMatch(/harness git held/);
+    rmSync(hook);
+    expect((await scout).status).toBe("failed");
+  }, 60_000);
 });
