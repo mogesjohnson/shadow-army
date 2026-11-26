@@ -1,5 +1,5 @@
 // The finished War Table and its summary drawer as rows. No Ink, so the mod can reuse them.
-import { safeText, toAscii, type ArmyView, type Soldier, type Tone } from "./model.js";
+import { safeText, toAscii, type ArmyView, type Message, type Soldier, type Tone } from "./model.js";
 import { cardRows, type CardInfo } from "./cardRows.js";
 import { monarchRows } from "./boardRows.js";
 import { fit, lr, rowWidth, type Row, type Seg } from "./layout.js";
@@ -17,9 +17,9 @@ const BOARD_WIDTH = 110, BOARD_HEIGHT = 28, SEATS = 6;
 const seg = (text: string, tone?: Tone, bold?: boolean): Seg => ({ text, tone, bold });
 // The glyphs of these screens that toAscii's table lacks.
 const MORE_ASCII: Record<string, string> = {
-  "╭": "+", "╮": "+", "╰": "+", "╯": "+", "╔": "+", "╗": "+", "╚": "+", "╝": "+", "═": "=", "║": "|", "✓": "v", "−": "-", "—": "-",
+  "╭": "+", "╮": "+", "╰": "+", "╯": "+", "╔": "+", "╗": "+", "╚": "+", "╝": "+", "═": "=", "║": "|", "✓": "v", "−": "-", "—": "-", "◂": "<", "▸": ">", "■": "#", "□": "=", "◆": "*",
 };
-const own = (rows: Row[], ascii: boolean): Row[] =>
+export const own = (rows: Row[], ascii: boolean): Row[] =>
   !ascii ? rows : rows.map((r) => r.map((s) => ({ ...s, text: toAscii(Array.from(s.text, (c) => MORE_ASCII[c] ?? c).join("")) })));
 
 /** A drawer box of at most `height` rows, borders included; a short screen drops its last lines. */
@@ -45,20 +45,25 @@ function card(s: Soldier, info: CardInfo, opts: Parameters<typeof cardRows>[2]):
 
 const money = (usd: number | undefined): string | undefined => (Number.isFinite(usd) ? `$${usd!.toFixed(2)}` : undefined);
 
-/** The finished screen around a drawer: `drawer` gets the rows left under the board or the tree. */
-export function finishedRows(view: ArmyView, scene: TableScene, height: number, drawer: (left: number) => Row[]): Row[] {
+/** What a screen puts around the board: its two top lines, and the Monarch panel's three inner lines. */
+export interface Chrome {
+  top: [Row, Row];
+  /** The message the panel's box is drawn from; its talk line is the box's fourth row. */
+  talk?: Message;
+  /** `box` is monarchRows' panel; `edged` puts the box's sides around a line `view.width - 4` wide. */
+  panel: (box: Row[], edged: (line: Row) => Row) => Row[];
+  /** A line in place of a started soldier's context meter. */
+  meter?: Row;
+}
+
+/** The War Table around a drawer: `drawer` gets the rows left under the board or the tree. */
+export function drawnRows(view: ArmyView, scene: TableScene, height: number, chrome: Chrome, drawer: (left: number) => Row[]): Row[] {
   const w = view.width;
   // A peer line makes the War Table's panel five rows; the panel and the drawer are replaced below.
-  const talk = { time: "", from: "monarch", to: "monarch", kind: "peer", text: "", status: "delivered" } as const;
+  const talk: Message = { time: "", from: "monarch", to: "monarch", kind: "peer", text: "", status: "delivered" };
   const rows = tableRows(view, { ...scene, messages: [talk] }, height);
   const put = (at: number, next: Row[]) => next.forEach((r, i) => { if (at + i < height - 1) rows[at + i] = fit(r, w); });
-
-  const name: Row = [seg(" SHADOW ARMY ", "ac", true), seg(" war table", undefined, true)];
-  const run = seg(`  run ${safeText(scene.runId)} · finished`, "dm");
-  const idle: Row = [seg("0 working", "dm")];
-  const left = rowWidth([...name, run, ...idle]) < w ? [...name, run] : name;
-  const focus: Row = [seg(" focus: pane ", "ac", true), seg(" "), seg("nothing needs you", "dm"), seg(`   ${safeText(scene.hint)}`, "dm")];
-  put(0, own([lr(left, idle, w), focus], view.ascii));
+  put(0, own(chrome.top, view.ascii));
 
   // The tree is one row per soldier, so its drawer starts four rows below their count.
   let at = view.soldiers.length + 4;
@@ -69,21 +74,21 @@ export function finishedRows(view: ArmyView, scene: TableScene, height: number, 
         const s = view.soldiers[from + i];
         if (!s) return undefined;
         const info = scene.cards[s.id] ?? { role: "" };
-        return card(s, info, { width: cw, focus: scene.focus === s.id, notch, ascii: view.ascii });
+        const drawn = card(s, info, { width: cw, focus: scene.focus === s.id, notch, ascii: view.ascii });
+        // The meter is the card's fifth row; its sides stay.
+        if (chrome.meter && s.state !== "off") {
+          drawn[4] = [...drawn[4].slice(0, 2), ...own([fit(chrome.meter, cw - 4)], view.ascii)[0], ...drawn[4].slice(-2)];
+        }
+        return drawn;
       });
       return Array.from({ length: 7 }, (_, y) => three.flatMap((c) => [gap, ...(c?.[y] ?? [seg(" ".repeat(cw))])]));
     };
     put(2, cards(0, "bottom"));
     put(16, cards(3, "top"));
-    // monarchRows draws the box and the briefs line; the other two lines say that the run is over.
-    const panel = monarchRows(view, scene.briefs, [talk]);
-    const cost = money(scene.briefs.costUsd);
+    const box = monarchRows(view, scene.briefs, chrome.talk ? [chrome.talk] : []);
     const edge = own([[seg("║", "ac")]], view.ascii)[0];
-    const lines = own([
-      lr([seg("✓ nothing in flight", "ok")], cost ? [seg(`${cost} where the CLIs report a cost`, "dm")] : [], w - 4),
-      fit([seg("talk", "dm"), seg("  nothing in flight", "fa")], w - 4),
-    ], view.ascii);
-    put(10, [panel[0], panel[1], ...lines.map((r) => [...edge, seg(" "), ...r, seg(" "), ...edge]), panel[4]]);
+    const edged = (r: Row): Row => [...edge, seg(" "), ...own([fit(r, w - 4)], view.ascii)[0], seg(" "), ...edge];
+    put(10, [box[0], ...chrome.panel(box, edged), box[box.length - 1]]);
     at = 23;
   }
   const room = Math.max(0, height - 1 - at);
@@ -91,6 +96,26 @@ export function finishedRows(view: ArmyView, scene: TableScene, height: number, 
   put(at, Array.from({ length: room }, (_, i) => drawn[i] ?? []));
   // A row cut above ends in an ellipsis, which the ASCII profile swaps too.
   return own(rows, view.ascii);
+}
+
+/** The finished screen: the run is over, and its panel says so. */
+export function finishedRows(view: ArmyView, scene: TableScene, height: number, drawer: (left: number) => Row[]): Row[] {
+  const w = view.width;
+  const name: Row = [seg(" SHADOW ARMY ", "ac", true), seg(" war table", undefined, true)];
+  const run = seg(`  run ${safeText(scene.runId)} · finished`, "dm");
+  const idle: Row = [seg("0 working", "dm")];
+  const left = rowWidth([...name, run, ...idle]) < w ? [...name, run] : name;
+  const focus: Row = [seg(" focus: pane ", "ac", true), seg(" "), seg("nothing needs you", "dm"), seg(`   ${safeText(scene.hint)}`, "dm")];
+  const cost = money(scene.briefs.costUsd);
+  return drawnRows(view, scene, height, {
+    top: [lr(left, idle, w), focus],
+    talk: { time: "", from: "monarch", to: "monarch", kind: "peer", text: "", status: "delivered" },
+    panel: (box, edged) => [
+      box[1],
+      edged(lr([seg("✓ nothing in flight", "ok")], cost ? [seg(`${cost} where the CLIs report a cost`, "dm")] : [], w - 4)),
+      edged([seg("talk", "dm"), seg("  nothing in flight", "fa")]),
+    ],
+  }, drawer);
 }
 
 export function summaryRows(view: ArmyView, scene: TableScene, sum: Summary, height: number): Row[] {
