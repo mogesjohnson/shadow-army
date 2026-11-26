@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
 import { captureState, diffState, type RepoState } from "../workspace/guard.js";
@@ -10,7 +10,7 @@ import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { HarnessGit } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
-import { findWrites, freshStart, openSnapshot, posixInspect, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, type GitFactory, type Snapshot, type TurnStart } from "./snapshot.js";
+import { findWrites, freshStart, openSnapshot, posixInspect, realish, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, within, type GitFactory, type Snapshot, type TurnStart } from "./snapshot.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
@@ -281,7 +281,10 @@ export class PostOffice {
         gitDir = resolve(path, (await readFile(join(path, ".git"), "utf8")).replace(/^gitdir:\s*/, "").trim());
       } catch (error) {
         // A snapshot started but not made: removed as one that timed out (WSP-10).
-        removeInside(root, path);
+        try { removeInside(root, path); } catch (failed) {
+          this.record({ type: "snapshot", data: { session: entry.name, removed: false, made: false, reason: String(failed) } });
+          continue;
+        }
         this.record({ type: "snapshot", data: { session: entry.name, removed: true, made: false, reason: String(error) } });
         continue;
       }
@@ -296,6 +299,22 @@ export class PostOffice {
         await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
       } catch (error) {
         this.record({ type: "snapshot", data: { session: entry.name, removed: false, retained: true, reason: String(error) } });
+      }
+    }
+    // C4: a removal interrupted after its folder went leaves the snapshot's worktree entry; it is finished here.
+    const entries = join(this.repo.commonDir, "worktrees"), mine = realish(subfolder);
+    for (const name of await readdir(entries).catch(() => [] as string[])) {
+      const gitDir = join(entries, name);
+      let path: string;
+      try { path = dirname(resolve(gitDir, (await readFile(join(gitDir, "gitdir"), "utf8")).trim())); } catch { continue; }
+      const parent = realish(dirname(path)), session = basename(path);
+      // A locked entry is kept, as git's own prune keeps it.
+      if (existsSync(path) || existsSync(join(gitDir, "locked")) || !within(mine, parent) || !within(parent, mine) || await running(session)) continue;
+      try {
+        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+        this.record({ type: "snapshot", data: { session, removed: true, resumed: true } });
+      } catch (error) {
+        this.record({ type: "snapshot", data: { session, removed: false, resumed: true, reason: String(error) } });
       }
     }
     await this.logPending;

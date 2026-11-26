@@ -559,6 +559,20 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     expect(existsSync(join(opened.cwd, "soldier.txt"))).toBe(true);
     await first.close().catch(() => {}); await second.close();
   }, 30_000);
+
+  it("finishes at startup a snapshot removal interrupted after its folder went (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: idle() }); offices.push(first);
+    const opened = await first.open("scout");
+    const entry = join(repo.dir, ".git", "worktrees", opened.session);
+    expect(existsSync(entry)).toBe(true);
+    rmSync(opened.cwd, { recursive: true, force: true });                     // the folder went, the entry stayed
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(existsSync(entry)).toBe(false);
+    expect(events.filter((event) => event.type === "snapshot").map((event) => event.data)).toEqual([{ session: opened.session, removed: true, resumed: true }]);
+    await first.close().catch(() => {}); await second.close();
+  }, 30_000);
 });
 
 describe("M1b-27 the guard waits for background work, and a backlog pauses soldiers (PO-8, WSP-11, PO-7)", () => {
