@@ -8,10 +8,13 @@
 // its PO-12 name only after a compile that succeeded and left a complete, statically linked ELF
 // executable for this processor.
 // The previous helper is removed first, so a failed build never leaves an old one in place.
+// Builds may overlap in one checkout. Each compiles in a folder only it created, so the bytes it
+// checked are the bytes it renames over the helper's name. After that first removal it touches
+// nothing another build made: not its folder, and not a helper it published, even on failure.
 // `npm run build:ts` builds the TypeScript alone.
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,6 +27,7 @@ export const ELF_MACHINES = { x64: 62, arm64: 183 };
 export const SOURCE = join("native", "linux", "sa-contain.c");
 // -static: PO-12 and M1-AC17 need each Linux binary statically linked.
 export const FLAGS = ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-static"];
+export const compileArgs = (output) => [...FLAGS, "-o", output, SOURCE];
 
 /** Returns the first of `cc` and `gcc` that runs, or undefined. */
 export function findCompiler(run = (cmd) => spawnSync(cmd, ["--version"], { stdio: "ignore" })) {
@@ -79,7 +83,7 @@ export function elfProblem(file, arch) {
 /**
  * Decides what the build does on this system. Pure, so the test can try each case.
  * @returns {{action: "skip", message: string} | {action: "fail", out: string, message: string}
- *   | {action: "compile", cc: string, args: string[], out: string}}
+ *   | {action: "compile", cc: string, out: string}}
  */
 export function plan({ platform, arch, compiler }) {
   if (platform !== "linux") {
@@ -103,7 +107,7 @@ export function plan({ platform, arch, compiler }) {
         "to build the TypeScript alone. The release package needs no compiler.",
     };
   }
-  return { action: "compile", cc: compiler, args: [...FLAGS, "-o", `${out}.tmp`, SOURCE], out };
+  return { action: "compile", cc: compiler, out };
 }
 
 /** Why the compiler's output can't be published, or undefined when it can. */
@@ -130,27 +134,31 @@ export function main({
     return 0;
   }
   const out = join(cwd, step.out);
-  const tmp = `${out}.tmp`;
   rmSync(out, { force: true }); // never leave a previous build under the helper's name
   if (step.action === "fail") {
     error(step.message);
     return 1;
   }
   mkdirSync(dirname(out), { recursive: true });
-  rmSync(tmp, { force: true });
-  const result = run(step.cc, step.args, { cwd, stdio: "inherit" });
-  if (result.error || result.status !== 0) {
-    rmSync(tmp, { force: true });
-    error(`build-native: ${step.cc} failed to build ${step.out}.`);
-    return 1;
+  // mkdtemp creates a new folder under a name no other build has. It is beside the helper, so the
+  // rename stays on one file system and is atomic.
+  const own = mkdtempSync(join(dirname(out), ".sa-contain-build-"));
+  try {
+    const tmp = join(own, "sa-contain");
+    const result = run(step.cc, compileArgs(relative(cwd, tmp)), { cwd, stdio: "inherit" });
+    if (result.error || result.status !== 0) {
+      error(`build-native: ${step.cc} failed to build ${step.out}.`);
+      return 1;
+    }
+    const problem = artifactProblem(tmp, arch);
+    if (problem) {
+      error(`build-native: ${step.out} not published (PO-12): ${step.cc}'s output is refused, ${problem}.`);
+      return 1;
+    }
+    renameSync(tmp, out);
+  } finally {
+    rmSync(own, { recursive: true, force: true });
   }
-  const problem = artifactProblem(tmp, arch);
-  if (problem) {
-    rmSync(tmp, { recursive: true, force: true });
-    error(`build-native: ${step.out} not published (PO-12): ${step.cc}'s output is refused, ${problem}.`);
-    return 1;
-  }
-  renameSync(tmp, out);
   log(`build-native: built ${step.out} with ${step.cc}.`);
   return 0;
 }

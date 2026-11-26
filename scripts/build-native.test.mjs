@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { ELF_MACHINES, FLAGS, LINUX_DIRS, SOURCE, elfProblem, findCompiler, main, plan } from "./build-native.mjs";
+import { ELF_MACHINES, FLAGS, LINUX_DIRS, SOURCE, compileArgs, elfProblem, findCompiler, main, plan } from "./build-native.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -48,7 +48,7 @@ describe("build-native plan", () => {
       expect(step.action).toBe("compile");
       expect(step.cc).toBe("gcc");
       expect(step.out).toBe(join("native", dir, "sa-contain"));
-      expect(step.args).toEqual([...FLAGS, "-o", `${step.out}.tmp`, SOURCE]);
+      expect(compileArgs("scratch")).toEqual([...FLAGS, "-o", "scratch", SOURCE]);
     }
     expect(FLAGS).toEqual(expect.arrayContaining(["-Wall", "-Wextra", "-Werror", "-static"]));
   });
@@ -124,6 +124,62 @@ describe("build-native main, with a stand-in compiler", () => {
     return { status };
   };
   const quiet = { log: () => {}, error: () => {} };
+  /** Everything beside the helper: a finished build leaves none of its own files there. */
+  const leftovers = (out) => readdirSync(dirname(out)).filter((name) => name !== "sa-contain");
+  const build = (run) => main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet });
+  /** A good x64 helper, told apart from others by one byte of its code. */
+  const marked = (mark) => {
+    const bytes = elf(ELF_MACHINES.x64);
+    bytes[64 + 56] = mark;
+    return bytes;
+  };
+  /** Runs build A, and the whole of build B after A's compiler has written A's output. */
+  const overlapping = (a, b) => {
+    let second;
+    const first = build((...call) => {
+      const result = a(...call);
+      second = build(b);
+      return result;
+    });
+    return [first, second];
+  };
+
+  it("gives each of two concurrent builds its own temporary file and publishes the last one's bytes", () => {
+    const out = setup();
+    const outputs = [];
+    const writing = (bytes) => (cc, args, opts) => {
+      outputs.push(join(opts.cwd, args[args.indexOf("-o") + 1]));
+      return compilerWriting(bytes)(cc, args, opts);
+    };
+    expect(overlapping(writing(marked(1)), writing(marked(2)))).toEqual([0, 0]);
+    expect(new Set(outputs).size).toBe(2);
+    for (const path of outputs) expect(path.startsWith(dirname(out))).toBe(true);
+    expect(readFileSync(out).equals(marked(1))).toBe(true); // A published after B
+    expect(leftovers(out)).toEqual([]);
+  });
+
+  it.each([
+    ["fails to compile", compilerWriting(marked(2), 1)],
+    ["is refused", compilerWriting(elf(ELF_MACHINES.arm64))],
+  ])("publishes its own bytes while a concurrent build %s", (name, other) => {
+    const out = setup();
+    expect(overlapping(compilerWriting(marked(1)), other)).toEqual([0, 1]);
+    expect(readFileSync(out).equals(marked(1))).toBe(true);
+    expect(leftovers(out)).toEqual([]);
+  });
+
+  it("keeps a concurrent build's published helper when it then fails", () => {
+    const out = setup();
+    expect(overlapping(compilerWriting(marked(1), 1), compilerWriting(marked(2)))).toEqual([1, 0]);
+    expect(readFileSync(out).equals(marked(2))).toBe(true);
+    expect(leftovers(out)).toEqual([]);
+  });
+
+  it("removes its temporary files when the compiler throws", () => {
+    const out = setup();
+    expect(() => build(() => { throw new Error("spawn failed"); })).toThrow("spawn failed");
+    expect(leftovers(out)).toEqual([]);
+  });
 
   it("fails with no compiler and leaves no previous helper behind", () => {
     const out = setup();
@@ -136,7 +192,7 @@ describe("build-native main, with a stand-in compiler", () => {
     const run = compilerWriting(elf(ELF_MACHINES.x64), 1);
     expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(1);
     expect(existsSync(out)).toBe(false);
-    expect(existsSync(`${out}.tmp`)).toBe(false);
+    expect(leftovers(out)).toEqual([]);
   });
 
   it("refuses a binary built for another processor", () => {
@@ -144,7 +200,7 @@ describe("build-native main, with a stand-in compiler", () => {
     const run = compilerWriting(elf(ELF_MACHINES.arm64));
     expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(1);
     expect(existsSync(out)).toBe(false);
-    expect(existsSync(`${out}.tmp`)).toBe(false);
+    expect(leftovers(out)).toEqual([]);
   });
 
   it.each([
@@ -171,7 +227,7 @@ describe("build-native main, with a stand-in compiler", () => {
     const run = compilerWriting(elf(ELF_MACHINES.x64));
     expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(0);
     expect(existsSync(out)).toBe(true);
-    expect(existsSync(`${out}.tmp`)).toBe(false);
+    expect(leftovers(out)).toEqual([]);
   });
 });
 
