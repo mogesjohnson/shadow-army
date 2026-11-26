@@ -18,7 +18,7 @@ const MONARCH_144 = [
 ];
 const MESSAGES_144 = [
   "╭─ messages  ■ brief   □ summary   ◆ soldier to soldier   ! asks you ──────────────────────────────────────────────────────────────────────────╮",
-  "│ 14:31:02  Monarch ■ Iron     brief \"dark-mode toggle…\"                                                                           ✓ delivered │",
+  "│ 14:31:02  Monarch ■ Iron     brief \"dark-mode toggle…\"                                                                           → delivered │",
   "│ 14:31:40  Igris   ◆ Iron     \"tokens ready: bg.dark, text.dark\"                                                                  → delivered │",
   "│ 14:32:11  Tusk    □ Monarch  summary · lint scan · 0 findings                                                                     ✓ answered │",
   "│ 14:32:30  Beru    ! you      asks: Run this command?                                                                          waiting on you │",
@@ -107,7 +107,7 @@ describe("War Table messages log", () => {
     for (const width of [144, 72, 50]) {
       const out = messageRows(six(width), long, 7);
       expect(out.map(rowWidth)).toEqual(Array(7).fill(width));
-      const ends = ["✓ delivered", "→ delivered", "✓ answered", "waiting on you", "… queued"];
+      const ends = ["→ delivered", "→ delivered", "✓ answered", "waiting on you", "… queued"];
       text(out).slice(1, 6).forEach((l, i) => expect(l.endsWith(`… ${ends[i]} │`)).toBe(true));
     }
     expect(log(50)[1]).not.toContain("14:31:02");
@@ -117,7 +117,7 @@ describe("War Table messages log", () => {
     const wide = MESSAGES.map((m) => ({ ...m, text: "你好世界，请确认这个很长的消息并回答我们的问题" }));
     const rows = messageRows(six(50), wide, 7);
     expect(rows.map(rowWidth)).toEqual(Array(7).fill(50));
-    const ends = ["✓ delivered", "→ delivered", "✓ answered", "waiting on you", "… queued"];
+    const ends = ["→ delivered", "→ delivered", "✓ answered", "waiting on you", "… queued"];
     text(rows).slice(1, 6).forEach((l, i) => expect(l.endsWith(`${ends[i]} │`)).toBe(true));
     const ink = stripVTControlCharacters(renderToString(<Messages view={six(50)} messages={wide} height={7} />, { columns: 50 })).split("\n");
     expect(ink).toEqual(text(rows));
@@ -141,6 +141,19 @@ describe("ASCII fallback and Ink", () => {
     const rows = log(144, 7, MESSAGES, true);
     expect(rows[0]).toContain("# brief   = summary   * soldier to soldier   ! asks you");
     expect(rows.slice(1, 5).map((l) => l[20])).toEqual(["#", "*", "=", "!"]);
+  });
+
+  it("picks the status glyph by delivery state in both profiles", () => {
+    const fits = (rows: string[]) => rows.map((l) => l.replace(/ +/g, " "));
+    const uni = fits(log(144, 7, MESSAGES));
+    expect(uni[1]).toContain("→ delivered │");
+    expect(uni[2]).toContain("→ delivered │");
+    expect(uni[3]).toContain("✓ answered │");
+    expect(uni.join("")).not.toContain("✓ delivered");
+    const asc = fits(log(144, 7, MESSAGES, true));
+    expect(asc[1]).toContain("> delivered |");
+    expect(asc[3]).toContain("+ answered |");
+    expect(asc.join("")).not.toMatch(/v (delivered|answered)/);
   });
 
   it("renders both parts through Ink as the plain rows", () => {

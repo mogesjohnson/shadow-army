@@ -11,7 +11,7 @@ const MIN_WIDTH = 40;
 // The board's glyphs the slice's ASCII table lacks. Each message kind keeps its own stand-in.
 const BOARD_ASCII: Record<string, string> = {
   "╔": "+", "╗": "+", "╚": "+", "╝": "+", "═": "=", "║": "|", "╭": "+", "╮": "+", "╰": "+", "╯": "+",
-  "■": "#", "□": "=", "◆": "*", "▸": ">", "✓": "v",
+  "■": "#", "□": "=", "◆": "*", "▸": ">", "✓": "+",
 };
 const asciiRows = (rows: Row[], ascii: boolean): Row[] =>
   !ascii ? rows : rows.map((r) => r.map((s) => ({
@@ -88,7 +88,8 @@ const LEGEND = "■ brief   □ summary   ◆ soldier to soldier   ! asks you";
 function status(m: Message): Seg {
   if (m.status === "waiting") return seg("waiting on you", "wn", true);
   if (m.status === "queued") return seg("… queued", "dm");
-  if (m.kind === "peer" && m.status === "delivered") return seg("→ delivered", "in");
+  // The glyph follows the delivery state, not the message kind (VIS-2, MSG-4).
+  if (m.status === "delivered") return seg("→ delivered", m.kind === "peer" ? "in" : "ok");
   return seg(`✓ ${m.status}`, "ok");
 }
 
