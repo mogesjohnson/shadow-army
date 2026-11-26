@@ -3,7 +3,8 @@ import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { renderToString } from "ink";
 import { ROSTER, warTable } from "./fixture.js";
-import { headerRows, plain, stripRow } from "./layout.js";
+import stringWidth from "string-width";
+import { headerRows, plain, rowWidth, stripRow } from "./layout.js";
 import { safeText } from "./model.js";
 import { PaneHeader } from "./PaneHeader.js";
 import { Strip } from "./Strip.js";
@@ -31,9 +32,27 @@ describe("v2.1 strip (HOST-6)", () => {
     for (const w of [144, 110, 80, 44]) expect(Array.from(plain(stripRow(warTable(w, false, ROSTER)))).length).toBe(w);
   });
 
-  it("steps down to tags at 44 columns, and only needs-you states carry a word", () => {
-    expect(strip(44)).toEqual([" army  ◐ Ir  ⚠ Ig  ! Be waiting  ○ Tu  ❄ Ka…"]);
+  it("steps down to tags, then folds soldiers that need nothing as +N more (44 columns)", () => {
+    expect(strip(44)).toEqual([" army  ◐ Ir  ⚠ Ig  ! Be waiting  +3 more"]);
     expect(strip(44)[0]).not.toMatch(/working|idle|cold/);
+  });
+
+  it("keeps a late soldier who needs the owner, and counts overflow under /decisions", () => {
+    const late = ROSTER.map((s) => (s.id === "bellion" ? { ...s, state: "wait" as const } : s));
+    expect(strip(44, false, late)).toEqual([" army  ! Be waiting  ! Bl waiting  +4 more"]);
+    const rows = strip(30, false, late);
+    expect(rows[0]).toContain("/decisions");
+    expect(rows[0]).toMatch(/\+\d+ · \/decisions/);
+    expect(Array.from(rows[0]).length).toBeLessThanOrEqual(30);
+  });
+
+  it("keeps the right-hand segment when the strip folds", () => {
+    const right = [{ text: "$1.2" }];
+    for (const w of [44, 30]) {
+      const row = plain(stripRow(warTable(w, false, ROSTER), right));
+      expect(stringWidth(row)).toBe(w);
+      expect(row.endsWith("$1.2")).toBe(true);
+    }
   });
 
   it("tells soldiers apart with no colour: ASCII tags are distinct and every glyph is ASCII", () => {
@@ -47,21 +66,43 @@ describe("v2.1 strip (HOST-6)", () => {
 });
 
 describe("v2.1 pane header (HOST-4)", () => {
-  it("is one line from 50 columns: name · host · model, state on the right", () => {
-    for (const w of [144, 110, 80, 50]) {
+  it("is one line from 50 columns: name · id · model · queue, state on the right", () => {
+    for (const w of [144, 110, 80]) {
       const rows = header("igris", w);
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatch(/^ Igris · codex-sol · gpt-6\.1-sol +⚠ near handoff$/);
+      expect(rows[0]).toMatch(/^ Igris · igris · gpt-6\.1-sol · 2 queued +⚠ near handoff$/);
+    }
+    expect(header("igris", 50)).toEqual([" Igris · igris · gpt-6… · 2 queued ⚠ near handoff"]);
+    expect(header("tusk", 80)[0]).toMatch(/^ Tusk · tusk · gemini-3\.1-pro-high +○ idle$/);
+  });
+
+  it("keeps id, model and queue count across two lines at 44 columns", () => {
+    expect(header("tusk", 44)).toEqual([" Tusk                                ○ idle", " tusk · gemini-3.1-pro-high"]);
+    expect(header("igris", 44, true)).toEqual([" Igris                       ! near handoff", " igris . gpt-6.1-sol . 2 queued"]);
+  });
+
+  it("cuts a long model with an ellipsis below 50 columns, never the name or the queue count", () => {
+    expect(header("tusk", 24)[1]).toBe(" tusk · gemini-3.1-pro…");
+    expect(header("beru", 30)[1]).toMatch(/^ beru · grok-4\.7 · 1 queued$/);
+    expect(header("igris", 28)[1]).toMatch(/… · 2 queued$/);
+  });
+});
+
+describe("v2.1 terminal cells", () => {
+  it("measures a 50-column header with CJK name and model by cells and keeps the state visible", () => {
+    const wide = { ...ROSTER[1], name: "イグリス", id: "igris-ホスト-name-xxxxx", model: "モデル" };
+    for (const ascii of [false, true]) {
+      const [row] = headerRows(wide, 50, ascii);
+      expect(rowWidth(row)).toBe(50);
+      expect(stringWidth(plain(row))).toBe(50);
+      expect(plain(row)).toMatch(ascii ? /near handoff $/ : /⚠ near handoff $/);
     }
   });
 
-  it("keeps name, host and model across two lines at 44 columns", () => {
-    expect(header("tusk", 44)).toEqual([" Tusk                                ○ idle", " agy · gemini-3.1-pro-high"]);
-    expect(header("igris", 44, true)).toEqual([" Igris                       ! near handoff", " codex-sol . gpt-6.1-sol"]);
-  });
-
-  it("cuts a long model with an ellipsis below 50 columns, never the name", () => {
-    expect(header("tusk", 24)[1]).toBe(" agy · gemini-3.1-pro-…");
+  it("clips on grapheme boundaries and keeps every two-line row at exactly w cells", () => {
+    const wide = { ...ROSTER[3], model: "模型模型模型模型模型" };
+    for (const row of headerRows(wide, 24)) expect(stringWidth(plain(row))).toBe(24);
+    expect(headerRows(wide, 24)[1]).toBeDefined();
   });
 });
 

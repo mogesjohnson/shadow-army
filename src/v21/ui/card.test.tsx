@@ -2,6 +2,7 @@ import React from "react";
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { renderToString } from "ink";
+import stringWidth from "string-width";
 import { ROSTER } from "./fixture.js";
 import { cardEdge, cardRows, type CardInfo, type CardOpts } from "./cardRows.js";
 import { Card } from "./Card.js";
@@ -138,7 +139,7 @@ const who = (id: string, over: Partial<Soldier> = {}): Soldier => ({ ...ROSTER.f
 const ink = (s: Soldier, info: CardInfo, opts: CardOpts): string[] =>
   stripVTControlCharacters(renderToString(<Card soldier={s} info={info} {...opts} />, { columns: opts.width })).split("\n");
 const text = (s: Soldier, info: CardInfo, opts: CardOpts): string[] => cardRows(s, info, opts).map(plain);
-const cells = (line: string): number => Array.from(line).length;
+const cells = (line: string): number => stringWidth(line);
 const notch = (i: number): CardOpts["notch"] => (i < 3 ? "bottom" : "top");
 
 describe("v2.1 War Table cards", () => {
@@ -160,10 +161,12 @@ describe("v2.1 War Table cards", () => {
   it("narrows to three across 80 columns (the 80x24 frame draws no cards): every row stays 25 cells", () => {
     for (const s of ROSTER) {
       const rows = ink(s, WORK[s.id], { width: 25, notch: "bottom" });
-      expect(rows).toHaveLength(7);
+      // A waiting card grows to keep its question and keys whole; the others stay seven rows.
+      expect(rows).toHaveLength(s.id === "beru" ? 9 : 7);
       for (const row of rows) expect(cells(row), row).toBe(25);
     }
-    expect(text(who("beru"), WORK.beru, { width: 25 }).slice(1, 3)).toEqual(["┃ ! waiting on you grok ┃", "┃ build · asks: Run th… ┃"]);
+    expect(text(who("beru"), WORK.beru, { width: 25 }).slice(1, 5))
+      .toEqual(["┃ ! waiting on you grok ┃", "┃ build · asks: Run     ┃", "┃ this command?         ┃", "┃ 1-3 answer in the     ┃"]);
   });
 
   it("tells a needs-you card from a working one with colour off", () => {
@@ -201,5 +204,30 @@ describe("v2.1 War Table cards", () => {
     const evil = text(who("iron", { name: "Ir\u202eon", host: "a\u001bb" }), { role: "r\u2066", elapsed: "\r", task: "t\n", note: { text: "n\u200f" } }, { width: 60 }).join("");
     for (const code of ["202E", "001B", "2066", "000D", "000A", "200F"]) expect(evil).toContain(`<U+${code}>`);
     expect(text(who("iron"), { role: "build", tool: "go\u202e" }, { width: 60 })[3]).toContain("go<U+202E>");
+  });
+
+  it("fits every row to the terminal cells with CJK and combining marks, borders intact", () => {
+    const marks = "é".repeat(20);
+    for (const name of ["鉄の兵士鉄の兵士", `Ir${marks}`]) {
+      const s = who("iron", { name, host: "クロード", task: "設定を切り替える設定を切り替える設定を切り替える" });
+      for (const width of [35, 25]) {
+        for (const notch of ["top", "bottom"] as const) {
+          const rows = text(s, { role: "ビルド", tool: "編集 ページ" }, { width, focus: true, notch });
+          for (const row of rows) expect(cells(row), row).toBe(width);
+          for (const row of rows.slice(1, 6)) expect(row[0] + row.slice(-1), row).toBe("││");
+          expect(rows[0][0] + rows[0].slice(-1)).toBe("╭╮");
+        }
+      }
+    }
+  });
+
+  it("keeps a waiting card's whole question and its keys in view at 35 columns", () => {
+    const q = "Run the tests before publishing, or skip them for now?";
+    const rows = text(who("beru"), { role: "build", task: `asks: ${q}`, note: hint("1 run  2 skip  3 ask me later") }, { width: 35 });
+    for (const row of rows) expect(cells(row), row).toBe(35);
+    const body = rows.slice(1, -1).map((r) => r.slice(2, -2).trim());
+    expect(body.join(" ")).toContain(`build · asks: ${q}`);
+    expect(body.join(" ")).toContain("1 run  2 skip  3 ask me later");
+    expect(rows.length).toBeGreaterThan(7);
   });
 });

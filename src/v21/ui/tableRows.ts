@@ -1,4 +1,5 @@
 // The whole War Table screen as rows, exactly the view's width by `height`. No Ink, so the mod can reuse it.
+import stringWidth from "string-width";
 import { RANK, STATES, needs, safeText, toAscii, type ArmyView, type Briefs, type Message, type Soldier, type Tone } from "./model.js";
 import { cardRows, type CardInfo } from "./cardRows.js";
 import { messageRows, monarchRows } from "./boardRows.js";
@@ -27,15 +28,11 @@ export interface TableScene {
 // The design's threshold: below it the board folds to a tree. The board also holds only two rows of three.
 const BOARD_WIDTH = 110, BOARD_HEIGHT = 28, SEATS = 6;
 
-// Terminal columns, not code points: wide characters take two cells. Same rule as Ink's own measuring, with no new dependency.
+// Terminal columns, not code points: the same measuring as Ink's own (string-width), so a row we size is a row Ink keeps whole.
 const graphemes = new Intl.Segmenter();
-const WIDE = [[0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe30, 0xfe6f], [0xff00, 0xff60], [0xffe0, 0xffe6], [0x1f300, 0x1faff], [0x20000, 0x3fffd]];
-const cols = (g: string): number => {
-  const cp = g.codePointAt(0)!;
-  return WIDE.some(([a, b]) => cp >= a && cp <= b) || g.includes("️") ? 2 : 1;
-};
+const cols = (g: string): number => stringWidth(g);
 const parts = (text: string): string[] => Array.from(graphemes.segment(text), (x) => x.segment);
-const textWidth = (text: string): number => parts(text).reduce((n, g) => n + cols(g), 0);
+const textWidth = (text: string): number => stringWidth(text);
 const rw = (r: Row): number => r.reduce((n, x) => n + textWidth(x.text), 0);
 /** Like `fit`, in terminal columns: clip with an ellipsis, then pad. */
 function fitCols(r: Row, w: number): Row {
@@ -161,16 +158,19 @@ function decisionRows(view: ArmyView, scene: TableScene, p: PinnedCard, height: 
     ? [...wrap(ask, inner), ...spread([]), ...wrap([seg(safeText(p.source), "fa")], inner),
       ...(next ? dm(`Tab: next → ${nextName} ${STATES[next.state].glyph} ${STATES[next.state].word}`) : [[]])]
     : [...worktree, ...wrap(ask, inner), ...spread([seg(`      ${safeText(p.source)}`, "fa")]), ...dm(facts), ...dm(safeText(p.keys))];
-  // A decision taller than its room keeps the prompt and every numbered answer; the command gives up its last lines.
+  // A decision taller than its room keeps every numbered answer first; the prompt, then the command, give up their last lines.
   const room = height - 2;
   let body = full;
   if (full.length > room) {
     const prompt = wrap([seg(safeText(p.asks)), seg(" "), seg(safeText(p.question))], inner);
     const command = wrap([seg(safeText(p.command), "tx", true)], inner);
     const choices = spread([]);
-    const left = Math.max(0, room - prompt.length - choices.length);
-    const shown = command.length <= left ? command : left ? [...command.slice(0, left - 1), [seg(`… ${command.length - left + 1} more command lines`, "dm")]] : [];
-    body = [...prompt, ...shown, ...choices, ...full.slice(wrap(ask, inner).length + choices.length)];
+    const avail = Math.max(0, room - choices.length);
+    const cut = (rows: Row[], n: number, what: string, tone?: Tone): Row[] =>
+      rows.length <= n ? rows : n ? [...rows.slice(0, n - 1), [seg(`… ${rows.length - n + 1} more ${what} lines`, tone)]] : [];
+    const asked = cut(prompt, avail, "question", "dm");
+    const shown = cut(command, Math.max(0, avail - asked.length), "command", "dm");
+    body = [...asked, ...shown, ...choices, ...full.slice(wrap(ask, inner).length + choices.length)];
   }
   if (height < 3) return [];
   const label = [...fitCols(title, Math.min(rw(title), w - 5)), seg(" ")];
