@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderReport } from "../core/summon.js";
 import type { Report } from "../core/types.js";
@@ -135,7 +135,12 @@ describe("removing a worktree never follows a link inside it", () => {
     r.git("config", "worktree.useRelativePaths", "true");
     const shadowRoot = join(r.dir, ".shadow");
     const snap = await createSnapshot(r.dir, shadowRoot, "HEAD", "look-relative");
-    expect(readFileSync(join(r.dir, ".git", "worktrees", "look-relative", "gitdir"), "utf8")).toMatch(/^\.\./);
+    // git before 2.48 ignores worktree.useRelativePaths and writes an absolute path, so write the relative
+    // form that newer git stores; the code under test must find the record from either.
+    const record = join(r.dir, ".git", "worktrees", "look-relative", "gitdir");
+    const written = readFileSync(record, "utf8").trim();
+    if (isAbsolute(written)) writeFileSync(record, `${relative(dirname(record), written).split(sep).join("/")}\n`);
+    expect(readFileSync(record, "utf8")).toMatch(/^\.\./);
 
     await snap.remove();
 
