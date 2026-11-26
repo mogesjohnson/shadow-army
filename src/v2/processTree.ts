@@ -67,12 +67,25 @@ async function repositoryFolders(cwd: string): Promise<string[]> {
 }
 
 /**
+ * CH-1: the repository folders by real path. A folder that no longer exists (a stale worktree entry) holds nothing
+ * and keeps its lexical path; any other failure leaves the root unverified, so the launch is refused (C17).
+ */
+export async function verifiedRoots(folders: string[], real: (path: string) => Promise<string> = realpath): Promise<string[]> {
+  return Promise.all(folders.map(async (folder) => {
+    try { return comparable(await real(folder)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return comparable(resolve(folder));
+      throw Object.assign(new Error(`could not verify the real path of repository folder ${folder}: ${(error as Error).message}`), { code: "EACCES" });
+    }
+  }));
+}
+
+/**
  * CH-1: the CLI's PATH is the caller's less every relative or empty entry, every entry that can't be
  * resolved, and every entry in the folder, its checkout or a worktree, compared by real path.
  */
 async function trustedPath(cwd: string, env: NodeJS.ProcessEnv): Promise<{ kept: string[]; dropped: string[]; roots: string[] }> {
   const pathValue = Object.entries(env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
-  const roots = (await Promise.all((await repositoryFolders(cwd)).map((folder) => realpath(folder).catch(() => resolve(folder))))).map(comparable);
+  const roots = await verifiedRoots(await repositoryFolders(cwd));
   const kept: string[] = [], dropped: string[] = [];
   for (const entry of pathValue.split(delimiter)) {
     const real = entry && isAbsolute(entry) ? await realpath(entry).catch(() => undefined) : undefined;

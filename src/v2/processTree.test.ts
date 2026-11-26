@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
-import { spawnManagedProcess, verifyExecutable, type ManagedProcess } from "./processTree.js";
+import { spawnManagedProcess, verifiedRoots, verifyExecutable, type ManagedProcess } from "./processTree.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -46,6 +46,14 @@ describe("CH-1 executable check", () => {
     await expect(verifyExecutable(outside, [root.toLowerCase()], failing)).rejects.toMatchObject({ code: "EACCES", message: expect.stringMatching(/could not verify the real path/) });
     await expect(verifyExecutable(outside, [root.toLowerCase()], async () => join(root, "bin", "claude.exe"))).rejects.toThrow(/inside the soldier's repository/);
     await expect(verifyExecutable(outside, [root.toLowerCase()], async (path) => path)).resolves.toBeUndefined();
+  });
+
+  it("refuses a repository folder whose real path cannot be read, and keeps a missing one by its lexical path (C17)", async () => {
+    const stale = join(tmpdir(), "sa-c17-stale-worktree");
+    const fail = (code: string) => async (path: string) => { throw Object.assign(new Error(`${code}: realpath ${path}`), { code }); };
+    await expect(verifiedRoots([stale], fail("EPERM"))).rejects.toMatchObject({ code: "EACCES", message: expect.stringMatching(/could not verify the real path of repository folder/) });
+    const comparable = windows ? stale.toLowerCase() : stale;
+    await expect(verifiedRoots([stale], fail("ENOENT"))).resolves.toEqual([comparable]);
   });
 });
 
