@@ -131,6 +131,17 @@ describe("the /send command (M1-AC23)", () => {
     expect(commands).toHaveLength(0);
   });
 
+  it("rejects a malformed option without contacting a running post office (#94 C8)", async () => {
+    const { send, spawns, commands } = await mod(() => ({ status: "completed" }));
+    await send("Tank --claim a.ts go");
+    const before = commands.length;
+    for (const args of [String.raw`Tank --claim "C:\Users\me\My Notes.md go`, "Tank --claim", `Tank --claim 'a'b go`]) {
+      expect(await send(args), args).toMatch(/^Nothing sent: /);
+    }
+    expect(spawns).toHaveLength(1);
+    expect(commands).toHaveLength(before);
+  });
+
   it("shows a post office refusal as one row, with the credential redacted", async () => {
     const { send, spawns } = await mod(() => { throw new Error("claims overlap Tank's"); });
     const row = await send("claude-sonnet --claim a do it");
