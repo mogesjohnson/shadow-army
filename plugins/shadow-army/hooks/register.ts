@@ -209,26 +209,15 @@ function uiLog($: EngineInterface, text: string, credential = ""): void {
 }
 
 /**
- * `/send <soldier> --claim <path-or-glob> ... <brief>`. A claim with a space sits in double or single quotes
- * (`--claim "docs/Project Notes.md"`); the closing quote must be followed by a space or the end. The brief is
- * everything after the last claim, untouched. A missing or unclosed claim comes back as `error`, before any session opens.
+ * `/send <soldier> <brief>`. This build has no claim audit or apply (C15), so a brief that starts with `--claim`
+ * is refused as `error` before any session opens, instead of being sent as text.
  */
-function parseSend(args: string): { name?: string; claims: string[]; brief: string; error?: string } {
-  let rest = args.trim();
-  const name = /^\S+/.exec(rest)?.[0];
-  rest = rest.slice(name?.length ?? 0).trimStart();
-  const claims: string[] = [];
-  for (let flag; (flag = /^--claim(?=\s|$)\s*/.exec(rest));) {
-    rest = rest.slice(flag[0].length);
-    const quoted = /^["']/.test(rest);
-    const match = quoted ? /^(["'])(.*?)\1(?=\s|$)\s*/.exec(rest) : /^()(\S+)\s*/.exec(rest);
-    if (quoted && !match) return { name, claims, brief: rest, error: "a quoted --claim is not closed, or its closing quote is not followed by a space." };
-    const claim = match?.[2]?.trim();
-    if (!match || !claim || claim === "--claim") return { name, claims, brief: rest, error: "--claim needs a path or glob; put one with a space in quotes." };
-    rest = rest.slice(match[0].length);
-    claims.push(claim);
-  }
-  return { name, claims, brief: rest };
+function parseSend(args: string): { name?: string; brief: string; error?: string } {
+  const text = args.trim();
+  const name = /^\S+/.exec(text)?.[0];
+  const brief = text.slice(name?.length ?? 0).trimStart();
+  if (/^--claim(?=\s|$)/.test(brief)) return { name, brief, error: "--claim is not available in this build: there is no claim audit yet, so a claimed brief is not sent." };
+  return { name, brief };
 }
 
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
@@ -241,10 +230,9 @@ function card(soldier: Soldier, delivery: Delivery, log: string, credential: str
 }
 
 async function send($: EngineInterface, args: string): Promise<string> {
-  const { name, claims, brief, error } = parseSend(args);
+  const { name, brief, error } = parseSend(args);
   if (name && error) return `Nothing sent: ${error}`;
-  if (!name || !brief) return "Usage: /send <soldier> --claim <path-or-glob> <brief>";
-  if (!claims.length) return "Nothing sent: /send needs at least one --claim <path-or-glob>, so the soldier's changes can be audited.";
+  if (!name || !brief) return "Usage: /send <soldier> <brief>";
   const runtime = await ensure($);
   const soldiers = await post($, runtime, { action: "army" }) as Soldier[];
   if (!Array.isArray(soldiers)) throw new Error("invalid army response");
@@ -253,13 +241,13 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (!soldier.supported || !soldier.roles.includes("build")) return show(`Nothing sent: ${soldier.name} is not a claude soldier with the build role.`);
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
   const opened = await post($, runtime, { action: "open", soldier: soldier.key }) as { session?: string };
-  const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
+  const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief }) as Delivery;
   return card(soldier, delivery, `${runtime.cwd}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
 
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
-    await $.command.register({ name: "send", description: "Send one brief to a claude soldier and wait for its summary.", argumentHint: "<soldier> --claim <path-or-glob> <brief>", immediate: true });
+    await $.command.register({ name: "send", description: "Send one brief to a claude soldier and wait for its summary.", argumentHint: "<soldier> <brief>", immediate: true });
     return next(e);
   });
   on("command.run", { command: "send" }, async ($, e) => {

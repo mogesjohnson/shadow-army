@@ -73,8 +73,8 @@ describe("the /send command (M1-AC23)", () => {
 
   it("starts the post office on first use, reuses it after, and never puts the credential in argv", async () => {
     const { send, spawns, commands } = await mod(() => ({ status: "completed", summary: "done" }));
-    await send("claude-sonnet --claim src/a.ts first brief");
-    await send("claude-sonnet --claim src/a.ts second brief");
+    await send("claude-sonnet first brief");
+    await send("claude-sonnet second brief");
     expect(spawns).toHaveLength(1);
     expect(spawns[0].argv.join(" ")).toMatch(/modRelay\.js --cwd \/repo$/);
     const bootstrap = JSON.parse(spawns[0].input);
@@ -83,51 +83,46 @@ describe("the /send command (M1-AC23)", () => {
     expect(commands.filter((c) => c.action === "send")).toHaveLength(2);
   });
 
-  it("sends the brief and every claim to the named soldier, by name or key", async () => {
+  it("sends the brief, and no claims, to the named soldier, by name or key", async () => {
     const { send, commands } = await mod(() => ({ status: "completed", summary: "ok" }));
-    await send("Tank --claim src/a.ts --claim docs/** write the parser");
-    expect(commands.find((c) => c.action === "send")).toEqual({ action: "send", soldier: "claude-sonnet", text: "write the parser", claims: ["src/a.ts", "docs/**"] });
+    await send("Tank write the parser");
+    expect(commands.find((c) => c.action === "send")).toEqual({ action: "send", soldier: "claude-sonnet", text: "write the parser" });
+    expect(commands.find((c) => c.action === "open")).toEqual({ action: "open", soldier: "claude-sonnet" });
   });
 
-  it("sends nothing, and says why, with no claim, no brief, an unknown soldier or one that cannot build", async () => {
+  it("sends nothing, and says why, with no brief, an unknown soldier or one that cannot build", async () => {
     const { send, spawns, commands } = await mod();
-    expect(await send("")).toMatch(/^Usage: \/send/);
-    expect(await send("claude-sonnet do it")).toMatch(/needs at least one --claim/);
+    expect(await send("")).toBe("Usage: /send <soldier> <brief>");
+    expect(await send("claude-sonnet")).toMatch(/^Usage: \/send/);
     expect(spawns).toHaveLength(0);
-    expect(await send("nobody --claim a do it")).toMatch(/unknown soldier/);
-    expect(await send("grok --claim a do it")).toMatch(/Beru is not a claude soldier with the build role/);
-    expect(await send("codex --claim a do it")).toMatch(/Igris is not a claude soldier/);
+    expect(await send("nobody do it")).toMatch(/unknown soldier/);
+    expect(await send("grok do it")).toMatch(/Beru is not a claude soldier with the build role/);
+    expect(await send("codex do it")).toMatch(/Igris is not a claude soldier/);
     expect(commands.some((c) => c.action === "send")).toBe(false);
   });
 
-  it("takes a quoted claim with a space whole, and keeps the brief's own quotes and spacing", async () => {
-    const { send, commands } = await mod(() => ({ status: "completed" }));
-    await send(`Tank --claim "docs/Project Notes.md" --claim 'my dir/**' --claim plain.ts  rewrite "the notes"  now`);
-    expect(commands.find((c) => c.action === "send")).toEqual({
-      action: "send", soldier: "claude-sonnet", text: `rewrite "the notes"  now`, claims: ["docs/Project Notes.md", "my dir/**", "plain.ts"],
-    });
-  });
-
-  it("rejects a missing or unclosed claim before opening a session", async () => {
-    const { send, spawns, commands } = await mod();
-    for (const args of [
-      "Tank --claim", "Tank --claim ", `Tank --claim "" go`, "Tank --claim --claim a go", `Tank --claim "docs/Project Notes.md go`,
-      `Tank --claim "a"b go`, `Tank --claim a --claim 'b c go`,
-    ]) expect(await send(args), args).toMatch(/^Nothing sent: (--claim needs a path or glob|a quoted --claim is not closed)/);
-    expect(spawns).toHaveLength(0);
-    expect(commands).toHaveLength(0);
+  it("does not advertise claims, and refuses a --claim before opening a session (C15)", async () => {
+    const { $, handlers, registered, send, spawns, commands } = await mod();
+    await handlers["session.start"]!($, {}, async () => undefined);
+    expect(JSON.stringify(registered)).not.toMatch(/claim/i);
+    for (const args of ["Tank --claim src/a.ts go", "Tank --claim", "Tank  --claim 'a b' --claim c go"]) {
+      expect(await send(args), args).toMatch(/^Nothing sent: --claim is not available in this build/);
+    }
+    expect(await send("Tank fix the --claim flag docs")).not.toMatch(/Nothing sent/);
+    expect(spawns).toHaveLength(1);
+    expect(commands.filter((c) => c.action === "send").map((c) => c.text)).toEqual(["fix the --claim flag docs"]);
   });
 
   it("shows a post office refusal as one row, with the credential redacted", async () => {
-    const { send, spawns } = await mod(() => { throw new Error("claims overlap Tank's"); });
-    const row = await send("claude-sonnet --claim a do it");
-    expect(row).toContain("Shadow Army: claims overlap Tank's");
+    const { send, spawns } = await mod(() => { throw new Error("the soldier is busy"); });
+    const row = await send("claude-sonnet do it");
+    expect(row).toContain("Shadow Army: the soldier is busy");
     expect(row).not.toContain(JSON.parse(spawns[0].input).credential);
   });
 
   it("releases the lease at the session's end", async () => {
     const { $, handlers, send, commands } = await mod(() => ({ status: "completed" }));
-    await send("claude-sonnet --claim a do it");
+    await send("claude-sonnet do it");
     await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
     expect(commands.at(-1)).toEqual({ action: "release", session: "session-1" });
   });
@@ -137,13 +132,13 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
   it("holds the soldier, at most five summary lines, the log path and the files applied", async () => {
     const summary = ["1", "2", "3", "4", "5", "6", "7"].join("\n");
     const { send } = await mod(() => ({ status: "completed", summary, applied: ["src/a.ts", "src/b.ts"] }));
-    const row = await send("claude-sonnet --claim src/** go");
+    const row = await send("claude-sonnet go");
     expect(row).toBe(`Shadow Army · Tank · completed\n1\n2\n3\n4\n5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nApplied: src/a.ts, src/b.ts`);
   });
 
   it("gives the reason when nothing was applied, and names a reverted file", async () => {
     const { send } = await mod(() => ({ status: "completed", summary: "s", reason: "you changed src/a.ts yourself", reverted: ["docs/x.md"] }));
-    const row = await send("claude-sonnet --claim src/** go");
+    const row = await send("claude-sonnet go");
     expect(row).toContain("Not applied: you changed src/a.ts yourself");
     expect(row).toContain("Reverted, outside its claims: docs/x.md");
   });
@@ -151,7 +146,7 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
   it("shows each Cc and Cf character as a placeholder and keeps newline and tab", async () => {
     const hostile = "a\u001b[31mred‮drawer​z\ttab\nnext\u0007";
     const { send } = await mod(() => ({ status: "completed", summary: hostile, applied: ["we‮ird.ts"] }));
-    const row = await send("claude-sonnet --claim src/** go");
+    const row = await send("claude-sonnet go");
     expect(row).toContain("a\\u{1b}[31mred\\u{202e}drawer\\u{200b}z\ttab\nnext\\u{7}");
     expect(row).toContain("we\\u{202e}ird.ts");
     expect(row).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f​‮]/);
@@ -159,28 +154,28 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
 
   it("falls back to the error text for a failed turn with no summary", async () => {
     const { send } = await mod(() => ({ status: "failed", error: { message: "read-only guard failed" } }));
-    expect(await send("claude-sonnet --claim a go")).toContain("Shadow Army · Tank · failed\nread-only guard failed\n");
+    expect(await send("claude-sonnet go")).toContain("Shadow Army · Tank · failed\nread-only guard failed\n");
   });
 
   it("caps a CRLF summary at five lines", async () => {
     const { send } = await mod(() => ({ status: "completed", summary: "1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7" }));
-    expect(await send("claude-sonnet --claim a go")).toBe("Shadow Army · Tank · completed\n1\n2\n3\n4\n5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nNot applied: no change was applied");
+    expect(await send("claude-sonnet go")).toBe("Shadow Army · Tank · completed\n1\n2\n3\n4\n5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nNot applied: no change was applied");
   });
 
   it("caps the error used for a failed turn with no summary at five lines, with LF and CRLF", async () => {
     for (const eol of ["\n", "\r\n"]) {
       const message = ["e1", "e2", "e3", "e4", "e5", "e6", "e7"].join(eol);
       const { send } = await mod(() => ({ status: "failed", error: { message } }));
-      expect(await send("claude-sonnet --claim a go")).toBe("Shadow Army · Tank · failed\ne1\ne2\ne3\ne4\ne5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nNot applied: no change was applied");
+      expect(await send("claude-sonnet go")).toBe("Shadow Army · Tank · failed\ne1\ne2\ne3\ne4\ne5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nNot applied: no change was applied");
     }
   });
 
   it("prefers the summary to the error, and treats an empty summary as none", async () => {
     const error = { message: "boom" };
     const { send } = await mod(() => ({ status: "failed", summary: "s1\ns2", error }));
-    expect(await send("claude-sonnet --claim a go")).toContain("failed\ns1\ns2\nLog:");
+    expect(await send("claude-sonnet go")).toContain("failed\ns1\ns2\nLog:");
     const empty = await mod(() => ({ status: "failed", summary: "", error }));
-    expect(await empty.send("claude-sonnet --claim a go")).toContain("failed\nboom\nLog:");
+    expect(await empty.send("claude-sonnet go")).toContain("failed\nboom\nLog:");
   });
 });
 
@@ -188,7 +183,7 @@ describe("relay diagnostics in the UI log (SEC-6)", () => {
   it("shows format characters in a channel event as placeholders", async () => {
     const event = { type: "error", soldier: "Ta‪nk", data: { message: "bad\u007F ‮" } };
     const { send, logs } = await mod(() => ({ status: "completed" }), { after: [{ stream: "stdout", text: `${JSON.stringify(event)}\n` }] });
-    await send("claude-sonnet --claim a go");
+    await send("claude-sonnet go");
     await new Promise((done) => setTimeout(done, 0));
     expect(logs).toEqual([`Shadow Army · Ta\\u{202a}nk: {"message":"bad\\u{7f} \\u{202e}"}`]);
   });
@@ -196,7 +191,7 @@ describe("relay diagnostics in the UI log (SEC-6)", () => {
   it("shows a startup diagnostic with control characters as placeholders and redacts the credential", async () => {
     const secret = "a".repeat(64);
     const { send, logs } = await mod(() => ({}), { before: [{ stream: "stderr", text: `boom‮\u001B[0m ${secret}` }], ready: false });
-    const row = await send("claude-sonnet --claim a go");
+    const row = await send("claude-sonnet go");
     expect(row).toContain("boom\\u{202e}\\u{1b}[0m [redacted]");
     expect(logs).toEqual(["Shadow Army: Error: post office relay ended: boom\\u{202e}\\u{1b}[0m [redacted]"]);
   });
