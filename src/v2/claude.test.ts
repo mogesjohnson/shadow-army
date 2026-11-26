@@ -57,7 +57,7 @@ async function s6Protocol() {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send };
+  return { channel, events, emit, send, stdout };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -216,6 +216,20 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(result).toMatchObject({ status: "completed", text: "true reply" });
     // The stale result moved no usage baseline: the delta runs from the first turn's total.
     expect(result.usage?.costUsd).toBeCloseTo(0.07);
+  });
+
+  it("redacts the whole malformed line before logging it, then excerpts the redacted text (CH-1, C12)", async () => {
+    const { events, stdout, send } = await s6Protocol();
+    await send("bad line");
+    // The secret straddles the 200-character excerpt boundary; the diagnostic sits past it.
+    const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
+    stdout.write(`{broken ${"x".repeat(180)} ${secret} diagnostic-tail\n`);
+    await until(() => events.some((event) => event.type === "error"));
+    const raw = events.find((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")!.data as { text: string };
+    const error = events.find((event) => event.type === "error")!.data as NativeError;
+    expect(raw.text).toContain("diagnostic-tail");
+    for (const text of [raw.text, error.message]) expect(text).not.toMatch(/sk-ant-a/);
+    expect(error.message.length).toBeLessThan(400);
   });
 
   it("leaves a result naming no message as a log-only frame (CH-2, C10)", async () => {

@@ -151,9 +151,12 @@ export class ClaudeChannel implements NativeChannel {
     try { frame = object(JSON.parse(line)); } catch { /* A malformed protocol cannot safely delimit the active turn. */ }
     if (!frame || typeof frame.type !== "string") {
       this.badLines++;
-      const excerpt = line.length > BAD_LINE_EXCERPT ? `${line.slice(0, BAD_LINE_EXCERPT)}...` : line;
-      const message = `Claude emitted an unparseable line: ${String(redact(excerpt))}`;
-      this.emit("raw", { type: "unparseable_line", text: String(redact(excerpt)) });
+      // CH-1: redact the whole line (already bounded by MAX_FRAME_BYTES) first, so no secret is cut in
+      // half; the record keeps the full redacted diagnostic and the message shows its excerpt.
+      const redacted = String(redact(line));
+      const excerpt = redacted.length > BAD_LINE_EXCERPT ? `${redacted.slice(0, BAD_LINE_EXCERPT)}...` : redacted;
+      const message = `Claude emitted an unparseable line: ${excerpt}`;
+      this.emit("raw", { type: "unparseable_line", text: redacted });
       if (this.badLines >= MAX_BAD_LINES_IN_A_ROW) void this.failTransport(`Claude connection lost: ${MAX_BAD_LINES_IN_A_ROW} unparseable lines in a row`);
       else this.emit("error", { kind: "other", message } satisfies NativeError);
       return;
