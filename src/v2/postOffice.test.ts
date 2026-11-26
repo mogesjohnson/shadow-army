@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { armyMark, type GitFactory } from "./snapshot.js";
@@ -492,6 +492,29 @@ describe("M1b-26 harness git and outside snapshots", () => {
     expect(calls.filter((args) => args[0] === "hash-object")).toHaveLength(2);
     // Was 34 (one hash-object per dirty file per read, and a hold check twice in a row after the turn).
     expect(calls.length).toBeLessThanOrEqual(28);
+  }, 60_000);
+
+  it("puts no ignore file back through a link out of the snapshot on a live turn, and reports it (review 15 C9)", async () => {
+    const repo = makeRepo({ "README.md": "hello\n", ".gitignore": "*.tmp\n", "sub/.gitignore": "*.log\n" }); repos.push(repo);
+    const outside = mkdtempSync(join(homedir(), ".sa-test-outside-"));
+    const events: OfficeEvent[] = [];
+    try {
+      await mkdir(join(outside, "sub")); await writeFile(join(outside, "sub", ".gitignore"), "outside\n"); await writeFile(join(outside, "hard"), "outside\n"); await writeFile(join(outside, "sub", "keep"), "keep\n");
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+        channelFactory: (options): NativeChannel => ({ async send() {
+          rmSync(join(options.cwd, "sub"), { recursive: true }); symlinkSync(join(outside, "sub"), join(options.cwd, "sub"), process.platform === "win32" ? "junction" : "dir");
+          rmSync(join(options.cwd, ".gitignore")); linkSync(join(outside, "hard"), join(options.cwd, ".gitignore"));
+          return { status: "completed", text: "ok", refusal: false };
+        }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+      offices.push(office);
+      const opened = await office.open("scout");
+      await office.send("scout", "look");
+      expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ files: expect.arrayContaining([".gitignore", "sub/.gitignore"]) });
+      expect([await readFile(join(outside, "sub", ".gitignore"), "utf8"), await readFile(join(outside, "hard"), "utf8")]).toEqual(["outside\n", "outside\n"]);
+      // Putting the snapshot back unlinks the link first: git's clean would otherwise delete the outside folder's files.
+      expect(existsSync(join(outside, "sub", "keep"))).toBe(true);
+      expect(await readFile(join(opened.cwd, "sub", ".gitignore"), "utf8")).toBe("*.log\n");
+    } finally { rmSync(outside, { recursive: true, force: true }); }
   }, 60_000);
 
   it("refuses a folder outside any git working tree", async () => {

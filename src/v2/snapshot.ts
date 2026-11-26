@@ -286,9 +286,23 @@ export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitF
 /** Puts the snapshot back as the turn began, ignored output included, before its next turn. */
 export async function discardWrites(snapshot: Snapshot, start: TurnStart, git: GitFactory) {
   const run = own(snapshot, git);
+  unlinkLinks(snapshot.path, true);
   for (const args of [["checkout", "-q", "--force", "--detach", start.head], ["reset", "-q", "--hard", start.head], ["clean", "-q", "-ffdx"]]) {
     const result = await run(args, "snapshot");
     if (result.code !== 0) throw new SnapshotError(`snapshot could not be put back: ${result.stderr.trim()}`);
+  }
+}
+
+/**
+ * Unlinks every link (junctions too) under `dir` but `.git`, never following one: Git for Windows's checkout and
+ * clean go through a junction standing for a tracked folder, writing and deleting files outside the snapshot.
+ */
+function unlinkLinks(dir: string, top = false) {
+  for (const name of readdirSync(dir)) {
+    if (top && name === ".git") continue;
+    const path = join(dir, name), info = lstatSync(path);
+    if (info.isSymbolicLink()) rmSync(path, { force: true });
+    else if (info.isDirectory()) unlinkLinks(path);
   }
 }
 
