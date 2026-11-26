@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from "node:fs";
+import { constants as fsConstants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -375,7 +375,7 @@ export class PostOffice {
       try { verified = await this.verifiedTrees(ops); } catch (error) { throw new Error(`earlier trees not swept, and no soldier starts: ${message(error)}`); }
       this.earlierTrees ??= verified;
       let swept: Awaited<ReturnType<typeof sweepTrees>>;
-      try { swept = await sweepTrees(this.root, this.boundOps(ops, verified)); } catch (error) { throw new Error(`earlier trees not swept, and no soldier starts: a process check failed: ${message(error)}`); }
+      try { swept = await sweepTrees(this.root, this.boundOps(ops, verified), verified); } catch (error) { throw new Error(`earlier trees not swept, and no soldier starts: a process check failed: ${message(error)}`); }
       if (swept.swept || swept.left.length || swept.unhandled) this.record({ type: "swept", data: swept });
       if (swept.left.length || swept.unhandled) {
         const named = swept.left.map((one) => `${one.pid}${one.command ? ` ${one.command}` : ""}`).join(", ");
@@ -704,21 +704,40 @@ export class PostOffice {
   }
 
   /**
-   * C1: the earlier trees, before any is ended: a plain folder (owned by this user and not writable by others, on POSIX), plain
-   * files, every line parsed and the post office's line first, and a helper that reads this process correctly. Throws otherwise.
+   * C1: the earlier trees, before any is ended: a plain folder owned by this user (or, on Windows, a trusted owner) that no
+   * one else can write, plain files (on POSIX each owned by this user, neither group- nor world-writable, and read through the
+   * handle that was checked), every line parsed and the post office's line first, and a helper that reads this process
+   * correctly. Throws otherwise. The sweep is given exactly these records and never re-reads the folder.
    */
   private async verifiedTrees(ops: OfficeOps): Promise<{ id: string; lines: TreeLine[] }[]> {
     const dir = treesDir(this.root);
     const info = await lstat(dir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
     if (!info) return [];
     if (!info.isDirectory()) throw new Error(`${dir} is not a plain folder`);
-    if (process.platform !== "win32" && (info.uid !== process.getuid?.() || (info.mode & 0o002) !== 0)) throw new Error(`${dir} is not owned by this user, or others can write to it`);
+    const untrusted = (path: string) => new Error(`${path} is not owned by this user, or others can write to it`);
+    const posix = process.platform !== "win32";
+    const owned = (stats: { uid: number; mode: number }) => stats.uid === process.getuid?.() && (stats.mode & 0o022) === 0;
+    if (posix && !owned(info)) throw untrusted(dir);
+    if (!posix) {
+      let facts: FolderFacts;
+      try { facts = (this.options.inspect ?? platformInspect())(dir); } catch (error) { throw new Error(`${dir}'s owner and permissions can't be checked: ${error instanceof Error ? error.message : String(error)}`); }
+      if (facts.owner === "other" || facts.writableByOthers) throw untrusted(dir);
+    }
     await this.ownIdentity(ops);
     const trees: { id: string; lines: TreeLine[] }[] = [];
     for (const entry of await readdir(dir, { withFileTypes: true })) {
       if (!entry.name.endsWith(".jsonl")) continue;
       if (!entry.isFile()) throw new Error(`${entry.name} is not a plain file`);
-      const lines = (await readFile(join(dir, entry.name), "utf8")).split(/\r?\n/).filter((line) => line.trim()).map(parseTreeLine);
+      // No link is followed and no FIFO blocks; the checked handle is the one read.
+      const handle = await open(join(dir, entry.name), fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
+      let text: string;
+      try {
+        const file = await handle.stat();
+        if (!file.isFile()) throw new Error(`${entry.name} is not a plain file`);
+        if (posix && !owned(file)) throw untrusted(join(dir, entry.name));
+        text = await handle.readFile("utf8");
+      } finally { await handle.close(); }
+      const lines = text.split(/\r?\n/).filter((line) => line.trim()).map(parseTreeLine);
       if (lines.some((line) => !line) || lines[0]?.kind !== "post-office") throw new Error(`${entry.name} is not a whole tree record`);
       trees.push({ id: entry.name.slice(0, -".jsonl".length), lines: lines as TreeLine[] });
     }

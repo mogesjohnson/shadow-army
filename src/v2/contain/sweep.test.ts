@@ -86,6 +86,18 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(await sweepTrees(root, fakeOps({}).ops)).toMatchObject({ swept: 0 });
   });
 
+  it("sweeps only the records it is given, never re-reading the folder after they were verified (C1)", async () => {
+    const dead = await TreeRecord.create(root, "dead", { pid: 3, startTime: 30 });
+    await dead.add({ kind: "cli", pid: 5, startTime: 50 });
+    const verified = await readTrees(root);
+    // Written after verification: the sweep must not see it.
+    await (await TreeRecord.create(root, "planted", { pid: 7, startTime: 70 })).add({ kind: "cli", pid: 8, startTime: 80 });
+    const { ops, calls } = fakeOps({ 5: 50, 8: 80 });
+    expect(await sweepTrees(root, ops, verified)).toMatchObject({ swept: 1, ended: [{ pid: 5 }] });
+    expect(calls).toEqual(["end 5"]);
+    expect(existsSync(join(treesDir(root), "planted.jsonl"))).toBe(true);
+  });
+
   it("has no operations for macOS until PO-17's helper exists", () => {
     expect(() => systemOps("darwin")).toThrow(/M1b-18/);
   });

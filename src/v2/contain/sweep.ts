@@ -41,11 +41,12 @@ const isProcess = (line: TreeLine): line is Extract<TreeLine, Identity> => "pid"
 /**
  * PO-16's sweep: ends every tree whose entry belongs to a post office that is no longer running, judged by the
  * entry's pid and start time. A process is ended only while its recorded identity still matches, never for a
- * session or process-group id alone; a pid that another process now holds is left running.
+ * session or process-group id alone; a pid that another process now holds is left running. `trees`, when given, are the
+ * records the caller verified (C1): the sweep judges exactly those and never re-reads the folder.
  */
-export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepReport> {
+export async function sweepTrees(root: string, ops: SweepOps, trees?: readonly { id: string; lines: readonly TreeLine[] }[]): Promise<SweepReport> {
   const report: SweepReport = { running: 0, swept: 0, ended: [], left: [], unhandled: 0 };
-  for (const { id, lines } of await readTrees(root)) {
+  for (const { id, lines } of trees ?? await readTrees(root)) {
     const postOffice = lines.find((line) => line.kind === "post-office");
     if (!postOffice || !("pid" in postOffice)) continue; // A file with no post office line can't be judged.
     if (await ops.startTimeOf(postOffice.pid) === postOffice.startTime) { report.running++; continue; }

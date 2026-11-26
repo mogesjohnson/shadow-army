@@ -1,9 +1,9 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { armyMark, type GitFactory } from "./snapshot.js";
 import { HarnessGit } from "./git/harness.js";
 import { git } from "../workspace/git.js";
@@ -14,6 +14,17 @@ import type { ChannelOptions, NativeChannel } from "./channel.js";
 import type { SweepOps } from "./contain/sweep.js";
 import { machineOps, PostOffice, type OfficeEvent, type OfficeOps } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
+
+// C1: Windows checks the trees folder's real owner and ACL. A machine's temp folder can grant a sandbox group (Codex's
+// CodexSandboxUsers) Modify, so the test repos' trees there are read as trusted; the check itself has its own case.
+vi.mock("./winAcl.js", async (load) => {
+  const real = await load<typeof import("./winAcl.js")>();
+  const { tmpdir } = await import("node:os");
+  return { ...real, platformInspect: (...args: Parameters<typeof real.platformInspect>) => {
+    const inspect = real.platformInspect(...args);
+    return (dir: string) => dir.startsWith(tmpdir()) && /[\\/]trees$/.test(dir) ? { owner: "owner" as const, writableByOthers: false } : inspect(dir);
+  } };
+});
 
 // WSP-11: snapshots go outside the folder; these tests keep theirs in a folder of their own in the home.
 const snapshots = mkdtempSync(join(homedir(), ".sa-test-snapshots-"));
@@ -936,6 +947,30 @@ describe("M1b-26 review 11 C1, C4: termination and starts gated on verified reco
     await deadTree(repo.dir);
     await office.open("scout");
     expect([calls.ended, starts]).toEqual([[{ pid: 501, startTime: 3 }], 1]);
+  });
+
+  it.runIf(process.platform === "win32")("trusts the trees folder on Windows only when its owner is trusted and no one else can write it (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    for (const facts of [{ owner: "other", writableByOthers: false }, { owner: "owner", writableByOthers: true }] as const) {
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, inspect: (dir) => dir.endsWith("trees") ? facts : { owner: "owner", writableByOthers: false }, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: channel() }); offices.push(office);
+      await expect(office.open("scout")).rejects.toThrow(/earlier trees not swept, and no soldier starts: .*trees is not owned by this user, or others can write to it/);
+    }
+    expect([calls, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, true]);
+  });
+
+  it.runIf(process.platform !== "win32")("refuses a group-writable trees folder or record, and a record another user could replace (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    for (const [path, mode] of [[trees(repo.dir), 0o770], [join(trees(repo.dir), "dead.jsonl"), 0o620]] as const) {
+      await chmod(path, mode);
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: channel() }); offices.push(office);
+      await expect(office.open("scout")).rejects.toThrow(/earlier trees not swept, and no soldier starts: .* is not owned by this user, or others can write to it/);
+      await chmod(path, path.endsWith(".jsonl") ? 0o600 : 0o700);
+    }
+    expect([calls, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, true]);
   });
 
   it("treats a failed probe as unknown, never as absence: nothing is ended and starts wait (C1)", async () => {
