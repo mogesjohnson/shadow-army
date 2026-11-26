@@ -102,7 +102,7 @@ describe.runIf(contained)("session process containment (Windows and Linux; Not t
     await expect(spawnManagedProcess({ file: "shadow-definitely-missing-executable", cwd: await directory() })).rejects.toThrow();
   }, 30_000);
 
-  it("launches a Windows npm-style cmd shim without a visible window", async () => {
+  it.runIf(windows)("launches a Windows npm-style cmd shim without a visible window", async () => {
     const cwd = await directory(); const script = join(cwd, "echo.cjs"); const shim = join(cwd, "fake.cmd");
     await writeFile(script, "console.log(JSON.stringify(process.argv.slice(2)));process.stdin.once('data',data=>{process.stdout.write(data);process.exit(0)});", "utf8");
     await writeFile(shim, `@echo off\r\n"${process.execPath}" "%~dp0echo.cjs" %*\r\n`, "utf8");
