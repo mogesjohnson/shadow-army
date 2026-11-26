@@ -71,6 +71,8 @@ describe("when the index cannot be changed and the edits cannot be taken back ou
 
     expect(existsSync(join(r.dir, "run.log"))).toBe(true);
     expect(result).toMatchObject({ applied: false, left: ["keep.txt", "run.log"] });
-    expect(renderApply(result, "shadow/run/test")).toContain("  run.log");
+    const text = renderApply(result, "shadow/run/test");
+    expect(text).toContain("  run.log");
+    expect(text).toContain("git diff does not show new untracked files");
   });
 });

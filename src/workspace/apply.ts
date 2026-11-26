@@ -112,7 +112,7 @@ export function renderApply(result: ApplyResult, branch: string, shell: Shell = 
     if (result.clashes.length) lines.push(...result.clashes.map((p) => `  ${p}`));
     if (result.left) {
       lines.push("Your folder was NOT put back; these files may still carry the run's edits:", ...result.left.map((p) => `  ${p}`));
-      lines.push(`Review them with git diff. The work is on ${branch}.`);
+      lines.push(`Check each file itself: git diff does not show new untracked files. The work is on ${branch}.`);
     } else lines.push(`Your folder is unchanged; the work is on ${branch}.`);
     return lines.join("\n");
   }
