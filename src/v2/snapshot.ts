@@ -251,13 +251,13 @@ export async function beginTurn(snapshot: Snapshot, git: GitFactory): Promise<Tu
 
 /**
  * The turn's writes: files git doesn't ignore by the rules the turn began with, ARM-6's paths even where git ignores them,
- * the files of commits the turn made, and a moved HEAD. `.gitignore` files the turn changed or added are put back first,
- * so they hide nothing; one behind a linked folder is reported and left. Other ignored output is not a write.
+ * the files of commits the turn made, and a moved HEAD. `.gitignore` files the turn changed or added (untracked or indexed)
+ * are put back first, so they hide nothing; one behind a linked folder is reported and left. Other ignored output is not a write.
  */
 export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitFactory): Promise<ReadViolation | undefined> {
   const run = own(snapshot, git);
   const files = new Set<string>();
-  for (const path of entries(await must(run, ["ls-files", "-z", "--others"]))) {
+  for (const path of entries(await must(run, ["ls-files", "-z", "--cached", "--others"]))) {
     if (basename(path) === ".gitignore" && !(path in start.ignores)) { files.add(path); replaceable(snapshot, path); }
   }
   for (const [path, data] of Object.entries(start.ignores)) {

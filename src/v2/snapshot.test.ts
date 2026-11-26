@@ -331,4 +331,12 @@ describe("Codex review 31", () => {
     await removeSnapshot(snap, r.root, r.repo, spy);
     expect(kinds).toEqual(["other"]);
   }, 60_000);
+  it("C10: a .gitignore the turn added to the index hides nothing", async () => {
+    const r = makeRepo();
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory);
+    put(join(snap.path, "sub", ".gitignore"), "*.out\n"); git(snap.path, "add", "sub/.gitignore");
+    put(join(snap.path, "sub", "hidden.out"), "w");
+    expect((await findWrites(snap, start, factory))?.files).toEqual(["sub/.gitignore", "sub/hidden.out"]);
+  }, 60_000);
 });
