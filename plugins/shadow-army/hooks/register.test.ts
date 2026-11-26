@@ -40,6 +40,10 @@ type Env = {
   gate?: Promise<void>;
   /** The relay ends on its own once this settles, as after its client closed its post office; a rejection fails its stream. */
   ends?: Promise<void>;
+  /** What that relay reports of its post office's exit before it ends, or `none` for no report (C5); default code 0. */
+  office?: { code: number | null; signal: string | null } | "none";
+  /** That relay's own terminal result; default code 0. */
+  result?: { code: number | null; signal: string | null };
   /** The relay starts but never reports ready. Read at each start, so a test can change it between two. */
   silent?: boolean;
   /** The relay reports ready only once this settles. */
@@ -139,7 +143,12 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
         const relay = (async function* () {
           if (env.late) await env.late;
           if (!env.silent) yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_ } })}\n` };
-          if (await Promise.race([closed.then(() => false), (env.ends ?? new Promise<void>(() => {})).then(() => true)])) order.push("relay ended on its own");
+          if (await Promise.race([closed.then(() => false), (env.ends ?? new Promise<void>(() => {})).then(() => true)])) {
+            order.push("relay ended on its own");
+            // The relay reports the post office's exit it observed (C5); `office: "none"` is a relay ended from outside.
+            if (env.office !== "none") yield { stream: "stdout", text: `${JSON.stringify({ type: "post_office_exit", data: env.office ?? { code: 0, signal: null } })}\n` };
+            return env.result ?? { code: 0, signal: null };
+          }
           return { code: null, signal: null };
         })();
         const origin = relay.return.bind(relay);
@@ -441,7 +450,7 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
     close();
     await pending;
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/did not report ready within 60 s · step: waiting for its ready event · relay ended after closing its post office$/);
+    expect(logs[0]).toMatch(/did not report ready within 60 s · step: waiting for its ready event · relay saw its post office exit \(exit code 0\)$/);
     expect(logs[0]).not.toContain("ended with its processes");
     expect(relaysEnded).toEqual([]);
     env.silent = false;
@@ -790,7 +799,7 @@ describe("a start that stalls (HOST-2, PO-7, C5)", () => {
     expect(order).toEqual(["relay started", "relay ended on its own", "relay started"]);
     expect(relaysEnded).toEqual([]);
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/step: waiting for its ready event · relay ended after closing its post office$/);
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay saw its post office exit \(exit code 0\)$/);
   });
 
   it("never takes the 30 s timer as the relay's end: a relay that never ends keeps every next start refused", async () => {
@@ -841,13 +850,103 @@ describe("a start that stalls (HOST-2, PO-7, C5)", () => {
     after.find((t) => t.ms === 60_000)!.run();
     broke(new Error("stream broke"));
     await first;
-    expect(logs[0]).toMatch(/step: waiting for its ready event · relay failed before closing its post office; the army won't start again$/);
+    expect(logs[0]).toMatch(/step: waiting for its ready event · relay failed before it could close its post office; the army won't start again$/);
     env.silent = false;
     env.ends = undefined;
     expect(await send("claude-sonnet --claim a go")).toMatch(/the last relay failed before it could close its post office \(step: waiting for its ready event\)/);
     expect(spawns).toHaveLength(1);
   });
 
+  it("takes a relay that ends normally without reporting its post office's exit as unconfirmed, and refuses every retry (C5, review 28)", async () => {
+    let close!: () => void;
+    const env: Env = { silent: true, office: "none", result: { code: 0, signal: null }, ends: new Promise<void>((done) => { close = done; }) };
+    const { send, after, logs, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    after.find((t) => t.ms === 60_000)!.run();
+    close();
+    await first;
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/· relay ended \(exit code 0\) without confirming that its post office closed; the army won't start again$/);
+    expect(logs[0]).not.toMatch(/saw its post office exit|after closing/);
+    env.silent = false;
+    env.ends = undefined;
+    for (let i = 0; i < 2; i++) expect(await send("claude-sonnet --claim a go")).toMatch(/the last relay ended \(exit code 0\) without confirming that its post office closed/);
+    expect(spawns).toHaveLength(1);
+  });
+
+  it("lets a retry start after a session end during the stall once the relay reports its post office's exit", async () => {
+    let close!: () => void;
+    const env: Env = { silent: true, office: { code: null, signal: "SIGTERM" }, ends: new Promise<void>((done) => { close = done; }) };
+    const { $, handlers, send, after, logs, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    after.find((t) => t.ms === 60_000)!.run();
+    await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
+    env.silent = false;
+    env.ends = undefined;
+    const retry = send("claude-sonnet --claim a go");
+    await flush();
+    expect(spawns).toHaveLength(1);
+    close();
+    await first;
+    expect(logs[0]).toMatch(/relay saw its post office exit \(signal SIGTERM\)$/);
+    expect(await retry).toContain("Tank");
+    expect(spawns).toHaveLength(2);
+  });
+});
+
+describe("a relay that ends or breaks outside a stall (PO-7, C5, review 28)", () => {
+  it("refuses every retry when a released relay ends normally without reporting its post office's exit, and logs no close", async () => {
+    let close!: () => void;
+    const env: Env = { office: "none", ends: new Promise<void>((done) => { close = done; }) };
+    const { $, handlers, send, logs, spawns } = await mod(OK, env);
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
+    close();
+    await flush();
+    env.ends = undefined;
+    for (let i = 0; i < 2; i++) expect(await send("claude-sonnet --claim a go")).toMatch(/won't start the army: the last relay ended \(exit code 0\) without confirming that its post office closed/);
+    expect(spawns).toHaveLength(1);
+    expect(logs.join("\n")).not.toMatch(/closed its post office|saw its post office exit/);
+  });
+
+  it("starts the retry after a released relay reports its post office's exit", async () => {
+    let close!: () => void;
+    const env: Env = { ends: new Promise<void>((done) => { close = done; }) };
+    const { $, handlers, send, spawns } = await mod(OK, env);
+    await send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
+    close();
+    await flush();
+    env.ends = undefined;
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    expect(spawns).toHaveLength(2);
+  });
+
+  it("holds the next start behind a stream that dies before the stall deadline, then refuses it and every retry", async () => {
+    let broke!: (error: Error) => void;
+    let open!: () => void;
+    const env: Env = { silent: true, gate: new Promise<void>((done) => { open = done; }), ends: new Promise<void>((_done, failed) => { broke = failed; }) };
+    const { send, after, logs, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    broke(new Error("stream broke"));
+    expect(await first).toMatch(/stream broke/);
+    expect(after.find((t) => t.ms === 60_000)!.cancelled).toBe(true);
+    env.silent = false;
+    env.ends = undefined;
+    let settled = false;
+    const next = send("claude-sonnet --claim a go").finally(() => { settled = true; });
+    await flush();
+    expect(settled).toBe(false);
+    expect(spawns).toHaveLength(1);
+    open();
+    expect(await next).toMatch(/the last relay failed before it could close its post office/);
+    expect(await send("claude-sonnet --claim a go")).toMatch(/the last relay failed before it could close its post office/);
+    expect(spawns).toHaveLength(1);
+    expect(logs).toHaveLength(1);
+  });
 });
 
 describe("the acceptance scenarios (M1-AC1, M1-AC12, C6)", () => {

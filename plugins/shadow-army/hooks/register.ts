@@ -35,7 +35,27 @@ interface Runtime {
   /** A next start waits for this: the relay's end, or a stalled start's decision to refuse (C5). */
   barrier: Promise<void>;
   lift: () => void;
+  /** The relay's own terminal result, once its stream ended without failing (C5). */
+  exit?: ProcessSpawnResult;
+  /** Reading the relay's stream failed: it was abandoned, so its post office's end was not seen (C5). */
+  broken?: boolean;
+  /** The post office's exit as the relay observed it: the only proof that it closed (C5). */
+  officeExit?: { code: number | null; signal: string | null };
 }
+
+/** How a process ended, in words. */
+const ending = (exit?: { code: number | null; signal: string | null }): string =>
+  !exit ? "no exit result" : exit.signal ? `signal ${exit.signal}` : exit.code === null ? "no exit code" : `exit code ${exit.code}`;
+
+/** Why a relay's end does not show its post office closed, or `undefined` when it does or the relay has not ended (C5). */
+function unseen(runtime: Runtime): string | undefined {
+  if (runtime.officeExit) return undefined;
+  if (runtime.broken) return "failed before it could close its post office";
+  if (runtime.exit) return `ended (${ending(runtime.exit)}) without confirming that its post office closed`;
+  return undefined;
+}
+const heldBack = (runtime: Runtime, why: string): string =>
+  `Shadow Army won't start the army: the last relay ${why} (step: ${runtime.step}), so its post office may still be running`;
 
 // These values stay in this module's private environment. $.store writes a file,
 // and $.state is readable by other plugins; neither may hold the Monarch secret.
@@ -125,6 +145,11 @@ function fail($: EngineInterface, runtime: Runtime, error: unknown, keepRelay = 
   cancelTimers(runtime);
   runtime.reject(new Error(message));
   if (active === runtime) active = undefined;
+  // C5: every failed start retires behind the barrier, so the next start waits for its cleanup; a relay that ended
+  // or broke without reporting its post office's exit refuses every start (the stall's own words win while it decides).
+  retiring.add(runtime);
+  const why = unseen(runtime);
+  if (why) unconfirmedEnd = heldBack(runtime, why);
   if (!wasClosing) $.ui.log(sanitize(prefixed(message)));
   // The native stream owns only the relay. Returning it cannot skip the
   // detached post office's independent expiry/containment/finalization path.
@@ -173,6 +198,14 @@ function renew($: EngineInterface, runtime: Runtime): void {
 function event($: EngineInterface, runtime: Runtime, line: string): void {
   const value = JSON.parse(line) as { type?: string; soldier?: string; data?: Record<string, unknown>; url?: string };
   if (!value || typeof value !== "object" || typeof value.type !== "string") throw new Error("invalid post office event");
+  if (value.type === "post_office_exit") {
+    const exit = (value.data ?? {}) as { code?: unknown; signal?: unknown };
+    const code = exit.code === null || Number.isInteger(exit.code) ? exit.code as number | null : undefined;
+    const signal = exit.signal === null || typeof exit.signal === "string" ? exit.signal as string | null : undefined;
+    if (runtime.officeExit || value.soldier || code === undefined || signal === undefined) throw new Error("invalid post office exit event");
+    runtime.officeExit = { code, signal };
+    return;
+  }
   if (value.type === "ready") {
     if (runtime.url) throw new Error("post office sent ready more than once");
     const url = value.data?.url ?? value.url;
@@ -212,7 +245,12 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
   try {
     // Native chunks are decoded UTF-8 pieces, not JSON lines. Keep pulling after
     // the initiating command returns; its return alone does not end this child.
-    for await (const chunk of runtime.stream) {
+    // Read by hand, not `for await`: the terminal result is the relay's own report of how it ended (C5).
+    for (;;) {
+      let step: IteratorResult<ProcessSpawnChunk, ProcessSpawnResult>;
+      try { step = await runtime.stream.next(); } catch (error) { runtime.broken = true; throw error; }
+      if (step.done) { runtime.exit = step.value; break; }
+      const chunk = step.value;
       if (chunk.stream === "stderr") {
         runtime.diagnostic = safeText(runtime.diagnostic + chunk.text, runtime.credential).slice(-4_096);
         continue;
@@ -227,6 +265,8 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
     }
     if (buffer.trim()) throw new Error("post office ended with an incomplete event");
     if (!runtime.closing) throw new Error(`post office relay ended${runtime.diagnostic ? `: ${runtime.diagnostic}` : ""}`);
+    // A relay ended from outside also returns a terminal result: only one that confirms its post office's exit is a shutdown (C5).
+    if (!runtime.officeExit) throw new Error(`post office relay ${unseen(runtime)}`);
   } finally {
     cancelTimers(runtime);
   }
@@ -492,8 +532,8 @@ async function preflight($: EngineInterface, cwd: string, tools: { node: string;
 
 /**
  * The post office gave no `ready` in 60 s. The relay is not killed: a kill would orphan its post office. Its client
- * gave up at 30 s and closes the post office, waiting for its process to exit, before the relay ends; so the relay's
- * own end is the observed shutdown (C5). If it is not seen in 30 s more, every start is refused until it is.
+ * gave up at 30 s and closes the post office, waiting for its process to exit, and reports that exit before it ends; only
+ * that report is the observed shutdown (C5). Without it, or if the relay has not ended in 30 s more, every start is refused.
  */
 async function stalled($: EngineInterface, runtime: Runtime): Promise<void> {
   const step = runtime.step;
@@ -502,16 +542,17 @@ async function stalled($: EngineInterface, runtime: Runtime): Promise<void> {
   runtime.closing = true;
   retiring.add(runtime);
   if (active === runtime) active = undefined;
-  // A stream that failed was abandoned, and the host then kills the relay: its post office's end is not seen.
-  const own = (runtime.relay ?? Promise.resolve()).then(() => "ended" as const, () => "failed" as const);
+  // Only the relay's report of its post office's exit counts as the shutdown; a relay that ends or breaks without it does not.
+  const own = (runtime.relay ?? Promise.resolve()).then(() => "ended" as const, () => runtime.officeExit ? "ended" as const : "failed" as const);
   let timer: Timer | undefined;
   const bound = new Promise<"late">((done) => { timer = $.clock.after(CLEANUP_WAIT_MS, () => done("late")); });
   const ended = await (runtime.cleanup ??= Promise.race([own, bound]).finally(() => timer?.cancel()));
+  const why = ended === "failed" ? unseen(runtime) ?? "failed before it could close its post office" : `has not ended in ${CLEANUP_WAIT_MS / 1000} s`;
   if (ended !== "ended") {
-    const mine = unconfirmedEnd = `Shadow Army won't start the army: the last relay ${ended === "failed" ? "failed before it could close its post office" : `has not ended in ${CLEANUP_WAIT_MS / 1000} s`} (step: ${step}), so its post office may still be running`;
+    const mine = unconfirmedEnd = heldBack(runtime, why);
     void own.then((how) => { if (how === "ended" && unconfirmedEnd === mine) unconfirmedEnd = undefined; });
   }
-  const how = ended === "ended" ? "relay ended after closing its post office" : ended === "failed" ? "relay failed before closing its post office; the army won't start again" : `relay has not ended in ${CLEANUP_WAIT_MS / 1000} s; the army won't start again until it does`;
+  const how = ended === "ended" ? `relay saw its post office exit (${ending(runtime.officeExit)})` : ended === "failed" ? `relay ${why}; the army won't start again` : `relay has not ended in ${CLEANUP_WAIT_MS / 1000} s; the army won't start again until it does`;
   const line = `post office did not report ready within 60 s · step: ${step}${said ? ` · its relay said: ${said}` : ""} · ${how}`;
   $.ui.log(sanitize(prefixed(safeText(line, runtime.credential))));
   fail($, runtime, line);
