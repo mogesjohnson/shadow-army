@@ -99,7 +99,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: Env = {
         const there = !env.unresolved?.includes(path) && (!exe || ((env.dirs ?? [BIN]).includes(exe[1]!) && env.tools?.[exe[2]!] !== "missing"));
         if (!there) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
         if (env.dangling?.includes(path)) return { kind: "other", size: 0, mtimeMs: 0, isLink: true };
-        const kind = env.files?.[path] === undefined && /[\\/]\.git$/.test(path) ? "directory" : "file";
+        const kind = env.files?.[path] === undefined && /\.git$/.test(path) ? "directory" : "file";
         return { kind, size: 0, mtimeMs: 0, isLink: false, ...(options?.resolve ? { realPath: env.real?.[path] ?? path } : {}) };
       },
       read: async (path: string) => {
@@ -641,6 +641,28 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
         ["lists worktrees without its git folder", { [ADMIN]: ["w2"] }],
       ])("starts nothing from a linked checkout when the common folder %s (C9, review 24)", async (_case, lists) => {
         const { probes, spawns, line } = await launched({ ...linked(), lists });
+        expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
+        expect(probes).toEqual([]);
+        expect(spawns).toEqual([]);
+      });
+
+      it("starts nothing from a linked checkout whose common git folder is separate from its primary checkout (C9, review 35)", async () => {
+        const STORE = process.platform === "win32" ? "F:/meta/store.git" : "/meta/store.git";
+        const { probes, spawns, line } = await launched({
+          cwd: LINKED, lists: { [`${STORE}/worktrees`]: ["w9"] },
+          files: { [`${LINKED}/.git`]: `gitdir: ${STORE}/worktrees/w9\n`, [`${STORE}/worktrees/w9/gitdir`]: `${fwd(LINKED)}/.git\n`, [`${STORE}/worktrees/w9/commondir`]: "../..\n" },
+        });
+        expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
+        expect(probes).toEqual([]);
+        expect(spawns).toEqual([]);
+      });
+
+      it.each([
+        ["from a linked checkout", () => linked({ [`${fwd(ROOT)}/.git/config`]: "[core]\n\tworktree = /primary\n" })],
+        ["from the main checkout", (): Env => ({ files: { [`${fwd(ROOT)}/.git/config`]: "[core]\n\tbare = false\n\tworktree = /primary\n" } })],
+        ["through an include", () => linked({ [`${fwd(ROOT)}/.git/config`]: "[include]\n\tpath = more\n" })],
+      ])("starts nothing when the common git folder's config may move the primary checkout, %s (C9, review 35)", async (_case, env) => {
+        const { probes, spawns, line } = await launched(env());
         expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
         expect(probes).toEqual([]);
         expect(spawns).toEqual([]);

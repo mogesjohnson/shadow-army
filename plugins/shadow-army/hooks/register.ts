@@ -401,10 +401,29 @@ async function sameReal($: EngineInterface, a: string, b: string): Promise<boole
 }
 
 /**
+ * The primary checkout of the common git folder, proven from git's files, or `undefined` (C9, review 35). Git keeps no record of a primary
+ * checkout whose git folder was separated from it (`git init --separate-git-dir`: `git worktree list` then names the git folder itself), and
+ * `core.worktree` in the config, `config.worktree` or an included file can move it. So the primary is the folder holding the common folder as
+ * its `.git` folder, and only when neither config file sets a work tree or includes another file; git cannot run here, before it is vetted.
+ */
+async function primaryOf($: EngineInterface, common: string): Promise<string | undefined> {
+  if (!common.endsWith("/.git")) return undefined;
+  const primary = common.slice(0, -"/.git".length);
+  try { if ((await $.fs.stat(`${primary}/.git`)).kind !== "directory") return undefined; } catch { return undefined; }
+  if (!await sameReal($, `${primary}/.git`, common)) return undefined;
+  for (const name of ["config", "config.worktree"]) {
+    let text: string;
+    try { text = String(await $.fs.read(`${common}/${name}`)); } catch (error) { if (isMissing(error)) continue; return undefined; }
+    if (/^\s*(?:worktree\s*=|\[\s*include)/im.test(text)) return undefined;
+  }
+  return primary;
+}
+
+/**
  * Every checkout of the repository, read from git's own files before anything runs (HOST-2, CH-1; C9, reviews 21 and 24): the nearest checkout,
  * the main checkout and each registered worktree (`<common git folder>/worktrees/<name>/gitdir`). The common folder must be a folder; a linked
  * checkout's `.git` file must name a git folder that names that checkout back, whose `commondir` names the common folder, and which the common
- * folder lists as one of its worktrees. Each other registered worktree whose checkout is there must name its own git folder back; one whose
+ * folder lists as one of its worktrees, and the primary checkout must be proven (`primaryOf`). Each other registered worktree whose checkout is there must name its own git folder back; one whose
  * checkout is gone is still barred. An empty registry counts only for a main checkout; anything unverified leaves the layout unknown, and nothing starts.
  */
 async function checkouts($: EngineInterface, root: string): Promise<string[] | { refusal: string }> {
@@ -422,7 +441,9 @@ async function checkouts($: EngineInterface, root: string): Promise<string[] | {
     common = joined(admin, shared);
     try { if ((await $.fs.stat(common)).kind !== "directory") return refusal; } catch { return refusal; }
   } else if (kind !== "directory") return refusal;
-  const found = [root, common.endsWith("/.git") ? common.slice(0, -"/.git".length) : common];
+  const primary = await primaryOf($, common);
+  if (!primary) return refusal;
+  const found = [root, primary];
   let names: string[] = [];
   try { names = (await $.fs.list(`${common}/worktrees`)).filter((entry) => entry.kind === "directory").map((entry) => entry.name); }
   catch (error) { if (admin || !isMissing(error)) return refusal; }
