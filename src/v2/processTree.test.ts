@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { helperPath } from "./contain/linux.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 const sessions: ManagedProcess[] = [];
@@ -29,16 +31,18 @@ afterEach(async () => {
 });
 
 const windows = process.platform === "win32";
+// Linux runs the guardian driver once `npm run build` has built its helper (#139 C2).
+const contained = windows || process.platform === "linux" && existsSync(helperPath());
 
-// Linux and macOS have no containment driver yet (M1b): PO-14 says so and nothing starts.
-describe.skipIf(windows)("session process containment off Windows", () => {
+// macOS has no containment driver yet (M1b): PO-14 says so and nothing starts.
+describe.runIf(process.platform === "darwin")("session process containment on macOS", () => {
   it("fails with the no-helper message and starts nothing", async () => {
     await expect(spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd: await directory() }))
       .rejects.toThrow(/No containment helper for .*, so no soldier can start/);
   });
 });
 
-describe.skipIf(!windows)("session process containment (Windows; Not tested on other systems, D-34)", () => {
+describe.runIf(contained)("session process containment (Windows and Linux; Not tested on macOS, D-34)", () => {
   it("allows asynchronous native EOF cleanup before stopping retained descendants", async () => {
     const cwd = await directory(); const marker = join(cwd, "cleanup-writes"); const cleanup = join(cwd, "native-cleanup");
     const writer = "const fs=require('node:fs');setInterval(()=>fs.appendFileSync(process.argv[1],'x'),20);";
