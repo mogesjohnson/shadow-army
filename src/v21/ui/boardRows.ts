@@ -1,5 +1,5 @@
 // The War Table's Monarch panel and messages log as rows. No Ink, so the mod can reuse them.
-import { needs, safeText, toAscii, type ArmyView, type Briefs, type Message, type Tone } from "./model.js";
+import { needs, RANK, safeText, toAscii, type ArmyView, type Briefs, type Message, type Tone } from "./model.js";
 import { fit, lr, rowWidth, type Row, type Seg } from "./layout.js";
 
 const seg = (text: string, tone?: Tone, bold?: boolean): Seg => ({ text, tone, bold });
@@ -57,9 +57,11 @@ export function monarchRows(view: ArmyView, briefs: Briefs, messages: Message[])
   const inner = w - 4;
   // A soldier near its handoff line is still in its turn.
   const working = view.soldiers.filter((s) => s.state === "work" || s.state === "near").length;
-  const asking = view.soldiers.filter((s) => needs(s.state)).length;
-  const army: Row = [seg(`${working} working`, "ac")];
-  if (asking) army.push(seg("  "), seg(`${asking} ${asking === 1 ? "needs" : "need"} you`, "wn", true));
+  // The work frame counts one waiting soldier; the `needs 110` frame, with two, names them, most urgent first.
+  const asking = view.soldiers.filter((s) => needs(s.state)).sort((a, b) => RANK[a.state] - RANK[b.state]);
+  const army: Row = asking.length > 1
+    ? [seg("! waiting on you", "wn", true), seg("  "), ...asking.flatMap((s, i) => [...(i ? [seg(", ")] : []), party(view, s.id)])]
+    : [seg(`${working} working`, "ac"), ...(asking.length ? [seg("  "), seg("1 needs you", "wn", true)] : [])];
 
   const body: Row[] = [
     keepRight([seg("briefs", "dm"), seg(`  ${counts}`)], since === undefined ? [] : [seg(`${since} since the first brief`, "dm")], inner),
