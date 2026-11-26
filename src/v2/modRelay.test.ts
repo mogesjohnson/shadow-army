@@ -31,6 +31,8 @@ windowsOnly("the actual mod relay exposes only a loopback endpoint and releases 
     expect((await command("renew", "native-mod-session")).status).toBe(200);
     expect((await command("release", "native-mod-session")).status).toBe(200);
     expect(await closed).toBe(0);
+    // C5: the relay's last line is the post office's exit it observed, the mod's only proof that it closed.
+    expect(output.split("\n").filter(Boolean).map((line) => JSON.parse(line)).at(-1)).toEqual({ type: "post_office_exit", data: { code: 0, signal: null } });
     expect(output + diagnostic).not.toContain(credential);
     expect(diagnostic).toBe("");
     await expect(readFile(join(repo.dir, ".shadow", "v2", "post-office.lock"))).rejects.toMatchObject({ code: "ENOENT" });

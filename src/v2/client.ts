@@ -26,6 +26,8 @@ export class OfficeClient {
   private readonly ready: Promise<string>;
   private closePromise?: Promise<void>;
   private ended = false;
+  /** How the post office's process ended, once its exit was observed (C5); never set for a process that did not start. */
+  exit?: { code: number | null; signal: NodeJS.Signals | null };
 
   constructor(options: ClientOptions) {
     if (options.credential !== undefined) {
@@ -64,7 +66,7 @@ export class OfficeClient {
     });
     this.exited = new Promise<void>((resolve) => {
       this.child.once("error", (error) => { this.ended = true; clearTimeout(timer); failed(error); resolve(); });
-      this.child.once("close", () => { this.ended = true; clearTimeout(timer); failed(new Error(`post office ended${diagnostic ? `: ${diagnostic}` : ""}`)); resolve(); });
+      this.child.once("close", (code, signal) => { this.exit = { code, signal }; this.ended = true; clearTimeout(timer); failed(new Error(`post office ended${diagnostic ? `: ${diagnostic}` : ""}`)); resolve(); });
     });
     this.child.stdin.end(`${JSON.stringify({ credential: this.#credential, ...(options.lease ? { lease: options.lease } : {}) })}\n`);
   }
