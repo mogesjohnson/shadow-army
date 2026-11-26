@@ -20,9 +20,11 @@
  *       limits and standard streams it was itself started with. The CLI joins
  *       its session and process group, and it stays the CLI's parent.
  *
- * Fd 3 is the pipe to the post office: a Unix stream socket (Node.js's
- * `pipe` stdio entry is one). If fd 3 is anything else (a file, a pipe, a
- * network socket) the helper exits 2 at once and writes nothing (PO-17). It
+ * Fd 3 is the pipe to the post office: a connected Unix stream socket
+ * (Node.js's `pipe` stdio entry is one). If fd 3 is anything else (a file, a
+ * pipe, a network socket, an unconnected or listening socket) the helper
+ * exits 2 at once and writes nothing (PO-17). A check whose report can't be
+ * sent exits 1. It
  * writes one JSON line per result on it, never on fds 0-2, and as the
  * guardian reads one command per line from it:
  *
@@ -34,7 +36,9 @@
  * any command is refused once and dropped up to its newline. If the pipe
  * reaches its end, or the guardian gets SIGTERM, SIGINT or SIGHUP, it kills
  * the tree at once (PO-10, "when the post office is gone"). It keeps
- * watching the pipe and signals while the CLI's exec is pending.
+ * watching the pipe and signals while the CLI's exec is pending. It reports
+ * `started` only once the program's exec is known to have committed: a child that dies by
+ * a signal before exec is reported as step "exec-unconfirmed" (C8).
  *
  * Killing the tree: the guardian SIGKILLs each of its children, and each
  * process it adopts as their parents die, and reaps them, until wait()
@@ -241,6 +245,9 @@ static int reap_ready(int killing, int *reaped) {
  * namespace. Opened once before `ready`; every scan goes through it. */
 static int proc_fd = -1;
 static pid_t proc_self = -1;
+static char own_comm[32]; /* the guardian's name; a child keeps it until exec */
+
+static int read_stat(int dir, char comm[32], pid_t *ppid, unsigned *flags);
 
 static int signal_dir(int dir, int sig) {
   return (int)syscall(SYS_pidfd_send_signal, dir, sig, NULL, 0);
@@ -280,14 +287,22 @@ static int open_proc_view(void) {
     if (dir >= 0) close(dir);
     return -1;
   }
+  pid_t ppid;
+  unsigned flags;
+  if (read_stat(dir, own_comm, &ppid, &flags) != 0) {
+    fail("guard", "proc-stat", errno);
+    close(dir);
+    return -1;
+  }
   close(dir);
   proc_self = getpid();
   return 0;
 }
 
-/* Reads the parent pid from <dir>/stat. The command name is in
- * parentheses and may hold any byte, so the fields start after the last ')'. */
-static pid_t parent_of(int dir) {
+/* Reads <dir>/stat: the command name (comm, may be NULL), the parent pid and
+ * the kernel flags. The name is in parentheses and may hold any byte, so the
+ * fields start after the last ')'. Returns 0, or -1 if it can't be read. */
+static int read_stat(int dir, char comm[32], pid_t *ppid, unsigned *flags) {
   char buf[512];
   int fd = openat(dir, "stat", O_RDONLY | O_CLOEXEC);
   if (fd < 0) return -1;
@@ -295,12 +310,24 @@ static pid_t parent_of(int dir) {
   close(fd);
   if (n <= 0) return -1;
   buf[n] = '\0';
+  char *start = strchr(buf, '(');
   char *end = strrchr(buf, ')');
-  if (!end) return -1;
+  if (!start || !end || end < start || end - start - 1 >= 32) return -1;
   char state;
-  int ppid;
-  if (sscanf(end + 1, " %c %d", &state, &ppid) != 2) return -1;
-  return (pid_t)ppid;
+  int parent, i;
+  if (sscanf(end + 1, " %c %d %d %d %d %d %u", &state, &parent, &i, &i, &i, &i, flags) != 7) return -1;
+  if (comm) {
+    memcpy(comm, start + 1, (size_t)(end - start - 1));
+    comm[end - start - 1] = '\0';
+  }
+  *ppid = (pid_t)parent;
+  return 0;
+}
+
+static pid_t parent_of(int dir) {
+  pid_t ppid;
+  unsigned flags;
+  return read_stat(dir, NULL, &ppid, &flags) == 0 ? ppid : -1;
 }
 
 /* SIGKILLs each process whose parent is the guardian in the verified view,
@@ -384,7 +411,49 @@ static int start_cli(char **argv) {
   return 0;
 }
 
-/* exec_fd is readable: an errno means exec failed, the end means it ran. */
+static int exec_unsure = 0; /* the pipe ended; whether exec ran is not known yet */
+
+#define PF_EXITING_FLAG 0x4 /* the kernel's PF_EXITING: do_exit has begun */
+
+/* The status pipe also reaches its end when the child dies before exec
+ * (C8), so the end alone confirms nothing. The child ran the program if it
+ * now has another name than the guardian's (exec renames it), exited with a
+ * code (before exec it only exits after writing an errno), or is alive and
+ * not exiting (the pipe closes before death only at exec). It did not, as
+ * far as can be known, if it died by a signal under the guardian's name.
+ * Returns 1 ran, 0 not confirmed, -1 dying: ask again at SIGCHLD. */
+static int exec_outcome(void) {
+  siginfo_t si;
+  memset(&si, 0, sizeof si);
+  int dead = waitid(P_PID, (id_t)cli_pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0 && si.si_pid == cli_pid;
+  if (dead && si.si_code == CLD_EXITED) return 1;
+  char name[16], comm[32];
+  pid_t ppid;
+  unsigned flags = 0;
+  snprintf(name, sizeof name, "%d", (int)cli_pid);
+  int dir = openat(proc_fd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  int known = dir >= 0 && read_stat(dir, comm, &ppid, &flags) == 0;
+  if (dir >= 0) close(dir);
+  if (known && strcmp(comm, own_comm) != 0) return 1;
+  if (dead) return 0;
+  if (!known || (flags & PF_EXITING_FLAG)) return -1;
+  return 1;
+}
+
+/* Reports the start once its outcome is known. */
+static int settle_start(void) {
+  int ran = exec_outcome();
+  if (ran < 0) return 0;
+  exec_unsure = 0;
+  if (!ran) {
+    fail("guard", "exec-unconfirmed", 0);
+    return -1;
+  }
+  reportf("{\"op\":\"guard\",\"event\":\"started\",\"pid\":%d}", (int)cli_pid);
+  return 0;
+}
+
+/* exec_fd is readable: an errno means exec failed; the end is settled above. */
 static int finish_start(void) {
   int err = 0;
   ssize_t n;
@@ -397,8 +466,8 @@ static int finish_start(void) {
     fail("guard", "exec", n == (ssize_t)sizeof err ? err : n < 0 ? errno : 0);
     return -1;
   }
-  reportf("{\"op\":\"guard\",\"event\":\"started\",\"pid\":%d}", (int)cli_pid);
-  return 0;
+  exec_unsure = 1;
+  return settle_start();
 }
 
 enum command { CMD_NONE, CMD_START, CMD_TERM, CMD_KILL, CMD_UNKNOWN };
@@ -474,6 +543,8 @@ static int op_guard(int argc, char **argv) {
       while (read(sigfd, &info, sizeof info) == (ssize_t)sizeof info) {
         if (info.ssi_signo != SIGCHLD) end = 1;
       }
+      /* Before reaping: a dying child is settled while it is still a zombie. */
+      if (exec_unsure && settle_start() != 0) { kill_tree(sigfd); return 1; }
       reap_ready(0, NULL);
       if (end) return kill_tree(sigfd);
     }
@@ -534,6 +605,10 @@ static int transport_ok(void) {
   if (getsockopt(report_fd, SOL_SOCKET, SO_TYPE, &type, &len) != 0 || type != SOCK_STREAM) return 0;
   len = sizeof domain;
   if (getsockopt(report_fd, SOL_SOCKET, SO_DOMAIN, &domain, &len) != 0 || domain != AF_UNIX) return 0;
+  /* Connected to a peer (C9): a listening or unconnected socket has none. */
+  struct sockaddr_storage peer;
+  len = sizeof peer;
+  if (getpeername(report_fd, (struct sockaddr *)&peer, &len) != 0) return 0;
   return 1;
 }
 
@@ -543,6 +618,9 @@ int main(int argc, char **argv) {
   int rc;
   if (argc == 2 && strcmp(argv[1], "check") == 0) {
     rc = op_check();
+    drain_out(1000);
+    /* A check passes only if its report reached the post office (C9). */
+    if (rc == 0 && (out_used > 0 || out_gone || dropped > 0)) rc = 1;
   } else if (argc >= 2 && strcmp(argv[1], "guard") == 0) {
     rc = op_guard(argc, argv);
   } else {
