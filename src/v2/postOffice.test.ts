@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { armyMark, type GitFactory } from "./snapshot.js";
@@ -371,6 +371,39 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(second.write?.applicable).toBe(true);
   }, 30_000);
 
+  it("carries an apply queued ahead of a finishing turn's guard into that turn's baseline (review 15 C7)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let releaseMedic!: () => void;
+    const medicGate = new Promise<void>((done) => { releaseMedic = done; });
+    let medicSending = false;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, channelFactory: (options): NativeChannel => {
+      return { async send(text) {
+        if (text.includes("edit b")) { medicSending = true; await medicGate; await writeFile(join(options.cwd, "src", "b.ts"), "medic\n"); }
+        else await writeFile(join(options.cwd, "src", "a.ts"), "tank\n");
+        return { status: "completed", text: "done", refusal: false };
+      }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    // Opening a write session can outlast `until`'s 6 s on a loaded Windows machine; the test's own timeout bounds this wait.
+    const settle = async (check: () => boolean) => { while (!check()) await new Promise((done) => setTimeout(done, 10)); };
+    // Exclusive calls: medic's start (1), tank's start (2), tank's guard (3), tank's apply (4), medic's guard (5).
+    // Tank's apply waits until medic's turn has returned and queued its guard, so medic's guard runs after the apply.
+    const inner = office as unknown as { exclusive: <T>(fn: () => Promise<T>) => Promise<T> };
+    const exclusive = inner.exclusive.bind(office);
+    let calls = 0;
+    inner.exclusive = (fn) => {
+      const call = ++calls;
+      return exclusive(async () => { if (call === 4) { releaseMedic(); await settle(() => calls >= 5); } return fn(); });
+    };
+    const medic = office.send("medic", "edit b", { claims: ["src/b.ts"] });
+    await settle(() => medicSending);
+    const tank = await office.send("tank", "edit a", { claims: ["src/a.ts"] }).finally(releaseMedic);
+    expect(tank.write?.apply?.applied).toBe(true);
+    const result = await medic;
+    expect(result.error?.message ?? "").not.toContain("src/a.ts");
+    expect(result.status).toBe("completed");
+    expect(result.write?.applicable).toBe(true);
+  }, 120_000);
+
   it("refuses overlapping claims naming the holder, and claims for a soldier that cannot write, starting nothing", async () => {
     const { office, started } = await writer({ "src/a.ts": "x\n" });
     await office.open("tank", { claims: ["src/**"] });
@@ -474,7 +507,31 @@ describe("M1b-26 harness git and outside snapshots", () => {
     // Three dirty files are hashed in one call per guard read, not one call each.
     expect(calls.filter((args) => args[0] === "hash-object")).toHaveLength(2);
     // Was 34 (one hash-object per dirty file per read, and a hold check twice in a row after the turn).
-    expect(calls.length).toBeLessThanOrEqual(28);
+    // 28 before #120's repaired audit (review 15 C9), which adds a config, a diff and an ls-files call per turn.
+    expect(calls.length).toBeLessThanOrEqual(31);
+  }, 60_000);
+
+  it("puts no ignore file back through a link out of the snapshot on a live turn, and reports it (review 15 C9)", async () => {
+    const repo = makeRepo({ "README.md": "hello\n", ".gitignore": "*.tmp\n", "sub/.gitignore": "*.log\n" }); repos.push(repo);
+    const outside = mkdtempSync(join(homedir(), ".sa-test-outside-"));
+    const events: OfficeEvent[] = [];
+    try {
+      await mkdir(join(outside, "sub")); await writeFile(join(outside, "sub", ".gitignore"), "outside\n"); await writeFile(join(outside, "hard"), "outside\n"); await writeFile(join(outside, "sub", "keep"), "keep\n");
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+        channelFactory: (options): NativeChannel => ({ async send() {
+          rmSync(join(options.cwd, "sub"), { recursive: true }); symlinkSync(join(outside, "sub"), join(options.cwd, "sub"), process.platform === "win32" ? "junction" : "dir");
+          rmSync(join(options.cwd, ".gitignore")); linkSync(join(outside, "hard"), join(options.cwd, ".gitignore"));
+          return { status: "completed", text: "ok", refusal: false };
+        }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+      offices.push(office);
+      const opened = await office.open("scout");
+      await office.send("scout", "look");
+      expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ files: expect.arrayContaining([".gitignore", "sub/.gitignore"]) });
+      expect([await readFile(join(outside, "sub", ".gitignore"), "utf8"), await readFile(join(outside, "hard"), "utf8")]).toEqual(["outside\n", "outside\n"]);
+      // Putting the snapshot back unlinks the link first: git's clean would otherwise delete the outside folder's files.
+      expect(existsSync(join(outside, "sub", "keep"))).toBe(true);
+      expect(await readFile(join(opened.cwd, "sub", ".gitignore"), "utf8")).toBe("*.log\n");
+    } finally { rmSync(outside, { recursive: true, force: true }); }
   }, 60_000);
 
   it("refuses a folder outside any git working tree", async () => {
@@ -715,13 +772,14 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
 
 describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {
   const builders = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true }, scout: { cli: "claude", model: "synthetic", roles: ["review"], write: false } });
-  /** Harness git that records each call's repository and arguments, and can fail `worktree remove`. */
-  function spyGit(dir: string, calls: string[][], failRemove: { on: boolean }): GitFactory {
+  /** Harness git that records each call's repository and arguments, and can fail `worktree remove` or `worktree add`. */
+  function spyGit(dir: string, calls: string[][], failRemove: { on: boolean; add?: boolean }): GitFactory {
     return (repo) => {
       const harness = new HarnessGit({ repo, hooksDir: join(dir, ".shadow", "v2", "hooks") });
       return { run: async (args, kind, cwd) => {
         calls.push([resolve(repo.workTree), ...args]);
         if (failRemove.on && args[0] === "worktree" && args[1] === "remove") return { code: 1, stdout: "", stderr: "locked" };
+        if (failRemove.add && args[0] === "worktree" && args[1] === "add") return { code: 1, stdout: "", stderr: "add failed" };
         return harness.run(args, kind, cwd);
       } };
     };
@@ -752,6 +810,31 @@ describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup
     expect(inWorktree).toEqual(expect.arrayContaining(["diff", "ls-files", "add", "commit"]));
   }, 60_000);
 
+  it("removes the worktree when the hold fires on the check after `worktree add`, and releases the claims (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    const inner = spyGit(repo.dir, [], { on: false });
+    let fire = true;
+    const gitFactory: GitFactory = (target) => {
+      const git = inner(target);
+      return { run: async (args, kind, cwd) => {
+        const result = await git.run(args, kind, cwd);
+        if (fire && args[0] === "worktree" && args[1] === "add") { fire = false; await writeFile(hook, "#!/bin/sh\n"); }
+        return result;
+      } };
+    };
+    const post = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory, channelFactory: (): NativeChannel => ({
+      async send() { return { status: "completed", text: "done", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(post);
+    await expect(post.open("tank", { claims: ["src/a.ts"] })).rejects.toThrow(/harness git held/);
+    const folder = join(repo.dir, ".shadow", "worktrees");
+    expect(existsSync(folder) ? readdirSync(folder) : []).toEqual([]);
+    expect(existsSync(join(repo.dir, ".git", "worktrees")) ? readdirSync(join(repo.dir, ".git", "worktrees")) : []).toEqual([]);
+    rmSync(hook);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.status).toBe("completed");
+  }, 60_000);
+
   it("keeps a down session and its snapshot when reconnecting can't remove it, and the next reconnect does", async () => {
     const failRemove = { on: true };
     const { office: post, channels, events } = await office(failRemove);
@@ -765,6 +848,50 @@ describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup
     const second = await post.open("scout");
     expect(second.cwd).not.toBe(first.cwd);
     expect(existsSync(first.cwd)).toBe(false);
+  }, 60_000);
+
+  it("lets reconnect start fresh after a restart removed the old snapshot but could not open a new one (review 15 C8)", async () => {
+    const failRemove = { on: false, add: false };
+    const { office: post, channels, events } = await office(failRemove);
+    const first = await post.open("scout");
+    failRemove.add = true;
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => events.some((event) => event.type === "down"));
+    expect(existsSync(first.cwd)).toBe(false);
+    failRemove.add = false;
+    const second = await post.open("scout");
+    expect(second.cwd).not.toBe(first.cwd);
+    expect(existsSync(second.cwd)).toBe(true);
+  }, 60_000);
+
+  it("reports the applied edits and the hold when the hold fires after an apply while another turn runs (w168 note)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    const inner = spyGit(repo.dir, [], { on: false });
+    const gitFactory: GitFactory = (target) => {
+      const git = inner(target);
+      return { run: async (args, kind, cwd) => {
+        const result = await git.run(args, kind, cwd);
+        if (args[0] === "apply" && !args.includes("--check") && !args.includes("-R")) await writeFile(hook, "#!/bin/sh\n");
+        return result;
+      } };
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    const post = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory, channelFactory: (options): NativeChannel => ({
+      async send() {
+        if (options.cwd.includes("worktrees")) await writeFile(join(options.cwd, "src", "a.ts"), "claimed\n");
+        else await gate;
+        return { status: "completed", text: "done", refusal: false };
+      }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(post);
+    const scout = post.send("scout", "look");
+    await until(() => (post as unknown as { sessions: Map<string, { guardBase?: unknown }> }).sessions.get("scout")?.guardBase !== undefined);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] }).finally(release);
+    expect(result.write?.apply).toMatchObject({ applied: true, files: [expect.objectContaining({ path: "src/a.ts" })] });
+    expect(result.write?.reason).toMatch(/harness git held/);
+    rmSync(hook);
+    expect((await scout).status).toBe("failed");
   }, 60_000);
 });
 

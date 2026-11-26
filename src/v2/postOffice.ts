@@ -13,8 +13,10 @@ import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type SessionGit, type WriteSession } from "../workspace/session.js";
 import { HarnessGit, HarnessGitHeld } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
-import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, posixInspect, realish, removeInside, snapshotSubfolder, validateSnapshotRoot, within, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
+import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, realish, removeInside, snapshotSubfolder, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
+import { platformInspect } from "./winAcl.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
+import type { ApplyResult } from "../workspace/apply.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
@@ -127,6 +129,8 @@ export interface OfficeOptions {
   onEvent?: (event: OfficeEvent) => void;
   /** Waits before the first, second and third automatic restart (PO-1: 1, 5 and 30 seconds). */
   restartDelaysMs?: readonly number[];
+  /** The snapshot root's owner and permission check (WSP-11); tests pass their own. */
+  inspect?: (dir: string) => FolderFacts;
   /** Harness git for a repository (WSP-10); tests pass their own. */
   gitFactory?: GitFactory;
   /** The machine's processes (PO-15, PO-16); tests pass fakes. `null` where the platform has none yet (macOS: M1b-18). */
@@ -288,11 +292,16 @@ export class PostOffice {
   private holdStarted = false;
   private lastLogEnd?: string;
   private earlierTrees?: Awaited<ReturnType<typeof readTrees>>;
+  /** WSP-10: harness git for any repository, each command between a hold check before and one after (once the hold is set). */
+  private readonly held: GitFactory = (repo) => {
+    const git = this.git(repo);
+    return { run: (args, kind, cwd) => (this.hold ? this.hold.run(git, args, kind, cwd) : git.run(args, kind, cwd)) };
+  };
 
   private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
     private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
     this.root = root;
-    this.officeGit = git(repo);
+    this.officeGit = this.held(repo);
     this.roster = options.roster ?? loadRoster(root);
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
@@ -319,9 +328,9 @@ export class PostOffice {
     const listed = await lister(found).run(["worktree", "list", "--porcelain"], "guard");
     if (listed.code !== 0) throw new Error(`the army can't list the repository's working trees: ${listed.stderr.trim()}`);
     const workTrees = listed.stdout.split(/\r?\n/).filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9));
-    // A bad root starts no soldier, so it is kept to name at each open. The Windows ACL reader is M1b-17.
+    // A bad root starts no soldier, so it is kept to name at each open. Windows reads real owners and ACLs, failing closed.
     const snapshots = validateSnapshotRoot(process.env.SHADOW_ARMY_SNAPSHOTS || join(homedir(), ".shadow-army", "snapshots"), { home: homedir(), folder: found.workTree, workTrees,
-      inspect: process.platform === "win32" ? () => ({ owner: "owner", writableByOthers: false }) : posixInspect });
+      inspect: options.inspect ?? platformInspect() });
     const untrusted = [found.workTree, ...workTrees, ...(snapshots.ok ? [snapshots.root] : [])];
     const gitFor: GitFactory = options.gitFactory ?? ((repo) => new HarnessGit({ repo, hooksDir, untrusted }));
     // The folder as `git rev-parse --show-toplevel` prints it: the army's mark is taken from this path (WSP-11).
@@ -509,27 +518,40 @@ export class PostOffice {
     return value;
   }
 
+  /** The worktree a held `worktree add` made: its registration and its folder, each only inside its own root. Its branch stays, recorded. */
+  private dropHeldWorktree(path: string) {
+    let admin: string | undefined;
+    try { admin = resolve(path, readFileSync(join(path, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim()); } catch { /* no .git file: nothing registered */ }
+    try {
+      if (admin) removeInside(join(this.repo.commonDir, "worktrees"), admin);
+      removeInside(join(this.root, ".shadow", "worktrees"), path);
+      this.record({ type: "git_hold", data: { removedWorktree: path } });
+    } catch (error) { this.record({ type: "git_hold", data: { leftoverWorktree: path, reason: String(error) } }); }
+  }
+
   /** Harness git for a write session: the folder's own, and each worktree's bound to the identity read as it is made. */
   private sessionGit(): SessionGit {
     return {
-      repo: (args, kind) => this.officeGit.run(args, kind),
-      worktree: (path) => { const git = this.git(findRepo(path)); return (args, kind) => git.run(args, kind, path); },
+      repo: async (args, kind) => {
+        if (args[0] !== "worktree" || args[1] !== "add") return this.officeGit.run(args, kind);
+        // A hold on the check after `worktree add` comes once the worktree exists: take it out again, without git (C1).
+        const path = args.at(-2)!, before = existsSync(path);
+        try { return await this.officeGit.run(args, kind); } catch (error) {
+          if (error instanceof HarnessGitHeld && !before && existsSync(path)) this.dropHeldWorktree(path);
+          throw error;
+        }
+      },
+      worktree: (path) => { const git = this.held(findRepo(path)); return (args, kind) => git.run(args, kind, path); },
     };
   }
 
-  /**
-   * The folder's checkout state for the guard, by harness git between two hold checks (WSP-10).
-   * `closeCheck: false` only where the caller's very next step is a hold check, which then closes this read.
-   */
-  private async guardState(closeCheck = true): Promise<RepoState> {
-    await this.unheld();
-    const state = await harnessState(async (args) => {
+  /** The folder's checkout state for the guard, by harness git, each command between two hold checks (WSP-10). */
+  private async guardState(): Promise<RepoState> {
+    return harnessState(async (args) => {
       const result = await this.officeGit.run(args, "guard");
       if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
       return result.stdout;
     }, this.root);
-    if (closeCheck) await this.unheld();
-    return state;
   }
 
   private check(): void {
@@ -619,9 +641,7 @@ export class PostOffice {
     if (claims?.length && (!spec.write || !spec.roles.includes("build"))) throw new Error(`${key} cannot write: claims need the build role and write access in the roster`);
     // Bad or overlapping claims throw here, naming the holder, before any process starts (WSP-2).
     // WSP-10: the worktree is made by harness git under the hold, and its identity is recorded as it is made.
-    if (claims?.length) await this.unheld();
     const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS, git: this.sessionGit() }) : undefined;
-    if (ws) await this.unheld().catch(async (error: unknown) => { await ws.release(); throw error; });
     const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
     let snapshot: Snapshot | undefined, tree: TreeRecord | undefined;
@@ -651,9 +671,9 @@ export class PostOffice {
     const file = join(snapshotsDir(this.root), `${sessionId}.json`);
     // The snapshot root goes in the record too: a later start finds it even after SHADOW_ARMY_SNAPSHOTS changed.
     await writeAtomic(file, JSON.stringify({ path: join(snapshotSubfolder(root, this.root), sessionId), root }));
-    const snapshot = await openSnapshot({ root, folder: this.root, sessionId, repo: this.repo, git: this.git });
+    const snapshot = await openSnapshot({ root, folder: this.root, sessionId, repo: this.repo, git: this.held });
     // The HEAD it was made at, so a later start can report a commit made in it (WSP-11).
-    const head = (await this.git({ gitDir: snapshot.gitDir, workTree: snapshot.path, commonDir: snapshot.commonDir }).run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+    const head = (await this.held({ gitDir: snapshot.gitDir, workTree: snapshot.path, commonDir: snapshot.commonDir }).run(["rev-parse", "HEAD"], "guard")).stdout.trim();
     await writeAtomic(file, JSON.stringify({ path: snapshot.path, root, gitDir: snapshot.gitDir, head }));
     return snapshot;
   }
@@ -858,6 +878,8 @@ export class PostOffice {
       // WSP-11: a fresh session gets a fresh snapshot; the old one's writes were reported when its turn's guard closed.
       if (session.snapshot && this.snapshots.ok) {
         if (!await this.dropSnapshot(session.snapshot, session)) throw new Error(`the old snapshot ${session.snapshot.path} could not be removed; reconnect explicitly`);
+        // Removed, so no longer this session's: a failed open below leaves nothing for reconnect to remove again.
+        session.snapshot = undefined;
         await this.unheld();
         session.snapshot = await this.openRecorded(this.snapshots.root, `${session.id}-r${session.restarts}`);
         session.cwd = session.snapshot.path;
@@ -896,7 +918,7 @@ export class PostOffice {
     // WSP-11: a read-only turn begins with its snapshot's HEAD, ignore rules and audited hashes; its writes are found against them.
     let startFailure: string | undefined;
     if (session.snapshot) {
-      session.turnStart = await this.unheld().then(() => beginTurn(session.snapshot!, this.git)).catch((error: unknown) => { startFailure = String(error); return undefined; });
+      session.turnStart = await beginTurn(session.snapshot!, this.held).catch((error: unknown) => { startFailure = String(error); return undefined; });
     }
     session.guardBase = await this.exclusive(() => this.guardState()).catch((error: unknown) => { startFailure ??= String(error); return undefined; });
     // PO-1: the baseline, with the turn's ID as its open marker, is on disk whole before anything is sent.
@@ -948,26 +970,26 @@ export class PostOffice {
       this.record({ soldier: session.spec.key, type: "containment_turn", data: { ended: held === "ended", line: containment } }, session);
     }
     const changes: string[] = startFailure ? [`checkout guard could not start: ${startFailure}`] : [];
-    const base = session.guardBase;
-    session.guardBase = undefined;
     const start = session.turnStart;
     session.turnStart = undefined;
-    const snapshotTurn = Boolean(session.snapshot && start);
     try {
-      // A snapshot turn's hold check before findWrites, next, also closes this guard read (one check, not two back to back).
-      if (base) changes.push(...await this.exclusive(async () => diffState(base, await this.guardState(!snapshotTurn))));
+      // The baseline is read and cleared under the lock, so an apply queued ahead of this guard still carries into it (W12-3).
+      if (session.guardBase) changes.push(...await this.exclusive(async () => {
+        const base = session.guardBase;
+        session.guardBase = undefined;
+        return base ? diffState(base, await this.guardState()) : [];
+      }));
     } catch (error) { changes.push(`checkout guard could not complete: ${String(error)}`); }
     // WSP-11: the snapshot's writes are a read-violation, reported, then discarded before its next turn.
     // A failed guard keeps them instead, as the partial work its line names.
     if (session.snapshot && start) {
       try {
-        await this.unheld();
-        const violation = await findWrites(session.snapshot, start, this.git);
+        const violation = await findWrites(session.snapshot, start, this.held);
         if (violation) {
           const lines = [...violation.files.map((file) => `read-only snapshot: wrote ${file}`), ...(violation.head ? [`read-only snapshot: HEAD moved from ${violation.head.from} to ${violation.head.to}`] : [])];
           this.record({ soldier: session.spec.key, type: "read_violation", data: { ...violation, cwd: session.cwd } }, session);
           if (changes.length) changes.push(...lines);
-          else { await this.logPending; await this.unheld(); await discardWrites(session.snapshot, start, this.git); }
+          else { await this.logPending; await discardWrites(session.snapshot, start, this.held); }
         }
       } catch (error) { changes.push(`read-only snapshot could not be checked or put back: ${String(error)}`); }
     }
@@ -1009,16 +1031,24 @@ export class PostOffice {
     // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
     if (write?.applicable) {
       const audited = write;
-      const apply = await this.exclusive(async () => {
+      let after: string | undefined;
+      const apply = await this.exclusive(async (): Promise<ApplyResult> => {
         const others = [...this.sessions.values()].filter((other) => other !== session && other.guardBase);
-        const before = others.length ? await this.guardState() : undefined;
-        const applied = await applyAudited(this.root, audited, session.write!.applied);
+        let before: RepoState | undefined;
+        try { before = others.length ? await this.guardState() : undefined; }
+        catch (error) { return { applied: false, reason: `the folder's state could not be read before applying: ${String(error)}`, clashes: [] }; }
+        const applied = await applyAudited(this.officeGit.run, audited, session.write!.applied);
         // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
-        if (before && applied.applied && applied.files.length) carryApply(others, before, await this.guardState(), applied.files.map((file) => file.path));
+        // A hold (or failure) after the apply leaves those guards uncarried: they then name these files, failing closed.
+        if (before && applied.applied && applied.files.length) {
+          try { carryApply(others, before, await this.guardState(), applied.files.map((file) => file.path)); }
+          catch (error) { after = `applied, then the folder's state could not be read: ${String(error)}; other running turns' guards will name these files`; }
+        }
         return applied;
       });
       if (apply.applied && write.commit) session.write!.applied = write.commit;
-      write = { ...write, apply };
+      write = { ...write, apply, ...(after ? { reason: after } : {}) };
+      if (after) this.record({ soldier: session.spec.key, type: "git_hold", data: { afterApply: after } }, session);
     }
     if (write) result = { ...result, write };
     this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
@@ -1032,12 +1062,15 @@ export class PostOffice {
 
   /** v1's claim audit: revert edits outside the claims, commit the rest on the soldier's branch, and hand B4 the audited diff. */
   private async audit(session: Session, result: TurnResult, guardChanges: string[]): Promise<WriteOutcome> {
-    const info = await this.underHold(() => session.write!.ws.finish(`${session.spec.key}: turn`));
+    const info = await session.write!.ws.finish(`${session.spec.key}: turn`);
     // WSP-10: the worktree's git identity recorded at open, the audit's timeout policy, and the commit the audit made, not a HEAD read now.
     let diff = "";
     if (info.commit) {
-      await this.unheld();
-      const result = await this.git(session.write!.repo).run(["diff", info.base, info.commit], "guard");
+      // The audit names its commit by a short id: resolve it once, now, so apply gets the exact full id (C1).
+      const full = await this.held(session.write!.repo).run(["rev-parse", "-q", "--verify", `${info.commit}^{commit}`], "guard");
+      if (full.code !== 0 || !full.stdout.trim()) throw new Error(`the audited commit ${info.commit} could not be resolved: ${full.stderr.trim() || `exit ${full.code}`}`);
+      info.commit = full.stdout.trim();
+      const result = await this.held(session.write!.repo).run(["diff", info.base, info.commit], "guard");
       if (result.code !== 0) throw new Error(`git diff of the audited commit failed: ${result.stderr.trim() || `exit ${result.code}`}`);
       diff = result.stdout;
     }
@@ -1107,7 +1140,6 @@ export class PostOffice {
       if (lstatSync(snapshot.path, { throwIfNoEntry: false })?.isSymbolicLink() || real === realish(root) || !within(realish(root), real)) throw new Error(`refusing to remove ${snapshot.path}: not a folder inside ${root}`);
       note({ removing: true });
       await this.logPending;
-      await this.unheld();
       const result = await this.officeGit.run(["worktree", "remove", "--force", snapshot.path], "snapshot");
       if (result.code !== 0) throw new Error(`git worktree remove failed: ${result.stderr.trim() || `exit ${result.code}`}`);
       try {

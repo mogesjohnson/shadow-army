@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -95,6 +95,34 @@ describe("harness git hold", () => {
     expect(repo.ran()).toEqual([]);
   }, 60_000);
 
+  it("checks before and after each command, not each batch: a change between two holds the next before it runs (review 15 C1)", async () => {
+    const { repo, gitFor, main, open } = setup(), hold = open(), ran: string[] = [];
+    await hold.start();
+    const git = hold.wrap((where) => { const inner = gitFor(where); return { run: (args, kind, cwd) => { ran.push(args[0]!); return inner.run(args, kind, cwd); } }; })(main);
+    expect((await git.run(["status", "--porcelain"], "guard")).code).toBe(0);
+    const undo = plantChange(repo, "hook");
+    await expect(git.run(["ls-files"], "guard")).rejects.toBeInstanceOf(HarnessGitHeld);
+    expect(ran).toEqual(["status"]);
+    undo();
+    expect((await git.run(["ls-files"], "guard")).code).toBe(0);
+    expect(ran).toEqual(["status", "ls-files"]);
+  }, 60_000);
+
+  it("runs no git for a check while nothing git reads changed, and holds once a file an include names appears", async () => {
+    const { repo, main, gitFor } = setup(), calls: string[] = [];
+    appendFileSync(join(repo.gitDir, "config"), "[include]\n\tpath = extra.cfg\n");
+    const counting = (where: typeof main) => { const inner = gitFor(where); return { run: (args: string[], kind?: "guard") => { calls.push(args[0]!); return inner.run(args, kind); } }; };
+    const hold = new HarnessHold({ repo: main, gitFor: counting, statePath: join(repo.root, "..", "log", "quick.json") });
+    expect(await hold.start()).toEqual({ held: false });
+    expect(await hold.check()).toEqual({ held: false });
+    calls.length = 0;
+    expect(await hold.check()).toEqual({ held: false });
+    expect(calls).toEqual([]);
+    writeFileSync(join(repo.gitDir, "extra.cfg"), filter);
+    const check = await hold.check();
+    expect(check.held && check.files).toEqual([".git/extra.cfg"]);
+  }, 60_000);
+
   it("names the files that differ", () => {
     expect(changedFiles({ "config .git/config": "a", "x": "1" }, { "config .git/config": "b", "y": "2" })).toEqual([".git/config", "x", "y"]);
   });
@@ -142,5 +170,21 @@ describe("submodules", () => {
     await hold.start();
     addSubmodule(repo, "late");
     expect(await hold.check()).toMatchObject({ held: true, files: expect.arrayContaining(["late/.git"]) });
+  }, 60_000);
+
+  it("holds when the git folder a gitlink names was missing and then appears, quick check included (#136 self-review)", async () => {
+    const { repo, open, gitFor, main } = setup();
+    addSubmodule(repo, "sub", true);
+    const modules = join(repo.gitDir, "modules", "sub"), away = join(temp(), "sub");
+    renameSync(modules, away);
+    const calls: string[] = [];
+    const hold = new HarnessHold({ repo: main, statePath: join(temp(), "hold.json"), gitFor: (where) => { const inner = gitFor(where); return { run: (args, kind) => { calls.push(args[0]!); return inner.run(args, kind); } }; } });
+    expect(await hold.start()).toEqual({ held: false });
+    expect(await hold.check()).toEqual({ held: false });
+    calls.length = 0;
+    expect(await hold.check()).toEqual({ held: false });
+    expect(calls).toEqual([]); // the quick check is in use
+    renameSync(away, modules);
+    expect(await hold.check()).toMatchObject({ held: true, files: expect.arrayContaining([".git/modules/sub"]) });
   }, 60_000);
 });
