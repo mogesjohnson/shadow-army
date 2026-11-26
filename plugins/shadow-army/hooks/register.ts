@@ -41,9 +41,14 @@ const VERSION_WAIT_MS = 10_000;
 /** PO-16: the sweep ends a tree within 10 s; the mod gives the whole one-shot process three times that. */
 const SWEEP_WAIT_MS = 30_000;
 const READY_WAIT_MS = 60_000;
-/** C5: how long a timed-out sweep's stop may take to confirm; until it does, `unconfirmedStop` refuses every restart. */
+/** C5: how long a timed-out sweep's stop may take to confirm; until the sweep is seen to end, `unconfirmedStop` refuses every restart. */
 const STOP_WAIT_MS = 10_000;
-let unconfirmedStop: string | undefined;
+let unconfirmedStop: { message: string } | undefined;
+/** C5: a process's exit as its stream reports it, an exit code or a signal; anything else is no evidence that it ended. */
+const exited = (result: unknown): boolean => {
+  const { code, signal } = (result ?? {}) as { code?: unknown; signal?: unknown };
+  return (Number.isInteger(code) && signal === null) || (code === null && typeof signal === "string" && signal !== "");
+};
 const MIN_HOST = [2, 1, 294];
 const PROXY_VARIABLES = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 const NO_PROXY_VARIABLES = ["NO_PROXY", "no_proxy"];
@@ -194,17 +199,22 @@ async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<strin
   // The deadline settles this wait even when the iterator can't settle `next()` after `return()`.
   const outcome = await Promise.race([read, late]).finally(() => timer?.cancel());
   if (outcome === "late") {
-    void read.catch(() => {});
-    // C5: the restart barrier holds until the stop is confirmed; a rejected or unconfirmed stop fails restarts closed.
-    const stop = stream.return({ code: null, signal: null }).then(() => "stopped" as const, () => "failed" as const);
+    const late = `the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s`;
+    // C5: the restart barrier lifts only on evidence that this sweep ended: a terminal exit from the stop, or one the
+    // read confirms later. A rejected or pending stop, or one that just echoes its argument, keeps it refusing.
+    const barrier = { message: `Shadow Army won't restart the army: ${late} and its stop could not be confirmed, so it may still be running` };
+    unconfirmedStop = barrier;
+    const lift = (): void => { if (unconfirmedStop === barrier) unconfirmedStop = undefined; };
+    void read.then(({ result }) => { if (exited(result)) lift(); }, () => {});
+    const stop = stream.return({ code: null, signal: null })
+      .then((step) => step.done && exited(step.value) ? "stopped" as const : "unconfirmed" as const, () => "failed" as const);
+    void stop.then((how) => { if (how === "stopped") lift(); });
     let stopTimer: Timer | undefined;
     const stopLate = new Promise<"late">((done) => { stopTimer = $.clock.after(STOP_WAIT_MS, () => done("late")); });
     const stopped = await Promise.race([stop, stopLate]).finally(() => stopTimer?.cancel());
-    const late = `the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s`;
     if (stopped === "stopped") return `${late} and was stopped; what it left is unknown`;
-    unconfirmedStop = `Shadow Army won't restart the army: ${late} and its stop could not be confirmed, so it may still be running`;
-    if (stopped === "late") void stop.then((how) => { if (how === "stopped") unconfirmedStop = undefined; });
-    return `${late} and ${stopped === "failed" ? "its stop failed" : `its stop was not confirmed in ${STOP_WAIT_MS / 1000} s`}; what it left is unknown, and the army won't restart until it is`;
+    if (unconfirmedStop !== barrier) return `${late} and has since exited; what it left is unknown`;
+    return `${late} and ${stopped === "failed" ? "its stop failed" : stopped === "late" ? `its stop was not confirmed in ${STOP_WAIT_MS / 1000} s` : "its stop was not confirmed"}; what it left is unknown, and the army won't restart until it is`;
   }
   const code = outcome.result?.code;
   const lastLine = outcome.out.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
@@ -338,7 +348,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     // The end hook only requests release. A later foreground command waits for the
     // old relay/helper to finish guard finalization and release the folder marker.
     await Promise.all([...retiring].map((old) => old.finished));
-    if (unconfirmedStop) throw new Error(unconfirmedStop);
+    if (unconfirmedStop) throw new Error(unconfirmedStop.message);
     // Another concurrent foreground call may have opened the army while we waited.
     if (active && !active.closing && active.cwd === cwd) {
       const shared = active;

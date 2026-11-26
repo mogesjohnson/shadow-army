@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "hang-reject" | "hang-stall" | "off"; tail?: string; startRefusal?: string; stderr?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "hang-reject" | "hang-stall" | "hang-echo" | "off"; tail?: string; startRefusal?: string; stderr?: string } = {}) {
   vi.resetModules();
   const { register, useSweepLauncher } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -28,6 +28,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const spawns: any[] = [];
   const sweeps: any[] = [];
   const sweepsStopped: number[] = [];
+  let exitSweep: (value: unknown) => void = () => {};
   const stops: (() => void)[] = [];
   const probes: any[] = [];
   const killed: string[] = [];
@@ -66,12 +67,19 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
         if (options.argv[1]?.endsWith("sweepMain.js")) {
           sweeps.push(options);
           if (env.sweep === "throw") throw new Error("spawn failed");
-          if (env.sweep === "hang" || env.sweep === "hang-reject" || env.sweep === "hang-stall") {
-            // An iterator whose next() never settles, not even after return(); the stop itself resolves, rejects or never settles.
+          if (env.sweep === "hang" || env.sweep === "hang-reject" || env.sweep === "hang-stall" || env.sweep === "hang-echo") {
+            // An iterator whose next() settles only when the test reports the process's exit (`exitSweep`), not after
+            // return(); the stop ends the process (terminal exit), rejects, never settles, or echoes its argument as a
+            // bare generator does, which is no evidence that the process ended (C5).
             const how = env.sweep;
             return {
-              [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
-              return: () => { sweepsStopped.push(1); return how === "hang" ? Promise.resolve({ done: true }) : how === "hang-reject" ? Promise.reject(new Error("no")) : new Promise(() => {}); },
+              [Symbol.asyncIterator]: () => ({ next: () => new Promise((done) => { exitSweep = (value) => done({ done: true, value }); }) }),
+              return: (value: unknown) => {
+                sweepsStopped.push(1);
+                return how === "hang" ? Promise.resolve({ done: true, value: { code: null, signal: "SIGTERM" } })
+                  : how === "hang-echo" ? Promise.resolve({ done: true, value })
+                  : how === "hang-reject" ? Promise.reject(new Error("no")) : new Promise(() => {});
+              },
             };
           }
           const result = env.sweep ?? { out: "", code: 0 };
@@ -116,7 +124,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, sweeps, sweepsStopped, endRelay, probes, killed, commands, logs, registered, asks, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, sweeps, sweepsStopped, exitSweep: (value: unknown) => exitSweep(value), endRelay, probes, killed, commands, logs, registered, asks, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {
@@ -589,17 +597,55 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
     await next.catch(() => undefined);
   });
 
-  it("fails a restart explicitly while a timed-out sweep's stop is rejected or unconfirmed (C5)", async () => {
-    for (const [sweep, words] of [["hang-reject", /its stop failed/], ["hang-stall", /its stop was not confirmed in 10 s/]] as const) {
-      const m = await died({ sweep });
-      m.after.filter((t) => t.ms === 30_000 && !t.cancelled).forEach((t) => t.run());
-      await settle();
-      m.after.filter((t) => t.ms === 10_000 && !t.cancelled).forEach((t) => t.run());
-      await settle();
-      expect(m.sweepsStopped).toHaveLength(1);
+  /** A sweep that never answers, past both deadlines: the 30 s answer and the 10 s stop. */
+  const timedOut = async (sweep: "hang-reject" | "hang-stall" | "hang-echo") => {
+    const m = await died({ sweep });
+    m.after.filter((t) => t.ms === 30_000 && !t.cancelled).forEach((t) => t.run());
+    await settle();
+    m.after.filter((t) => t.ms === 10_000 && !t.cancelled).forEach((t) => t.run());
+    await settle();
+    expect(m.sweepsStopped).toHaveLength(1);
+    return m;
+  };
+
+  it("fails a restart explicitly while a timed-out sweep's stop and exit are both unknown (C5)", async () => {
+    for (const [sweep, words] of [["hang-reject", /its stop failed/], ["hang-stall", /its stop was not confirmed in 10 s/],
+      ["hang-echo", /its stop was not confirmed/]] as const) {
+      const m = await timedOut(sweep);
       expect(shadowLines(m.logs)).toEqual([expect.stringMatching(words)]);
+      expect(await m.send("claude-sonnet --claim a again")).toMatch(/won't restart the army/);
+      // An exit the read reports without a code or a signal is not evidence either.
+      m.exitSweep({ code: null, signal: null });
+      await settle();
       expect(await m.send("claude-sonnet --claim a again")).toMatch(/won't restart the army/);
       expect(m.spawns).toHaveLength(1);
     }
+  });
+
+  it("lifts the restart barrier once the read confirms the sweep exited after a rejected or pending stop (C5)", async () => {
+    for (const sweep of ["hang-reject", "hang-stall"] as const) {
+      const m = await timedOut(sweep);
+      expect(await m.send("claude-sonnet --claim a again")).toMatch(/won't restart the army/);
+      m.exitSweep({ code: 1, signal: null });
+      await settle();
+      const next = m.send("claude-sonnet --claim a again");
+      await settle();
+      expect(m.spawns).toHaveLength(2);
+      m.endRelay();
+      await next.catch(() => undefined);
+    }
+  });
+
+  it("lifts the restart barrier at once on a terminal exit from the stop (C5)", async () => {
+    const m = await died({ sweep: "hang" });
+    m.after.filter((t) => t.ms === 30_000 && !t.cancelled).forEach((t) => t.run());
+    await settle();
+    expect(m.after.filter((t) => t.ms === 10_000 && !t.cancelled)).toEqual([]);
+    expect(shadowLines(m.logs)).toEqual([expect.stringMatching(/and was stopped; what it left is unknown$/)]);
+    const next = m.send("claude-sonnet --claim a again");
+    await settle();
+    expect(m.spawns).toHaveLength(2);
+    m.endRelay();
+    await next.catch(() => undefined);
   });
 });
