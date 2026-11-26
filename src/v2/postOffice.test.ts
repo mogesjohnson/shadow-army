@@ -618,4 +618,34 @@ describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup
     expect(second.cwd).not.toBe(first.cwd);
     expect(existsSync(second.cwd)).toBe(true);
   }, 60_000);
+
+  it("reports the applied edits and the hold when the hold fires after an apply while another turn runs (w168 note)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    const inner = spyGit(repo.dir, [], { on: false });
+    const gitFactory: GitFactory = (target) => {
+      const git = inner(target);
+      return { run: async (args, kind, cwd) => {
+        const result = await git.run(args, kind, cwd);
+        if (args[0] === "apply" && !args.includes("--check") && !args.includes("-R")) await writeFile(hook, "#!/bin/sh\n");
+        return result;
+      } };
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    const post = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory, channelFactory: (options): NativeChannel => ({
+      async send() {
+        if (options.cwd.includes("worktrees")) await writeFile(join(options.cwd, "src", "a.ts"), "claimed\n");
+        else await gate;
+        return { status: "completed", text: "done", refusal: false };
+      }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(post);
+    const scout = post.send("scout", "look");
+    await until(() => (post as unknown as { sessions: Map<string, { guardBase?: unknown }> }).sessions.get("scout")?.guardBase !== undefined);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] }).finally(release);
+    expect(result.write?.apply).toMatchObject({ applied: true, files: [expect.objectContaining({ path: "src/a.ts" })] });
+    expect(result.write?.reason).toMatch(/harness git held/);
+    rmSync(hook);
+    expect((await scout).status).toBe("failed");
+  }, 60_000);
 });

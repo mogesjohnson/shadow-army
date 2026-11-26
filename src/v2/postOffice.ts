@@ -13,6 +13,7 @@ import { HarnessHold, type GitRepo } from "./git/hold.js";
 import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, realish, removeInside, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
 import { platformInspect } from "./winAcl.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
+import type { ApplyResult } from "../workspace/apply.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
@@ -544,16 +545,24 @@ export class PostOffice {
     // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
     if (write?.applicable) {
       const audited = write;
-      const apply = await this.exclusive(async () => {
+      let after: string | undefined;
+      const apply = await this.exclusive(async (): Promise<ApplyResult> => {
         const others = [...this.sessions.values()].filter((other) => other !== session && other.guardBase);
-        const before = others.length ? await this.guardState() : undefined;
+        let before: RepoState | undefined;
+        try { before = others.length ? await this.guardState() : undefined; }
+        catch (error) { return { applied: false, reason: `the folder's state could not be read before applying: ${String(error)}`, clashes: [] }; }
         const applied = await applyAudited(this.officeGit.run, audited, session.write!.applied);
         // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
-        if (before && applied.applied && applied.files.length) carryApply(others, before, await this.guardState(), applied.files.map((file) => file.path));
+        // A hold (or failure) after the apply leaves those guards uncarried: they then name these files, failing closed.
+        if (before && applied.applied && applied.files.length) {
+          try { carryApply(others, before, await this.guardState(), applied.files.map((file) => file.path)); }
+          catch (error) { after = `applied, then the folder's state could not be read: ${String(error)}; other running turns' guards will name these files`; }
+        }
         return applied;
       });
       if (apply.applied && write.commit) session.write!.applied = write.commit;
-      write = { ...write, apply };
+      write = { ...write, apply, ...(after ? { reason: after } : {}) };
+      if (after) this.record({ soldier: session.spec.key, type: "git_hold", data: { afterApply: after } }, session);
     }
     if (write) result = { ...result, write };
     this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
