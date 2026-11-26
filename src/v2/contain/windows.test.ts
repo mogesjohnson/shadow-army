@@ -1,12 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, defaultSupervisorCache, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, supervisorBinary, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, packagedSupervisor, probeWindowsProcess, spawnManagedProcess, supervisorBinary, SUPERVISOR_SOURCE_SHA256, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -256,84 +256,63 @@ describe("reading the supervisor's listing reply (PO-11)", () => {
   });
 });
 
-describe("Windows supervisor cache (compiled once, verified on every spawn)", () => {
-  const hashOf = async (path: string) => createHash("sha256").update(await readFile(path)).digest("hex");
-
-  const openTo = (path: string) => execFileSync("icacls", [path, "/grant", "*S-1-1-0:(M)"], { windowsHide: true }); // Everyone may modify.
-  // A cache must sit in guarded folders, and %TEMP% may be open to other accounts (a sandbox group here): beside the real one.
-  const cacheDirectory = async () => {
-    const path = await mkdtemp(join(dirname(await defaultSupervisorCache()), "test-"));
-    directories.push(path); return path;
+describe("the packaged Windows launcher (PO-19, checked before every launch as PO-14 steps 1 and 2 say)", () => {
+  const hashOf = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+  // A launcher and record as the build writes them, in a folder of the test's own.
+  const packaged = async (bytes = "MZ launcher", ...record: unknown[]) => {
+    const folder = await directory();
+    const files = { binary: join(folder, "shadow-supervisor.exe"), record: join(folder, "shadow-supervisor.json") };
+    await writeFile(files.binary, bytes);
+    await writeFile(files.record, JSON.stringify(record.length ? record[0] : { source: SUPERVISOR_SOURCE_SHA256, sha256: hashOf(bytes) }));
+    return files;
   };
 
-  windowsOnly("compiles once, then reuses the verified binary, leaving other versions' files alone", async () => {
-    const cache = await cacheDirectory();
-    // Another installed version's record and binary in the same profile (C2).
-    const other = ["a".repeat(32) + ".json", `${"a".repeat(32)}-${"b".repeat(64)}.exe`];
-    for (const name of other) await writeFile(join(cache, name), "another version");
-    const first = await supervisorBinary(cache);
-    expect(first.compiled).toBe(true);
-    expect(first.path.endsWith(`-${await hashOf(first.path)}.exe`)).toBe(true);
-    expect(await readdir(cache)).toEqual(expect.arrayContaining(other));
-    expect(await supervisorBinary(cache)).toEqual({ path: first.path, compiled: false });
+  it("accepts the launcher its record names, built from this source", async () => {
+    const files = await packaged();
+    expect(await supervisorBinary(files)).toBe(files.binary);
+  });
 
-    // The same verified files, but the binary is open to everyone: refused before it runs (C1).
-    const copy = await cacheDirectory();
-    for (const name of await readdir(cache)) await copyFile(join(cache, name), join(copy, name));
-    openTo(join(copy, basename(first.path)));
-    await expect(supervisorBinary(copy)).rejects.toThrow(/someone else can change it/);
-  }, 120_000);
+  it("refuses a missing launcher or record, and writes or compiles nothing in their place", async () => {
+    const files = await packaged();
+    await rm(files.binary);
+    await expect(supervisorBinary(files)).rejects.toThrow(/no soldier can start: the packaged launcher .*shadow-supervisor\.exe is missing/);
+    expect(await readdir(dirname(files.binary))).toEqual(["shadow-supervisor.json"]);
+    const other = await packaged();
+    await rm(other.record);
+    await expect(supervisorBinary(other)).rejects.toThrow(/shadow-supervisor\.json is missing/);
+    expect(await readdir(dirname(other.binary))).toEqual(["shadow-supervisor.exe"]);
+  });
 
-  windowsOnly("refuses a cache outside this user's local application data, or open to others (C1)", async () => {
-    await expect(supervisorBinary(join(process.env.SystemRoot ?? "C:\\Windows", "Temp", "shadow-army-c1"))).rejects.toThrow(/is not inside/);
-    const link = join(await cacheDirectory(), "link");
-    await symlink(process.env.PUBLIC ?? "C:\\Users\\Public", link, "junction");
-    await expect(supervisorBinary(link)).rejects.toThrow(/resolves to/);
-    const open = await cacheDirectory();
-    openTo(open);
-    await expect(supervisorBinary(open)).rejects.toThrow(/someone else can change it/);
-  }, 60_000);
+  it("refuses an altered launcher, a record for other source, and a record that names no hash", async () => {
+    const altered = await packaged();
+    await writeFile(altered.binary, "MZ planted");
+    await expect(supervisorBinary(altered)).rejects.toThrow(/does not match its recorded SHA-256/);
+    await expect(supervisorBinary(await packaged("MZ old", { source: "0".repeat(64), sha256: hashOf("MZ old") }))).rejects.toThrow(/built from other source/);
+    for (const record of [null, [], { source: SUPERVISOR_SOURCE_SHA256 }, { source: SUPERVISOR_SOURCE_SHA256, sha256: "X".repeat(64) }]) {
+      await expect(supervisorBinary(await packaged("MZ launcher", record))).rejects.toThrow(/built from other source|names no SHA-256/);
+    }
+    const unreadable = await packaged();
+    await writeFile(unreadable.record, "{");
+    await expect(supervisorBinary(unreadable)).rejects.toThrow(/is not readable JSON/);
+  });
 
-  windowsOnly("takes the default cache from Windows, not from %LOCALAPPDATA% (C1)", async () => {
-    const saved = process.env.LOCALAPPDATA;
-    const planted = await directory();
-    process.env.LOCALAPPDATA = planted;
-    try {
-      const cache = await defaultSupervisorCache();
-      expect(cache.toLowerCase().startsWith(planted.toLowerCase())).toBe(false);
-      expect(cache.toLowerCase().endsWith(join("appdata", "local", "shadow-army", "supervisor"))).toBe(true);
-    } finally { process.env.LOCALAPPDATA = saved; }
-  }, 60_000);
+  it("refuses a launcher or record behind a link or junction", async () => {
+    const real = await packaged();
+    const linked = await directory();
+    const files = { binary: join(linked, "shadow-supervisor.exe"), record: real.record };
+    await symlink(await directory(), files.binary, "junction"); // Needs no privilege on Windows.
+    await expect(supervisorBinary(files)).rejects.toThrow(/is not a plain file/);
+    await expect(supervisorBinary({ binary: real.binary, record: files.binary })).rejects.toThrow(/is not a plain file/);
+  });
 
-  windowsOnly("recompiles a tampered, missing or misrecorded binary instead of running it", async () => {
-    const cache = await cacheDirectory();
-    const first = await supervisorBinary(cache);
-    await writeFile(first.path, "MZ planted, not the supervisor");
-    const repaired = await supervisorBinary(cache);
-    expect(repaired.compiled).toBe(true);
-    expect(repaired.path).not.toBe(first.path);
-    expect(repaired.path.endsWith(`-${await hashOf(repaired.path)}.exe`)).toBe(true);
-    expect(await readdir(cache)).not.toContain(basename(first.path)); // The tampered file is gone.
+  it("has no run-time compiler left in the module (PO-19)", async () => {
+    const source = await readFile(new URL("./windows.ts", import.meta.url), "utf8");
+    expect(source).not.toMatch(/OutputAssembly|mkdtemp|writeFile/); // It writes no file at all.
+    expect(packagedSupervisor().binary).toMatch(/[\\/]dist[\\/]native[\\/]windows[\\/]shadow-supervisor\.exe$/);
+  });
 
-    await rm(repaired.path);
-    const missing = await supervisorBinary(cache);
-    expect(missing.compiled).toBe(true);
-
-    // A record that is valid JSON but not an object is a cache miss, not a throw (C3).
-    await writeFile(join(cache, (await readdir(cache)).find((name) => name.endsWith(".json"))!), "null");
-    expect((await supervisorBinary(cache)).compiled).toBe(true);
-
-    // A record for another source, or one pointing at a planted binary under a self-chosen hash, is not trusted.
-    const record = (await readdir(cache)).find((name) => name.endsWith(".json"))!;
-    const planted = join(cache, "planted.exe");
-    await writeFile(planted, "MZ planted");
-    await writeFile(join(cache, record), JSON.stringify({ source: "0".repeat(64), sha256: await hashOf(planted) }));
-    const again = await supervisorBinary(cache);
-    expect(again.compiled).toBe(true);
-    expect(await hashOf(again.path)).not.toBe(await hashOf(planted));
-  }, 240_000);
-
-  windowsOnly("runs containment from the verified cached binary, which still kills the whole tree", async () => {
+  windowsOnly("runs containment from the built, checked package launcher, which still kills the whole tree", async () => {
+    const built = await supervisorBinary(); // Fails here when `npm run build` has not built it.
     const session = await spawnManagedProcess({
       file: process.execPath, cwd: await directory(), exitGraceMs: 0,
       args: ["-e", "const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});console.log('child:'+c.pid);process.stdin.resume();setInterval(()=>{},1000);"],
@@ -346,9 +325,7 @@ describe("Windows supervisor cache (compiled once, verified on every spawn)", ()
     });
     stray.push(child);
     const guardianPath = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${session.guardian!.pid}).Path`], { encoding: "utf8", windowsHide: true }).trim();
-    const cached = await supervisorBinary();
-    expect(cached.compiled).toBe(false);
-    expect(guardianPath.toLowerCase()).toBe(cached.path.toLowerCase());
+    expect(guardianPath.toLowerCase()).toBe(built.toLowerCase());
     await session.close({ grace: false });
     expect(await gone(session.pid, 5_000)).toBe(true);
     expect(await gone(child, 5_000)).toBe(true);
