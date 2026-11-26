@@ -1,6 +1,8 @@
 // The War Table soldier card: seven rows, exactly `width` cells wide. No Ink, so the mod can reuse it.
 import { STATES, needs, safeText, toAscii, type Soldier, type SoldierState, type Tone } from "./model.js";
-import { fit, lr, rowWidth, type Row, type Seg } from "./layout.js";
+import { cells, fit, lr, rowWidth, takeCells, type Row, type Seg } from "./layout.js";
+
+const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** What a card shows beyond the view model's soldier. */
 export interface CardInfo {
@@ -58,19 +60,41 @@ function meterRow(tokensK: number): Row {
   return [seg("▓".repeat(n), tone), seg("░".repeat(10 - n), "fa"), seg(` ${tokensK}k/200k handoff`, "dm")];
 }
 
-/** Replace the cell at `col`, where a stem to the Monarch leaves the border. */
+/** Replace the cell at `col`, where a stem to the Monarch leaves the border. A wide grapheme there keeps its width. */
 function stamp(row: Row, col: number, ch: string): Row {
   const out: Row = [];
   let at = 0;
   for (const s of row) {
-    const cs = Array.from(s.text);
-    const i = col - at;
-    if (i >= 0 && i < cs.length) cs[i] = ch;
-    at += cs.length;
-    out.push({ ...s, text: cs.join("") });
+    let text = "";
+    for (const { segment } of segmenter.segment(s.text)) {
+      const c = cells(segment);
+      text += c > 0 && at <= col && col < at + c ? ch + " ".repeat(c - 1) : segment;
+      at += c;
+    }
+    out.push({ ...s, text });
   }
   return out;
 }
+
+/** Word-wrap text to `width` cells; a word longer than a line is cut by grapheme. */
+function wrap(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (let word of text.split(" ")) {
+    if (!line && !word) continue;
+    while (cells(word) > width) {
+      if (line) { lines.push(line); line = ""; }
+      const head = takeCells(word, width) || Array.from(word)[0];
+      lines.push(head);
+      word = word.slice(head.length);
+    }
+    if (line && cells(line) + 1 + cells(word) > width) { lines.push(line); line = ""; }
+    line = line ? `${line} ${word}` : word;
+  }
+  return line ? [...lines, line] : lines;
+}
+const wrapped = (text: string, width: number, tone: Tone, bold?: boolean): Row[] =>
+  wrap(text, width).map((t) => [seg(t, tone, bold)]);
 
 export function cardRows(s: Soldier, info: CardInfo, opts: CardOpts): Row[] {
   const w = Math.max(MIN_WIDTH, opts.width);
@@ -91,13 +115,23 @@ export function cardRows(s: Soldier, info: CardInfo, opts: CardOpts): Row[] {
   const third: Row = info.tool
     ? [seg("↳", "in"), seg(` ${safeText(info.tool)}`, "dm")]
     : info.note ? [{ ...info.note, text: safeText(info.note.text) }] : [];
-  const body: Row[] = [
-    stateRow(s, info.elapsed, inner),
-    narrow ? [seg(`${role} · `, "dm"), task] : [task],
-    third,
-    meterRow(s.tokensK),
-    info.windowPct === undefined ? [] : [seg(`${" ".repeat(11)}· ${info.windowPct}% window`, "dm")],
-  ];
+  const meter = meterRow(s.tokensK);
+  const win: Row = info.windowPct === undefined ? [] : [seg(`${" ".repeat(11)}· ${info.windowPct}% window`, "dm")];
+  // A card that needs the owner keeps its whole question and keys in view (VIS-3): they wrap and the card grows.
+  const decision = needs(s.state) && !info.tool;
+  let body: Row[];
+  if (decision) {
+    const q = safeText(info.task ?? s.task);
+    const lines = [
+      ...wrapped(narrow ? `${role} · ${q}` : q, inner, "tx"),
+      ...(info.note ? wrapped(safeText(info.note.text), inner, info.note.tone ?? "wn", info.note.bold) : []),
+    ];
+    const tail = [meter, win].filter((r) => r.length);
+    body = [stateRow(s, info.elapsed, inner), ...lines, ...tail];
+    while (body.length < 5) body.push([]);
+  } else {
+    body = [stateRow(s, info.elapsed, inner), narrow ? [seg(`${role} · `, "dm"), task] : [task], third, meter, win];
+  }
 
   const col = Math.floor((w - 1) / 2);
   const rows: Row[] = [

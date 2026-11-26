@@ -87,7 +87,7 @@ const REPLAY_110 = String.raw`
  │                                 │ │                                 │ ┆                                 ┆
  ╰─────────────────────────────────╯ ╰─────────────────────────────────╯ ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
 ╭─ messages  ■ brief   □ summary   ◆ soldier to soldier   ! asks you ────────────────────────────────────────╮
-│ 14:31:02  Monarch ■ Iron     brief "dark-mode toggle…"                                         ✓ delivered │
+│ 14:31:02  Monarch ■ Iron     brief "dark-mode toggle…"                                         → delivered │
 │ 14:31:40  Igris   ◆ Iron     "tokens ready: bg.dark, text.dark"                                → delivered │
 │ 14:32:11  Tusk    □ Monarch  summary · lint scan · 0 findings                                   ✓ answered │
 │ 14:32:30  Beru    ! you      asks: Run this command?                                        waiting on you │
@@ -102,6 +102,38 @@ const SCREENS: [string, (view: ArmyView, h: number) => Row[], (view: ArmyView) =
   ["ledger", (v, h) => ledgerRows(v, LEDGER_SCENE, LEDGER, h), (v) => <Ledger view={v} scene={LEDGER_SCENE} ledger={LEDGER} height={31} />, LEDGER_110, finishedTable],
   ["replay", (v, h) => replayRows(v, REPLAY_SCENE, REPLAY, h), (v) => <Replay view={v} scene={REPLAY_SCENE} replay={REPLAY} height={31} />, REPLAY_110, replayTable],
 ];
+
+// The drawer's own rows, border and padding stripped, wrapped lines joined by one space.
+const drawerText = (rows: string[]) => rows.filter((r) => r.startsWith("│")).map((r) => r.replace(/^│ ?| ?│$/g, "").trim()).join(" ").replace(/\s+/g, " ");
+const from = (rows: string[], top: string) => rows.slice(rows.findIndex((r) => r.startsWith(top)));
+
+it.each([[110, 28], [110, 24], [120, 30]])("keeps the whole ledger drawer at %ix%i, the board giving up its rows", (w, h) => {
+  const rows = text(ledgerRows(finishedTable(w), LEDGER_SCENE, LEDGER, h));
+  expect(rows).toHaveLength(h);
+  const drawer = drawerText(from(rows, "╭─ ✓ war ledger"));
+  for (const name of ["Iron", "Igris", "Kaisel", "Beru"]) expect(drawer).toContain(name);
+});
+
+it("keeps the whole summary drawer at 110x28", () => {
+  const drawer = from(text(summaryRows(finishedTable(110), FINISHED_SCENE, SUMMARY, 28)), "╭─ ✓ summary");
+  expect(drawer.filter((r) => r.startsWith("│"))).toHaveLength(5);
+  expect(drawer.join("\n")).toContain("nothing is running");
+});
+
+describe("a narrow screen reflows instead of clipping", () => {
+  it("keeps each ledger row's time, cost and outcome at 44x24", () => {
+    const drawer = drawerText(from(text(ledgerRows(finishedTable(44), LEDGER_SCENE, LEDGER, 24)), "╭─ ✓ war ledger"));
+    for (const l of LEDGER) {
+      expect(drawer).toContain(l.time);
+      expect(drawer).toContain(`$${l.costUsd!.toFixed(2)}`);
+      expect(drawer).toContain(l.outcome.text);
+    }
+  });
+  it("keeps each summary label with its value at 44x24", () => {
+    const drawer = drawerText(from(text(summaryRows(finishedTable(44), FINISHED_SCENE, SUMMARY, 24)), "╭─ ✓ summary"));
+    for (const pair of ["answered Reviewed the dark-mode toggle", "changes none (a review)", "tests not run", "applied nothing to apply"]) expect(drawer).toContain(pair);
+  });
+});
 
 it("shows a dash for a cost no CLI reported", () => {
   const unpriced = LEDGER.map(({ costUsd: _, ...line }) => line);

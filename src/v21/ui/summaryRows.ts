@@ -2,7 +2,7 @@
 import { safeText, toAscii, type ArmyView, type Message, type Soldier, type Tone } from "./model.js";
 import { cardRows, type CardInfo } from "./cardRows.js";
 import { monarchRows } from "./boardRows.js";
-import { fit, lr, rowWidth, type Row, type Seg } from "./layout.js";
+import { cells, fit, lr, rowWidth, type Row, type Seg } from "./layout.js";
 import { tableRows, type TableScene } from "./tableRows.js";
 
 /** What the last answer said, and what each worktree holds. */
@@ -12,7 +12,32 @@ export interface Summary {
 }
 
 // tableRows' own threshold: under it the board folds to the tree.
-const BOARD_WIDTH = 110, BOARD_HEIGHT = 28, SEATS = 6;
+const BOARD_WIDTH = 110, BOARD_HEIGHT = 28, SEATS = 6, BOARD_DRAWER_AT = 23;
+
+// Widths and clipping are layout.ts's (string-width cells); only the grapheme split for breaking a long word lives here.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const parts = (text: string): string[] => Array.from(graphemes.segment(text), (x) => x.segment);
+export const rw = rowWidth;
+/** Words of a row wrapped to `w` columns, tones kept; a word wider than a line is broken between characters. */
+export function wrapRow(row: Row, w: number): Row[] {
+  const lines: Row[] = [[]];
+  let used = 0;
+  const put = (text: string, x: Seg, width: number) => { lines[lines.length - 1].push({ ...x, text }); used += width; };
+  const next = () => { lines.push([]); used = 0; };
+  for (const x of row) {
+    for (const token of x.text.split(/(\s+)/).filter(Boolean)) {
+      const width = cells(token);
+      if (/^\s+$/.test(token)) { if (used && used + width <= w) put(token, x, width); continue; }
+      if (used && used + width > w) next();
+      if (width <= w) { put(token, x, width); continue; }
+      for (const g of parts(token)) {
+        if (used && used + cells(g) > w) next();
+        put(g, x, cells(g));
+      }
+    }
+  }
+  return lines.filter((l) => l.length);
+}
 
 const seg = (text: string, tone?: Tone, bold?: boolean): Seg => ({ text, tone, bold });
 // The glyphs of these screens that toAscii's table lacks.
@@ -26,9 +51,9 @@ export const own = (rows: Row[], ascii: boolean): Row[] =>
 export function drawerBox(view: ArmyView, title: Row, body: Row[], height: number): Row[] {
   if (height < 3) return [];
   const w = view.width, side = seg("│", "ok");
-  const label: Row = [seg(" "), ...fit(title, Math.min(rowWidth(title), w - 5)), seg(" ")];
+  const label: Row = [seg(" "), ...fit(title, Math.min(rw(title), w - 5)), seg(" ")];
   return own([
-    [seg("╭─", "ok"), ...label, seg("─".repeat(w - 3 - rowWidth(label)) + "╮", "ok")],
+    [seg("╭─", "ok"), ...label, seg("─".repeat(w - 3 - rw(label)) + "╮", "ok")],
     ...body.slice(0, height - 2).map((r) => [side, seg(" "), ...fit(r, w - 4), seg(" "), side]),
     [seg("╰" + "─".repeat(w - 2) + "╯", "ok")],
   ], view.ascii);
@@ -61,13 +86,17 @@ export function drawnRows(view: ArmyView, scene: TableScene, height: number, chr
   const w = view.width;
   // A peer line makes the War Table's panel five rows; the panel and the drawer are replaced below.
   const talk: Message = { time: "", from: "monarch", to: "monarch", kind: "peer", text: "", status: "delivered" };
-  const rows = tableRows(view, { ...scene, messages: [talk] }, height);
+  // The drawer keeps all its rows: when the board would leave it fewer, the tree stands in and the board gives up its rows first.
+  const need = drawer(Infinity).length;
+  const board = w >= BOARD_WIDTH && height >= BOARD_HEIGHT && view.soldiers.length <= SEATS && height - 1 - BOARD_DRAWER_AT >= need;
+  const base = tableRows(view, { ...scene, messages: [talk] }, board ? height : Math.min(height, BOARD_HEIGHT - 1));
+  const rows = [...base.slice(0, -1), ...Array.from({ length: height - base.length }, () => fit([], w)), base[base.length - 1]];
   const put = (at: number, next: Row[]) => next.forEach((r, i) => { if (at + i < height - 1) rows[at + i] = fit(r, w); });
   put(0, own(chrome.top, view.ascii));
 
   // The tree is one row per soldier, so its drawer starts four rows below their count.
   let at = view.soldiers.length + 4;
-  if (w >= BOARD_WIDTH && height >= BOARD_HEIGHT && view.soldiers.length <= SEATS) {
+  if (board) {
     const cw = Math.floor((w - 4) / 3), gap = seg(" ".repeat(Math.floor((w - 3 * cw) / 4)));
     const cards = (from: number, notch: "top" | "bottom"): Row[] => {
       const three = [0, 1, 2].map((i) => {
@@ -89,7 +118,7 @@ export function drawnRows(view: ArmyView, scene: TableScene, height: number, chr
     const edge = own([[seg("║", "ac")]], view.ascii)[0];
     const edged = (r: Row): Row => [...edge, seg(" "), ...own([fit(r, w - 4)], view.ascii)[0], seg(" "), ...edge];
     put(10, [box[0], ...chrome.panel(box, edged), box[box.length - 1]]);
-    at = 23;
+    at = BOARD_DRAWER_AT;
   }
   const room = Math.max(0, height - 1 - at);
   const drawn = drawer(room);
@@ -122,13 +151,20 @@ export function summaryRows(view: ArmyView, scene: TableScene, sum: Summary, hei
   const soldier = (id: string) => view.soldiers.find((s) => s.id === id);
   const who = (id: string) => safeText(soldier(id)?.name ?? id);
   const spent = [scene.briefs.sinceFirst && safeText(scene.briefs.sinceFirst), money(scene.briefs.costUsd)].filter(Boolean).join(" · ");
-  const field = (key: string, value: string): Row => [seg(key.padEnd(10), "dm"), seg(safeText(value))];
+  const inner = view.width - 4;
+  // A label keeps its value: a long value wraps under its own label, a narrow row splits into one field per line.
+  const field = (key: string, value: string): Row[] =>
+    wrapRow([seg(safeText(value))], Math.max(1, inner - 10)).map((r, i) => [seg(i ? " ".repeat(10) : key.padEnd(10), "dm"), ...r]);
+  const flow = (row: Row): Row[] => (rw(row) <= inner ? [row] : wrapRow(row, inner));
+  const one: Row = [...field("changes", sum.changes)[0], seg("        "), seg("tests  ", "dm"), seg(safeText(sum.tests)), seg("        "), seg("applied  ", "dm"), seg(safeText(sum.applied))];
+  const facts = rw(one) <= inner && field("changes", sum.changes).length === 1 ? [one]
+    : [...field("changes", sum.changes), ...field("tests", sum.tests), ...field("applied", sum.applied)];
   const title: Row = [seg("✓", "ok"), seg(` summary from ${who(sum.from)}`, "ac", true), seg(` · ${safeText(sum.report)}`, "dm"), seg("  t ledger", "fa")];
   return finishedRows(view, scene, height, (room) => drawerBox(view, title, [
-    field("answered", sum.answered),
-    [...field("changes", sum.changes), seg("        "), seg("tests  ", "dm"), seg(safeText(sum.tests)), seg("        "), seg("applied  ", "dm"), seg(safeText(sum.applied))],
-    ...sum.worktrees.map((t): Row => [seg(who(t.soldier), soldier(t.soldier)?.colour), seg(`  ${safeText(t.line)}`, "dm")]),
-    [seg("✓ The shadows return.", "ok", true), seg(spent && `  ${spent}${money(scene.briefs.costUsd) ? " where the CLIs report a cost" : ""}`, "dm")],
-    [seg("nothing is running · /send <soldier> <message> to type to one", "dm")],
+    ...field("answered", sum.answered),
+    ...facts,
+    ...sum.worktrees.flatMap((t) => flow([seg(who(t.soldier), soldier(t.soldier)?.colour), seg(`  ${safeText(t.line)}`, "dm")])),
+    ...flow([seg("✓ The shadows return.", "ok", true), seg(spent && `  ${spent}${money(scene.briefs.costUsd) ? " where the CLIs report a cost" : ""}`, "dm")]),
+    ...flow([seg("nothing is running · /send <soldier> <message> to type to one", "dm")]),
   ], room));
 }
