@@ -1,12 +1,12 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import * as managedProcesses from "./processTree.js";
 import type { ChannelEvent, NativeError } from "./channel.js";
-import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, VERSION_TIMEOUT_MS } from "./claude.js";
+import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, resolveClaudeLaunch, VERSION_TIMEOUT_MS } from "./claude.js";
 
 const channels: ClaudeChannel[] = [];
 const folders: string[] = [];
@@ -411,6 +411,53 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(result.error).toEqual({ kind: "other", message: "claude --version gave no answer in 0.3 s" });
     expect(events.some((event) => event.type === "raw" && (event.data as { type?: string }).type === "system")).toBe(false);
   }, 15_000);
+
+  const withPath = (...entries: string[]): NodeJS.ProcessEnv => ({ ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path")), PATH: entries.join(delimiter) });
+  async function fakeClaudeIn(directory: string, body: string): Promise<string> {
+    await mkdir(directory, { recursive: true });
+    const file = join(directory, process.platform === "win32" ? "claude.cmd" : "claude");
+    await writeFile(file, process.platform === "win32" ? `@echo off\r\n${body}\r\n` : `#!/bin/sh\n${body}\n`);
+    if (process.platform !== "win32") await chmod(file, 0o755);
+    return file;
+  }
+
+  it("resolves claude once on PATH outside the soldier's folder, and refuses an unvalidated target (CH-1)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "sa-claude-launch-")); folders.push(cwd);
+    const outside = await mkdtemp(join(tmpdir(), "sa-claude-trusted-")); folders.push(outside);
+    const local = join(cwd, "bin");
+    await fakeClaudeIn(local, "exit 0");
+    const trusted = await fakeClaudeIn(outside, "exit 0");
+    const launch = await resolveClaudeLaunch(undefined, cwd, withPath("bin", "", local, join(outside, "missing"), outside));
+    if (typeof launch === "string") throw new Error(launch);
+    expect(launch.file.toLowerCase()).toBe(trusted.toLowerCase()); // PATHEXT's own case
+    expect(launch.dropped).toEqual(["bin", "", local, join(outside, "missing")]);
+    expect(launch.env.PATH).toBe(outside);
+    if (process.platform === "win32") expect(launch.env.NoDefaultCurrentDirectoryInExePath).toBe("1");
+    expect(await resolveClaudeLaunch(undefined, cwd, withPath("bin", local))).toMatch(/not found on PATH/);
+    expect(await resolveClaudeLaunch({ file: "claude" }, cwd, withPath(outside))).toMatch(/not an absolute path/);
+  });
+
+  windowsOnly("starts the probe and the session from the same validated claude and environment (CH-1)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "sa-claude-launch-")); folders.push(cwd);
+    const outside = await mkdtemp(join(tmpdir(), "sa-claude-trusted-")); folders.push(outside);
+    const log = join(outside, "starts.log"); const marker = join(cwd, "local-ran");
+    const local = join(cwd, "bin");
+    await fakeClaudeIn(local, `echo ran>"${marker}"`);
+    const trusted = await fakeClaudeIn(outside, `echo %~f0^|%PATH%>>"${log}"\r\n"${process.execPath}" "${resolve("test/fakes/claude.mjs")}" %*`);
+    const events: ChannelEvent[] = [];
+    const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions: "x", onEvent: (event) => events.push(event), env: withPath(local, outside) });
+    channels.push(channel);
+    expect((await channel.send("hello")).status).toBe("completed");
+    expect((await readFile(log, "utf8")).trim().split(/\r?\n/)).toEqual([`${trusted}|${outside}`, `${trusted}|${outside}`]);
+    expect(events.find((event) => event.type === "raw" && (event.data as { type?: string }).type === "path")?.data).toEqual({ type: "path", dropped: [local] });
+    const refusedEvents: ChannelEvent[] = [];
+    const refused = new ClaudeChannel({ cwd, model: "fake-model", instructions: "x", onEvent: (event) => refusedEvents.push(event), env: withPath(local) });
+    channels.push(refused);
+    expect((await refused.send("hello")).error?.kind).toBe("other");
+    await until(() => refusedEvents.some((event) => event.type === "closed"));
+    expect(refusedEvents.find((event) => event.type === "closed")?.data).toMatchObject({ refusedStart: true });
+    await expect(readFile(marker)).rejects.toThrow();
+  }, 30_000);
 
   windowsOnly("opens no session for a claude older than the oldest, and it is not a crash (CH-2, M1-AC4)", async () => {
     const { channel, events } = await setup({ fakeArgs: ["--fake-version", "2.1.276"] });

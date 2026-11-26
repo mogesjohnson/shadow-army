@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, constants, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, isAbsolute, join, relative } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, RetryNotice, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
@@ -25,6 +25,50 @@ const STDERR_DRAIN_MS = 500;
 export interface ClaudeChannelOptions extends ChannelOptions {
   /** Test seam for the 10 s `--version` bound. */
   versionTimeoutMs?: number;
+  /** The environment the launch target is resolved from (default: the post office's own). */
+  env?: NodeJS.ProcessEnv;
+}
+
+/** CH-1: the one validated target both the `--version` probe and the session start. */
+export interface ClaudeLaunch { file: string; args: string[]; env: NodeJS.ProcessEnv; dropped: string[] }
+
+const foldCase = process.platform === "win32" || process.platform === "darwin";
+const inside = (child: string, parent: string): boolean => {
+  const rel = relative(foldCase ? parent.toLowerCase() : parent, foldCase ? child.toLowerCase() : child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
+const isFile = async (path: string): Promise<boolean> => {
+  try { if (!(await stat(path)).isFile()) return false; if (process.platform !== "win32") await access(path, constants.X_OK); return true; }
+  catch { return false; }
+};
+
+/**
+ * CH-1: resolve claude once. The post office's `PATH` loses every relative, empty or unresolvable
+ * entry and every entry in the soldier's folder, compared by real path; `claude` is looked up in what
+ * is left (on Windows with each `PATHEXT` extension in order, never with none, never in the current
+ * folder), and the session gets that cleaned `PATH`. A configured command must be absolute.
+ * Returns the refusal line when no trusted claude is found.
+ */
+export async function resolveClaudeLaunch(command: { file: string; args?: string[] } | undefined, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<ClaudeLaunch | string> {
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+  const folder = await realpath(cwd).catch(() => cwd);
+  const kept: string[] = []; const dropped: string[] = [];
+  for (const entry of (env[pathKey] ?? "").split(delimiter)) {
+    const real = entry && isAbsolute(entry) ? await realpath(entry).catch(() => undefined) : undefined;
+    if (real && !inside(real, folder)) kept.push(entry); else dropped.push(entry);
+  }
+  const launchEnv: NodeJS.ProcessEnv = { ...env, [pathKey]: kept.join(delimiter) };
+  if (process.platform === "win32") launchEnv.NoDefaultCurrentDirectoryInExePath = "1";
+  if (command) {
+    if (!isAbsolute(command.file)) return `claude command ${command.file} is not an absolute path`;
+    return { file: command.file, args: command.args ?? [], env: launchEnv, dropped };
+  }
+  const extensions = process.platform === "win32" ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
+  for (const entry of kept) for (const extension of extensions) {
+    const candidate = join(entry, `claude${extension}`);
+    if (await isFile(candidate)) return { file: candidate, args: [], env: launchEnv, dropped };
+  }
+  return "claude was not found on PATH outside the soldier's folder; install claude";
 }
 
 const versionParts = (text: string): number[] | undefined => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.slice(1).map(Number);
@@ -39,9 +83,9 @@ const isOlder = (found: number[], oldest: number[]): boolean => {
  * start is not a crash (PO-1), so the caller reports it with kind "other". Rejects, with
  * `containmentFailed`, when the probe's processes cannot be confirmed stopped.
  */
-export async function claudeVersionProblem(command: { file: string; args?: string[] }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
+export async function claudeVersionProblem(command: { file: string; args?: string[]; env?: NodeJS.ProcessEnv }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
   let child: ManagedProcess;
-  try { child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), "--version"], cwd }); }
+  try { child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), "--version"], cwd, env: command.env }); }
   catch (error) { return `claude --version could not run: ${error instanceof Error ? error.message : String(error)}`; }
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
@@ -162,7 +206,10 @@ export class ClaudeChannel implements NativeChannel {
   }
 
   private async spawn(): Promise<ManagedProcess> {
-    const command = this.options.command ?? { file: "claude" };
+    // CH-1: one validated target for the probe and the session. No trusted claude is a refused start.
+    const command = await resolveClaudeLaunch(this.options.command, this.options.cwd, this.options.env);
+    if (typeof command === "string") throw Object.assign(new Error(command), { refusedStart: true });
+    if (command.dropped.length) this.emit("raw", { type: "path", dropped: command.dropped });
     // CH-2: an old or silent claude opens no session. This is a refused start, not a crash.
     const problem = await claudeVersionProblem(command, this.options.cwd, this.options.versionTimeoutMs);
     if (problem) throw Object.assign(new Error(problem), { refusedStart: true });
@@ -174,7 +221,7 @@ export class ClaudeChannel implements NativeChannel {
       instructionPath = join(this.instructionDirectory, "instructions.txt");
       await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
     }
-    return spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd });
+    return spawnManagedProcess({ file: command.file, args: [...command.args, ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: command.env });
   }
 
   private emit(type: ChannelEvent["type"], data: unknown): void {
