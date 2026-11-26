@@ -1,6 +1,8 @@
 // Fixtures for the War Table until the post office feeds the view (the design's lib.mjs ARMY and kit.mjs models).
 import type { ArmyView, Briefs, Message, Soldier } from "./model.js";
 import type { TableCard, TableScene } from "./tableRows.js";
+import type { Summary } from "./summaryRows.js";
+import type { LedgerLine } from "./ledgerRows.js";
 
 /** The design's whole roster, in roster order; the strip tests compare all six with the canvas frames. */
 export const ROSTER: Soldier[] = [
@@ -71,3 +73,39 @@ export const NEEDS_SCENE: TableScene = {
 
 /** The needs-you scene's six soldiers. */
 export const needsSoldiers: Soldier[] = ROSTER.map((s) => (s.id === "igris" ? { ...s, state: "ready" } : s));
+
+/** The "summary 110" and "ledger 110" scenes: the run is over and every started soldier is idle. */
+const DONE: Record<string, [string, number]> = {
+  iron: ["toggle done · 2 files", 58], igris: ["theme tokens done", 142], beru: ["lint pass after your OK", 71],
+  tusk: ["last: lint scan ✓", 38], kaisel: ["review answered ✓", 64],
+};
+const doneSoldiers: Soldier[] = ROSTER.map((s) => (DONE[s.id] ? { ...s, state: "idle", task: DONE[s.id][0], tokensK: DONE[s.id][1] } : s));
+export const finishedTable = (width: number, ascii = false): ArmyView => ({ ...warTable(width, ascii, doneSoldiers), decisions: [], handoffs: [] });
+
+const cold = (left: string): TableCard["note"] => ({ text: `cold in ${left}`, tone: "dm" });
+export const FINISHED_SCENE: TableScene = {
+  runId: "r-0412", hint: "t shows the ledger", focus: "kaisel", messages: [],
+  briefs: { sent: 4, answered: 4, queued: 0, sinceFirst: "3:05", costUsd: 0.64 },
+  cards: {
+    iron: { role: "build", note: cold("56m") }, igris: { role: "build", note: cold("12m"), windowPct: 55 },
+    beru: { role: "build", windowPct: 28 }, tusk: { role: "research" }, kaisel: { role: "review", note: cold("55m") },
+    bellion: { role: "orchestrate" },
+  },
+};
+
+export const SUMMARY: Summary = {
+  from: "kaisel", report: ".shadow/reports/kaisel-1431.md",
+  answered: 'Reviewed the dark-mode toggle: no blocking findings. One nit: the label could read "Dark theme".',
+  changes: "none (a review)", tests: "not run", applied: "nothing to apply",
+  worktrees: [{ soldier: "iron", line: "2 files · +42 −2 on shadow/iron · tests ✓ passed · applied ○ not yet" }],
+};
+
+export const LEDGER_SCENE: TableScene = {
+  ...FINISHED_SCENE, hint: "the ledger counts briefs, answers, peak context, time and cost per soldier",
+};
+export const LEDGER: LedgerLine[] = [
+  { soldier: "iron", briefs: 2, answers: 2, peakK: 112, time: "2:14", costUsd: 0.22, outcome: { mark: "✓", text: "2 files +42 −2 on shadow/iron" } },
+  { soldier: "igris", briefs: 1, answers: 1, peakK: 200, peakMark: "handoff", time: "2:45", costUsd: 0.29, outcome: { mark: "⇥", text: "handed off once, then a fresh session" } },
+  { soldier: "kaisel", briefs: 1, answers: 1, peakK: 142, peakMark: "cold", time: "0:22", costUsd: 0.09, outcome: { mark: "✓", text: "no blocking findings · began cold" } },
+  { soldier: "beru", briefs: 1, answers: 1, peakK: 64, time: "2:23", costUsd: 0.04, outcome: { mark: "!", text: "1 ask · answered Allow once" } },
+];
