@@ -8,13 +8,14 @@ import type { ChannelOptions, NativeChannel, TurnResult } from "./channel.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, until } from "./fixture-main.testutil.js";
 import { Locks } from "../workspace/locks.js";
+import type { ApplyResult } from "../workspace/apply.js";
 
-// C4: a hook that runs right after an apply, before the office reads the folder again.
-const hooks = vi.hoisted(() => ({ afterApply: undefined as undefined | (() => void), cleanup: undefined as string | undefined }));
+// C4: a hook that runs right after an apply, before the office reads the folder again. #94 C14/C15: `map` rewrites its outcome.
+const hooks = vi.hoisted(() => ({ afterApply: undefined as undefined | (() => void), map: undefined as undefined | ((out: ApplyResult) => ApplyResult) }));
 vi.mock("./apply.js", async (load) => {
   const real = await load<typeof import("./apply.js")>();
   return { applyAudited: async (...args: Parameters<typeof real.applyAudited>) => {
-    const out = await real.applyAudited(...args); hooks.afterApply?.(); return hooks.cleanup ? { ...out, cleanup: hooks.cleanup } : out;
+    const out = await real.applyAudited(...args); hooks.afterApply?.(); return hooks.map ? hooks.map(out) : out;
   } };
 });
 
@@ -24,7 +25,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   hooks.afterApply = undefined;
-  hooks.cleanup = undefined;
+  hooks.map = undefined;
   await Promise.all(offices.splice(0).map((office) => office.close().catch(() => {})));
   repos.splice(0).forEach((repo) => repo.cleanup());
 });
@@ -37,9 +38,9 @@ type Step = (cwd: string) => Promise<TurnResult["status"]>;
 const put = async (dir: string, name: string, body: string) => { await mkdir(dirname(join(dir, name)), { recursive: true }); await writeFile(join(dir, name), body); };
 
 /** Each soldier's channel runs its next scripted step per turn (the w12 probes' shape). */
-async function office(steps: Record<string, Step[]>) {
+async function office(steps: Record<string, Step[]>, onEvent?: (event: OfficeEvent) => void) {
   const repo = makeRepo({ "README.md": "hello\n", "src/a.ts": "a\n", "src/b.ts": "b\n" }); repos.push(repo);
-  const o = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: (options: ChannelOptions): NativeChannel => {
+  const o = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent, channelFactory: (options: ChannelOptions): NativeChannel => {
     const key = options.cwd.includes("medic") ? "medic" : "tank";
     return { async send() { return { status: await steps[key]!.shift()!(options.cwd), text: "done", refusal: false }; },
       async interrupt() {}, async respondApproval() {}, async close() {} };
@@ -170,12 +171,25 @@ describe("post office fixes from the M1a pre-review", () => {
   it("#94 C14: a failed cleanup after the apply keeps the applied files and reports the cleanup as a warning", async () => {
     const { repo, office: o } = await office({ tank: [async (cwd) => { await put(cwd, "src/a.ts", "tank\n"); return "completed"; }] });
     await o.open("tank", { claims: ["src/a.ts"] });
-    hooks.cleanup = "EBUSY";
+    hooks.map = (out) => ({ ...out, cleanup: "EBUSY" });
     const result = await o.send("tank", "a");
     expect(result.write?.apply).toMatchObject({ applied: true, files: [{ change: "M", path: "src/a.ts" }] });
     expect(result.logFailure).toContain("cleanup failed: EBUSY");
     expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("tank\n");
   }, 30_000);
+
+  it("#94 C15: a failed rollback's paths survive an observer that throws, at the session-down record and after", async () => {
+    for (const at of ["down", "delivery"] as const) {
+      const { office: o } = await office({ tank: [async (cwd) => { await put(cwd, "src/a.ts", "tank\n"); return "completed"; }] },
+        (event) => { if (event.type === at) throw new Error(`observer broke at ${at}`); });
+      await o.open("tank", { claims: ["src/a.ts"] });
+      hooks.map = () => ({ applied: false, reason: "index.lock; taking the edits back out failed too", clashes: [], left: ["src/a.ts"] });
+      const result = await o.send("tank", "a");
+      expect(result.write?.apply).toMatchObject({ applied: false, left: ["src/a.ts"] });
+      expect(result.write?.reason).toContain("the session is down");
+      expect(result.logFailure).toContain(`observer broke at ${at}`);
+    }
+  }, 60_000);
 
   it("#94 C12: an owner's full staging of an empty file another soldier added still fails the guard", async () => {
     for (const stage of [false, true]) {

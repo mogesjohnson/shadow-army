@@ -408,7 +408,7 @@ export class PostOffice {
         // other running turns' guards naming these paths (they fail closed).
         if (before && applied.applied && applied.files.length) {
           try { await carryApply(this.root, others, before, await captureState(this.root), applied.files, audited.tip!); }
-          catch (error) { failure = `other running turns' guards were not moved past this apply: ${message(error)}`; }
+          catch (error) { failure = [failure, `other running turns' guards were not moved past this apply: ${message(error)}`].filter(Boolean).join("; "); }
         }
         return applied;
       });
@@ -417,25 +417,29 @@ export class PostOffice {
     // W12-1: a turn that moved the branch but did not reach the folder (not applicable, or its apply refused: C1) leaves
     // work the owner never got. A later turn's apply would carry it in, so the session goes down, as after a guard
     // failure; reconnecting starts a fresh worktree.
+    // #92 C6: once files reached the owner's folder, no later failure (an observer, the log) hides which.
+    // #94 C15: nor which files a failed rollback may have left changed (`left`).
+    const applied = !!write?.apply && (write.apply.applied ? write.apply.files.length > 0 : !!write.apply.left?.length);
+    const afterApply = (error: unknown) => {
+      if (!applied) throw error;
+      failure = [failure, `the post office failed after the apply: ${message(error)}`].filter(Boolean).join("; ");
+    };
     if (write && !write.apply?.applied && write.tip && write.tip !== tip && !session.down) {
       session.down = true;
-      await session.channel!.close();
       write = { ...write, reason: `${write.reason ?? write.apply?.reason ?? "the apply was refused"}; the session is down so a later turn cannot carry this work in; reconnect to start fresh` };
-      this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
+      try {
+        await session.channel!.close();
+        this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
+      } catch (error) { afterApply(error); }
     }
     if (write) result = { ...result, write };
     result = { ...result, summary: result.text.split(/\r?\n/).slice(0, 5).join("\n") };
-    // #92 C6: once files reached the owner's folder, no later failure (an observer, the log) hides which.
-    const applied = !!write?.apply?.applied && write.apply.files.length > 0;
     try {
       this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
       if (write) this.record({ soldier: session.spec.key, type: "audit", data: { ...write, diff: undefined } }, session);
       this.record({ soldier: session.spec.key, type: "delivery", data: { state: result.status === "completed" ? "answered" : "interrupted", result } }, session);
       await this.logPending;
-    } catch (error) {
-      if (!applied) throw error;
-      failure = [failure, `the post office failed after the apply: ${message(error)}`].filter(Boolean).join("; ");
-    }
+    } catch (error) { afterApply(error); }
     if (this.logFailure) {
       if (!applied) throw this.logFailure;
       failure = [failure, `post office log failed: ${this.logFailure.message}`].filter(Boolean).join("; ");
