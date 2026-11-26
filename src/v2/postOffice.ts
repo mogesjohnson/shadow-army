@@ -8,9 +8,9 @@ import { diffState, MAX_HASHED, type RepoState } from "../workspace/guard.js";
 import { splitZ } from "../workspace/git.js";
 import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type SessionGit, type WriteSession } from "../workspace/session.js";
-import { HarnessGit } from "./git/harness.js";
+import { HarnessGit, HarnessGitHeld } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
-import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, realish, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
+import { beginTurn, discardWrites, findWrites, FOLDER_FILE, openSnapshot, realish, removeInside, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type RunGit, type Snapshot, type TurnStart } from "./snapshot.js";
 import { platformInspect } from "./winAcl.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
@@ -221,10 +221,29 @@ export class PostOffice {
     return office;
   }
 
+  /** The worktree a held `worktree add` made: its registration and its folder, each only inside its own root. Its branch stays, recorded. */
+  private dropHeldWorktree(path: string) {
+    let admin: string | undefined;
+    try { admin = resolve(path, readFileSync(join(path, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim()); } catch { /* no .git file: nothing registered */ }
+    try {
+      if (admin) removeInside(join(this.repo.commonDir, "worktrees"), admin);
+      removeInside(join(this.root, ".shadow", "worktrees"), path);
+      this.record({ type: "git_hold", data: { removedWorktree: path } });
+    } catch (error) { this.record({ type: "git_hold", data: { leftoverWorktree: path, reason: String(error) } }); }
+  }
+
   /** Harness git for a write session: the folder's own, and each worktree's bound to the identity read as it is made. */
   private sessionGit(): SessionGit {
     return {
-      repo: (args, kind) => this.officeGit.run(args, kind),
+      repo: async (args, kind) => {
+        if (args[0] !== "worktree" || args[1] !== "add") return this.officeGit.run(args, kind);
+        // A hold on the check after `worktree add` comes once the worktree exists: take it out again, without git (C1).
+        const path = args.at(-2)!, before = existsSync(path);
+        try { return await this.officeGit.run(args, kind); } catch (error) {
+          if (error instanceof HarnessGitHeld && !before && existsSync(path)) this.dropHeldWorktree(path);
+          throw error;
+        }
+      },
       worktree: (path) => { const git = this.held(findRepo(path)); return (args, kind) => git.run(args, kind, path); },
     };
   }

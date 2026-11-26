@@ -565,6 +565,31 @@ describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup
     expect(inWorktree).toEqual(expect.arrayContaining(["diff", "ls-files", "add", "commit"]));
   }, 60_000);
 
+  it("removes the worktree when the hold fires on the check after `worktree add`, and releases the claims (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    const inner = spyGit(repo.dir, [], { on: false });
+    let fire = true;
+    const gitFactory: GitFactory = (target) => {
+      const git = inner(target);
+      return { run: async (args, kind, cwd) => {
+        const result = await git.run(args, kind, cwd);
+        if (fire && args[0] === "worktree" && args[1] === "add") { fire = false; await writeFile(hook, "#!/bin/sh\n"); }
+        return result;
+      } };
+    };
+    const post = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, gitFactory, channelFactory: (): NativeChannel => ({
+      async send() { return { status: "completed", text: "done", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} }) });
+    offices.push(post);
+    await expect(post.open("tank", { claims: ["src/a.ts"] })).rejects.toThrow(/harness git held/);
+    const folder = join(repo.dir, ".shadow", "worktrees");
+    expect(existsSync(folder) ? readdirSync(folder) : []).toEqual([]);
+    expect(existsSync(join(repo.dir, ".git", "worktrees")) ? readdirSync(join(repo.dir, ".git", "worktrees")) : []).toEqual([]);
+    rmSync(hook);
+    const result = await post.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.status).toBe("completed");
+  }, 60_000);
+
   it("keeps a down session and its snapshot when reconnecting can't remove it, and the next reconnect does", async () => {
     const failRemove = { on: true };
     const { office: post, channels, events } = await office(failRemove);
