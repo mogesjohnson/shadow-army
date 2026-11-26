@@ -51,6 +51,8 @@ export interface Soldier {
   tag: string;
   colour: Colour;
   host: string;
+  /** Messages waiting in the soldier's queue (HOST-4 shows the count). */
+  queued: number;
   model: string;
   state: SoldierState;
   /** Context tokens, in thousands. */
