@@ -25,7 +25,7 @@ The orchestrator (`orch-<n>`) opens one terminal tab per task. Each worker (`w<n
 **Tasks and briefs.**
 - A task is about 70k of work with a list of the files it may change. Two live workers never share a file; overlapping tasks run in order. At most three workers at once. No new worker while the cockpit's 5-hour figure is 80% or more.
 - The brief goes in `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md`: the task, its files and the files it must not touch, branch and base, model and effort, what done means, and the orchestrator's name. Codex-fix briefs point at `codex-fix-common.md` beside them.
-- **Model and effort:** Opus medium for concurrency, security stores, process termination and design; Sonnet high for safety code (redaction, filters); Sonnet medium for ordinary modules; Haiku low for mechanical edits.
+- **Model and effort:** Sonnet by default (the owner, 2026-11-26). Opus medium only for concurrency, security stores, process termination and design; Sonnet high for safety code (redaction, filters); Sonnet medium for ordinary modules; Haiku low for mechanical edits.
 - **Lead the prompt with the task**, not "You are worker": the cockpit's duplicate-task stop compares prompts.
 
 **Launch** from the PowerShell tool (cheapest; no `;` inside the prompt):
@@ -48,7 +48,9 @@ For an orchestrator, replace `$env:NO_COLOR=1;` with `Remove-Item Env:NO_COLOR;`
 
 **Cockpit holds** (same-file guard, duplicate-task stop) are the owner's controls. Never lift one by typing into a tab; close one of the two workers and run the tasks in order.
 
-**Merge** with merge commits only (V13), after retargeting the PRs stacked on the branch (V14), and only with Codex's approval at the exact head.
+**Merge** with merge commits only (V13), after retargeting the PRs stacked on the branch (V14), and only with Codex's approval at the exact head. **Merge on approval, unasked (the owner, 2026-11-26):** the loop is Codex reviews, workers fix, test, merge; merge each PR as soon as Codex approves its exact head and its `Validation:` passes. Read each PR's head and base first and merge bottom-up (the PR whose base is the trunk first). Run the merges as a script in its own tab: `wt.exe -w 0 new-tab --title merge-x "C:\Program Files\Git\bin\bash.exe" <script>` with `gh pr ready <n>` and `gh pr merge <n> --merge --match-head-commit <sha>`.
+
+**Speed-up five (the owner, 2026-11-26, "yes do all five"):** (1) flat PRs: one PR per milestone part, stacked at most one level, commits within V6, the PR may pass 400 lines and 6 files with `Overrides: V6, "yes do all five", 2026-11-26` in its body; the orchestrator folds small open PRs together. (2) Workers self-review before pushing (`spec-reviewer` on Sonnet and the seven failure simulations; `codex-fix-common.md` step 4). (3) One lane until M1 is merged; the Ink lane waits. (4) Sonnet for most fixes. (5) Merge on approval, above.
 
 **At 175k (the save point):**
 1. Commit and push the records.
