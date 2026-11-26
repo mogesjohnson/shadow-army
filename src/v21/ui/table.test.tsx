@@ -109,6 +109,15 @@ describe("War Table screen", () => {
     const seven = { ...work(144), soldiers: [...ROSTER, { ...ROSTER[0], id: "extra" }] };
     expect(screen(seven, WORK_SCENE, 31).filter((l) => /^ [├└]─ /.test(l))).toHaveLength(7);
   });
+  it("keeps the whole pinned decision when the screen is short or narrow (VIS-3)", () => {
+    const p = NEEDS_SCENE.pinned!;
+    for (const [w, h] of [[110, 28], [110, 27], [80, 24], [44, 24], [50, 20]]) {
+      const text = screen(needs(w), NEEDS_SCENE, h).join(" ").replace(/┃/g, " ").replace(/\s+/g, " ");
+      for (const part of [p.question, ...p.command.split(" "), ...p.options.map((o, i) => `${i + 1} ${o}`)]) {
+        expect(text, `${w}x${h} ${part}`).toContain(part);
+      }
+    }
+  });
   it("is exactly the asked size at every width and height, and pure ASCII on request", () => {
     const bad: string[] = [];
     for (let w = 44; w <= 160; w++) for (let h = 16; h <= 50; h++) for (const ascii of [false, true]) {

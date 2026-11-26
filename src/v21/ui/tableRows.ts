@@ -81,6 +81,30 @@ function panel(view: ArmyView, scene: TableScene): Row[] {
   return rows.map((r, i) => (i === 2 ? [...edge, seg(" "), ...line, seg(" "), ...edge] : r));
 }
 
+/** Words of a row wrapped to `w` cells, tones kept; a word wider than a line is broken. */
+function wrap(row: Row, w: number): Row[] {
+  const lines: Row[] = [[]];
+  let used = 0;
+  const put = (text: string, s: Seg) => {
+    const piece: Seg = { ...s, text };
+    lines[lines.length - 1].push(piece);
+    used += rowWidth([piece]);
+  };
+  for (const s of row) {
+    for (const token of s.text.split(/(\s+)/).filter(Boolean)) {
+      const width = rowWidth([{ ...s, text: token }]);
+      if (/^\s+$/.test(token)) { if (used && used + width <= w) put(token, s); continue; }
+      if (used && used + width > w) { lines.push([]); used = 0; }
+      if (width <= w) { put(token, s); continue; }
+      for (const ch of Array.from(token)) {
+        if (used && used + rowWidth([{ ...s, text: ch }]) > w) { lines.push([]); used = 0; }
+        put(ch, s);
+      }
+    }
+  }
+  return lines.filter((l) => l.length);
+}
+
 function decisionRows(view: ArmyView, scene: TableScene, p: PinnedCard, height: number, folded: boolean): Row[] {
   const w = view.width, list = asking(view);
   const s = view.soldiers.find((x) => x.id === p.soldier);
@@ -94,18 +118,22 @@ function decisionRows(view: ArmyView, scene: TableScene, p: PinnedCard, height: 
     if (next) title.push(seg(`  Tab: next → ${nextName} ${STATES[next.state].glyph}`, "dm"));
   }
   const ask: Row = [seg(safeText(p.asks)), seg(folded ? " " : "  "), seg(safeText(p.question)), seg(folded ? "  " : "    "), seg(safeText(p.command), "tx", true)];
+  const options: Row[] = p.options.map((o, i) => [seg(`${i + 1}`, "wn", true), seg(` ${safeText(o)}`, "wn")]);
   const answers: Row = p.options.flatMap((o, i) => [seg(i ? (folded ? "   " : "      ") : ""), seg(`${i + 1}`, "wn", true), seg(` ${safeText(o)}`, "wn")]);
   const card = scene.cards[p.soldier];
   const used = card?.tokensK ?? s?.tokensK ?? 0;
   const facts = [`${name} turn is paused until you answer`, `${used}k / 200k handoff`,
     ...(card?.windowPct === undefined ? [] : [`${card.windowPct}% window`]), safeText(p.hostNote)].join(" · ");
+  const inner = w - 4;
+  const dm = (text: string): Row[] => wrap([seg(text, "dm")], inner);
+  const worktree = dm(`worktree  ${safeText(p.worktree)}      asked  ${safeText(p.askedAt)}      waiting  ${safeText(p.waiting)}`);
+  // The prompt, the command and every option come first when rows run out; a line too narrow is reflowed, not cut.
+  const spread = (tail: Row): Row[] => rowWidth([...answers, ...tail]) <= inner
+    ? [[...answers, ...tail]] : [...options.flatMap((o) => wrap(o, inner)), ...(tail.length ? wrap(tail, inner) : [])];
   const body: Row[] = folded
-    ? [ask, answers, [seg(safeText(p.source), "fa")],
-      next ? [seg(`Tab: next → ${nextName} ${STATES[next.state].glyph} ${STATES[next.state].word}`, "dm")] : []]
-    : [
-      [seg(`worktree  ${safeText(p.worktree)}      asked  ${safeText(p.askedAt)}      waiting  ${safeText(p.waiting)}`, "dm")],
-      ask, [...answers, seg(`      ${safeText(p.source)}`, "fa")], [seg(facts, "dm")], [seg(safeText(p.keys), "dm")],
-    ];
+    ? [...wrap(ask, inner), ...spread([]), ...wrap([seg(safeText(p.source), "fa")], inner),
+      ...(next ? dm(`Tab: next → ${nextName} ${STATES[next.state].glyph} ${STATES[next.state].word}`) : [[]])]
+    : [...worktree, ...wrap(ask, inner), ...spread([seg(`      ${safeText(p.source)}`, "fa")]), ...dm(facts), ...dm(safeText(p.keys))];
   if (height < 3) return [];
   const label = [...fit(title, Math.min(rowWidth(title), w - 5)), seg(" ")];
   const side = seg("┃", "wn");
@@ -121,7 +149,8 @@ const drawer = (view: ArmyView, scene: TableScene, height: number, folded: boole
 
 const withCard = (s: Soldier, c: TableCard | undefined): Soldier => ({ ...s, tokensK: c?.tokensK ?? s.tokensK });
 
-function board(view: ArmyView, scene: TableScene, height: number): Row[] {
+/** The board above the drawer. */
+function board(view: ArmyView, scene: TableScene): Row[] {
   const w = view.width;
   const cw = Math.floor((w - 4) / 3), gap = Math.floor((w - 3 * cw) / 4), col = Math.floor((cw - 1) / 2);
   const seats = Array.from({ length: 3 }, (_, i) => i);
@@ -154,15 +183,14 @@ function board(view: ArmyView, scene: TableScene, height: number): Row[] {
     return own([row], view.ascii)[0];
   };
 
-  const rows = [
+  return [
     titleRow(view, scene, false), focusRow(view, scene, false),
     ...cards(0, "bottom"), connectors(0), ...panel(view, scene), connectors(3), ...cards(3, "top"),
   ];
-  return [...rows, ...drawer(view, scene, height - rows.length - 1, false)];
 }
 
 /** The narrow screen: one line per soldier in place of the cards, with the drawer under the tree. */
-function tree(view: ArmyView, scene: TableScene, height: number): Row[] {
+function tree(view: ArmyView, scene: TableScene): Row[] {
   const lines = view.soldiers.map((s, i): Row => {
     const c = scene.cards[s.id], look = STATES[s.state], k = withCard(s, c).tokensK;
     const filled = Math.round(Math.min(1, k / 200) * 10);
@@ -175,15 +203,23 @@ function tree(view: ArmyView, scene: TableScene, height: number): Row[] {
   });
   // The panel is asked for under the box threshold, so a short wide screen gets the one line too.
   const one = monarchRows({ ...view, width: Math.min(view.width, BOARD_WIDTH - 1) }, scene.briefs, scene.messages);
-  const rows = [titleRow(view, scene, true), focusRow(view, scene, true), ...one, ...own(lines, view.ascii), []];
-  return [...rows, ...drawer(view, scene, height - rows.length - 1, true)];
+  return [titleRow(view, scene, true), focusRow(view, scene, true), ...one, ...own(lines, view.ascii), []];
 }
 
 /** The screen: title, focus line, the board or the tree, and the strip on the last row. */
 export function tableRows(view: ArmyView, scene: TableScene, height: number): Row[] {
   const w = view.width;
-  const full = w >= BOARD_WIDTH && height >= BOARD_HEIGHT && view.soldiers.length <= SEATS;
-  const body = (full ? board : tree)(view, scene, height).slice(0, Math.max(0, height - 1));
+  let full = w >= BOARD_WIDTH && height >= BOARD_HEIGHT && view.soldiers.length <= SEATS;
+  let top = full ? board(view, scene) : tree(view, scene);
+  // A pinned decision is never cut (VIS-3): when the board and the whole decision do not fit, the tree stands in for the board.
+  if (full && scene.pinned && top.length + decisionRows(view, scene, scene.pinned, Infinity, false).length + 1 > height) {
+    full = false;
+    top = tree(view, scene);
+  }
+  const room = Math.max(0, height - 1);
+  // The rows above the drawer give way first, from the bottom.
+  if (scene.pinned) top = top.slice(0, Math.max(0, room - decisionRows(view, scene, scene.pinned, Infinity, !full).length));
+  const body = [...top, ...drawer(view, scene, room - top.length, !full)].slice(0, room);
   while (body.length < height - 1) body.push([]);
   // A cut row ends in an ellipsis, which the ASCII profile swaps too.
   return [...body, stripRow(view)].slice(0, height).map((r) => own([fit(r, w)], view.ascii)[0]);
