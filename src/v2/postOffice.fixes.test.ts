@@ -164,6 +164,25 @@ describe("post office fixes from the M1a pre-review", () => {
     expect((await medic).status).toBe("completed");
   }, 30_000);
 
+  it("#94 C12: an owner's full staging of an empty file another soldier added still fails the guard", async () => {
+    for (const stage of [false, true]) {
+      let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+      let started!: () => void; const medicStarted = new Promise<void>((resolve) => { started = resolve; });
+      const { repo, office: o } = await office({
+        tank: [async (cwd) => { await medicStarted; await put(cwd, "src/empty.ts", ""); return "completed"; }],
+        medic: [async () => { started(); await gate; return "completed"; }],
+      });
+      await o.open("tank", { claims: ["src/empty.ts"] }); await o.open("medic", { claims: ["src/b.ts"] });
+      const medic = o.send("medic", "b");
+      // The staged entry is the empty blob at stage 0 too, exactly what `git add -N` writes.
+      if (stage) hooks.afterApply = () => { hooks.afterApply = undefined; execFileSync("git", ["add", "src/empty.ts"], { cwd: repo.dir }); };
+      expect((await o.send("tank", "a")).write?.apply).toMatchObject({ applied: true, files: [{ change: "A", path: "src/empty.ts" }] });
+      release();
+      const m = await medic;
+      if (stage) expect(m.error?.message).toContain("src/empty.ts"); else expect(m.status).toBe("completed");
+    }
+  }, 60_000);
+
   it("C1: a moved tip whose apply was refused takes the session down, so a later no-op cannot carry it in", async () => {
     const { repo, office: o } = await office({ tank: [
       async (cwd) => { await put(cwd, "src/a.ts", "soldier\n"); return "completed"; },

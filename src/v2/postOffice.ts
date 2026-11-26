@@ -5,7 +5,7 @@ import { applyAudited } from "./apply.js";
 import type { AppliedFile } from "../workspace/apply.js";
 import { captureState, diffState, type RepoState } from "../workspace/guard.js";
 import { Locks } from "../workspace/locks.js";
-import { git, repoRoot } from "../workspace/git.js";
+import { git, repoRoot, splitZ } from "../workspace/git.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { createSnapshot } from "../workspace/worktree.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
@@ -68,14 +68,21 @@ const blob = (root: string, rev: string, path: string) => git(root, ["rev-parse"
  * else's change, so the guard still names that path.
  * #99 C7: the worktree and the index are reconciled independently. The apply's only index effect is the intent-to-add
  * entry of a file it added, so only that entry moves; any other index change (an owner's staging) is still named.
+ * #94 C12: an empty file the owner staged in full has the same `ls-files --stage` entry as intent-to-add, but only the
+ * staged one is in `diff --cached`. An added path that is not verified intent-to-add carries neither its index nor its
+ * worktree state, so the guard still names it.
  */
 async function carryApply(root: string, sessions: Session[], before: RepoState, after: RepoState, files: AppliedFile[], commit: string): Promise<void> {
   const own = { dirty: [] as string[], index: [] as string[] };
+  const staged = files.some((file) => file.change === "A")
+    ? new Set(splitZ(await git(root, ["diff", "--cached", "--no-renames", "--name-only", "-z"]))) : new Set<string>();
   for (const { path, change } of files) {
+    const intentToAdd = INTENT_TO_ADD.test(after.index.get(path) ?? "") && !staged.has(path);
+    if (change === "A" && !intentToAdd) continue;
     const entry = after.dirty.get(path);
     const hash = entry === undefined ? await blob(root, "HEAD", path) : entry.slice(entry.lastIndexOf(" ") + 1);
     if (hash !== "" && (hash === "gone" ? undefined : hash) === await blob(root, commit, path)) own.dirty.push(path);
-    if (change === "A" && INTENT_TO_ADD.test(after.index.get(path) ?? "")) own.index.push(path);
+    if (change === "A") own.index.push(path);
   }
   for (const session of sessions) {
     const base = session.guardBase;
