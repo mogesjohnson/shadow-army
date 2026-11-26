@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; refuseOn?: string; answer?: string | Error | Promise<string>; ownOpen?: boolean } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -30,6 +30,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const killed: string[] = [];
   const commands: any[] = [];
   const logs: string[] = [];
+  const asks: { question: string; options: any }[] = [];
   const registered: any[] = [];
   const claudeId = { value: "session-1" };
   const every: { ms: number; run: () => void; cancelled: boolean }[] = [];
@@ -44,7 +45,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
       every: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; every.push(t); return { cancel() { t.cancelled = true; } }; },
       after: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; after.push(t); return { cancel() { t.cancelled = true; } }; },
     },
-    ui: { log: (line: string) => logs.push(line) },
+    ui: { log: (line: string) => logs.push(line), ask: async (question: string, options: unknown) => { asks.push({ question, options }); if (env.answer instanceof Error) throw env.answer; return await (env.answer ?? "Trust these files"); } },
     command: { register: async (spec: unknown) => { registered.push(spec); } },
     process: {
       spawn: (options: { argv: string[] }) => {
@@ -75,11 +76,12 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
       fetch: async (_url: string, init: { body: string }) => {
         if (env.refuse) throw new Error(env.refuse);
         const command = JSON.parse(init.body);
+        if (command.action === env.refuseOn) { commands.push(command); throw new Error("web fetch is not allowed"); }
         commands.push(command);
         if (command.action === env.hang) await new Promise(() => {});
         if (command.action === "army") return { ok: true, status: 200, text: JSON.stringify({ result: SOLDIERS }) };
-        if (command.action === "open") return { ok: true, status: 200, text: JSON.stringify({ result: { session: "tank-1" } }) };
-        try { return { ok: true, status: 200, text: JSON.stringify({ result: respond(command) }) }; }
+        if (command.action === "open" && !env.ownOpen) return { ok: true, status: 200, text: JSON.stringify({ result: { session: "tank-1" } }) };
+        try { return { ok: true, status: 200, text: JSON.stringify({ result: await respond(command) }) }; }
         catch (error) { return { ok: false, status: 400, text: JSON.stringify({ error: (error as Error).message }) }; }
       },
     },
@@ -88,7 +90,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, probes, killed, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, probes, killed, commands, logs, registered, asks, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {
@@ -352,6 +354,30 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
     expect(spawns).toHaveLength(1);
   });
 
+  it("asks for no roster once Claude Code retires the army after the runtime check (C10, HOST-2)", async () => {
+    let gap = 0;
+    for (let hops = 0; hops < 12; hops++) {
+      const env: { refuseOn?: string } = {};
+      const { send, commands, spawns, heartbeat, $ } = await mod(() => ({ status: "completed", summary: "ok" }), env);
+      await send("claude-sonnet --claim a go");
+      env.refuseOn = "renew";
+      let retired = -1;
+      const log = $.ui.log;
+      $.ui.log = (line: string) => { if (line.includes("refused the request")) retired = commands.length; return log(line); };
+      const sending = send("claude-sonnet --claim a go");
+      let wait = Promise.resolve();
+      for (let i = 0; i < hops; i++) wait = wait.then(() => {});
+      void wait.then(() => heartbeat()!.run());
+      await sending;
+      expect(retired).toBeGreaterThan(0);
+      // A retirement before the runtime check starts a new army; one after it must post nothing more, the roster included.
+      if (spawns.length > 1) continue;
+      gap++;
+      expect(commands.slice(retired)).toEqual([]);
+    }
+    expect(gap).toBeGreaterThan(0);
+  });
+
   it("ends a post office that never reports ready after 60 s, naming the step, and the next use starts a new one", async () => {
     const { send, after, spawns, logs, $ } = await mod(() => ({ status: "completed", summary: "ok" }));
     const spawn = $.process.spawn as (o: { argv: string[] }) => unknown;
@@ -392,5 +418,229 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
     const { send, logs } = await mod(() => ({}), { refuse: "no\u001b[31m\u202e web" });
     await send("claude-sonnet --claim a go");
     expect(logs[0]).toContain("no\\u{1b}[31m\\u{202e} web");
+  });
+});
+
+describe("the mod's trust dialog (ARM-7, M1-AC13)", () => {
+  const A = "a".repeat(64), B = "b".repeat(64), C = "c".repeat(64);
+  const ROWS = [
+    { kind: "file", name: "shadow.config.json", state: "new", hash: A },
+    { kind: "file", name: "agent.md", state: "changed", hash: B },
+    { kind: "file", name: "rules.md", state: "gone", hash: "" },
+    { kind: "soldier", name: "Kaisel", cli: "claude", model: "opus", autonomy: "full" },
+    { kind: "server", file: ".mcp.json", name: "docs", target: "npx \u001b[31m‮ evil" },
+  ];
+  const STALE = "the hashes are not the ones the trust card showed; nothing was accepted";
+  /** A fake post office in #143's shape: `open` and `send` answer with the card until `trust` sends its file hashes. */
+  const office = (accept: (hashes: string[], state: { rows: any[] }) => unknown = () => ({ ok: true }), rows: any[] = ROWS) => {
+    const state = { rows, trusted: false, accepted: [] as string[][], opened: 0, sent: 0 };
+    const respond = (command: any) => {
+      if (command.action === "trust") {
+        state.accepted.push(command.hashes);
+        const result = accept(command.hashes, state);
+        if ((result as { ok?: unknown } | undefined)?.ok === true) state.trusted = true;
+        return result;
+      }
+      if (!state.trusted && (command.action === "open" || command.action === "send")) return { trust: { rows: state.rows } };
+      if (command.action === "open") { state.opened++; return { session: "tank-1" }; }
+      if (command.action === "send") state.sent++;
+      return { status: "completed", summary: "done" };
+    };
+    return { state, respond };
+  };
+  const run = "claude-sonnet --claim a go";
+  const later = () => new Promise((done) => setTimeout(done, 0));
+  const deferred = () => { let answer: (text: string) => void = () => {}; const promise = new Promise<string>((done) => { answer = done; }); return { promise, answer }; };
+
+  it("shows a row per file, soldier and .mcp.json server with SEC-6 placeholders, then asks with Not now first", async () => {
+    const { respond } = office();
+    const { send, logs, asks } = await mod(respond, { answer: "Not now", ownOpen: true });
+    await send(run);
+    expect(logs).toEqual(expect.arrayContaining([
+      `Shadow Army · trust · new · shadow.config.json · ${"a".repeat(12)}`, `Shadow Army · trust · changed · agent.md · ${"b".repeat(12)}`,
+      "Shadow Army · trust · gone · rules.md", "Shadow Army · trust · soldier · Kaisel · claude · opus · full",
+      "Shadow Army · trust · .mcp.json server · docs · npx \\u{1b}[31m\\u{202e} evil"]));
+    expect(logs.join("|")).not.toContain("\u001b");
+    expect(asks).toHaveLength(1);
+    expect(asks[0]!.question).toBe("Trust this folder's Shadow Army files?");
+    expect(asks[0]!.options.options).toEqual(["Not now", "Trust these files"]);
+  });
+
+  it.each([["Not now"], ["trust these files"], ["Trust these files, and more"], [""], [new Error("dismissed")]])("starts nothing on %s", async (answer) => {
+    const { state, respond } = office();
+    const { send } = await mod(respond, { answer: answer as string | Error, ownOpen: true });
+    expect(await send(run)).toMatch(/Nothing started: the army waits for you to trust this folder's Shadow Army files/);
+    expect(state).toMatchObject({ accepted: [], opened: 0, sent: 0 });
+  });
+
+  it("accepts exactly the hashes shown on the exact answer, then opens and sends", async () => {
+    const { state, respond } = office();
+    const { send } = await mod(respond, { answer: "Trust these files", ownOpen: true });
+    expect(await send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(state).toMatchObject({ accepted: [[A, B, ""]], opened: 1, sent: 1 });
+  });
+
+  it.each([
+    ["no rows", { trust: {} }], ["empty rows", { trust: { rows: [] } }], ["a null card", { trust: null }],
+    ["a short hash", { trust: { rows: [{ kind: "file", name: "agent.md", state: "new", hash: "abc" }] } }],
+    ["a file that is not a policy file", { trust: { rows: [{ kind: "file", name: "evil.json", state: "new", hash: A }] } }],
+    ["no file row", { trust: { rows: [ROWS[3]] } }],
+  ])("shows and accepts nothing on a trust answer with %s", async (_name, answer) => {
+    const accepted: unknown[] = [];
+    const { send, asks } = await mod((c) => { if (c.action === "trust") accepted.push(c); return c.action === "open" ? answer : {}; }, { ownOpen: true });
+    expect(await send(run)).toMatch(/trust answer is malformed; nothing was accepted and nothing started/);
+    expect(asks).toHaveLength(0);
+    expect(accepted).toHaveLength(0);
+  });
+
+  it.each([[{ ok: "yes" }], [{}], [undefined]])("starts nothing unless the accept answers ok: true (%j)", async (result) => {
+    const { state, respond } = office(() => result);
+    const { send } = await mod(respond, { answer: "Trust these files", ownOpen: true });
+    expect(await send(run)).toMatch(/did not confirm the trust; nothing was accepted/);
+    expect(state).toMatchObject({ opened: 0, sent: 0 });
+  });
+
+  it.each([["Not now", 0], ["Trust these files", 2]])("shows one card for two uses at once; %s answers both", async (answer, sent) => {
+    const { state, respond } = office();
+    const owner = deferred();
+    const { send, asks } = await mod(respond, { answer: owner.promise, ownOpen: true });
+    const both = Promise.all([send(run), send(run)]);
+    for (let i = 0; i < 10; i++) await later();
+    expect(asks).toHaveLength(1);
+    owner.answer(answer);
+    const results = await both;
+    expect(asks).toHaveLength(1);
+    expect(state.accepted).toHaveLength(sent ? 1 : 0);
+    expect(state.sent).toBe(sent);
+    if (!sent) for (const result of results) expect(result).toMatch(/Nothing started: the army waits for you/);
+  });
+
+  it("accepts nothing and opens nothing when the army ends while the question is open", async () => {
+    const { state, respond } = office();
+    const owner = deferred();
+    const { send, handlers, $ } = await mod(respond, { answer: owner.promise, ownOpen: true });
+    const result = send(run);
+    for (let i = 0; i < 10; i++) await later();
+    await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
+    owner.answer("Trust these files");
+    expect(await result).toMatch(/the army ended while the question was open; nothing was accepted/);
+    expect(state).toMatchObject({ accepted: [], opened: 0, sent: 0 });
+  });
+
+  it("shows the new hashes and asks again when a file changed while the question was open", async () => {
+    const { state, respond } = office((hashes, live) => {
+      if (hashes[1] === B) { live.rows = ROWS.map((row) => row.name === "agent.md" ? { ...row, hash: C } : row); throw new Error(STALE); }
+      return { ok: true };
+    });
+    const { send, asks, logs } = await mod(respond, { answer: "Trust these files", ownOpen: true });
+    expect(await send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(asks).toHaveLength(2);
+    expect(logs).toEqual(expect.arrayContaining([
+      "Shadow Army · trust · the files changed while the question was open; these are their new hashes", `Shadow Army · trust · changed · agent.md · ${"c".repeat(12)}`]));
+    expect(state).toMatchObject({ accepted: [[A, B, ""], [A, C, ""]], opened: 1, sent: 1 });
+  });
+
+  it("stops and says why when the same card's accept is refused", async () => {
+    const { state, respond } = office(() => { throw new Error("the trust record can't be written: EACCES"); });
+    const { send, asks } = await mod(respond, { answer: "Trust these files", ownOpen: true });
+    expect(await send(run)).toMatch(/Nothing started: nothing was accepted, the trust record can't be written: EACCES/);
+    expect(asks).toHaveLength(1);
+    expect(state).toMatchObject({ opened: 0, sent: 0 });
+  });
+
+  it("accepts a card for orchestratorDelegate.md, the fifth policy file ARM-7 names (C8)", async () => {
+    const { state, respond } = office(undefined, [{ kind: "file", name: "orchestratorDelegate.md", state: "changed", hash: A }]);
+    const { send } = await mod(respond, { answer: "Trust these files", ownOpen: true });
+    expect(await send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(state).toMatchObject({ accepted: [[A]], opened: 1, sent: 1 });
+  });
+
+  it("answers a use whose card arrives after Not now with that answer, and asks no second time (C3)", async () => {
+    const { state, respond } = office();
+    const slow = deferred(), owner = deferred();
+    let opens = 0;
+    const { send, asks } = await mod((c) => c.action === "open" && ++opens === 2 ? slow.promise.then(() => respond(c)) : respond(c), { answer: owner.promise, ownOpen: true });
+    const first = send(run), second = send(run);
+    for (let i = 0; i < 10; i++) await later();
+    expect(opens).toBe(2);
+    expect(asks).toHaveLength(1);
+    owner.answer("Not now");
+    expect(await first).toMatch(/Nothing started: the army waits for you/);
+    slow.answer("");
+    expect(await second).toMatch(/Nothing started: the army waits for you/);
+    expect(asks).toHaveLength(1);
+    expect(state).toMatchObject({ accepted: [], opened: 0, sent: 0 });
+  });
+
+  it("keeps a delayed use's decline when a later owner's card is accepted before its reply (C3)", async () => {
+    const { state, respond } = office();
+    const slow = deferred(), owner = deferred();
+    let opens = 0;
+    const env: { answer: string | Promise<string>; ownOpen: boolean } = { answer: owner.promise, ownOpen: true };
+    // The second use's reply is the card as it stood when the request reached the post office.
+    const { send, asks } = await mod((c) => { if (c.action !== "open" || ++opens !== 2) return respond(c); const reply = respond(c); return slow.promise.then(() => reply); }, env);
+    const first = send(run), second = send(run);
+    for (let i = 0; i < 10; i++) await later();
+    expect(asks).toHaveLength(1);
+    owner.answer("Not now");
+    expect(await first).toMatch(/Nothing started: the army waits for you/);
+    env.answer = "Trust these files";
+    expect(await send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(asks).toHaveLength(2);
+    slow.answer("");
+    expect(await second).toMatch(/Nothing started: the army waits for you/);
+    expect(asks).toHaveLength(2);
+    expect(state).toMatchObject({ opened: 1, sent: 1 });
+  });
+
+  it("posts nothing once Claude Code retires the army while a stale accept is handled (C9, HOST-2)", async () => {
+    for (let hops = 0; hops < 20; hops++) {
+      let retire = () => {};
+      const { respond } = office((hashes, live) => {
+        if (hashes[1] !== B) return { ok: true };
+        live.rows = ROWS.map((row) => row.name === "agent.md" ? { ...row, hash: C } : row);
+        env.refuseOn = "renew";
+        let wait = Promise.resolve();
+        for (let i = 0; i < hops; i++) wait = wait.then(() => {});
+        void wait.then(() => retire());
+        throw new Error(STALE);
+      });
+      const env: { answer: string; ownOpen: boolean; refuseOn?: string } = { answer: "Trust these files", ownOpen: true };
+      const { send, commands, heartbeat, $ } = await mod(respond, env);
+      retire = () => heartbeat()!.run();
+      // The moment the army retires is the one its refusal line is logged; every post must come before it.
+      let retired = -1;
+      const log = $.ui.log;
+      $.ui.log = (line: string) => { if (line.includes("refused the request")) retired = commands.length; return log(line); };
+      expect(await send(run)).toMatch(/Nothing started|army ended/);
+      expect(retired).toBeGreaterThan(0);
+      expect(commands.length).toBe(retired);
+    }
+  });
+
+  it("posts nothing more when Claude Code refuses the accept's fetch (C9, HOST-2)", async () => {
+    const { state, respond } = office();
+    const { send, asks, commands } = await mod(respond, { answer: "Trust these files", ownOpen: true, refuseOn: "trust" });
+    expect(await send(run)).toMatch(/Nothing started/);
+    expect(asks).toHaveLength(1);
+    expect(commands.map((c) => c.action).slice(-1)).toEqual(["trust"]);
+    expect(state).toMatchObject({ opened: 0, sent: 0 });
+  });
+
+  it("shows no card when the folder is trusted, and answers a card that meets the send", async () => {
+    const quiet = office();
+    quiet.state.trusted = true;
+    const calm = await mod(quiet.respond, { ownOpen: true });
+    expect(await calm.send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(calm.asks).toHaveLength(0);
+    let changed = true;
+    const late = await mod((c) => {
+      if (c.action === "open") return { session: "tank-1" };
+      if (c.action === "trust") { changed = false; return { ok: true }; }
+      return changed ? { trust: { rows: ROWS.slice(0, 1) } } : { status: "completed", summary: "done" };
+    }, { answer: "Trust these files", ownOpen: true });
+    expect(await late.send(run)).toMatch(/Shadow Army · Tank · completed/);
+    expect(late.asks).toHaveLength(1);
+    expect(late.commands.filter((c) => c.action === "send")).toHaveLength(2);
   });
 });
