@@ -614,33 +614,31 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
         },
       });
 
-      it("refuses entries in the main checkout, its worktrees folder and every registered worktree from a linked checkout", async () => {
-        const dirs = [where(ROOT, "bin"), where(`${ROOT}-worktrees`, "x", "bin"), where(OTHER, "bin"), BIN];
-        const { probes, spawns } = await launched({ ...linked(), dirs });
+      /** The main checkout, with `w9` and `w2` registered as its worktrees (git's files spell their checkouts with forward slashes). */
+      const main = (files: Record<string, string | undefined> = {}): Env =>
+        ({ ...linked({ [`${fwd(LINKED)}/.git`]: `gitdir: ${ADMIN}/w9\n`, ...files }), cwd: ROOT });
+
+      it("refuses entries in the main checkout, its worktrees folder and every registered worktree", async () => {
+        const dirs = [where(ROOT, "bin"), where(`${ROOT}-worktrees`, "x", "bin"), where(LINKED, "bin"), where(OTHER, "bin"), BIN];
+        const { probes, spawns } = await launched({ ...main(), dirs });
         expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
         expect(spawns).toHaveLength(1);
       });
 
-      it.each([
-        ["its .git file names no git folder", { [`${LINKED}/.git`]: "nonsense\n" }],
-        ["its git folder does not name it back", { [`${ADMIN}/w9/gitdir`]: "/somewhere/else/.git\n" }],
-        ["its git folder has no commondir", { [`${ADMIN}/w9/commondir`]: undefined }],
-        ["a registered worktree's gitdir cannot be read", { [`${ADMIN}/w2/gitdir`]: undefined }],
-        ["its commondir names no git folder", { [`${ADMIN}/w9/commondir`]: "../../../nowhere\n" }],
-        ["a registered worktree's checkout names another git folder (C9, review 24)", { [`${fwd(OTHER)}/.git`]: `gitdir: ${ADMIN}/w9\n` }],
-        ["a registered worktree's checkout names no git folder (C9, review 24)", { [`${fwd(OTHER)}/.git`]: "nonsense\n" }],
-      ])("starts nothing from a linked checkout when %s", async (_case, files) => {
-        const { probes, spawns, line } = await launched(linked(files));
-        expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
+      it("starts nothing from a linked checkout whose files all agree, since nothing proves which folder is the primary checkout (C9, review 45)", async () => {
+        // A separated git folder at <primary>/.git (`git init --separate-git-dir`) gives these same files, with the real primary elsewhere.
+        const { probes, spawns, line } = await launched({ ...linked(), dirs: [BIN] });
+        expect(line).toMatch(/^Shadow Army: .+ is a linked worktree, and nothing proves which folder is its primary checkout · .+ · nothing started$/);
         expect(probes).toEqual([]);
         expect(spawns).toEqual([]);
       });
 
       it.each([
-        ["lists no worktrees", {}],
-        ["lists worktrees without its git folder", { [ADMIN]: ["w2"] }],
-      ])("starts nothing from a linked checkout when the common folder %s (C9, review 24)", async (_case, lists) => {
-        const { probes, spawns, line } = await launched({ ...linked(), lists });
+        ["a registered worktree's gitdir cannot be read", { [`${ADMIN}/w2/gitdir`]: undefined }],
+        ["a registered worktree's checkout names another git folder (C9, review 24)", { [`${fwd(OTHER)}/.git`]: `gitdir: ${ADMIN}/w9\n` }],
+        ["a registered worktree's checkout names no git folder (C9, review 24)", { [`${fwd(OTHER)}/.git`]: "nonsense\n" }],
+      ])("starts nothing from the main checkout when %s", async (_case, files) => {
+        const { probes, spawns, line } = await launched(main(files));
         expect(line).toMatch(/^Shadow Army: .+ · nothing started$/);
         expect(probes).toEqual([]);
         expect(spawns).toEqual([]);
@@ -670,7 +668,7 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
 
       it("still bars a registered worktree whose checkout is gone, and starts (C9, review 24)", async () => {
         const dirs = [where(OTHER, "bin"), BIN];
-        const { probes, spawns } = await launched({ ...linked(), dirs, unresolved: [`${fwd(OTHER)}/.git`] });
+        const { probes, spawns } = await launched({ ...main(), dirs, unresolved: [`${fwd(OTHER)}/.git`] });
         expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
         expect(spawns).toHaveLength(1);
       });

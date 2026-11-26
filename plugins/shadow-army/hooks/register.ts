@@ -401,56 +401,40 @@ async function sameReal($: EngineInterface, a: string, b: string): Promise<boole
 }
 
 /**
- * The primary checkout of the common git folder, proven from git's files, or `undefined` (C9, review 35). Git keeps no record of a primary
- * checkout whose git folder was separated from it (`git init --separate-git-dir`: `git worktree list` then names the git folder itself), and
- * `core.worktree` in the config, `config.worktree` or an included file can move it. So the primary is the folder holding the common folder as
- * its `.git` folder, and only when neither config file sets a work tree or includes another file; git cannot run here, before it is vetted.
+ * Whether the common git folder's config may move the primary checkout: `core.worktree` in `config` or `config.worktree`, or an included file
+ * that could set it. One that cannot be read counts as moving it (C9, review 35).
  */
-async function primaryOf($: EngineInterface, common: string): Promise<string | undefined> {
-  if (!common.endsWith("/.git")) return undefined;
-  const primary = common.slice(0, -"/.git".length);
-  try { if ((await $.fs.stat(`${primary}/.git`)).kind !== "directory") return undefined; } catch { return undefined; }
-  if (!await sameReal($, `${primary}/.git`, common)) return undefined;
+async function movable($: EngineInterface, common: string): Promise<boolean> {
   for (const name of ["config", "config.worktree"]) {
     let text: string;
-    try { text = String(await $.fs.read(`${common}/${name}`)); } catch (error) { if (isMissing(error)) continue; return undefined; }
-    if (/^\s*(?:worktree\s*=|\[\s*include)/im.test(text)) return undefined;
+    try { text = String(await $.fs.read(`${common}/${name}`)); } catch (error) { if (isMissing(error)) continue; return true; }
+    if (/^\s*(?:worktree\s*=|\[\s*include)/im.test(text)) return true;
   }
-  return primary;
+  return false;
 }
 
 /**
- * Every checkout of the repository, read from git's own files before anything runs (HOST-2, CH-1; C9, reviews 21 and 24): the nearest checkout,
- * the main checkout and each registered worktree (`<common git folder>/worktrees/<name>/gitdir`). The common folder must be a folder; a linked
- * checkout's `.git` file must name a git folder that names that checkout back, whose `commondir` names the common folder, and which the common
- * folder lists as one of its worktrees, and the primary checkout must be proven (`primaryOf`). Each other registered worktree whose checkout is there must name its own git folder back; one whose
- * checkout is gone is still barred. An empty registry counts only for a main checkout; anything unverified leaves the layout unknown, and nothing starts.
+ * Every checkout of the repository, read from git's own files before anything runs (HOST-2, CH-1; C9, reviews 21, 24, 35 and 45): the nearest
+ * checkout, which must hold its git folder as a `.git` folder and so is the primary checkout itself, and each registered worktree
+ * (`.git/worktrees/<name>/gitdir`). From a linked checkout nothing proves which folder is the primary: git keeps no record of it, and git's own
+ * `git worktree list` only drops `/.git` from the common folder's name, as a separated git folder (`--separate-git-dir`) would also give. So a
+ * linked checkout, a `.git` file, or a config that may move the work tree leaves the layout unknown, and nothing starts. Each registered
+ * worktree whose checkout is there must name its own git folder back; one whose checkout is gone is still barred.
  */
 async function checkouts($: EngineInterface, root: string): Promise<string[] | { refusal: string }> {
   const refusal = { refusal: `Shadow Army: the git worktrees of ${root} cannot be verified · nothing started` };
   const dotGit = `${root}/.git`;
   let kind: string;
   try { kind = (await $.fs.stat(dotGit)).kind; } catch (error) { return isMissing(error) ? [root] : refusal; }
-  let common = joined(root, ".git");
-  let admin: string | undefined;
-  if (kind === "file") {
-    admin = (await adminOf($, root)) ?? undefined;
-    if (!admin) return refusal;
-    const [back, shared] = [await gitValue($, `${admin}/gitdir`), await gitValue($, `${admin}/commondir`)];
-    if (!back || !shared || !await sameReal($, joined(admin, back), dotGit)) return refusal;
-    common = joined(admin, shared);
-    try { if ((await $.fs.stat(common)).kind !== "directory") return refusal; } catch { return refusal; }
-  } else if (kind !== "directory") return refusal;
-  const primary = await primaryOf($, common);
-  if (!primary) return refusal;
-  const found = [root, primary];
+  if (kind === "file") return { refusal: `Shadow Army: ${root} is a linked worktree, and nothing proves which folder is its primary checkout · start the army from the primary checkout · nothing started` };
+  const common = joined(root, ".git");
+  if (kind !== "directory" || await movable($, common)) return refusal;
+  const found = [root];
   let names: string[] = [];
   try { names = (await $.fs.list(`${common}/worktrees`)).filter((entry) => entry.kind === "directory").map((entry) => entry.name); }
-  catch (error) { if (admin || !isMissing(error)) return refusal; }
-  let listed = false;
+  catch (error) { if (!isMissing(error)) return refusal; }
   for (const name of names) {
     const entry = `${common}/worktrees/${name}`;
-    if (admin && await sameReal($, entry, admin)) { listed = true; continue; }
     const back = await gitValue($, `${entry}/gitdir`);
     if (!back) return refusal;
     const checkout = joined(entry, back).replace(/\/\.git$/, "");
@@ -458,7 +442,7 @@ async function checkouts($: EngineInterface, root: string): Promise<string[] | {
     if (named === undefined || (named !== null && !await sameReal($, named, entry))) return refusal;
     found.push(checkout);
   }
-  return admin && !listed ? refusal : found;
+  return found;
 }
 
 /**
