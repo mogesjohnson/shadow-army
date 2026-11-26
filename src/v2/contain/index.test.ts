@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { containmentFor, containmentTable, noContainmentMessage, spawnManagedProcess } from "./index.js";
+import { containmentFor, containmentTable, noContainmentMessage, spawnLinux, spawnManagedProcess } from "./index.js";
 import { spawnManagedProcess as spawnWindows } from "./windows.js";
 
 describe("containment dispatch table (PO-12)", () => {
@@ -14,7 +14,12 @@ describe("containment dispatch table (PO-12)", () => {
     expect(containmentFor("win32", "arm64")).toBe(spawnWindows);
   });
 
-  it.each([["linux", "x64"], ["linux", "arm64"], ["darwin", "arm64"], ["darwin", "x64"], ["linux", "riscv64"], ["freebsd", "x64"], ["win32", "ia32"]])(
+  it("registers the guardian driver for both Linux processors (#139 C2: the driver that lists the tree)", () => {
+    expect(containmentFor("linux", "x64")).toBe(spawnLinux);
+    expect(containmentFor("linux", "arm64")).toBe(spawnLinux);
+  });
+
+  it.each([["darwin", "arm64"], ["darwin", "x64"], ["linux", "riscv64"], ["freebsd", "x64"], ["win32", "ia32"]])(
     "says no helper for %s-%s (PO-14) and starts nothing",
     async (platform, arch) => {
       const message = `No containment helper for ${platform}-${arch}, so no soldier can start. Supported: Linux x64 and arm64, macOS, Windows x64 and arm64.`;

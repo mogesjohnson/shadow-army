@@ -1,17 +1,25 @@
+import { spawnManagedProcess as spawnLinuxGuardian } from "./linux.js";
 import { spawnManagedProcess as spawnWindows, type ManagedProcess, type ManagedProcessOptions } from "./windows.js";
 
-export type { ManagedProcess, ManagedProcessOptions, ProcessExit } from "./windows.js";
+export type { ListedProcess, ManagedProcess, ManagedProcessOptions, ProcessExit } from "./windows.js";
 
 type Driver = (options: ManagedProcessOptions) => Promise<ManagedProcess>;
 
+/** The Linux guardian driver, its tree listing marking the CLI's own process (PO-11: `ppid` and `cli` give launch provenance). */
+export async function spawnLinux(options: ManagedProcessOptions): Promise<ManagedProcess> {
+  const session = await spawnLinuxGuardian(options);
+  const list = session.list;
+  return Object.assign(session, { list: async () => (await list()).map((one) => one.pid === session.pid ? { ...one, cli: true } : one) });
+}
+
 /**
  * PO-12's table, keyed `<process.platform>-<process.arch>`. `null` is a pair the spec lists whose
- * driver is not built yet (M1b); a pair missing from the table is one the spec does not list.
+ * driver is not built yet (macOS, M1b); a pair missing from the table is one the spec does not list.
  * Both get PO-14's "no helper" message.
  */
 export const containmentTable: Readonly<Record<string, Driver | null>> = {
-  "linux-x64": null,
-  "linux-arm64": null,
+  "linux-x64": spawnLinux,
+  "linux-arm64": spawnLinux,
   "darwin-arm64": null,
   "darwin-x64": null,
   "win32-x64": spawnWindows,

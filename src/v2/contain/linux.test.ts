@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { helperPath, parseStat, spawnManagedProcess, treeOf, type LinuxManagedProcess } from "./linux.js";
+import { helperPath, listTree, parseStat, spawnManagedProcess, treeOf, type LinuxManagedProcess } from "./linux.js";
 
 const fake = fileURLToPath(new URL("../../../test/fakes/tree-writer.mjs", import.meta.url));
 // The helper exists only on Linux after `npm run build`; elsewhere these tests skip (D-34: Not tested off Linux).
@@ -24,6 +24,23 @@ describe("Linux tree listing (PO-11)", () => {
     const all = [entry(1, 0), entry(10, 1), entry(11, 10), entry(12, 11), entry(20, 1), entry(30, 31), entry(31, 30)];
     expect(treeOf(all, 10).map((process) => process.pid)).toEqual([11, 12]);
     expect(treeOf(all, 99)).toEqual([]);
+  });
+});
+
+describe("Linux tree listing that can't be complete (#139 C2, PO-11)", () => {
+  const fakeProc = (entries: Record<number, number | null>) => {
+    const proc = mkdtempSync(join(tmpdir(), "sa-proc-"));
+    for (const [pid, ppid] of Object.entries(entries)) {
+      mkdirSync(join(proc, pid));
+      // A `null` entry's stat is a folder, so reading it fails with an error that is not "gone".
+      if (ppid === null) mkdirSync(join(proc, pid, "stat"));
+      else writeFileSync(join(proc, pid, "stat"), `${pid} (x) S ${ppid} ${"0 ".repeat(17)}77 0`);
+    }
+    return proc;
+  };
+  it.each([["a stat that can't be read", { 1: 0, 10: 1, 11: null }], ["a chain whose parent is missing", { 1: 0, 10: 1, 12: 11 }]])("rejects %s, never a short list", async (_, entries) => {
+    const proc = fakeProc(entries);
+    try { await expect(listTree(10, proc)).rejects.toThrow(/listing incomplete/); } finally { rmSync(proc, { recursive: true, force: true }); }
   });
 });
 

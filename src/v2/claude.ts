@@ -6,6 +6,7 @@ import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
+import type { ListedProcess } from "./contain/index.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 type Frame = Record<string, unknown>;
@@ -400,6 +401,30 @@ export class ClaudeChannel implements NativeChannel {
         clearTimeout(timer); this.controls.delete(id); reject(error instanceof Error ? error : new Error(String(error)));
       });
     });
+  }
+
+  /**
+   * PO-11: the managed process's tree listing, passed through. A closing channel answers once its teardown has
+   * an outcome: empty only when containment confirmed the tree stopped. A tree that can't be listed (no driver
+   * listing, the process never started, an unconfirmed teardown) rejects, so the post office records it incomplete.
+   */
+  async list(): Promise<ListedProcess[]> {
+    if (this.closed) return this.listClosed();
+    try {
+      const child = await this.process;
+      if (!child.list) throw new Error("this system's containment driver can't list the tree");
+      const listed = await child.list();
+      if (!this.closed) return listed;
+    } catch (error) {
+      if (!this.closed) throw error;
+    }
+    return this.listClosed();
+  }
+
+  private async listClosed(): Promise<ListedProcess[]> {
+    await this.closePromise;
+    if (this.contained) return [];
+    throw new Error("Claude channel is closed and its tree was not confirmed stopped: it can't be listed");
   }
 
   async interrupt(): Promise<void> {
