@@ -552,6 +552,10 @@ export class PostOffice {
     // WSP-10: the worktree's git identity recorded at open, the audit's timeout policy, and the commit the audit made, not a HEAD read now.
     let diff = "";
     if (info.commit) {
+      // The audit names its commit by a short id: resolve it once, now, so apply gets the exact full id (C1).
+      const full = await this.held(session.write!.repo).run(["rev-parse", "-q", "--verify", `${info.commit}^{commit}`], "guard");
+      if (full.code !== 0 || !full.stdout.trim()) throw new Error(`the audited commit ${info.commit} could not be resolved: ${full.stderr.trim() || `exit ${full.code}`}`);
+      info.commit = full.stdout.trim();
       const result = await this.held(session.write!.repo).run(["diff", info.base, info.commit], "guard");
       if (result.code !== 0) throw new Error(`git diff of the audited commit failed: ${result.stderr.trim() || `exit ${result.code}`}`);
       diff = result.stdout;
