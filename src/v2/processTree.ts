@@ -67,12 +67,25 @@ async function repositoryFolders(cwd: string): Promise<string[]> {
 }
 
 /**
+ * CH-1: the repository folders by real path. A folder that no longer exists (a stale worktree entry) holds nothing
+ * and keeps its lexical path; any other failure leaves the root unverified, so the launch is refused (C17).
+ */
+export async function verifiedRoots(folders: string[], real: (path: string) => Promise<string> = realpath): Promise<string[]> {
+  return Promise.all(folders.map(async (folder) => {
+    try { return comparable(await real(folder)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return comparable(resolve(folder));
+      throw Object.assign(new Error(`could not verify the real path of repository folder ${folder}: ${(error as Error).message}`), { code: "EACCES" });
+    }
+  }));
+}
+
+/**
  * CH-1: the CLI's PATH is the caller's less every relative or empty entry, every entry that can't be
  * resolved, and every entry in the folder, its checkout or a worktree, compared by real path.
  */
 async function trustedPath(cwd: string, env: NodeJS.ProcessEnv): Promise<{ kept: string[]; dropped: string[]; roots: string[] }> {
   const pathValue = Object.entries(env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
-  const roots = (await Promise.all((await repositoryFolders(cwd)).map((folder) => realpath(folder).catch(() => resolve(folder))))).map(comparable);
+  const roots = await verifiedRoots(await repositoryFolders(cwd));
   const kept: string[] = [], dropped: string[] = [];
   for (const entry of pathValue.split(delimiter)) {
     const real = entry && isAbsolute(entry) ? await realpath(entry).catch(() => undefined) : undefined;
@@ -91,6 +104,18 @@ async function resolveWindowsCommand(file: string, cwd: string, env: NodeJS.Proc
     try { await access(candidate); return candidate; } catch { /* Try the next executable suffix. */ }
   }
   throw Object.assign(new Error(`could not find executable ${file}`), { code: "ENOENT" });
+}
+
+/**
+ * CH-1: the selected file itself, links followed, must lie outside the checkout and its worktrees.
+ * The check needs the real path: one that can't be read refuses the launch, never falls back to the lexical path (C17).
+ */
+export async function verifyExecutable(executable: string, roots: string[], real: (path: string) => Promise<string> = realpath): Promise<void> {
+  let resolved: string;
+  try { resolved = comparable(await real(executable)); } catch (error) {
+    throw Object.assign(new Error(`could not verify the real path of executable ${executable}: ${(error as Error).message}`), { code: "EACCES" });
+  }
+  if (roots.some((root) => inside(resolved, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
 }
 
 /** Windows argv quoting for native executables, including embedded quotes and trailing backslashes. */
@@ -120,9 +145,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
     [pathKey]: path.kept.join(delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
   const executable = await resolveWindowsCommand(options.file, options.cwd, env, path.kept);
-  // CH-1: the selected file itself, links followed, must also lie outside the checkout and its worktrees.
-  const realExecutable = comparable(await realpath(executable).catch(() => resolve(executable)));
-  if (path.roots.some((root) => inside(realExecutable, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+  await verifyExecutable(executable, path.roots);
   const command = windowsCommand(executable, options.args ?? [], env);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
