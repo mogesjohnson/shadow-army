@@ -508,6 +508,8 @@ export class PostOffice {
     await this.renewLease(session);
     const generation = session.generation;
     const before = await this.listTree(session);
+    // PO-8: the services are those declared before the turn; a turn can't declare its own work a service.
+    const services = this.ops && before ? await claudeServices(session.cwd) : [];
     let result: TurnResult;
     try {
       this.check();
@@ -518,7 +520,7 @@ export class PostOffice {
     if (result.status === "completed") session.loginNeeded = false;
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
     // PO-11: the tree's processes as the channel lists them go into its record; a list that failed fails the guard.
-    const unlisted = await this.backgroundWork(session, generation, before);
+    const unlisted = await this.backgroundWork(session, generation, before, services);
     // WSP-11, PO-15: a session closing under the turn ends its guard only once the tree's teardown has an outcome.
     await session.containment?.done;
     // PO-15: while a process the failed containment named still runs, the guard stays open; with none named it is cut short.
@@ -596,10 +598,10 @@ export class PostOffice {
    * at every check while the turn is open, so a child an open task starts later joins it (#139 C2). Returns why a
    * list was incomplete, each once.
    */
-  private async backgroundWork(session: Session, generation: number, before: Listing | undefined): Promise<string[]> {
+  private async backgroundWork(session: Session, generation: number, before: Listing | undefined, services: readonly string[]): Promise<string[]> {
     const ops = this.ops, problems = new Set<string>(), known = new Set((before?.processes ?? []).map(identityKey));
     if (before?.incomplete) problems.add(before.incomplete);
-    let joined: Leftover[] = [], services: string[] | undefined;
+    let joined: Leftover[] = [];
     const take = async (listing: Listing | undefined): Promise<void> => {
       if (!listing) return;
       if (listing.incomplete) { problems.add(listing.incomplete); return; }
@@ -609,7 +611,6 @@ export class PostOffice {
       for (const one of listing.processes.filter((process) => !known.has(identityKey(process)))) {
         known.add(identityKey(one));
         const command = ((await ops.commandOf?.(one.pid).catch(() => undefined)) ?? "").trim();
-        services ??= await claudeServices(session.cwd);
         // PO-8: a service is a declared command line the CLI itself started; a tool's copy or an unknown parent is the turn's work.
         if (!(command !== "" && one.ppid !== undefined && cli.has(one.ppid) && services.includes(command))) joined.push({ ...one, command });
       }

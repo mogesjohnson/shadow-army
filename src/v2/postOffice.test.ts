@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { armyMark } from "./snapshot.js";
@@ -647,6 +647,17 @@ describe("M1b-27 the guard waits for background work, and a backlog pauses soldi
     expect(result.status).toBe("failed");
     expect(result.error?.message).toContain("README.md");
     await second;
+  });
+
+  it("treats a server the turn itself declared in .mcp.json as the turn's work (C3)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const alive: Tree = new Map([[600, [1, 1]]]), waits: number[] = [];
+    const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => pid === process.pid ? 1 : alive.get(pid)?.[0], endProcess: async (pid) => { alive.delete(pid); },
+      commandOf: async () => "lsp-server --stdio", wait: async (ms) => { waits.push(ms); alive.delete(701); } };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, channelFactory: (options) => ({
+      ...channel(options, () => { writeFileSync(join(options.cwd, ".mcp.json"), mcp); alive.set(701, [5, 600]); }), list: parented(alive) }) }); offices.push(office);
+    await office.send("scout", "edit");
+    expect(waits).toEqual([1_000]);
   });
 
   it.todo("C2: the real Claude channel's list() in claude.ts, the Windows job listing in contain/windows.ts and the Linux driver in containmentTable (a separate worker, after w179)");
