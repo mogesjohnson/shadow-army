@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -8,6 +9,7 @@ import { windowsOnly } from "./windowsOnly.testutil.js";
 import { processStartTime, startOfficeServer, type OfficeServer, type ServerOptions } from "./server.js";
 import type { StartTimeOf } from "./lock.js";
 import type { LeaseClock } from "./lease.js";
+import type { SweepOps } from "./contain/sweep.js";
 import type { OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
@@ -112,6 +114,35 @@ describe("M1 authenticated loopback command server", () => {
     expect(JSON.parse(await readFile(join(dir, "1.lock"), "utf8"))).toEqual({ released: true });
     servers.push(await startOfficeServer(options));
   }, 20_000);
+
+  it("takes the lock and reports ready before its one recovery, which opens wait for; a caller that loses the lock touches no recovery state (PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const shadow = join(repo.dir, ".shadow", "v2");
+    // What an earlier, dead post office left: a tree record and an open turn.
+    await mkdir(join(shadow, "trees"), { recursive: true }); await mkdir(join(shadow, "turns"), { recursive: true });
+    await writeFile(join(shadow, "trees", "old.jsonl"), `${JSON.stringify({ kind: "post-office", pid: 999, startTime: 5 })}\n`);
+    const turn = join(shadow, "turns", "old.json");
+    await writeFile(turn, "{}");
+    let free!: () => void;
+    const gate = new Promise<void>((done) => { free = done; });
+    const ops = (calls: number[], wait?: Promise<void>): SweepOps => ({ platform: "linux", commandOf: async (pid) => `fake ${pid}`, endProcess: async () => {}, wait: async () => {},
+      startTimeOf: async (pid) => { calls.push(pid); await wait; return pid === process.pid ? 1 : undefined; } });
+    const winnerCalls: number[] = [], loserCalls: number[] = [];
+    const winner = await startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps, processOps: ops(winnerCalls, gate) }); servers.push(winner);
+    // Ready with the recovery still waiting on its process check.
+    await until(() => winnerCalls.length > 0);
+    expect(existsSync(turn)).toBe(true);
+    await expect(startOfficeServer({ cwd: repo.dir, credential, roster, channelFactory: factory, startTimeOf: stamps, processOps: ops(loserCalls) })).rejects.toThrow("the army is still closing");
+    expect(loserCalls).toEqual([]);
+    expect(existsSync(turn)).toBe(true);
+    let answered = false;
+    const opening = command(winner, { action: "open", soldier: "scout" }).then((response) => { answered = true; return response; });
+    await new Promise((done) => setTimeout(done, 200));
+    expect(answered).toBe(false);
+    free();
+    expect((await opening).status).toBe(200);
+    expect(existsSync(turn)).toBe(false);
+  }, 30_000);
 
   it("replaces a lock whose process is gone and logs it, and starts nothing without a start time", async () => {
     const repo = makeRepo(); repos.push(repo);

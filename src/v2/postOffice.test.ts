@@ -1,8 +1,9 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { armyMark, type GitFactory } from "./snapshot.js";
 import { HarnessGit } from "./git/harness.js";
 import { git } from "../workspace/git.js";
@@ -10,8 +11,20 @@ import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
-import { PostOffice, type OfficeEvent } from "./postOffice.js";
+import type { SweepOps } from "./contain/sweep.js";
+import { machineOps, PostOffice, type OfficeEvent, type OfficeOps } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
+
+// C1: Windows checks the trees folder's real owner and ACL. A machine's temp folder can grant a sandbox group (Codex's
+// CodexSandboxUsers) Modify, so the test repos' trees there are read as trusted; the check itself has its own case.
+vi.mock("./winAcl.js", async (load) => {
+  const real = await load<typeof import("./winAcl.js")>();
+  const { tmpdir } = await import("node:os");
+  return { ...real, platformInspect: (...args: Parameters<typeof real.platformInspect>) => {
+    const inspect = real.platformInspect(...args);
+    return (dir: string) => dir.startsWith(tmpdir()) && /[\\/]trees$/.test(dir) ? { owner: "owner" as const, writableByOthers: false } : inspect(dir);
+  } };
+});
 
 // WSP-11: snapshots go outside the folder; these tests keep theirs in a folder of their own in the home.
 const snapshots = mkdtempSync(join(homedir(), ".sa-test-snapshots-"));
@@ -473,6 +486,21 @@ describe("M1b-26 harness git and outside snapshots", () => {
     } finally { process.env.SHADOW_ARMY_SNAPSHOTS = snapshots; }
   });
 
+  it("holds harness git while a repository hook differs from what it trusted, across a restart, and logs the hold (WSP-10)", async () => {
+    const { repo, office, events } = await setup();
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    await writeFile(hook, "#!/bin/sh\necho planted\n");
+    await expect(office.open("scout")).rejects.toThrow(/harness git held · \.git\/hooks\/post-checkout changed/);
+    await office.close();
+    // The restart keeps the state the held post office trusted, so the hook still holds harness git.
+    const restarted = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: factory, onEvent: (event) => events.push(event) }); offices.push(restarted);
+    expect(events.find((event) => event.type === "git_hold" && (event.data as { held?: boolean }).held)?.data).toMatchObject({ line: expect.stringContaining(".git/hooks/post-checkout differs from what the last post office trusted") });
+    rmSync(hook);
+    expect((await restarted.open("scout")).cwd.startsWith(repo.dir)).toBe(false);
+    const log = (await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(log.filter((record) => record.type === "git_hold" && record.data.event).map((record) => record.data.event)).toEqual(["trusted", "held", "held", "released"]);
+  });
+
   it("keeps a read-only turn's harness git calls, hold checks included, to a fixed count (each costs ~440 ms on Windows)", async () => {
     const repo = makeRepo(); repos.push(repo);
     for (const name of ["a", "b", "c"]) repo.write(`src/${name}.ts`, "owner's uncommitted work\n");
@@ -523,6 +551,297 @@ describe("M1b-26 harness git and outside snapshots", () => {
     try { await expect(PostOffice.create({ cwd: outside, credential, roster })).rejects.toThrow("the army runs only inside a git working tree"); }
     finally { rmSync(outside, { recursive: true, force: true }); }
   });
+});
+
+describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real waits)", () => {
+  /** pid -> start time of the processes that run; ending one removes it. */
+  function fakeOps(alive: Map<number, number>, ended: number[] = [], waits: number[] = []): SweepOps {
+    return { platform: "linux", startTimeOf: async (pid) => alive.get(pid), commandOf: async (pid) => `fake ${pid}`,
+      endProcess: async (pid) => { ended.push(pid); alive.delete(pid); }, wait: async (ms) => { waits.push(ms); } };
+  }
+  const idle = (onList?: () => { pid: number; startTime: number }[]) => (options: ChannelOptions): NativeChannel & { list?: () => Promise<{ pid: number; startTime: number }[]> } => ({
+    async send(text) { return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {},
+    ...(onList ? { list: async () => onList() } : {}), ...{ options } });
+  const treeFiles = (dir: string) => { try { return readdirSync(join(dir, ".shadow", "v2", "trees")); } catch { return []; } };
+
+  it("writes the tree record before the CLI starts, lists the tree after each turn and removes the record at close", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let atStart: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])),
+      channelFactory: (options) => { atStart = treeFiles(repo.dir); return idle(() => [{ pid: 500, startTime: 7 }])(options); } }); offices.push(office);
+    const opened = await office.open("scout");
+    expect(atStart).toEqual([`${opened.session}.jsonl`]);
+    await office.send("scout", "inspect");
+    const lines = (await readFile(join(repo.dir, ".shadow", "v2", "trees", `${opened.session}.jsonl`), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(lines).toEqual([{ kind: "post-office", pid: process.pid, startTime: 1 }, { kind: "process", pid: 500, startTime: 7 }]);
+    await office.closeSession("scout");
+    expect(treeFiles(repo.dir)).toEqual([]);
+  });
+
+  it("starts no CLI when the tree can't be recorded (PO-15)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map()), channelFactory: (options) => { starts++; return idle()(options); } }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow("Containment failed for");
+    expect(starts).toBe(0);
+    expect(treeFiles(repo.dir)).toEqual([]);
+  });
+
+  it("holds the guard open while a named process runs, then reconnects only once none does", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const alive = new Map([[process.pid, 1], [600, 9]]), ended: number[] = [], waits: number[] = [];
+    const channels: ChannelOptions[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(alive, ended, waits), channelFactory: (options) => {
+      channels.push(options);
+      return { ...idle(() => [...alive].filter(([pid]) => pid === 600).map(([pid, startTime]) => ({ pid, startTime })))(options),
+        async send(text) { if (channels.length === 1 && text === "fail") options.onEvent({ type: "closed", data: { containmentStopped: false } }); return { status: "completed", text, refusal: false }; } };
+    } }); offices.push(office);
+    await office.send("scout", "list");
+    const failed = await office.send("scout", "fail");
+    expect(failed.status).toBe("interrupted");
+    expect(failed.error?.message).toMatch(/the processes it named have stopped; nothing is applied/);
+    expect(ended).toEqual([600]);
+    expect(waits).toEqual([10_000]);
+    alive.set(600, 9);
+    await expect(office.open("scout")).rejects.toThrow("not confirmed stopped");
+    alive.delete(600);
+    await office.open("scout");
+    expect(channels).toHaveLength(2);
+  });
+
+  it("finishes a turn whose leftovers are unknown as interrupted, saying the attribution card can't cover them (PO-15)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), onEvent: (event) => events.push(event), channelFactory: (options) => ({
+      ...idle()(options), async send(text) { options.onEvent({ type: "closed", data: { containmentStopped: false } }); return { status: "completed", text, refusal: false }; } }) });
+    const result = await office.send("scout", "fail");
+    expect(result.status).toBe("interrupted");
+    expect(result.error?.message).toMatch(/may still be running, and what they change won't be on the turn's attribution card; nothing is applied/);
+    expect(events.find((event) => event.type === "containment_turn")?.data).toMatchObject({ ended: false });
+    await expect(office.close()).rejects.toThrow("could not be closed");
+  });
+
+  it("keeps a containment failure's turn interrupted when the guard also finds a change, with both lines (C5, PO-8)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), async send(text) {
+        await writeFile(join(repo.dir, "README.md"), "changed in the checkout\n");
+        options.onEvent({ type: "closed", data: { containmentStopped: false } });
+        return { status: "completed", text, refusal: false };
+      } }) });
+    const result = await office.send("scout", "fail");
+    expect(result.status).toBe("interrupted");
+    expect(result.error?.message).toMatch(/containment failed during the turn[^]*guard failed[^]*README\.md/);
+    await expect(office.close()).rejects.toThrow("could not be closed");
+  });
+
+  const v2 = (dir: string, ...parts: string[]) => join(dir, ".shadow", "v2", ...parts);
+  const completions = async (dir: string) => (await readFile(v2(dir, "completed-turns.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { turn: string; late?: boolean });
+
+  it("sends nothing when the turn's baseline can't be written, and records each finished turn by its ID before its baseline goes (PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let sent = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({ ...idle()(options), async send(text) { sent++; return { status: "completed", text, refusal: false }; } }) }); offices.push(office);
+    await office.send("scout", "first");
+    expect(sent).toBe(1);
+    expect(readdirSync(v2(repo.dir, "turns"))).toEqual([]);
+    const [first] = await completions(repo.dir);
+    expect(first!.turn).toMatch(/^[0-9a-f-]{36}$/);
+    rmSync(v2(repo.dir, "turns"), { recursive: true });
+    await writeFile(v2(repo.dir, "turns"), "a file where the folder goes");
+    const blocked = await office.send("scout", "second");
+    expect(sent).toBe(1);
+    expect(blocked.status).toBe("failed");
+    expect(blocked.error?.message).toMatch(/baseline could not be written/);
+  });
+
+  it("keeps the turn's baseline pending, with no completion, when the guard comparison can't run (C6, PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), async send(text) {
+        // The checkout's index is unreadable afterwards, so the end-of-turn state can't be read.
+        await writeFile(join(repo.dir, ".git", "index"), "not an index");
+        return { status: "completed", text, refusal: false };
+      } }) });
+    const result = await office.send("scout", "break");
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toMatch(/checkout guard could not complete/);
+    expect(readdirSync(v2(repo.dir, "turns"))).toHaveLength(1);
+    expect(existsSync(v2(repo.dir, "completed-turns.jsonl"))).toBe(false);
+    await office.close().catch(() => {});
+  });
+
+  it("keeps the tree record while a turn's baseline is pending, so a start after a clean close checks it (C6, PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const index = join(repo.dir, ".git", "index");
+    let saved: Buffer | undefined;
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), async send(text) {
+        saved = await readFile(index);
+        await writeFile(index, "not an index");
+        return { status: "completed", text, refusal: false };
+      } }) });
+    await first.send("scout", "break");
+    await first.close();
+    expect(treeFiles(repo.dir)).toHaveLength(1);
+    await writeFile(index, saved!);
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), channelFactory: idle() }); offices.push(second);
+    await second.open("scout");
+    expect(readdirSync(v2(repo.dir, "turns"))).toEqual([]);
+    expect(await completions(repo.dir)).toMatchObject([{ late: true }]);
+  });
+
+  it.runIf(process.platform !== "win32")("creates a trees folder its own next start trusts under umask 002 (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const before = process.umask(0o002);
+    try {
+      const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: idle() });
+      await first.open("scout");
+      await first.close();
+      const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), channelFactory: idle() }); offices.push(second);
+      await second.open("scout");
+    } finally { process.umask(before); }
+  });
+
+  it("at startup removes a baseline whose completion is on disk without reporting it again, and keeps one whose completion can't be written (PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await mkdir(v2(repo.dir, "turns"), { recursive: true }); await mkdir(v2(repo.dir, "trees"), { recursive: true });
+    const base = { head: "", branch: "", dirty: [], index: [], refs: [] };
+    for (const [session, turn] of [["s-done", "t-done"], ["s-open", "t-open"]]) {
+      await writeFile(v2(repo.dir, "turns", `${session}.json`), JSON.stringify({ turn, soldier: "scout", time: new Date().toISOString(), base }));
+      await writeFile(v2(repo.dir, "trees", `${session}.jsonl`), `${JSON.stringify({ kind: "post-office", pid: 998, startTime: 4 })}\n`);
+    }
+    // s-done's turn finished but its post office stopped before the baseline went; s-open's completion file can't be appended to.
+    await mkdir(v2(repo.dir, "completed-turns.jsonl"));
+    const events: OfficeEvent[] = [];
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(first);
+    expect(readdirSync(v2(repo.dir, "turns")).sort()).toEqual(["s-done.json", "s-open.json"]);
+    expect(events.some((event) => event.type === "startup" && (event.data as { pending?: boolean }).pending)).toBe(true);
+    rmSync(v2(repo.dir, "completed-turns.jsonl"), { recursive: true });
+    await writeFile(v2(repo.dir, "completed-turns.jsonl"), `${JSON.stringify({ turn: "t-done" })}\n`);
+    events.length = 0;
+    await first.open("scout");
+    expect(readdirSync(v2(repo.dir, "turns"))).toEqual([]);
+    const reported = events.filter((event) => event.type === "late_guard").map((event) => (event.data as { session: string }).session);
+    expect(reported).toEqual(["s-open"]);
+    expect((await completions(repo.dir)).map((line) => line.turn)).toEqual(["t-done", "t-open"]);
+  });
+
+  it("at startup sweeps dead trees, checks the open turn against its baseline and reports and removes the snapshot it left", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let release!: () => void;
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), send: (text) => new Promise((done) => { release = () => done({ status: "completed", text, refusal: false }); }) }) }); offices.push(first);
+    const opened = await first.open("scout");
+    const pending = first.send("scout", "hang");
+    await until(() => existsSync(join(repo.dir, ".shadow", "v2", "turns", `${opened.session}.json`)));
+    repo.write("src/late.ts", "changed after the crash\n");
+    await writeFile(join(opened.cwd, "soldier.txt"), "a write\n");
+    await mkdir(join(repo.dir, ".shadow", "v2", "turns"), { recursive: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "turns", "session-broken.json"), "{");
+    // A dead post office ran it; one with no tree record would be unresolved and kept (PO-1).
+    await writeFile(join(repo.dir, ".shadow", "v2", "trees", "session-broken.jsonl"), `${JSON.stringify({ kind: "post-office", pid: 998, startTime: 4 })}\n`);
+    await writeFile(join(repo.dir, ".shadow", "v2", "trees", "dead.jsonl"), `${JSON.stringify({ kind: "post-office", pid: 999, startTime: 5 })}\n${JSON.stringify({ kind: "process", pid: 501, startTime: 3 })}\n`);
+    // The second post office runs on a machine where the first one's identity no longer matches: it died.
+    const events: OfficeEvent[] = [], ended: number[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2], [501, 3]]), ended), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(ended).toEqual([501]);
+    expect(treeFiles(repo.dir)).not.toContain("dead.jsonl");
+    const lines = events.filter((event) => event.type === "late_guard").map((event) => (event.data as { line: string }).line);
+    expect(lines).toEqual(expect.arrayContaining([expect.stringMatching(/^session-broken's turn at an unknown time not checked: baseline missing$/), expect.stringMatching(/turn at \d\d:\d\d checked after its post office stopped: .*src\/late\.ts/)]));
+    expect(readdirSync(join(repo.dir, ".shadow", "v2", "turns"))).toEqual([]);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ session: opened.session, files: ["soldier.txt"] });
+    expect(existsSync(opened.cwd)).toBe(false);
+    release(); await pending.catch(() => {});
+    // Two offices in one folder close one after the other, so their git calls don't race the folder's removal.
+    await first.close().catch(() => {}); await second.close();
+  }, 30_000);
+
+  /** A post office stopped mid-turn: its open turn file and its read-only snapshot stay for the next one. */
+  async function stoppedMidTurn() {
+    const repo = makeRepo(); repos.push(repo);
+    let release!: () => void;
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), send: (text) => new Promise((done) => { release = () => done({ status: "completed", text, refusal: false }); }) }) }); offices.push(first);
+    const opened = await first.open("scout");
+    const pending = first.send("scout", "hang");
+    const turn = join(repo.dir, ".shadow", "v2", "turns", `${opened.session}.json`);
+    await until(() => existsSync(turn));
+    await writeFile(join(opened.cwd, "soldier.txt"), "a write\n");
+    const record = join(repo.dir, ".shadow", "v2", "snapshots", `${opened.session}.json`);
+    const finish = async () => { release(); await pending.catch(() => {}); await first.close().catch(() => {}); };
+    return { repo, opened, turn, record, finish };
+  }
+
+  it("keeps the turn baseline and snapshot pending while harness git is held, and resumes once a hold check passes (WSP-10)", async () => {
+    const { repo, opened, turn, record, finish } = await stoppedMidTurn();
+    expect(existsSync(record)).toBe(true);
+    const hook = join(repo.dir, ".git", "hooks", "post-checkout");
+    await writeFile(hook, "#!/bin/sh\n");
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(events.some((event) => event.type === "git_hold" && (event.data as { held?: boolean }).held)).toBe(true);
+    expect(events.some((event) => event.type === "startup" && (event.data as { pending?: boolean }).pending)).toBe(true);
+    expect([existsSync(turn), existsSync(opened.cwd), existsSync(record)]).toEqual([true, true, true]);
+    await expect(second.open("scout")).rejects.toThrow(/harness git held/);
+    expect([existsSync(turn), existsSync(opened.cwd)]).toEqual([true, true]);
+    rmSync(hook);
+    await second.open("scout");
+    expect([existsSync(turn), existsSync(opened.cwd), existsSync(record)]).toEqual([false, false, false]);
+    expect(events.some((event) => event.type === "late_guard" && /checked after its post office stopped/.test((event.data as { line: string }).line))).toBe(true);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ session: opened.session, files: ["soldier.txt"] });
+    await finish(); await second.close();
+  }, 60_000);
+
+  it("keeps a snapshot pending when its status check is refused, checking it with the recorded git identity (WSP-10, WSP-11)", async () => {
+    const { repo, opened, turn, record, finish } = await stoppedMidTurn();
+    const recorded = JSON.parse(await readFile(record, "utf8")) as { path: string; gitDir: string };
+    const seen: string[] = [];
+    const refusing: GitFactory = (target) => {
+      const harness = new HarnessGit({ repo: target, hooksDir: join(repo.dir, ".shadow", "v2", "hooks") });
+      return { run: async (args, kind, cwd) => {
+        if (args[0] !== "status" || resolve(target.workTree) !== resolve(recorded.path)) return harness.run(args, kind, cwd);
+        seen.push(target.gitDir);
+        return { code: 128, stdout: "", stderr: "refused" };
+      } };
+    };
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, gitFactory: refusing, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(seen).toEqual([recorded.gitDir]);
+    expect(existsSync(turn)).toBe(false);
+    expect([existsSync(opened.cwd), existsSync(record)]).toEqual([true, true]);
+    expect(events.find((event) => event.type === "snapshot" && (event.data as { pending?: boolean }).pending)?.data).toMatchObject({ session: opened.session, reason: expect.stringContaining("refused") });
+    expect(events.some((event) => event.type === "read_violation")).toBe(false);
+    await finish(); await second.close();
+  }, 60_000);
+
+  it("recovers a snapshot under its recorded root after the setting changed, reporting a commit made in it (WSP-11)", async () => {
+    const { repo, opened, record, finish } = await stoppedMidTurn();
+    await git(opened.cwd, ["add", "soldier.txt"]);
+    await git(opened.cwd, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a commit"]);
+    const moved = mkdtempSync(join(homedir(), ".sa-test-snapshots-moved-"));
+    process.env.SHADOW_ARMY_SNAPSHOTS = moved;
+    const events: OfficeEvent[] = [];
+    try {
+      const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+      const violation = events.find((event) => event.type === "read_violation")?.data as { head?: { from: string; to: string }; line: string };
+      expect(violation.head?.from).not.toBe(violation.head?.to);
+      expect(violation.line).toMatch(/HEAD moved from/);
+      expect([existsSync(opened.cwd), existsSync(record)]).toEqual([false, false]);
+      await finish(); await second.close();
+    } finally { process.env.SHADOW_ARMY_SNAPSHOTS = snapshots; rmSync(moved, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it("reports an orphan snapshot whose folder is gone and removes only its own worktree entry (WSP-11)", async () => {
+    const { repo, opened, record, finish } = await stoppedMidTurn();
+    const { gitDir } = JSON.parse(await readFile(record, "utf8")) as { gitDir: string };
+    rmSync(opened.cwd, { recursive: true, force: true });
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(events.find((event) => event.type === "snapshot" && (event.data as { orphan?: boolean }).orphan)?.data).toMatchObject({ session: opened.session, line: expect.stringMatching(/was gone; its worktree entry is removed/) });
+    expect([existsSync(gitDir), existsSync(record)]).toEqual([false, false]);
+    await finish(); await second.close();
+  }, 60_000);
 });
 
 describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup", () => {
@@ -648,4 +967,162 @@ describe("M1b-26 review 11: write sessions on harness git, and reconnect cleanup
     rmSync(hook);
     expect((await scout).status).toBe("failed");
   }, 60_000);
+});
+
+describe("M1b-26 review 11 C1, C4: termination and starts gated on verified records (fake processes)", () => {
+  type Id = { pid: number; startTime: number };
+  /** Identity-bound fakes: `endProcess` (pid only) is never what the office should call; a failing probe throws. */
+  function officeOps(alive: Map<number, number>, calls: { ended: Id[]; byPid: number[] } = { ended: [], byPid: [] }, failing = new Set<number>(), stubborn = new Set<number>()): OfficeOps {
+    return { platform: "linux", wait: async () => {}, commandOf: async (pid) => `fake ${pid}`,
+      // What `systemOps` does on a failed probe: it reads as absence.
+      startTimeOf: async (pid) => failing.has(pid) ? undefined : alive.get(pid),
+      endProcess: async (pid) => { calls.byPid.push(pid); if (!stubborn.has(pid)) alive.delete(pid); },
+      probe: async (pid) => { if (failing.has(pid)) throw new Error(`probe of ${pid} failed`); return alive.get(pid) ?? "gone"; },
+      endIdentity: async (one) => { calls.ended.push(one); if (alive.get(one.pid) === one.startTime && !stubborn.has(one.pid)) alive.delete(one.pid); } };
+  }
+  const channel = (extra: Partial<NativeChannel & { identities(): Promise<{ guardian?: Id; cli?: Id }> }> = {}, sent?: string[]) => (options: ChannelOptions): NativeChannel => ({
+    async send(text) { sent?.push(text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {}, ...extra, ...{ options } });
+  const trees = (dir: string) => join(dir, ".shadow", "v2", "trees");
+  const line = (value: object) => `${JSON.stringify(value)}\n`;
+  async function deadTree(dir: string, extra = "") {
+    await mkdir(trees(dir), { recursive: true });
+    await writeFile(join(trees(dir), "dead.jsonl"), line({ kind: "post-office", pid: 999, startTime: 5 }) + line({ kind: "process", pid: 501, startTime: 3 }) + extra);
+  }
+
+  it("ends an earlier tree's process only by its recorded identity, never by its pid alone (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: channel() }); offices.push(office);
+    expect(calls).toEqual({ ended: [{ pid: 501, startTime: 3 }], byPid: [] });
+    expect(existsSync(join(trees(repo.dir), "dead.jsonl"))).toBe(false);
+  });
+
+  it("ends nothing, keeps the entry and starts no soldier while a record doesn't verify, then recovers once it does (C1, C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir, `{"kind":"process","pid":502`);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: (options) => { starts++; return channel()(options); } }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/earlier trees not swept, and no soldier starts: dead\.jsonl is not a whole tree record/);
+    expect([calls, starts, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, 0, true]);
+    await deadTree(repo.dir);
+    await office.open("scout");
+    expect([calls.ended, starts]).toEqual([[{ pid: 501, startTime: 3 }], 1]);
+  });
+
+  it.runIf(process.platform === "win32")("trusts the trees folder on Windows only when its owner is trusted and no one else can write it (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    for (const facts of [{ owner: "other", writableByOthers: false }, { owner: "owner", writableByOthers: true }] as const) {
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, inspect: (dir) => dir.endsWith("trees") ? facts : { owner: "owner", writableByOthers: false }, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: channel() }); offices.push(office);
+      await expect(office.open("scout")).rejects.toThrow(/earlier trees not swept, and no soldier starts: .*trees is not owned by this user, or others can write to it/);
+    }
+    expect([calls, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, true]);
+  });
+
+  it.runIf(process.platform !== "win32")("refuses a group-writable trees folder or record, and a record another user could replace (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    for (const [path, mode] of [[trees(repo.dir), 0o770], [join(trees(repo.dir), "dead.jsonl"), 0o620]] as const) {
+      await chmod(path, mode);
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls), channelFactory: channel() }); offices.push(office);
+      await expect(office.open("scout")).rejects.toThrow(/earlier trees not swept, and no soldier starts: .* is not owned by this user, or others can write to it/);
+      await chmod(path, path.endsWith(".jsonl") ? 0o600 : 0o700);
+    }
+    expect([calls, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, true]);
+  });
+
+  it("treats a failed probe as unknown, never as absence: nothing is ended and starts wait (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const calls = { ended: [] as Id[], byPid: [] as number[] };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1], [501, 3]]), calls, new Set([999])), channelFactory: channel() }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/a process check failed: .*probe of 999 failed/);
+    expect([calls, existsSync(join(trees(repo.dir), "dead.jsonl"))]).toEqual([{ ended: [], byPid: [] }, true]);
+  });
+
+  it("keeps new starts gated while an earlier tree's process still runs, and starts once it stops (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    await deadTree(repo.dir);
+    const alive = new Map([[process.pid, 1], [501, 3]]), stubborn = new Set([501]);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(alive, undefined, undefined, stubborn), channelFactory: channel() }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/earlier trees still run, and no soldier starts until they stop: 501 fake 501/);
+    expect(existsSync(join(trees(repo.dir), "dead.jsonl"))).toBe(true);
+    alive.delete(501);
+    await office.open("scout");
+    expect(existsSync(join(trees(repo.dir), "dead.jsonl"))).toBe(false);
+  });
+
+  it("refuses to start a soldier with no process operations rather than run it unrecorded (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let starts = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, channelFactory: (options) => { starts++; return channel()(options); } }); offices.push(office);
+    await expect(office.open("scout")).rejects.toThrow(/Containment failed for .*no process operations/);
+    expect(starts).toBe(0);
+  });
+
+  it("puts the guardian's and CLI's identities in the record, and a failed write takes the soldier down on disk with one owner line, sending nothing (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const sent: string[] = [], events: OfficeEvent[] = [];
+    let breakRecord = false;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: officeOps(new Map([[process.pid, 1]])), onEvent: (event) => events.push(event),
+      channelFactory: channel({ async identities() {
+        if (breakRecord) for (const name of readdirSync(trees(repo.dir))) { rmSync(join(trees(repo.dir), name)); await mkdir(join(trees(repo.dir), name)); }
+        return { guardian: { pid: 600, startTime: 8 }, cli: { pid: 601, startTime: 9 } };
+      } }, sent) }); offices.push(office);
+    const opened = await office.open("scout");
+    await office.send("scout", "inspect");
+    const record = (await readFile(join(trees(repo.dir), `${opened.session}.jsonl`), "utf8")).trim().split("\n").map((text) => JSON.parse(text));
+    expect(record).toEqual([{ kind: "post-office", pid: process.pid, startTime: 1 }, { kind: "guardian", pid: 600, startTime: 8 }, { kind: "cli", pid: 601, startTime: 9 }]);
+    await office.closeSession("scout");
+    breakRecord = true;
+    await office.open("scout");
+    const result = await office.send("scout", "second");
+    expect(sent).toEqual(["inspect"]);
+    expect(result.status).not.toBe("completed");
+    const down = events.filter((event) => event.type === "containment_failed");
+    expect(down).toHaveLength(1);
+    expect(down[0]!.data).toMatchObject({ down: true, message: expect.stringMatching(/^Containment failed for .*tree record not written/) });
+    expect(office.downSoldiers.isDown("scout")).toBe(true);
+    const log = await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8");
+    expect(log).toMatch(/"type":"containment_failed".*"down":true/);
+  });
+});
+
+describe("#137 C1: the machine's process identity", () => {
+  /** A Node child that idles a minute, and a promise for its exit. */
+  const idler = () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
+    return { pid: child.pid!, exited: new Promise<void>((done) => child.once("exit", () => done())), kill: () => child.kill() };
+  };
+
+  windowsOnly("reads a start time as exact FILETIME ticks since 2020 and ends only that identity, on its held handle", async () => {
+    const ops = machineOps()!, child = idler();
+    try {
+      const ticks = await ops.probe(child.pid);
+      if (ticks === "gone") throw new Error("the idler is gone");
+      // 100 ns ticks after 2020-01-01 UTC: about now, and the same on a second read (lossless).
+      expect(Math.abs(ticks / 1e4 + Date.UTC(2020, 0, 1) - Date.now())).toBeLessThan(120_000);
+      expect(await ops.probe(child.pid)).toBe(ticks);
+      await ops.endIdentity({ pid: child.pid, startTime: ticks + 1 });
+      expect(await ops.probe(child.pid)).toBe(ticks);
+      await ops.endIdentity({ pid: child.pid, startTime: ticks });
+      await child.exited;
+      expect(await ops.probe(child.pid)).toBe("gone");
+    } finally { child.kill(); }
+  }, 60_000);
+
+  it.runIf(process.platform === "linux")("sends no signal on Linux, where Node has no pidfd (fails closed)", async () => {
+    const ops = machineOps()!, child = idler();
+    try {
+      const start = await ops.probe(child.pid);
+      if (start === "gone") throw new Error("the idler is gone");
+      await ops.endIdentity({ pid: child.pid, startTime: start });
+      await ops.endIdentity({ pid: child.pid, startTime: start }, true);
+      expect(await ops.probe(child.pid)).toBe(start);
+    } finally { child.kill(); }
+  }, 30_000);
 });

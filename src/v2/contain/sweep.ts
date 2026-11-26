@@ -41,11 +41,12 @@ const isProcess = (line: TreeLine): line is Extract<TreeLine, Identity> => "pid"
 /**
  * PO-16's sweep: ends every tree whose entry belongs to a post office that is no longer running, judged by the
  * entry's pid and start time. A process is ended only while its recorded identity still matches, never for a
- * session or process-group id alone; a pid that another process now holds is left running.
+ * session or process-group id alone; a pid that another process now holds is left running. `trees`, when given, are the
+ * records the caller verified (C1): the sweep judges exactly those and never re-reads the folder.
  */
-export async function sweepTrees(root: string, ops: SweepOps): Promise<SweepReport> {
+export async function sweepTrees(root: string, ops: SweepOps, trees?: readonly { id: string; lines: readonly TreeLine[] }[]): Promise<SweepReport> {
   const report: SweepReport = { running: 0, swept: 0, ended: [], left: [], unhandled: 0 };
-  for (const { id, lines } of await readTrees(root)) {
+  for (const { id, lines } of trees ?? await readTrees(root)) {
     const postOffice = lines.find((line) => line.kind === "post-office");
     if (!postOffice || !("pid" in postOffice)) continue; // A file with no post office line can't be judged.
     if (await ops.startTimeOf(postOffice.pid) === postOffice.startTime) { report.running++; continue; }
@@ -96,17 +97,47 @@ export function systemOps(platform: NodeJS.Platform = process.platform): SweepOp
     };
   }
   if (platform === "win32") {
-    const taskkill = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
     return {
       platform, wait: pause,
+      // The records' unit (FILETIME ticks since 2020), read the same way as the post office's probe.
       startTimeOf: async (pid) => {
-        try {
-          const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `([DateTimeOffset](Get-Process -Id ${pid} -ErrorAction Stop).StartTime).ToUnixTimeMilliseconds()`]);
-          return Number(stdout.trim());
-        } catch { return undefined; }
+        try { const found = await windowsProbe(pid); return found === "gone" ? undefined : found; } catch { return undefined; }
       },
-      endProcess: async (pid) => { await run(taskkill, ["/t", "/f", "/pid", String(pid)]); },
+      endProcess: async (pid) => { await run(system32("taskkill.exe"), ["/t", "/f", "/pid", String(pid)]); },
     };
   }
   throw new Error(`The sweep has no operations for ${platform} yet: macOS needs PO-17's helper (M1b-18).`);
+}
+
+/** Windows' own PowerShell and taskkill by absolute path, never a PATH lookup. */
+export const system32 = (...parts: string[]) => join(process.env.SystemRoot ?? "C:\\Windows", "System32", ...parts);
+/** The script goes as `-EncodedCommand` (UTF-16LE base64), so its quotes reach PowerShell unchanged. */
+export async function powershell(script: string): Promise<string> {
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  return (await run(system32("WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { windowsHide: true })).stdout.trim();
+}
+/** FILETIME of 2020-01-01 UTC: Windows identities are 100 ns ticks after it, exact and below 2^53 until about 2048. */
+const FILETIME_2020 = "132223104000000000";
+/**
+ * PowerShell that opens `pid` (a held handle), reads its exact creation FILETIME by `GetProcessTimes` on that handle and
+ * leaves the ticks since 2020 in `$t`; `gone` when no such process runs; a throw when it can't tell.
+ */
+export const windowsIdentity = (pid: number) => [
+  "$ErrorActionPreference = 'Stop'",
+  `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class SaProcessTimes { [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetProcessTimes(IntPtr h, out long c, out long e, out long k, out long u); }'`,
+  `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
+  "if ($null -eq $p) { 'gone'; exit 0 }",
+  "$h = $p.Handle; $c = 0L; $e = 0L; $k = 0L; $u = 0L",
+  // Exited, but kept by another handle: its pid can't be reused while held, and it runs nothing.
+  "if ($p.HasExited) { 'gone'; exit 0 }",
+  "if (-not [SaProcessTimes]::GetProcessTimes($h, [ref]$c, [ref]$e, [ref]$k, [ref]$u)) { throw 'GetProcessTimes failed' }",
+  `$t = $c - ${FILETIME_2020}`,
+  "if ($t -lt 0) { throw 'creation time before 2020' }",
+].join("\n");
+/** A Windows process's start time in FILETIME ticks since 2020, `gone` when none runs; throws when it can't tell. */
+export async function windowsProbe(pid: number): Promise<number | "gone"> {
+  const out = await powershell(`${windowsIdentity(pid)}\n[string]$t`);
+  if (out === "gone") return "gone";
+  if (!/^\d+$/.test(out) || !Number.isSafeInteger(Number(out))) throw new Error(`process ${pid}'s start time can't be read`);
+  return Number(out);
 }
