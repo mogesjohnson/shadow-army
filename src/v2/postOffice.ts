@@ -305,7 +305,9 @@ export class PostOffice {
     if (!text.trim()) throw new Error("message is empty");
     const session = await this.session(key, options.claims);
     if (session.active) throw new Error(`${key} already has a running turn`);
-    // #90 C7: the turn is reserved before the first await, so a parallel send sees it and is refused.
+    // #90 C7: the turn is reserved before the first await, so a parallel send sees it and is refused,
+    // and an interrupt during the lease renewal is kept for run().
+    session.stopRequested = false;
     const next = (async () => {
       // WSP-2: fail closed before the brief goes out when the claims may have changed hands.
       if (!(await this.renewLease(session))) {
@@ -315,7 +317,6 @@ export class PostOffice {
         this.record({ soldier: key, type: "down", data: { reason } }, session);
         throw new Error(`${key}: ${reason}`);
       }
-      session.stopRequested = false;
       // A copied credential in a brief must never enter a soldier's stdin/context either.
       return this.run(session, text.replace(new RegExp(this.secrets[0]!, "gi"), "[REDACTED]"));
     })();

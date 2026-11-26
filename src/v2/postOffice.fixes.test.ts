@@ -188,6 +188,21 @@ describe("post office fixes from the M1a pre-review", () => {
     expect((same as PromiseFulfilledResult<{ session: string }>).value.session).toBe((first as PromiseFulfilledResult<{ session: string }>).value.session);
   }, 30_000);
 
+  it("#90 C7: an interrupt while the reserved turn renews its lease stops it before the brief goes out", async () => {
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
+    const renew = Locks.prototype.renew;
+    const steps: Record<string, Step[]> = { tank: [async () => "completed"] };
+    const { office: o } = await office(steps);
+    await o.open("tank", { claims: ["src/**"] });
+    vi.spyOn(Locks.prototype, "renew").mockImplementationOnce(async function (this: Locks, ...args: Parameters<Locks["renew"]>) { await gate; return renew.apply(this, args); });
+    const sent = o.send("tank", "one", { claims: ["src/**"] });
+    await until(() => (o.army() as { key: string; state: string }[]).find((s) => s.key === "tank")!.state === "working");
+    await o.interrupt("tank");
+    release();
+    expect((await sent).status).toBe("interrupted");
+    expect(steps.tank).toHaveLength(1);
+  }, 30_000);
+
   it("#90 C7: two matching sends at once run one turn; the other is refused before any brief", async () => {
     const steps: Record<string, Step[]> = { tank: [async (cwd) => { await put(cwd, "src/a.ts", "one\n"); return "completed"; }, async () => "completed"] };
     const { office: o } = await office(steps);
