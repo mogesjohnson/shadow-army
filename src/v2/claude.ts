@@ -17,6 +17,17 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 export const MAX_BAD_LINES_IN_A_ROW = 10;
 const BAD_LINE_EXCERPT = 200;
 
+/** Resolves when the stream ends or closes, or after `ms`. */
+function ended(stream: Readable | undefined, ms = 1_000): Promise<void> {
+  if (!stream || stream.readableEnded || stream.destroyed) return Promise.resolve();
+  return new Promise((done) => {
+    const finish = () => { clearTimeout(timer); stream.off("end", finish); stream.off("close", finish); done(); };
+    const timer = setTimeout(finish, ms);
+    timer.unref();
+    stream.once("end", finish).once("close", finish);
+  });
+}
+
 interface PendingTurn {
   id: string;
   resolve: (result: TurnResult) => void;
@@ -86,7 +97,12 @@ export class ClaudeChannel implements NativeChannel {
   private instructionDirectory?: string;
   // Set once the CLI's initialize handshake is answered: pausing earlier would starve that very reply.
   private stdout?: Readable;
+  // Raw stderr enters the same event queue, so PO-7's budget holds it too, from the handshake on: a CLI
+  // blocked on a full stderr pipe could not answer the handshake.
+  private stderr?: Readable;
   private paused = false;
+  // Set once containment has ended the tree: the pipes then hold only their OS buffers, read to the end.
+  private contained = false;
 
   constructor(private readonly options: ChannelOptions) {
     this.process = this.spawn();
@@ -130,19 +146,27 @@ export class ClaudeChannel implements NativeChannel {
     }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
     await this.control({ subtype: "initialize", hooks: null });
     this.stdout = child.stdout;
-    if (this.paused && !this.closed) child.stdout.pause();
+    this.stderr = child.stderr;
+    if (this.paused && !this.contained) { child.stdout.pause(); child.stderr.pause(); }
   }
 
-  /** Stops reading the CLI's stdout (PO-7's backlog). The pipe fills and the CLI waits; nothing more is parsed or buffered here. */
+  /**
+   * Stops reading the CLI's stdout and stderr (PO-7's backlog). The pipes fill and the CLI waits; nothing more is
+   * parsed or buffered here. It holds through a close until containment has ended the tree.
+   */
   pause(): void {
     this.paused = true;
-    if (!this.closed) this.stdout?.pause();
+    if (this.contained) return;
+    this.stdout?.pause();
+    this.stderr?.pause();
   }
 
-  /** Reads on; what the pipe held arrives in order. */
+  /** Reads on; what the pipes held arrives in order. */
   resume(): void {
     this.paused = false;
-    if (!this.closed) this.stdout?.resume();
+    if (this.contained) return;
+    this.stdout?.resume();
+    this.stderr?.resume();
   }
 
   private read(chunk: string): void {
@@ -409,10 +433,6 @@ export class ClaudeChannel implements NativeChannel {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
-    // A closing channel is never paused: a CLI blocked on a full pipe cannot run its own exit,
-    // and its final frames still belong to the closing result.
-    this.paused = false;
-    this.stdout?.resume();
     clearTimeout(this.stopTimer);
     this.approvals.clear();
     for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error(this.reason.message)); }
@@ -426,6 +446,16 @@ export class ClaudeChannel implements NativeChannel {
         containmentStopped = false;
         this.reason = { kind: "transport", message: `Claude process containment failed: ${error instanceof Error ? error.message : String(error)}` };
         this.emit("error", this.reason);
+      }
+      // PO-7 holds a paused channel through teardown: a CLI blocked on a full pipe ends by containment's force
+      // instead. Once the tree is gone the pipes hold at most their OS buffers, which still belong to the closing
+      // result; read them to their end, or for 1 s. A tree that may still run stays paused.
+      if (containmentStopped) {
+        this.contained = true;
+        if (this.paused) {
+          this.stdout?.resume(); this.stderr?.resume();
+          await Promise.all([ended(this.stdout), ended(this.stderr)]);
+        }
       }
       this.acceptFrames = false;
       if (this.instructionDirectory) {

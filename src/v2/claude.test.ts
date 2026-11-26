@@ -30,7 +30,7 @@ async function until(check: () => boolean): Promise<void> {
  * Owner's Claude 2.1.296 probe observed error_during_execution/is_error with zero usage
  * after interrupt. Streaming usage shapes follow the vendor SDK/API documentation.
  */
-async function s6Protocol() {
+async function s6Protocol(close: () => Promise<void> = async () => {}) {
   const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
   const sent: Record<string, unknown>[] = [];
   let buffer = "";
@@ -46,7 +46,7 @@ async function s6Protocol() {
     }
   });
   const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
-    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
+    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close,
   });
   const events: ChannelEvent[] = [];
   const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event) });
@@ -58,7 +58,7 @@ async function s6Protocol() {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send, stdout };
+  return { channel, events, emit, send, stdout, stderr };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -424,16 +424,57 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
       await until(() => seen(events).length === 1);
     });
 
-    it("resumes a paused stream when the channel closes, so the CLI can exit and its last frames are read", async () => {
-      const { channel, events, emit, send, stdout } = await s6Protocol();
+    const stderrTexts = (events: ChannelEvent[]) => events.filter((event) => event.type === "raw" && (event.data as { type?: string }).type === "stderr").map((event) => (event.data as { text: string }).text);
+
+    it("holds stderr with stdout, so raw stderr cannot fill the event queue while it is paused", async () => {
+      const { channel, events, send, stderr } = await s6Protocol();
+      void (await send()).pending.catch(() => {});
+      stderr.write("one");
+      await until(() => stderrTexts(events).length === 1);
+      channel.pause();
+      stderr.write("two");
+      await settle();
+      expect(stderrTexts(events)).toEqual(["one"]);
+      channel.resume();
+      await until(() => stderrTexts(events).length === 2);
+      expect(stderrTexts(events)).toEqual(["one", "two"]);
+    });
+
+    it("holds stderr once the handshake is answered when paused before it, never starving the handshake", async () => {
+      const { channel, events, send, stderr } = await s6Protocol();
+      channel.pause();
+      expect((channel as unknown as { stderr?: unknown }).stderr).toBeUndefined(); // not held before the reply
+      void (await send()).pending.catch(() => {});
+      await until(() => stderr.isPaused());
+      stderr.write("held");
+      await settle();
+      expect(stderrTexts(events)).toEqual([]);
+      channel.resume();
+      await until(() => stderrTexts(events).length === 1);
+    });
+
+    it("stays paused while containment runs, then reads what the pipes held before the channel's last word", async () => {
+      let release!: () => void;
+      const contained = new Promise<void>((done) => { release = done; });
+      const { channel, events, emit, send, stdout, stderr } = await s6Protocol(() => contained);
       void (await send()).pending.catch(() => {});
       channel.pause();
-      expect(stdout.isPaused()).toBe(true);
       emit({ type: "system", n: 1 });
+      stderr.write("late");
+      const closing = channel.close();
       await settle();
+      expect(stdout.isPaused()).toBe(true);
+      expect(stderr.isPaused()).toBe(true);
       expect(seen(events)).toEqual([]);
-      await channel.close();
-      expect(stdout.isPaused()).toBe(false);
+      channel.resume(); channel.pause(); // a backlog that drains and refills during teardown still governs it
+      expect(stdout.isPaused()).toBe(true);
+      release();
+      await until(() => seen(events).length === 1);
+      stdout.end(); stderr.end();
+      await closing;
+      expect(seen(events)).toEqual([1]);
+      expect(stderrTexts(events)).toEqual(["late"]);
+      expect(events.at(-1)!.type).toBe("closed");
       channel.resume(); channel.pause(); // late calls on a closed channel change nothing
       expect(stdout.isPaused()).toBe(false);
     });

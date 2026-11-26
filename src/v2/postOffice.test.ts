@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { armyMark } from "./snapshot.js";
@@ -579,24 +579,143 @@ describe("M1b-27 the guard waits for background work, and a backlog pauses soldi
     expect((await turn).status).toBe("completed");
   });
 
-  it("waits for an undeclared child but never for a declared language server, whose turn closes at its result (M1-AC11)", async () => {
-    const repo = makeRepo(); repos.push(repo);
-    const alive = new Map([[process.pid, 1]]), waits: number[] = [];
-    const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => alive.get(pid), endProcess: async (pid) => { alive.delete(pid); },
+  /** pid -> [start time, parent pid]; the CLI is 600, listed before every turn and marked as the CLI. */
+  type Tree = Map<number, [number, number | undefined]>;
+  const parented = (alive: Tree) => async () => [...alive].map(([pid, [startTime, ppid]]) => ({ pid, startTime, ...(ppid === undefined ? {} : { ppid }), ...(pid === 600 ? { cli: true } : {}) }));
+  const mcp = JSON.stringify({ mcpServers: { lsp: { command: "lsp-server", args: ["--stdio"] } } });
+
+  it("never waits for a server the session's .mcp.json declares, started by the CLI, but waits for an undeclared child (C3, M1-AC11)", async () => {
+    const repo = makeRepo({ "README.md": "hello\n", ".mcp.json": mcp }); repos.push(repo);
+    const alive: Tree = new Map([[600, [1, 1]]]), waits: number[] = [];
+    const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => pid === process.pid ? 1 : alive.get(pid)?.[0], endProcess: async (pid) => { alive.delete(pid); },
       commandOf: async (pid) => pid === 701 ? "lsp-server --stdio" : "node child.js",
       // The injected clock: the undeclared child writes a checkout file, then exits, while the guard waits.
-      wait: async (ms) => { waits.push(ms); repo.write("README.md", "child\n"); alive.delete(700); } };
-    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, sessionServices: ["lsp-server"],
-      channelFactory: (options) => channel(options, (text) => { alive.set(701, 5); if (text === "child") alive.set(700, 6); }, alive) }); offices.push(office);
+      wait: async (ms) => { waits.push(ms); repo.write("README.md", "child\n"); alive.delete(700); if (waits.length > 3) alive.delete(701); } };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, channelFactory: (options) => ({
+      ...channel(options, (text) => { alive.set(701, [5, 600]); if (text === "child") alive.set(700, [6, 600]); }), list: parented(alive) }) }); offices.push(office);
     const first = await office.send("scout", "edit");
     expect(first.status).toBe("completed");
     expect(waits).toEqual([]);
-    expect(alive.has(701)).toBe(true);
     const second = await office.send("scout", "child");
     expect(waits).toEqual([1_000]);
     expect(second.status).toBe("failed");
     expect(second.error?.message).toContain("README.md");
   });
+
+  it("treats a declared command a tool started, a longer command line and an unknown parent as the turn's work (C3)", async () => {
+    for (const [command, ppid] of [["lsp-server --stdio", 702], ["lsp-server --stdio --other", 600], ["lsp-server --stdio", undefined]] as const) {
+      const repo = makeRepo({ "README.md": "hello\n", ".mcp.json": mcp }); repos.push(repo);
+      // 702 is a shell that ran before the turn; it is not the CLI.
+      const alive: Tree = new Map([[600, [1, 1]], [702, [2, 600]]]), waits: number[] = [];
+      const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => pid === process.pid ? 1 : alive.get(pid)?.[0], endProcess: async (pid) => { alive.delete(pid); },
+        commandOf: async (pid) => pid === 701 ? command : "bash", wait: async (ms) => { waits.push(ms); alive.delete(701); } };
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, channelFactory: (options) => ({
+        ...channel(options, () => { alive.set(701, [5, ppid]); }), list: parented(alive) }) }); offices.push(office);
+      expect((await office.send("scout", "edit")).status).toBe("completed");
+      expect(waits, `${command} ${ppid}`).toEqual([1_000]);
+    }
+  });
+
+  it("fails the turn when the tree can't be listed, instead of reading the failure as an empty tree (C2)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => pid === process.pid ? 1 : undefined, endProcess: async () => {}, wait: async () => {} };
+    let calls = 0;
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, channelFactory: (options) => ({
+      ...channel(options, () => {}), list: async () => { if (++calls > 1) throw new Error("listing denied"); return []; } }) }); offices.push(office);
+    const result = await office.send("scout", "edit");
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toContain("process tree listing incomplete: Error: listing denied");
+  });
+
+  it("re-lists the tree while a task runs, so a child it starts after the result holds the guard and the next message (C2)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [], sent: string[] = [];
+    const alive: Tree = new Map([[600, [1, 1]]]);
+    let emit!: ChannelOptions["onEvent"], tick = 0;
+    const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => pid === process.pid ? 1 : alive.get(pid)?.[0], endProcess: async (pid) => { alive.delete(pid); },
+      commandOf: async () => "node child.js",
+      // The injected clock: the task starts a child past the result and reports its end; the child writes, then exits.
+      wait: async () => {
+        if (++tick === 1) { alive.set(700, [6, 600]); emit(task("task_notification")); }
+        else if (tick === 3) { repo.write("README.md", "child\n"); alive.delete(700); }
+        await new Promise((done) => setTimeout(done, 5));
+      } };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, onEvent: (event) => events.push(event), channelFactory: (options) => {
+      emit = options.onEvent; return { ...channel(options, (text) => { sent.push(text); if (text === "bg") emit(task("task_started")); }), list: parented(alive) }; } }); offices.push(office);
+    const first = office.send("scout", "bg");
+    await until(() => events.some((event) => event.type === "background_work"));
+    const second = office.send("scout", "next").catch(() => undefined);
+    const result = await first;
+    expect(sent).toEqual(["bg"]);
+    expect(tick).toBeGreaterThanOrEqual(3);
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toContain("README.md");
+    await second;
+  });
+
+  it("treats a server the turn itself declared in .mcp.json as the turn's work (C3)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const alive: Tree = new Map([[600, [1, 1]]]), waits: number[] = [];
+    const ops: SweepOps = { platform: "linux", startTimeOf: async (pid) => pid === process.pid ? 1 : alive.get(pid)?.[0], endProcess: async (pid) => { alive.delete(pid); },
+      commandOf: async () => "lsp-server --stdio", wait: async (ms) => { waits.push(ms); alive.delete(701); } };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: ops, channelFactory: (options) => ({
+      ...channel(options, () => { writeFileSync(join(options.cwd, ".mcp.json"), mcp); alive.set(701, [5, 600]); }), list: parented(alive) }) }); offices.push(office);
+    await office.send("scout", "edit");
+    expect(waits).toEqual([1_000]);
+  });
+
+  it.todo("C2: the real Claude channel's list() in claude.ts, the Windows job listing in contain/windows.ts and the Linux driver in containmentTable (a separate worker, after w179)");
+  it.todo("C5: the real stdout/renewal case: a slow reader while the office serves renewals (PR #139 C4, main.ts, watch.ts, claude.ts)");
+  it.todo("C5: services from the adapter's whole configuration (~/.claude.json, plugins' language servers and their helpers) against a real claude");
+  it.todo("C5: the multi-soldier guard scenario: two soldiers' turns with background work over one checkout");
+
+  it("ends the guard only after a graceful close's teardown, so a child writing during it fails the turn (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    let finished!: () => void;
+    const turnDone = new Promise<void>((resolve) => { finished = resolve; });
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, onEvent: (event) => events.push(event),
+      channelFactory: (options) => ({ ...channel(options, () => options.onEvent(task("task_started"))),
+        // The tree is still stopping: a child writes the checkout before the teardown ends (or once the turn has ended).
+        async close() { await Promise.race([turnDone, new Promise((resolve) => setTimeout(resolve, 1_500))]); repo.write("README.md", "written while closing\n"); } }) }); offices.push(office);
+    const turn = office.send("scout", "bg").finally(finished);
+    await until(() => events.some((event) => event.type === "background_work"));
+    const closing = office.closeSession("scout");
+    const result = await turn;
+    await closing;
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toContain("README.md");
+  }, 30_000);
+
+  it("applies nothing when a close cannot confirm the tree stopped, and the turn sees the failure (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, processOps: null, onEvent: (event) => events.push(event),
+      roster: makeRoster({ tank: { cli: "claude", model: "m", roles: ["build"], write: true } }),
+      channelFactory: (options) => ({ ...channel(options, () => {}),
+        async send() { await writeFile(join(options.cwd, "claimed.txt"), "soldier's edit\n"); options.onEvent(task("task_started")); return { status: "completed", text: "done", refusal: false }; },
+        async close() { throw new Error("tree not empty: 4120 node child.js"); } }) });
+    try {
+      const turn = office.send("tank", "edit", { claims: ["claimed.txt"] });
+      await until(() => events.some((event) => event.type === "background_work"));
+      await expect(office.closeSession("tank")).rejects.toThrow("not confirmed stopped");
+      const result = await turn;
+      expect(result.write?.applicable).toBe(false);
+      expect(result.write?.reason).toContain("not confirmed stopped");
+      expect(result.write?.apply).toBeUndefined();
+      expect(existsSync(join(repo.dir, "claimed.txt"))).toBe(false);
+    } finally { await office.close().catch(() => {}); }
+  }, 30_000);
+
+  it("lets two closes of one session overlap, each ending cleanly (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, onEvent: (event) => events.push(event),
+      channelFactory: (options) => ({ ...channel(options, () => {}), async close() { await new Promise((resolve) => setTimeout(resolve, 50)); } }) }); offices.push(office);
+    await office.open("scout");
+    await expect(Promise.all([office.closeSession("scout"), office.closeSession("scout")])).resolves.toBeDefined();
+    expect(events.some((event) => event.type === "session_closed")).toBe(true);
+  }, 30_000);
 
   it("pauses every open channel's output on a full backlog, a channel opened meanwhile too, and resumes them once drained", async () => {
     const repo = makeRepo(); repos.push(repo);
