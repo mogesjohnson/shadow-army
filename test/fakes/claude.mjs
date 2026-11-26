@@ -31,7 +31,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
       emit({ type: "system", subtype: "init", model: "fake-claude", version: "synthetic-2.1.295" });
     } else if (frame.request.subtype === "interrupt") {
-      if (current?.message.content === "ignore-interrupt") continue;
+      if (current?.message.content === "ignore-interrupt" || current?.message.content === "malformed-ignore-interrupt") continue;
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
       if (approval) emit({ type: "control_cancel_request", request_id: approval });
       approval = undefined;
@@ -65,6 +65,12 @@ for await (const line of createInterface({ input: process.stdin })) {
     process.stdout.write("{broken JSON}\n");
     for (let i = 0; i < 8; i++) { await new Promise((resolve) => setTimeout(resolve, 30)); assistant(`working ${i}`); }
     result("progress finished"); continue;
+  }
+  // A bad line while a tool runs, and an interrupt that is never answered: the turn may still be running.
+  if (text === "malformed-ignore-interrupt") {
+    await writeFile(join(process.cwd(), "partial.txt"), "partial edit\n");
+    process.stdout.write("{broken JSON}\n");
+    continue;
   }
   if (text === "malformed-long") { process.stdout.write(`{broken ${"x".repeat(185)} sk-ant-abcdefghijklmnop ${"y".repeat(40)}}\n`); result("after long bad line"); continue; }
   if (text === "malformed-ten") { for (let i = 0; i < 10; i++) process.stdout.write("{broken JSON}\n"); continue; }

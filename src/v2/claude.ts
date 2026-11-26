@@ -366,12 +366,14 @@ export class ClaudeChannel implements NativeChannel {
     turn.error = { kind: "other", message: `Claude made no progress on the turn within ${quiet} ms of an unparseable line` };
     this.emit("error", turn.error);
     this.approvals.clear();
+    let acknowledged = false;
     this.stopTimer = setTimeout(() => {
       if (this.current !== turn) return;
+      if (!acknowledged) { void this.failTransport("Claude did not confirm a stop within 30 seconds of an unparseable line"); return; }
       this.finish({ status: "failed", text: turn.text, refusal: false, sessionId: this.sessionId, contextTokens: turn.contextTokens, usage: this.eventUsage(turn), error: turn.error });
     }, this.options.interruptTimeoutMs ?? 30_000);
     this.stopTimer.unref();
-    await this.write({ type: "control_request", request_id: randomUUID(), request: { subtype: "interrupt" } }).catch(() => undefined);
+    await this.control({ subtype: "interrupt" }).then(() => { acknowledged = true; }, () => undefined);
   }
 
   private finish(result: TurnResult): void {

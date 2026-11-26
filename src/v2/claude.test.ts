@@ -427,6 +427,16 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(done.text).toBe("progress finished");
   }, 8_000);
 
+  windowsOnly("contains the channel when a recovery interrupt is never confirmed, and settles after containment (#96 C5)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+    const result = await channel.send("malformed-ignore-interrupt");
+    // The turn may still be running natively, so it is not settled as an ordinary failure on a live channel.
+    expect(result.status).toBe("interrupted");
+    expect(result.error?.kind).toBe("transport");
+    const closed = events.find((event) => event.type === "closed")?.data as { containmentStopped?: boolean } | undefined;
+    expect(closed?.containmentStopped).toBe(true);
+    expect((await channel.send("hello")).status).toBe("interrupted");
+  }, 15_000);
 
 
   windowsOnly("uses only the main conversation for the meter and preserves native terminal/cache usage", async () => {
