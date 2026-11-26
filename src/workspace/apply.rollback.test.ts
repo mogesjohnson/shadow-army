@@ -54,4 +54,23 @@ describe("when the index cannot be changed and the edits cannot be taken back ou
     expect(text).toContain("NOT put back");
     expect(text).toContain("  hello.txt\n  keep.txt");
   });
+
+  it("lists an ignored addition that is still there, which plain git status leaves out", async () => {
+    const r = makeRepo({ "keep.txt": "a\n", ".gitignore": "*.log\n" });
+    repos.push(r);
+    const base = r.git("rev-parse", "HEAD");
+    r.git("checkout", "-q", "-b", "shadow/run/test");
+    r.write("keep.txt", "a\nb\n");
+    r.write("run.log", "hi\n");
+    r.git("add", "-f", "keep.txt", "run.log");
+    r.git("commit", "-q", "-m", "run");
+    r.git("checkout", "-q", "main");
+    writeFileSync(join(r.dir, ".git", "index.lock"), "owner's lock");
+
+    const result = await applyToCheckout(r.dir, base, "shadow/run/test");
+
+    expect(existsSync(join(r.dir, "run.log"))).toBe(true);
+    expect(result).toMatchObject({ applied: false, left: ["keep.txt", "run.log"] });
+    expect(renderApply(result, "shadow/run/test")).toContain("  run.log");
+  });
 });

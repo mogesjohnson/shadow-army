@@ -80,12 +80,9 @@ export async function applyToCheckout(root: string, base: string, branch: string
         try {
           await git(root, ["apply", "-R", "--whitespace=nowarn", patch]);
         } catch {
-          // Rolling back failed too, so say which files still carry the run's edits.
-          const touched = new Set(files.map((f) => f.path.toLowerCase()));
-          const left = await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).then(
-            (out) => [...new Set(changedPaths(out).filter((p) => touched.has(p.toLowerCase())))].sort(),
-            () => files.map((f) => f.path).sort(),
-          );
+          // Nothing is verified as restored, so list every affected path: `git status` can leave out
+          // files that still carry the run's edits, ignored additions among them.
+          const left = files.map((f) => f.path).sort();
           return { applied: false, reason: `${e.message}; taking the edits back out failed too`, clashes: [], left };
         }
         throw e;
