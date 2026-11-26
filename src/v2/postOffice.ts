@@ -97,6 +97,8 @@ interface Session {
   tasks: Set<string>;
   /** Wakes a guard waiting on background work. */
   settle?: () => void;
+  /** Set when a close starts; ends once the channel's tree teardown has an outcome, so a turn's guard never ends before it (WSP-11, PO-15). */
+  containment?: { done: Promise<void>; end: () => void };
 }
 
 /**
@@ -500,6 +502,8 @@ export class PostOffice {
     const after = channel?.list ? await channel.list().catch(() => []) : [];
     if (channel?.list && session.tree) await session.tree.listing(after);
     await this.backgroundWork(session, generation, before, after);
+    // WSP-11, PO-15: a session closing under the turn ends its guard only once the tree's teardown has an outcome.
+    await session.containment?.done;
     // PO-15: while a process the failed containment named still runs, the guard stays open; with none named it is cut short.
     if (session.containmentFailed && this.ops) await holdGuardOpen(await this.leftovers(session), this.processOps(this.ops), { wait: this.ops.wait });
     let changes: string[];
@@ -541,6 +545,8 @@ export class PostOffice {
       this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
     }
     if (session.write && write) session.write.tip = write.commit;
+    // PO-15: a tree whose end was not confirmed may still be writing, so nothing reaches the owner's folder.
+    if (write?.applicable && session.containmentFailed) write = { ...write, applicable: false, reason: "the soldier's native descendants were not confirmed stopped" };
     // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
     if (write?.applicable) {
       const audited = write;
@@ -637,18 +643,31 @@ export class PostOffice {
     await session.channel!.respondApproval(requestId, response);
   }
 
+  /** Marks a close as started before anything can wake the guard; the turn waits for its outcome (WSP-11, PO-15). */
+  private closing(session: Session | undefined): void {
+    if (!session || session.containment) return;
+    let end!: () => void;
+    const done = new Promise<void>((resolve) => { end = resolve; });
+    session.containment = { done, end };
+  }
+
   async closeSession(key: string): Promise<void> {
+    this.closing(this.sessions.get(key));
     await this.opening.get(key)?.catch(() => {});
     const session = this.sessions.get(key);
     if (!session) return;
+    this.closing(session);
     session.down = true;
     session.wake?.();
-    session.settle?.();
     let failure: string | undefined;
     try { await session.channel?.close(); } catch (error) {
       session.containmentFailed = true;
       failure = error instanceof Error ? error.message : String(error);
     }
+    // C1: the guard wakes only on the teardown's outcome, with a failure already set for the turn to see.
+    session.containment!.end();
+    session.containment = undefined;
+    session.settle?.();
     await session.active?.catch(() => {});
     await session.restart;
     if (session.containmentFailed) {
@@ -692,6 +711,7 @@ export class PostOffice {
 
   close(): Promise<void> {
     return this.closePromise ??= (async () => {
+      for (const session of this.sessions.values()) this.closing(session);
       this.closed = true;
       await Promise.allSettled(this.opening.values());
       const ended = await Promise.allSettled([...this.sessions.keys()].map((key) => this.closeSession(key)));

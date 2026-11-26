@@ -594,6 +594,44 @@ describe("M1b-27 the guard waits for background work, and a backlog pauses soldi
     expect(second.error?.message).toContain("README.md");
   });
 
+  it("ends the guard only after a graceful close's teardown, so a child writing during it fails the turn (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    let finished!: () => void;
+    const turnDone = new Promise<void>((resolve) => { finished = resolve; });
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, onEvent: (event) => events.push(event),
+      channelFactory: (options) => ({ ...channel(options, () => options.onEvent(task("task_started"))),
+        // The tree is still stopping: a child writes the checkout before the teardown ends (or once the turn has ended).
+        async close() { await Promise.race([turnDone, new Promise((resolve) => setTimeout(resolve, 1_500))]); repo.write("README.md", "written while closing\n"); } }) }); offices.push(office);
+    const turn = office.send("scout", "bg").finally(finished);
+    await until(() => events.some((event) => event.type === "background_work"));
+    const closing = office.closeSession("scout");
+    const result = await turn;
+    await closing;
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toContain("README.md");
+  }, 30_000);
+
+  it("applies nothing when a close cannot confirm the tree stopped, and the turn sees the failure (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, processOps: null, onEvent: (event) => events.push(event),
+      roster: makeRoster({ tank: { cli: "claude", model: "m", roles: ["build"], write: true } }),
+      channelFactory: (options) => ({ ...channel(options, () => {}),
+        async send() { await writeFile(join(options.cwd, "claimed.txt"), "soldier's edit\n"); options.onEvent(task("task_started")); return { status: "completed", text: "done", refusal: false }; },
+        async close() { throw new Error("tree not empty: 4120 node child.js"); } }) });
+    try {
+      const turn = office.send("tank", "edit", { claims: ["claimed.txt"] });
+      await until(() => events.some((event) => event.type === "background_work"));
+      await expect(office.closeSession("tank")).rejects.toThrow("not confirmed stopped");
+      const result = await turn;
+      expect(result.write?.applicable).toBe(false);
+      expect(result.write?.reason).toContain("not confirmed stopped");
+      expect(result.write?.apply).toBeUndefined();
+      expect(existsSync(join(repo.dir, "claimed.txt"))).toBe(false);
+    } finally { await office.close().catch(() => {}); }
+  }, 30_000);
+
   it("pauses every open channel's output on a full backlog, a channel opened meanwhile too, and resumes them once drained", async () => {
     const repo = makeRepo(); repos.push(repo);
     const calls: string[] = [];
