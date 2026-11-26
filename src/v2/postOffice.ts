@@ -644,19 +644,28 @@ export class PostOffice {
   }
 
   /** Marks a close as started before anything can wake the guard; the turn waits for its outcome (WSP-11, PO-15). */
-  private closing(session: Session | undefined): void {
-    if (!session || session.containment) return;
+  private closing(session: Session | undefined): Session["containment"] {
+    if (!session) return undefined;
+    if (session.containment) return session.containment;
     let end!: () => void;
     const done = new Promise<void>((resolve) => { end = resolve; });
-    session.containment = { done, end };
+    return session.containment = { done, end };
+  }
+
+  /** Ends a containment wait; a concurrent close's newer one stays. */
+  private contained(session: Session, containment: Session["containment"]): void {
+    containment?.end();
+    if (session.containment === containment) session.containment = undefined;
   }
 
   async closeSession(key: string): Promise<void> {
-    this.closing(this.sessions.get(key));
+    const early = this.sessions.get(key), earlyWait = this.closing(early);
     await this.opening.get(key)?.catch(() => {});
     const session = this.sessions.get(key);
+    // A session replaced or removed meanwhile has no close of its own left to end its wait.
+    if (early && early !== session) this.contained(early, earlyWait);
     if (!session) return;
-    this.closing(session);
+    const containment = this.closing(session);
     session.down = true;
     session.wake?.();
     let failure: string | undefined;
@@ -665,8 +674,7 @@ export class PostOffice {
       failure = error instanceof Error ? error.message : String(error);
     }
     // C1: the guard wakes only on the teardown's outcome, with a failure already set for the turn to see.
-    session.containment!.end();
-    session.containment = undefined;
+    this.contained(session, containment);
     session.settle?.();
     await session.active?.catch(() => {});
     await session.restart;

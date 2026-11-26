@@ -632,6 +632,16 @@ describe("M1b-27 the guard waits for background work, and a backlog pauses soldi
     } finally { await office.close().catch(() => {}); }
   }, 30_000);
 
+  it("lets two closes of one session overlap, each ending cleanly (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: null, onEvent: (event) => events.push(event),
+      channelFactory: (options) => ({ ...channel(options, () => {}), async close() { await new Promise((resolve) => setTimeout(resolve, 50)); } }) }); offices.push(office);
+    await office.open("scout");
+    await expect(Promise.all([office.closeSession("scout"), office.closeSession("scout")])).resolves.toBeDefined();
+    expect(events.some((event) => event.type === "session_closed")).toBe(true);
+  }, 30_000);
+
   it("pauses every open channel's output on a full backlog, a channel opened meanwhile too, and resumes them once drained", async () => {
     const repo = makeRepo(); repos.push(repo);
     const calls: string[] = [];
