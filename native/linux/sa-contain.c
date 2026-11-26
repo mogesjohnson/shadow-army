@@ -20,6 +20,19 @@
  *       limits and standard streams it was itself started with. The CLI joins
  *       its session and process group, and it stays the CLI's parent.
  *
+ *   sa-contain end <pid> <starttime> [group]
+ *       The sweep's end bound to an identity (PO-11, PO-16). Opens a pidfd on
+ *       <pid>, then reads field 22 of /proc/<pid>/stat (the start time in
+ *       clock ticks since boot) and compares it with <starttime>; only on a
+ *       match does it signal, through the pidfd, with SIGKILL. The pidfd is
+ *       held across the check: it names the process that had <pid> when it
+ *       was opened, and a process that matches at the check has held <pid>
+ *       since before then. With `group`, the process must lead its own process
+ *       group, and the group is killed (killpg) while the pidfd is held.
+ *       Exit 0 when it signalled, or when the process is gone or has another
+ *       start time (nothing is sent); 1 when it can't bind (no pidfd, say)
+ *       and sent nothing.
+ *
  * Fd 3 is the pipe to the post office: a stream socket (Node.js's `pipe`
  * stdio entry is one). The helper writes one JSON line per result on it,
  * never on fds 0-2, and as the guardian reads one command per line from it:
@@ -45,6 +58,7 @@
  *   {"op":"guard","event":"reaped","pid":P}         (a process other than the CLI, while killing)
  *   {"op":"guard","event":"ended","reaped":N}       (the tree is empty: ECHILD)
  *   {"op":"guard","event":"refused","reason":"unknown command"}
+ *   {"op":"end","ok":true,"result":"ended"|"gone"|"other"}
  *   {"op":"<op>","ok":false,"step":"<step>","errno":E}   (an error)
  *   {"ok":false,"reason":"unknown operation"}
  *
@@ -63,6 +77,7 @@
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/signalfd.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -372,11 +387,107 @@ static int op_guard(int argc, char **argv) {
   }
 }
 
+/* ---- the bound end ---- */
+
+#ifndef SYS_pidfd_open
+#define SYS_pidfd_open 434
+#endif
+#ifndef SYS_pidfd_send_signal
+#define SYS_pidfd_send_signal 424
+#endif
+
+/* A whole decimal number with no sign, space or trailing byte. */
+static int parse_number(const char *text, unsigned long long max, unsigned long long *out) {
+  if (text[0] < '0' || text[0] > '9') return -1;
+  errno = 0;
+  char *end;
+  unsigned long long value = strtoull(text, &end, 10);
+  if (errno != 0 || *end != '\0' || value > max) return -1;
+  *out = value;
+  return 0;
+}
+
+/* Fields 5 (process group) and 22 (start time) of /proc/<pid>/stat. Returns 0,
+ * or the errno of the read (ENOENT/ESRCH: gone), or EINVAL if unparsable. */
+static int read_stat(pid_t pid, long *pgrp, unsigned long long *start) {
+  char path[64];
+  char buf[1024];
+  snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+  int fd = open(path, O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return errno;
+  ssize_t n = read(fd, buf, sizeof buf - 1);
+  int err = errno;
+  close(fd);
+  if (n < 0) return err;
+  if (n == 0) return ESRCH;
+  buf[n] = '\0';
+  char *end = strrchr(buf, ')');
+  if (!end) return EINVAL;
+  /* After ')': field 3 (state), 4 (ppid), 5 (pgrp), ..., 22 (starttime). */
+  char *field = end + 1;
+  for (int index = 3; index <= 22; index++) {
+    while (*field == ' ') field++;
+    if (*field == '\0') return EINVAL;
+    if (index == 5) *pgrp = strtol(field, NULL, 10);
+    if (index == 22) {
+      if (*field < '0' || *field > '9') return EINVAL;
+      *start = strtoull(field, NULL, 10);
+      return 0;
+    }
+    while (*field != ' ' && *field != '\0') field++;
+  }
+  return EINVAL;
+}
+
+static int end_result(const char *result) {
+  reportf("{\"op\":\"end\",\"ok\":true,\"result\":\"%s\"}", result);
+  return 0;
+}
+
+static int op_end(int argc, char **argv) {
+  unsigned long long pid_value, start;
+  int group = argc == 5 && strcmp(argv[4], "group") == 0;
+  if ((argc != 4 && !group) || parse_number(argv[2], 4194304, &pid_value) != 0 || pid_value < 2 ||
+      parse_number(argv[3], ~0ULL, &start) != 0) {
+    fail("end", "usage", 0);
+    return 2;
+  }
+  pid_t pid = (pid_t)pid_value;
+  int pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
+  if (pidfd < 0) {
+    if (errno == ESRCH) return end_result("gone");
+    fail("end", "pidfd_open", errno);
+    return 1;
+  }
+  long pgrp = 0;
+  unsigned long long now = 0;
+  int err = read_stat(pid, &pgrp, &now);
+  if (err == ENOENT || err == ESRCH) { close(pidfd); return end_result("gone"); }
+  if (err != 0) { close(pidfd); fail("end", "stat", err); return 1; }
+  if (now != start) { close(pidfd); return end_result("other"); }
+  if (group) {
+    /* Only a group the process leads: its id can't name another group while
+     * the matched leader lives. */
+    if (pgrp != (long)pid) { close(pidfd); fail("end", "not-group-leader", 0); return 1; }
+    if (killpg(pid, SIGKILL) != 0 && errno != ESRCH) { err = errno; close(pidfd); fail("end", "killpg", err); return 1; }
+  }
+  if (syscall(SYS_pidfd_send_signal, pidfd, SIGKILL, NULL, 0) != 0 && errno != ESRCH) {
+    err = errno;
+    close(pidfd);
+    if (group) return end_result("ended"); /* the group was signalled */
+    fail("end", "pidfd_send_signal", err);
+    return 1;
+  }
+  close(pidfd);
+  return end_result("ended");
+}
+
 int main(int argc, char **argv) {
   /* Fd 3 must be open; without it there is no one to report to. */
   if (fcntl(report_fd, F_SETFD, FD_CLOEXEC) != 0) return 2;
   if (argc >= 2 && strcmp(argv[1], "check") == 0 && argc == 2) return op_check();
   if (argc >= 2 && strcmp(argv[1], "guard") == 0) return op_guard(argc, argv);
+  if (argc >= 2 && strcmp(argv[1], "end") == 0) return op_end(argc, argv);
   report("{\"ok\":false,\"reason\":\"unknown operation\"}\n");
   return 2;
 }
