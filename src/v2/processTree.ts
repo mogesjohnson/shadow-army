@@ -4,7 +4,7 @@ import { realpath as realpathCallback } from "node:fs";
 import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { Writable, type Readable } from "node:stream";
 
@@ -43,7 +43,8 @@ export async function spawnManagedProcess(options: ManagedProcessOptions): Promi
 // Real path with links, junctions and 8.3 short names followed (GetFinalPathNameByHandle on Windows).
 const realpath = promisify(realpathCallback.native);
 const comparable = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
-const inside = (path: string, root: string) => { const rel = relative(root, path); return rel === "" || !!rel && !rel.startsWith("..") && !isAbsolute(rel); };
+// Outside means a whole leading ".." segment: a child folder named "..bin" is still inside.
+const inside = (path: string, root: string) => { const rel = relative(root, path); return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel); };
 
 /** The soldier's folder, its repository's checkout and every worktree of it, read from git's own files (no git run). */
 async function repositoryFolders(cwd: string): Promise<string[]> {
@@ -69,7 +70,7 @@ async function repositoryFolders(cwd: string): Promise<string[]> {
  * CH-1: the CLI's PATH is the caller's less every relative or empty entry, every entry that can't be
  * resolved, and every entry in the folder, its checkout or a worktree, compared by real path.
  */
-async function trustedPath(cwd: string, env: NodeJS.ProcessEnv): Promise<{ kept: string[]; dropped: string[] }> {
+async function trustedPath(cwd: string, env: NodeJS.ProcessEnv): Promise<{ kept: string[]; dropped: string[]; roots: string[] }> {
   const pathValue = Object.entries(env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
   const roots = (await Promise.all((await repositoryFolders(cwd)).map((folder) => realpath(folder).catch(() => resolve(folder))))).map(comparable);
   const kept: string[] = [], dropped: string[] = [];
@@ -77,7 +78,7 @@ async function trustedPath(cwd: string, env: NodeJS.ProcessEnv): Promise<{ kept:
     const real = entry && isAbsolute(entry) ? await realpath(entry).catch(() => undefined) : undefined;
     if (real && !roots.some((root) => inside(comparable(real), root))) kept.push(entry); else dropped.push(entry);
   }
-  return { kept, dropped };
+  return { kept, dropped, roots };
 }
 
 async function resolveWindowsCommand(file: string, cwd: string, env: NodeJS.ProcessEnv, path: string[]): Promise<string> {
@@ -118,7 +119,11 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   // cmd.exe would otherwise search the current folder before PATH for every name a shim runs.
   const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
     [pathKey]: path.kept.join(delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
-  const command = windowsCommand(await resolveWindowsCommand(options.file, options.cwd, env, path.kept), options.args ?? [], env);
+  const executable = await resolveWindowsCommand(options.file, options.cwd, env, path.kept);
+  // CH-1: the selected file itself, links followed, must also lie outside the checkout and its worktrees.
+  const realExecutable = comparable(await realpath(executable).catch(() => resolve(executable)));
+  if (path.roots.some((root) => inside(realExecutable, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+  const command = windowsCommand(executable, options.args ?? [], env);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
   const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));

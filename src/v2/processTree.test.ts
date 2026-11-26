@@ -100,7 +100,8 @@ describe.skipIf(!windows)("session process containment (Windows; Not tested on o
   }, 30_000);
 
   it("launches a Windows npm-style cmd shim without a visible window", async () => {
-    const cwd = await directory(); const script = join(cwd, "echo.cjs"); const shim = join(cwd, "fake.cmd");
+    // The shim lives outside the soldier's folder: an executable inside it is refused (C11).
+    const cwd = await directory(); const bin = await directory(); const script = join(bin, "echo.cjs"); const shim = join(bin, "fake.cmd");
     await writeFile(script, "console.log(JSON.stringify(process.argv.slice(2)));process.stdin.once('data',data=>{process.stdout.write(data);process.exit(0)});", "utf8");
     await writeFile(shim, `@echo off\r\n"${process.execPath}" "%~dp0echo.cjs" %*\r\n`, "utf8");
     const args = ["with spaces", "literal&value", "percent%value", "%PATH%", "quote\"inside", "trailing\\"];
@@ -135,6 +136,24 @@ describe.skipIf(!windows)("session process containment (Windows; Not tested on o
       expect(session.droppedPath.slice(0, untrusted.length)).toEqual(untrusted);
       expect(session.droppedPath).not.toContain(trusted);
     } finally { try { repo.git("worktree", "remove", "--force", worktree); } catch {} repo.cleanup(); }
+  }, 30_000);
+
+  it("treats a checkout folder named with two leading dots as inside, and refuses an executable in the checkout (CH-1, C11)", async () => {
+    const repo = makeRepo(); const trusted = await directory();
+    try {
+      const shim = (word: string) => `@echo off\r\necho ${word}\r\n`;
+      repo.write("..bin/sa-c11-cli.cmd", shim("dotdot"));
+      await writeFile(join(trusted, "sa-c11-cli.cmd"), shim("trusted"));
+      const inherited = Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path");
+      const env = { ...Object.fromEntries(inherited), PATH: [join(repo.dir, "..bin"), trusted, process.env.Path ?? process.env.PATH ?? ""].join(";") };
+      const session = await spawnManagedProcess({ file: "sa-c11-cli", cwd: repo.dir, env }); sessions.push(session);
+      let output = ""; session.stdout.on("data", (chunk) => { output += chunk; }); session.stderr.resume();
+      expect((await session.exited).code).toBe(0); await session.close();
+      expect(output.trim()).toBe("trusted");
+      expect(session.droppedPath[0]).toBe(join(repo.dir, "..bin"));
+      await expect(spawnManagedProcess({ file: join(repo.dir, "..bin", "sa-c11-cli.cmd"), cwd: repo.dir, env }))
+        .rejects.toThrow(/inside the soldier's repository/);
+    } finally { repo.cleanup(); }
   }, 30_000);
 
   it("refuses a relative configured command instead of taking it from the soldier's folder (CH-1, C4)", async () => {

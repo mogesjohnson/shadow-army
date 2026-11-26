@@ -252,8 +252,10 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
 
   it.runIf(process.platform === "win32")("preserves multiline standing text through a real Windows batch shim and removes its append file", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "sa-native-claude-batch-"));
-    folders.push(cwd);
-    const batch = join(cwd, "fake-claude.cmd");
+    // The shim sits outside the soldier's folder: an executable inside it is refused (C11).
+    const bin = await mkdtemp(join(tmpdir(), "sa-native-claude-bin-"));
+    folders.push(cwd, bin);
+    const batch = join(bin, "fake-claude.cmd");
     await writeFile(batch, `@echo off\r\n"${process.execPath}" "${resolve("test/fakes/claude.mjs")}" %*\r\n`);
     const instructions = "First line 🌙\r\nSecond line with \"quotes\" & literal %values%.\nThird line.";
     const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions, onEvent: () => {}, command: { file: batch } });
