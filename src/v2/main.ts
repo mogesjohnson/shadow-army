@@ -26,12 +26,15 @@ export async function runPostOffice(settings: Partial<Omit<ServerOptions, "crede
       watch?.stop();
       input.close();
       process.stdin.destroy();
+      // The last events get 2 s; a reader that never takes them cannot keep the post office from exiting.
+      await output.close();
     }
   })();
+  // PO-7: fd 1 through a helper process, never process.stdout, whose pipe writes block on Windows.
+  const output = outputTransport();
   // PO-7: a write that fails, as with EPIPE once Claude Code was killed, stops the writing only; the watch or the
   // lease starts the shutdown. The loss is logged once (before the office exists there is no log to write it to).
-  // PO-7: fd 1 through a worker thread, never process.stdout, whose pipe writes block on Windows.
-  const events = eventWriter(outputTransport(1), {
+  const events = eventWriter(output.stream, {
     onLost: (error) => office?.office.logRecord({ type: "events_lost", reason: (error as NodeJS.ErrnoException).code ?? String(error) }),
     onBacklog: (full) => {
       office?.office.logRecord({ type: "events_backlog", full });

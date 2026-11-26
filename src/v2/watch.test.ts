@@ -124,7 +124,7 @@ describe("outputTransport (PO-7, M1-AC1)", () => {
     const watch = new URL("./watch.ts", import.meta.url).href;
     const code = `import { eventWriter, outputTransport } from ${JSON.stringify(watch)};
       import { createServer } from "node:http";
-      const writer = eventWriter(outputTransport(1), { limit: 1 << 20, onLost: (e) => process.stderr.write("lost " + e.code + " " + e.message + "\\n"), onBacklog: (full) => process.stderr.write("backlog " + full + "\\n") });
+      const writer = eventWriter(outputTransport().stream, { limit: 1 << 20, onLost: (e) => process.stderr.write("lost " + e.code + " " + e.message + "\\n"), onBacklog: (full) => process.stderr.write("backlog " + full + "\\n") });
       const line = "x".repeat(1023) + "\\n";
       for (let i = 0; i < 8192; i++) writer.write(line);
       const server = createServer((_q, s) => s.end("renewed")).listen(0, "127.0.0.1", () => process.stderr.write("port " + server.address().port + "\\n"));`;
@@ -145,6 +145,26 @@ describe("outputTransport (PO-7, M1-AC1)", () => {
       child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; });
       await until(() => bytes === 8192 * 1024 && err.includes("backlog false"), () => `full delivery (${bytes} bytes)`);
       expect(err).not.toContain("lost");
+    } finally { child.kill(); }
+  }, 30_000);
+
+  // M1-AC1: with nothing reading the output and the lease ended, the post office still exits with its own code.
+  it("lets the process exit with its own code when the reader never reads", async () => {
+    const loader = new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url).href;
+    const watch = new URL("./watch.ts", import.meta.url).href;
+    const code = `import { eventWriter, outputTransport } from ${JSON.stringify(watch)};
+      const output = outputTransport();
+      const writer = eventWriter(output.stream);
+      const line = "x".repeat(1023) + "\\n";
+      for (let i = 0; i < 8192; i++) writer.write(line);
+      setTimeout(async () => { await output.close(300); process.exitCode = 7; }, 300);`;
+    const child = spawn(process.execPath, ["--import", loader, "--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "inherit"] });
+    try {
+      const exit = await new Promise<number | null | "hung">((done) => {
+        const timer = setTimeout(() => done("hung"), 15_000);
+        child.once("exit", (status) => { clearTimeout(timer); done(status); });
+      });
+      expect(exit).toBe(7);
     } finally { child.kill(); }
   }, 30_000);
 });

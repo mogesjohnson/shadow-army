@@ -1,5 +1,5 @@
-import { Writable } from "node:stream";
-import { Worker } from "node:worker_threads";
+import { spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 
 /** PO-1's creation stamp of a process, or null when no process has the pid. */
 export type StampOf = (pid: number) => Promise<string | null>;
@@ -51,46 +51,47 @@ export function watchStarter(options: StarterWatchOptions): { stop(): void } {
   return { stop() { done = true; cancel(); } };
 }
 
-// The worker's whole job: blocking writes to the output, one reply per chunk (null, or the failure).
-const OUTPUT_WORKER = `const { parentPort, workerData } = require("node:worker_threads");
-const { writeSync } = require("node:fs");
+// The helper's whole job: blocking writes of its stdin to the inherited output. It ends on the first failure.
+const OUTPUT_HELPER = `const { writeSync } = require("node:fs");
 const nap = new Int32Array(new SharedArrayBuffer(4));
-parentPort.on("message", (bytes) => {
-  try {
-    for (let at = 0; at < bytes.length;) {
-      try { at += writeSync(workerData.fd, bytes, at); }
-      catch (error) { if (error.code !== "EAGAIN") throw error; Atomics.wait(nap, 0, 0, 5); }
-    }
-    parentPort.postMessage(null);
-  } catch (error) { parentPort.postMessage({ code: error.code, message: String(error.message) }); }
+process.stdin.on("data", (bytes) => {
+  for (let at = 0; at < bytes.length;) {
+    try { at += writeSync(1, bytes, at); }
+    catch (error) { if (error.code !== "EAGAIN") process.exit(1); Atomics.wait(nap, 0, 0, 5); }
+  }
 });`;
+
+export interface OutputTransport {
+  /** Never blocks; its `writableLength` is every byte the helper has not yet taken. */
+  readonly stream: Writable;
+  /** Ends the output: waits up to `ms` for what is queued to be written, then ends the helper either way. */
+  close(ms?: number): Promise<void>;
+}
 
 /**
  * PO-7's nonblocking event transport. Node makes a pipe on stdout blocking on Windows, so a reader that stops
- * reading would hold the whole event loop (renewals, the watch, every soldier). Here a worker thread does the
- * blocking writes. A chunk's callback runs only once its bytes reached the output, so `writableLength` counts
- * every byte not yet written, which is the queue `eventWriter` budgets. The worker keeps the process alive only
- * while bytes wait, so a shutdown still flushes what was written before it.
+ * reading would hold the whole event loop (renewals, the watch, every soldier). A thread cannot help: the
+ * process's exit waits for a thread stuck in that write, so the post office could never exit. Here a helper
+ * process inherits the output and does the blocking writes; the post office writes to the helper's stdin, an
+ * asynchronous pipe whose queue `eventWriter` budgets (plus the pipes' OS buffers). `close` lets a stalled
+ * helper go, so the post office still exits with its own code.
  */
-export function outputTransport(fd: number): Writable {
-  // No inherited flags: `--input-type=module` or a loader would make this CommonJS script fail to start.
-  const worker = new Worker(OUTPUT_WORKER, { eval: true, workerData: { fd }, execArgv: [] });
-  worker.unref();
-  const waiting: ((error?: Error | null) => void)[] = [];
-  const failAll = (error: Error) => { for (const done of waiting.splice(0)) done(error); };
-  worker.on("message", (failure: { code?: string; message: string } | null) => {
-    const done = waiting.shift();
-    if (!waiting.length) worker.unref();
-    done?.(failure ? Object.assign(new Error(failure.message), { code: failure.code }) : null);
-  });
-  worker.on("error", failAll);
-  worker.on("exit", () => failAll(new Error("event output worker ended")));
-  const send = (bytes: Buffer, done: (error?: Error | null) => void) => { waiting.push(done); worker.ref(); worker.postMessage(bytes); };
-  return new Writable({
-    write(chunk: Buffer, _encoding, done) { send(chunk, done); },
-    writev(chunks, done) { send(Buffer.concat(chunks.map(({ chunk }) => chunk as Buffer)), done); },
-    destroy(error, done) { void worker.terminate(); done(error); },
-  });
+export function outputTransport(): OutputTransport {
+  const helper = spawn(process.execPath, ["-e", OUTPUT_HELPER], { stdio: ["pipe", "inherit", "ignore"], windowsHide: true });
+  const exited = new Promise<void>((done) => { helper.once("exit", () => done()); helper.once("error", () => done()); });
+  // A helper that cannot start loses the output, as a failed write does.
+  helper.once("error", (error) => helper.stdin.destroy(error));
+  return {
+    stream: helper.stdin,
+    async close(ms = 2_000) {
+      helper.stdin.end();
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<boolean>((done) => { timer = setTimeout(() => done(true), ms); });
+      if (await Promise.race([exited.then(() => false), late])) helper.kill();
+      clearTimeout(timer);
+      helper.unref();
+    },
+  };
 }
 
 /** PO-7: past 16 MiB of events not yet written, the post office stops reading its soldiers' output. */
