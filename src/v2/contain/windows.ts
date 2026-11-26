@@ -576,7 +576,7 @@ export function systemDirectoryOf(sharedObjects: readonly string[]): string {
   return win32.dirname(ntdll[0]!);
 }
 /** PowerShell by its absolute path in the system directory, never by a name the PATH resolves (PO-16, C6). */
-async function systemPowerShell(): Promise<{ path: string; root: string }> {
+export async function systemPowerShell(): Promise<{ path: string; root: string }> {
   const report = process.report.getReport() as { sharedObjects?: unknown };
   const loaded = Array.isArray(report.sharedObjects) ? report.sharedObjects.filter((one): one is string => typeof one === "string") : [];
   const system = systemDirectoryOf(loaded);
@@ -616,7 +616,8 @@ export interface SweepSession {
   close(): void;
 }
 
-export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS): SweepSession {
+/** `locate` finds PowerShell (injected only by tests, to hold a startup at its lookup). */
+export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS, locate = systemPowerShell): SweepSession {
   const now = () => performance.now();
   let child: ChildProcess | undefined;
   let exit: Promise<void> = Promise.resolve(); // The running helper's exit.
@@ -632,11 +633,13 @@ export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS): SweepSessio
     if (helper) { stopped = exit; helper.kill(); }
     const answer = pending; pending = undefined; answer?.("unknown");
   };
-  const start = async (): Promise<ChildProcess | undefined> => {
+  // `wanted` is the caller still waiting within its deadline: a start whose caller has expired, or whose session
+  // closed, while it awaited the lookup creates no child (C10).
+  const start = async (wanted: () => boolean): Promise<ChildProcess | undefined> => {
     if (child) return child;
     const script = Buffer.from(`${SWEEP_HELPER}\n${SWEEP_LOOP}`, "utf16le").toString("base64");
-    const { path, root } = await systemPowerShell();
-    if (closed) return undefined; // A start that resolves after the session closed creates no child (C10).
+    const { path, root } = await locate();
+    if (closed || !wanted()) return undefined;
     // The system root it was found under, not the inherited one; and Windows PowerShell's own modules, not an
     // inherited PSModulePath (PowerShell 7's, when the sweep starts from it).
     const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:systemroot|windir|psmodulepath)$/i.test(key))), SystemRoot: root, windir: root };
@@ -659,25 +662,41 @@ export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS): SweepSessio
     helper.unref(); (helper.stdin as unknown as { unref?(): void }).unref?.(); (helper.stdout as unknown as { unref?(): void }).unref?.();
     return helper;
   };
-  const send = (line: string, until: number): Promise<string> => {
+  // A call's answer, and when its work has settled: the helper's stop, lookup and start included, not just its answer.
+  const send = (line: string, until: number): { answer: Promise<string>; settled: Promise<unknown> } => {
     const limit = Math.min(until, now() + callLimitMs);
-    if (closed || !(now() < limit)) return Promise.resolve("unknown"); // Past the deadline: never sent.
-    return new Promise<string>((done) => {
-      let finished = false;
-      const finish = (answer: string) => { if (finished) return; finished = true; clearTimeout(timer); done(answer); };
-      // The limit covers the helper's lookup and start too; past it, work in flight is cancelled with the helper.
-      const timer = setTimeout(() => { if (pending === finish) stop(); finish("unknown"); }, limit - now());
-      void (async () => {
-        await stopped;
-        const helper = await start().catch(() => undefined);
-        if (finished || closed || !helper || !(now() < limit)) { finish("unknown"); return; }
-        pending = finish;
-        helper.stdin!.write(`${line}\n`);
-      })();
-    });
+    if (closed || !(now() < limit)) return { answer: Promise.resolve("unknown"), settled: Promise.resolve() }; // Past the deadline: never sent.
+    let finished = false;
+    let finish!: (answer: string) => void;
+    const answer = new Promise<string>((done) => { finish = (one) => { if (finished) return; finished = true; clearTimeout(timer); done(one); }; });
+    // The limit covers the helper's lookup and start too; past it, work in flight is cancelled with the helper.
+    const timer = setTimeout(() => { if (pending === finish) stop(); finish("unknown"); }, limit - now());
+    const wanted = () => !finished && !closed && now() < limit;
+    const settled = (async () => {
+      await stopped;
+      const helper = wanted() ? await start(wanted).catch(() => undefined) : undefined;
+      if (!helper || !wanted()) { finish("unknown"); return; }
+      pending = finish;
+      helper.stdin!.write(`${line}\n`);
+      await answer;
+    })();
+    return { answer, settled };
+  };
+  // A caller waiting in the queue still has its answer by its deadline: "unknown", and its turn then sends nothing.
+  const by = (answer: Promise<string>, until: number): Promise<string> => {
+    if (until === Infinity) return answer;
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<string>((done) => { timer = setTimeout(() => done("unknown"), Math.max(0, until - now())); });
+    return Promise.race([answer, late]).finally(() => clearTimeout(timer));
   };
   return {
-    call: (line, until = Infinity) => { const answer = queue.then(() => send(line, until)); queue = answer.catch(() => {}); return answer; },
+    // One call at a time, and one startup or shutdown at a time: the next call's turn comes only once the last call's
+    // work has settled, so a stale startup never runs beside the next one (C10).
+    call: (line, until = Infinity) => {
+      const turn = queue.then(() => send(line, until));
+      queue = turn.then((one) => one.settled).catch(() => {});
+      return by(turn.then((one) => one.answer), until);
+    },
     get pid() { return child?.pid; },
     close: () => { closed = true; stop(); },
   };

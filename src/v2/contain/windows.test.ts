@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
-import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, systemDirectoryOf, windowsLeft, type ManagedProcess, type TreeListing } from "./windows.js";
+import { DEFAULT_EXIT_GRACE_MS, endWindowsProcess, exitGraceFor, listingFrom, openSweepSession, ownedByCurrentUser, probeWindowsProcess, spawnManagedProcess, systemDirectoryOf, systemPowerShell, windowsLeft, type ManagedProcess, type TreeListing } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
@@ -368,6 +368,24 @@ describe("the sweep's one helper session on Windows (C10)", () => {
     const late = closed.call("probe 4");
     closed.close(); // Closed before its helper started: none ever starts.
     expect([await late, closed.pid]).toEqual(["unknown", undefined]);
+  }, 60_000);
+
+  windowsOnly("starts no helper for a call that expired during its startup, and the next call waits for that startup", async () => {
+    // Each startup is held at its PowerShell lookup until the test lets it go.
+    const lookups: Array<() => void> = [];
+    const session = openSweepSession(undefined, () => new Promise<void>((done) => lookups.push(done)).then(systemPowerShell));
+    const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
+    try {
+      expect(await session.call("probe 4", performance.now() + 50)).toBe("unknown");
+      const later = probeWindowsProcess(process.pid, session, performance.now() + 30_000);
+      await pause(100);
+      expect(lookups).toHaveLength(1); // The later call's startup waits for the stale one.
+      lookups[0]!();
+      await pause(200);
+      expect([lookups.length, session.pid]).toEqual([2, undefined]); // The stale startup settled and spawned nothing.
+      lookups[1]!();
+      expect(await later).toMatch(/^[1-9]\d{17}$/);
+    } finally { session.close(); }
   }, 60_000);
 
   // Skipped: Left answers 0 while the orphan still runs; not wired into the sweep until it passes (C9, see the brief's Left).
