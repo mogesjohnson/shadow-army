@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "hang-reject" | "hang-stall" | "hang-echo" | "off"; tail?: string; startRefusal?: string; stderr?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; host?: string; tools?: Record<string, string>; vars?: Record<string, string>; settingsEnv?: Record<string, string>; refuse?: string; answer?: string | Error; sweep?: { out: string; code: number | null } | "throw" | "hang" | "hang-reject" | "hang-stall" | "hang-echo" | "read-reject" | "read-empty" | "off"; tail?: string; startRefusal?: string; stderr?: string } = {}) {
   vi.resetModules();
   const { register, useSweepLauncher } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -80,6 +80,15 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
                   : how === "hang-echo" ? Promise.resolve({ done: true, value })
                   : how === "hang-reject" ? Promise.reject(new Error("no")) : new Promise(() => {});
               },
+            };
+          }
+          if (env.sweep === "read-reject" || env.sweep === "read-empty") {
+            // C7: a launched sweep whose read rejects, or ends with neither an exit code nor a signal; its stop echoes
+            // its argument as a finished generator does, which is no evidence that the process ended.
+            const how = env.sweep;
+            return {
+              [Symbol.asyncIterator]: () => ({ next: () => how === "read-reject" ? Promise.reject(new Error("pipe broke")) : Promise.resolve({ done: true, value: { code: null, signal: null } }) }),
+              return: (value: unknown) => { sweepsStopped.push(1); return Promise.resolve({ done: true, value }); },
             };
           }
           const result = env.sweep ?? { out: "", code: 0 };
@@ -634,6 +643,27 @@ describe("the sweep after a dead post office (PO-16, M1b-21)", () => {
       m.endRelay();
       await next.catch(() => undefined);
     }
+  });
+
+  it("keeps the restart barrier when a launched sweep's read rejects or ends without an exit code or signal (C7)", async () => {
+    for (const [sweep, words] of [["read-reject", /the sweep's output could not be read \(pipe broke\) and its stop was not confirmed/],
+      ["read-empty", /the sweep ended without an exit code or signal and its stop was not confirmed/]] as const) {
+      const m = await died({ sweep });
+      expect(m.sweepsStopped).toHaveLength(1);
+      expect(shadowLines(m.logs)).toEqual([expect.stringMatching(words)]);
+      expect(await m.send("claude-sonnet --claim a again")).toMatch(/won't restart the army/);
+      expect(m.spawns).toHaveLength(1);
+    }
+  });
+
+  it("allows a restart after a confirmed launch failure, which started no sweep (C7)", async () => {
+    const m = await died({ sweep: "throw" });
+    expect(shadowLines(m.logs)).toEqual([expect.stringMatching(/the sweep failed: spawn failed/)]);
+    const next = m.send("claude-sonnet --claim a again");
+    await settle();
+    expect(m.spawns).toHaveLength(2);
+    m.endRelay();
+    await next.catch(() => undefined);
   });
 
   it("lifts the restart barrier at once on a terminal exit from the stop (C5)", async () => {

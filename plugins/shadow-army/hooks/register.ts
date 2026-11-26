@@ -196,13 +196,14 @@ async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<strin
       if (next.value.stream === "stdout") out += next.value.text;
     }
   })();
-  // The deadline settles this wait even when the iterator can't settle `next()` after `return()`.
-  const outcome = await Promise.race([read, late]).finally(() => timer?.cancel());
-  if (outcome === "late") {
-    const late = `the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s`;
-    // C5: the restart barrier lifts only on evidence that this sweep ended: a terminal exit from the stop, or one the
-    // read confirms later. A rejected or pending stop, or one that just echoes its argument, keeps it refusing.
-    const barrier = { message: `Shadow Army won't restart the army: ${late} and its stop could not be confirmed, so it may still be running` };
+  /**
+   * C5/C7: the sweep was launched but its end is unknown (no answer in time, a read that failed, or one that ended with
+   * no exit code or signal), so stop it, and refuse restarts until a terminal exit from the stop or a later read proves it
+   * ended. A rejected or pending stop, or one that just echoes its argument, keeps the barrier. A launcher that throws
+   * started nothing (a confirmed launch failure), so it reaches `sweep`'s catch and needs no barrier.
+   */
+  const unknownEnd = async (what: string): Promise<string> => {
+    const barrier = { message: `Shadow Army won't restart the army: ${what} and its stop could not be confirmed, so it may still be running` };
     unconfirmedStop = barrier;
     const lift = (): void => { if (unconfirmedStop === barrier) unconfirmedStop = undefined; };
     void read.then(({ result }) => { if (exited(result)) lift(); }, () => {});
@@ -212,10 +213,15 @@ async function sweepOutcome($: EngineInterface, runtime: Runtime): Promise<strin
     let stopTimer: Timer | undefined;
     const stopLate = new Promise<"late">((done) => { stopTimer = $.clock.after(STOP_WAIT_MS, () => done("late")); });
     const stopped = await Promise.race([stop, stopLate]).finally(() => stopTimer?.cancel());
-    if (stopped === "stopped") return `${late} and was stopped; what it left is unknown`;
-    if (unconfirmedStop !== barrier) return `${late} and has since exited; what it left is unknown`;
-    return `${late} and ${stopped === "failed" ? "its stop failed" : stopped === "late" ? `its stop was not confirmed in ${STOP_WAIT_MS / 1000} s` : "its stop was not confirmed"}; what it left is unknown, and the army won't restart until it is`;
-  }
+    if (stopped === "stopped") return `${what} and was stopped; what it left is unknown`;
+    if (unconfirmedStop !== barrier) return `${what} and has since exited; what it left is unknown`;
+    return `${what} and ${stopped === "failed" ? "its stop failed" : stopped === "late" ? `its stop was not confirmed in ${STOP_WAIT_MS / 1000} s` : "its stop was not confirmed"}; what it left is unknown, and the army won't restart until it is`;
+  };
+  // The deadline settles this wait even when the iterator can't settle `next()` after `return()`.
+  const outcome = await Promise.race([read.catch((error: unknown) => ({ error })), late]).finally(() => timer?.cancel());
+  if (outcome === "late") return unknownEnd(`the sweep gave no answer in ${SWEEP_WAIT_MS / 1000} s`);
+  if ("error" in outcome) return unknownEnd(`the sweep's output could not be read (${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)})`);
+  if (!exited(outcome.result)) return unknownEnd("the sweep ended without an exit code or signal");
   const code = outcome.result?.code;
   const lastLine = outcome.out.split("\n").map((line) => line.trim()).filter(Boolean).pop() ?? "";
   let report: { ended?: unknown; left?: unknown; unhandled?: unknown; error?: unknown } | undefined;
