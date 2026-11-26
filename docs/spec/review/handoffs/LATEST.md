@@ -1,42 +1,33 @@
-# Handoff: orchestrator 54 (`bab83f0f`) to orchestrator 55 (2026-11-26 ~12:05 UTC)
+# Handoff: orchestrator 55 (`b6c8725e`) to orchestrator 56 (2026-11-26 ~15:05 UTC)
 
-Self-contained: do not read older handoffs. Range `fd53f7d` (orch-53's handoff) to this commit. The 5-hour window reset at 10:00 and was at 75% at 12:00: **start no worker at 80% or more** (at that point only finish, tick and merge). RAM 3.4 GB free at 12:00; no new worker below 1.5 GB.
+Self-contained: do not read older handoffs. Range `719d909` (orch-54's handoff) to this commit. The 5-hour window reset at 15:00 (2% at 15:01). RAM about 3 GB free; no new worker below 1.5 GB.
 
-## Running workers (report to orch-55)
+## Running workers (report to orch-56; tell them your name)
 
-- **w178-fix139-c2c3** (Opus medium, session `7db3ea61`): #139 C2 postOffice half (failed list = incomplete, re-list per poll), C3 (services from adapter config, matched by identity), C5 (`it.todo`). Files: `src/v2/postOffice.ts`, its test. Brief `.shadow/v2-tools/tasks/w178-fix139-c2c3.md`. Was told to report as orch-54; it may SendMessage orch-54: if it is silent, check its tab.
-- **w180-fix139-c2-driver** (Opus medium): #139 C2 driver wiring: `list()` in `src/v2/claude.ts`, Windows job listing in `src/v2/contain/windows.ts`, Linux driver into `containmentTable` (`src/v2/contain/index.ts`), their tests. Brief `w180-fix139-c2-driver.md`; reports to the orchestrator named here.
-- Both push to `claude/63-m1b-po-chain2`. Next worker: **w181**. **Next Codex file: 86** (check the folder; workers write them).
-
-Workers may open in the second Terminal window (id 66972): list windows with TRACE (`processName: WindowsTerminal`) before closing tabs.
-
-## Fixes pushed this session (waiting for Codex at these heads)
-
-- #137 `1425660` (w172 to w174): C1 [P0] both halves (FILETIME ticks, Linux fail closed, record trust), C5, C6 live, 2 self-review P1s. Linux full file passes. C4, C7, C9, C6 recovery = build notes (Codex had them P1). File 81.
-- #116 `7c7befe` (w175): merged `claude/63-m1b` (now MERGEABLE), C10, one `log_failed` per failure. File 82.
-- #101 `f710f35` (w176): C3, C4. File 83.
-- #139 `01a4106` (w177, w179): C1 [P0] (file 84), C4 nonblocking event transport via helper process (file 85). C2, C3, C5 in progress.
-- Still waiting from orch-53/52: #110 `a678eb0`, #106 `6348339`, #136 `e101e26`, #121 `5f47b04`, #144, #132, #115, #113, #109, #111, #107.
-- No Codex review arrived 10:03 to 12:00 UTC. Last tick `2026-11-26T11:07:42Z` (later ticks were skipped, see below).
+- **w184-fix128-finish** (Sonnet medium): finish #128 C13 after w183 (code `1b53e0f`, tests `42d45cc`): WSL run, self-review, C13 reply, fix the PR body (it still says linked worktrees don't start), Codex file. Brief `w184-fix128-finish.md` -> `## Left` in `w183-fix128-c13.md`.
+- **w185-fix139-finish** (Sonnet medium): finish #139 C2 driver after w181 (head `3741e28`): self-review, C2 reply, Validation/Size, Codex file, Linux rerun. Brief `w185-fix139-finish.md` -> `## Left` in `w181-fix139-c2-driver.md`.
+- **w182-fix141** (Opus): stopped at 150k, tab still open: **close it**. Next worker: **w186**.
 
 ## Queue (one lane; `postOffice.ts` tasks one at a time)
 
-1. Codex ticks; merge on approval, bottom-up, merge script in its own tab (RUNBOOK 0.2).
-2. After w178: **#141** (C1 P0 `postOffice.ts:625`, C2 to C4 P1, C5/C6 P2), then **#142** (C1 P0 `:363`, C2 to C4 P1, C5 P2), then **#143** (C1 to C5 P0, C6/C7 P1, C8 P2 `server.test.ts`). Read findings with `gh pr view <n> --json reviews -q '.reviews|last|.body' | grep -E '^- C[0-9]+'`. One P0 per Opus worker. Or `tools/p0scan.sh <PR numbers>` (it needs the numbers; with none it prints nothing).
-
-## Waiting on the owner
-
-1. **Timers:** Claude Code reaped orch-54's hi and watch timers for low memory at ~11:12 and said not to restart them unasked. orch-54 asked the owner; no answer yet. Start yours as RUNBOOK 0.1 says (that is the owner's standing rule) unless reaped again.
-2. **CodexSandboxUsers ACL** (#138 C6 and #137's new trust check): the group has Modify on `%TEMP%` and `C:\Users\johns\projects`, so startup recovery refuses whenever a trees record exists (fails closed). Remove the grant, or accept the group?
-3. #139 C4 (w179): a paused close now ends by containment's 10 s force. Acceptable?
-4. Flatten plan (`orch-51-flatten.md`); spec Q11 (viewer credential and port); remove worktrees `ui-v21-monarch`, `w174-fix137` (unused) and the cockpit's `w174-fix137-finish-*`.
+1. **w186-fix141** (Opus medium, first): `## Left` in `w182-fix141.md`. #141 head `60a9f43` (merged #139's base at `c416ba0`). The AC11 branch-backed and C2 tests fail because the read-only snapshot's `diffState` counts the refs it shares with the repository; the fix is written there. Then C3, C4 (P1), C5, C6 (P2).
+2. Then **#142** (C1 P0 `postOffice.ts:363`, C2 to C4 P1, C5 P2), then **#143** (C1 to C5 P0, C6/C7 P1, C8 P2). Write new briefs (`w142-*`/`w143-*` are old). Findings: `gh pr view <n> --json reviews -q '.reviews|last|.body' | grep -E 'C[0-9]+ ?\[?P[0-9]'` (the `^- C` pattern misses bold-styled reviews).
+3. **#148** (Ink lane, Codex review 50: C1/C2 P1, C4 P2) waits until M1 is merged.
+4. Codex ticks; merge on approval at the exact head, bottom-up, merge script in its own tab (RUNBOOK 0.2). Last tick `2026-11-26T13:35:51Z`: Codex reviewed #128 (review 49, C13 only) and #148 (review 50) at 13:35; nothing else since 11:07.
 
 ## Owner's instructions in force
 
-- Speed-up five ("yes do all five", 2026-11-26), merge on approval at Codex's exact head (`gh pr ready`, `gh pr merge <n> --merge --match-head-commit <sha>`). Branch deletion needs the owner. A Codex file for every pushed fix. Timers: hi 50 min, watch 5 min.
+- "we will keep pushing through prs as fast as we can, i will have codex review and after then we will merge" (2026-11-26): keep fix workers running past the 80% 5-hour line; Codex is the bottleneck.
+- "stop the workers at 95% weekly and have them ping the api every 30 min ... then 5h reset happens then resume" (2026-11-26): in `codex-fix-common.md` (Limits). Workers' hi timer is `sleep 1800`. The cockpit line shows no weekly figure, so the 95% stop cannot be checked yet; asked the owner whether the cockpit should add it (no answer).
+- Speed-up five; merge on approval at Codex's exact head; branch deletion needs the owner; a Codex file per pushed fix.
+
+## Waiting on the owner
+
+1. Weekly figure in the cockpit line (above).
+2. Carried from orch-54: CodexSandboxUsers ACL (#138 C6, #137 trust check); #139 C4 paused close ends by containment's 10 s force; flatten plan; spec Q11; removing worktrees `ui-v21-monarch`, `w174-fix137`, `w174-fix137-finish-*`.
 
 ## Lessons
 
-- Two workers on one branch in disjoint files works (w177/w179, w178/w180) with `pull --rebase=merges` before push; check test files too when splitting (C5 sat in the other worker's test file).
-- The cockpit gives workers their own worktree; briefs should say "or the cockpit's; never both" to avoid leftovers.
-- Sonnet medium handled finish-up work (Linux runs, self-review, replies) at low cost; Opus for P0s.
+- The cockpit's duplicate-task stop held w180 for its whole life (it overlapped w178 on #139). Don't launch two workers on one PR at once; run them in order. Never answer the hold in the worker's tab.
+- Workers start near 70k to 100k context: a full P0 plus three P1s does not fit in 150k. Give one P0 (or two P1s) per Opus worker, and use short Sonnet finish-up briefs (`w184`/`w185`) for replies, self-review and Codex files.
+- With the 5-hour limit at 99%, workers stop mid-task; with the Limits rule they resume after the reset, but most hit 150k first. Plan for a finish-up worker.
