@@ -621,6 +621,20 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     await expect(office.close()).rejects.toThrow("could not be closed");
   });
 
+  it("keeps a containment failure's turn interrupted when the guard also finds a change, with both lines (C5, PO-8)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), async send(text) {
+        await writeFile(join(repo.dir, "README.md"), "changed in the checkout\n");
+        options.onEvent({ type: "closed", data: { containmentStopped: false } });
+        return { status: "completed", text, refusal: false };
+      } }) });
+    const result = await office.send("scout", "fail");
+    expect(result.status).toBe("interrupted");
+    expect(result.error?.message).toMatch(/containment failed during the turn[^]*guard failed[^]*README\.md/);
+    await expect(office.close()).rejects.toThrow("could not be closed");
+  });
+
   const v2 = (dir: string, ...parts: string[]) => join(dir, ".shadow", "v2", ...parts);
   const completions = async (dir: string) => (await readFile(v2(dir, "completed-turns.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { turn: string; late?: boolean });
 
@@ -639,6 +653,22 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     expect(sent).toBe(1);
     expect(blocked.status).toBe("failed");
     expect(blocked.error?.message).toMatch(/baseline could not be written/);
+  });
+
+  it("keeps the turn's baseline pending, with no completion, when the guard comparison can't run (C6, PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), async send(text) {
+        // The checkout's index is unreadable afterwards, so the end-of-turn state can't be read.
+        await writeFile(join(repo.dir, ".git", "index"), "not an index");
+        return { status: "completed", text, refusal: false };
+      } }) });
+    const result = await office.send("scout", "break");
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toMatch(/checkout guard could not complete/);
+    expect(readdirSync(v2(repo.dir, "turns"))).toHaveLength(1);
+    expect(existsSync(v2(repo.dir, "completed-turns.jsonl"))).toBe(false);
+    await office.close().catch(() => {});
   });
 
   it("at startup removes a baseline whose completion is on disk without reporting it again, and keeps one whose completion can't be written (PO-1)", async () => {

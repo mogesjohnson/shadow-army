@@ -979,12 +979,17 @@ export class PostOffice {
     const changes: string[] = startFailure ? [`checkout guard could not start: ${startFailure}`] : [];
     const start = session.turnStart;
     session.turnStart = undefined;
+    // C6: true only once the baseline was compared with the state now; a failed or held comparison keeps the turn pending.
+    let compared = false;
     try {
       // The baseline is read and cleared under the lock, so an apply queued ahead of this guard still carries into it (W12-3).
       if (session.guardBase) changes.push(...await this.exclusive(async () => {
         const base = session.guardBase;
         session.guardBase = undefined;
-        return base ? diffState(base, await this.guardState()) : [];
+        if (!base) return [];
+        const found = diffState(base, await this.guardState());
+        compared = true;
+        return found;
       }));
     } catch (error) { changes.push(`checkout guard could not complete: ${String(error)}`); }
     // WSP-11: the snapshot's writes are a read-violation, reported, then discarded before its next turn.
@@ -1000,9 +1005,10 @@ export class PostOffice {
         }
       } catch (error) { changes.push(`read-only snapshot could not be checked or put back: ${String(error)}`); }
     }
-    // PO-1: the baseline goes only once the turn's guard outcome is on disk under its ID. If it can't be, the baseline stays
-    // as evidence for the next start, and the session goes down so no later turn writes over it.
-    if (baselineWritten) {
+    // PO-1: the baseline goes only once the turn's guard outcome is on disk under its ID. If it can't be, or the comparison
+    // never ran (C6), the baseline stays as evidence for the next start, and the session goes down so no later turn writes over it.
+    if (baselineWritten && !compared) changes.push(`the turn's guard comparison did not run, so its baseline is kept at ${turnFile}`);
+    else if (baselineWritten) {
       try {
         await completeTurn(this.root, { turn: turnId, session: session.id, soldier: session.spec.key, changes });
         await unlink(turnFile).catch(() => {});
@@ -1022,9 +1028,10 @@ export class PostOffice {
       session.down = true;
       await session.channel!.close();
       const guard = `${session.write ? "checkout guard failed; nothing is applied" : "read-only guard failed"}; partial work is retained at ${session.cwd}: ${changes.join("; ")}`;
-      // PO-8: the CLI's own error keeps its kind and words; the guard failure follows it.
-      result = { ...result, status: "failed", error: result.error ? { ...result.error, message: `${result.error.message}\n${guard}` } : { kind: "other", message: guard } };
-      if (write) write = { ...write, applicable: false, reason: changes.join("; ") };
+      // PO-8: the CLI's own error keeps its kind and words; the guard failure follows it. A containment failure's turn stays
+      // interrupted (C5), and its line stays ahead of the guard's in the error and the write's reason.
+      result = { ...result, status: containment ? "interrupted" : "failed", error: result.error ? { ...result.error, message: `${result.error.message}\n${guard}` } : { kind: "other", message: guard } };
+      if (write) write = { ...write, applicable: false, reason: containment ? `${containment}; ${changes.join("; ")}` : changes.join("; ") };
     }
     // W12-1: a turn that is not applied but moved the branch leaves work the owner's folder never got. A later turn's
     // apply would carry it in, so the session goes down, as after a guard failure; reconnecting starts a fresh worktree.
