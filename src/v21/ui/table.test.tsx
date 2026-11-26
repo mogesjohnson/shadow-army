@@ -33,7 +33,7 @@ const WORK_144 = String.raw`
  ┆                                            ┆ ┆                                            ┆ ┆                                            ┆
  ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯ ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯ ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
 ╭─ messages  ■ brief   □ summary   ◆ soldier to soldier   ! asks you ──────────────────────────────────────────────────────────────────────────╮
-│ 14:31:02  Monarch ■ Iron     brief "dark-mode toggle…"                                                                           ✓ delivered │
+│ 14:31:02  Monarch ■ Iron     brief "dark-mode toggle…"                                                                           → delivered │
 │ 14:31:40  Igris   ◆ Iron     "tokens ready: bg.dark, text.dark"                                                                  → delivered │
 │ 14:32:11  Tusk    □ Monarch  summary · lint scan · 0 findings                                                                     ✓ answered │
 │ 14:32:30  Beru    ! you      asks: Run this command?                                                                          waiting on you │
