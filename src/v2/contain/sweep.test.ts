@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { endThroughHelper, OP_LIMIT_MS, readVerifiedTrees, sweepTrees, systemOps, SWEEP_LIMIT_MS, windowsTrust, type Probe, type SweepOps } from "./sweep.js";
+import { endThroughHelper, OP_LIMIT_MS, powershellEnv, readVerifiedTrees, sweepTrees, systemOps, SWEEP_LIMIT_MS, windowsTrees, type Probe, type SweepOps } from "./sweep.js";
 import { main } from "../sweepMain.js";
 import { readTrees, TreeRecord, treesDir } from "./trees.js";
 
@@ -236,20 +236,56 @@ describe("the sweep (PO-16, M1-AC16)", () => {
   }, 20_000);
 
   const windows = it.runIf(process.platform === "win32");
+  // PO-5's ACL, as the folders operation makes it: inheritance off, only this user, SYSTEM and Administrators.
+  const narrowed = (at: string) => {
+    const me = spawnSync("powershell.exe", ["-NoProfile", "-Command", "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"], { encoding: "utf8", env: powershellEnv() }).stdout.trim();
+    const narrow = (path: string, inherit: string) => spawnSync("icacls", [path, "/inheritance:r", "/grant:r", ...[me, "S-1-5-18", "S-1-5-32-544"].map((sid) => `*${sid}:${inherit}F`)]).status;
+    return [narrow(join(at, ".shadow", "v2"), "(OI)(CI)"), narrow(treesDir(at), "(OI)(CI)"), narrow(join(treesDir(at), "mine.jsonl"), "")];
+  };
   windows("on Windows passes the owner's own tree and fails a file or folder others can write (review 15 C1)", async () => {
     await TreeRecord.create(root, "mine", { pid: 3, startTime: 30 });
     const file = join(treesDir(root), "mine.jsonl");
-    // PO-5's ACL, as the folders operation makes it: inheritance off, only this user, SYSTEM and Administrators.
-    const me = spawnSync("powershell.exe", ["-NoProfile", "-Command", "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"], { encoding: "utf8" }).stdout.trim();
-    const narrow = (path: string, inherit: string) => spawnSync("icacls", [path, "/inheritance:r", "/grant:r", ...[me, "S-1-5-18", "S-1-5-32-544"].map((sid) => `*${sid}:${inherit}F`)]).status;
-    expect([narrow(join(root, ".shadow", "v2"), "(OI)(CI)"), narrow(treesDir(root), "(OI)(CI)"), narrow(file, "")]).toEqual([0, 0, 0]);
-    expect(await windowsTrust([{ path: join(root, ".shadow", "v2"), acl: true }, { path: file, acl: true }])).toEqual([undefined, undefined]);
-    expect((await readVerifiedTrees(root)).map((tree) => [tree.id, tree.untrusted])).toEqual([["mine", undefined]]);
+    expect(narrowed(root)).toEqual([0, 0, 0]);
+    expect((await readVerifiedTrees(root)).map((tree) => [tree.id, tree.untrusted, tree.lines.length])).toEqual([["mine", undefined, 1]]);
     expect(spawnSync("icacls", [file, "/grant", "*S-1-1-0:(M)"]).status).toBe(0); // Everyone may modify it.
     expect((await readVerifiedTrees(root))[0]).toMatchObject({ lines: [], untrusted: "writable by S-1-1-0" });
-    expect(await windowsTrust([{ path: join(root, "missing"), acl: true }])).toEqual(["unreadable"]);
+    expect(await readVerifiedTrees(join(root, "missing"))).toEqual([]);
     expect(spawnSync("icacls", [treesDir(root), "/grant", "*S-1-1-0:(M)"]).status).toBe(0);
     await expect(readVerifiedTrees(root)).rejects.toThrow(/writable by S-1-1-0/);
+  }, 30_000);
+  windows("on Windows checks and reads each record through one handle: it can't be swapped in between (review 30 C1)", async () => {
+    await TreeRecord.create(root, "mine", { pid: 3, startTime: 30 });
+    const file = join(treesDir(root), "mine.jsonl");
+    expect(narrowed(root)).toEqual([0, 0, 0]);
+    const reading = windowsTrees(root, undefined, 3_000); // Holds the checked handle 3 s before it reads.
+    await new Promise((done) => setTimeout(done, 2_000));
+    let swapped = true;
+    try { renameSync(file, join(root, "moved")); } catch { swapped = false; }
+    if (!swapped) writeFileSync(join(treesDir(root), "other.jsonl"), "");
+    expect(swapped).toBe(false); // The name is pinned to the checked file until its bytes are read.
+    expect((await reading).find((tree) => tree.id === "mine")).toMatchObject({ lines: [{ kind: "post-office", pid: 3 }] });
+    rmSync(join(treesDir(root), "other.jsonl"));
+    linkSync(file, join(root, "second-name"));
+    expect((await windowsTrees(root))[0]).toMatchObject({ lines: [], untrusted: "has another link" });
+    rmSync(join(root, "second-name"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "sa-sweep-junction-"));
+    try {
+      rmSync(join(root, ".shadow", "v2"), { recursive: true, force: true });
+      symlinkSync(elsewhere, join(root, ".shadow", "v2"), "junction");
+      await expect(windowsTrees(root)).rejects.toThrow(/a reparse point/);
+    } finally { rmSync(join(root, ".shadow", "v2"), { force: true }); rmSync(elsewhere, { recursive: true, force: true }); }
+  }, 30_000);
+  windows("on Windows checks records under a PowerShell 7 parent's module path (review 30 C10)", async () => {
+    await TreeRecord.create(root, "mine", { pid: 3, startTime: 30 });
+    expect(narrowed(root)).toEqual([0, 0, 0]);
+    const broken = join(root, "modules", "Microsoft.PowerShell.Utility");
+    mkdirSync(broken, { recursive: true });
+    writeFileSync(join(broken, "Microsoft.PowerShell.Utility.psm1"), "throw 'a module Windows PowerShell cannot load'");
+    const saved = process.env.PSModulePath;
+    process.env.PSModulePath = join(root, "modules");
+    try {
+      expect((await readVerifiedTrees(root)).map((tree) => [tree.id, tree.untrusted])).toEqual([["mine", undefined]]);
+    } finally { process.env.PSModulePath = saved; }
   }, 30_000);
   windows("ends a real process on Windows through its handle, and only while its creation time matches", async () => {
     const ops = systemOps();
