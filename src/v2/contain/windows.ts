@@ -443,13 +443,14 @@ export function packagedSupervisor(): { binary: string; record: string } {
 
 /**
  * PO-14 steps 1 and 2 for the Windows launcher, on every launch: the packaged launcher and its record
- * are there as plain files (no link, junction or other redirect), the record names this source's hash,
- * and the launcher's bytes hash to the record. Anything else throws, and nothing starts. Nothing is
- * compiled or written here (PO-19): a missing or altered launcher is fixed by `npm run build`.
+ * are there as plain files (lstat: no symbolic link or junction), the record names this source's hash,
+ * and the launcher's bytes hash to the record. Anything else throws, and nothing starts. The launcher is
+ * never compiled or written here (PO-19): a missing or altered one is fixed by reinstalling the package,
+ * or in a checkout by `npm run build` on Windows.
  */
 export async function supervisorBinary(files = packagedSupervisor()): Promise<string> {
   const refuse = (why: string) => new Error(
-    `No containment on Windows ${release()} ${process.arch}, so no soldier can start: the packaged launcher ${why}. Run \`npm run build\` on Windows to rebuild it.`);
+    `No containment on Windows ${release()} ${process.arch}, so no soldier can start: the packaged launcher ${why}. Reinstall Shadow Army; in a checkout, run \`npm run build\` on Windows.`);
   const plain = async (path: string) => {
     let info;
     try { info = await lstat(path); } catch { throw refuse(`${path} is missing`); }

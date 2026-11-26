@@ -305,7 +305,8 @@ describe("the packaged Windows launcher (PO-19, checked before every launch as P
     await expect(supervisorBinary({ binary: real.binary, record: files.binary })).rejects.toThrow(/is not a plain file/);
   });
 
-  it("has no run-time compiler left in the module (PO-19)", async () => {
+  // The launcher only: the sweep helper's Add-Type predates this PR (PO-16), a separate build note.
+  it("has no run-time launcher compile left in the module (PO-19)", async () => {
     const source = await readFile(new URL("./windows.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(/OutputAssembly|mkdtemp|writeFile/); // It writes no file at all.
     expect(packagedSupervisor().binary).toMatch(/[\\/]dist[\\/]native[\\/]windows[\\/]shadow-supervisor\.exe$/);
