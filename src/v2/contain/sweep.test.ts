@@ -151,6 +151,49 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect(Date.now() - started).toBeLessThan(3 * OP_LIMIT_MS);
   }, 20_000);
 
+  it("bounds reading the entries by the sweep's limit: a hanging check throws, nothing ended (review 30 C5)", async () => {
+    await (await TreeRecord.create(root, "t", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    const { ops, calls } = fakeOps({ 5: 50 });
+    let reads = 0;
+    const now = () => (reads++ === 0 ? 0 : 9_400); // Only 100 ms of the budget is left for the reading.
+    await expect(sweepTrees(root, { ...ops, now, trust: () => new Promise(() => {}) })).rejects.toThrow(/couldn't be checked within/);
+    expect(calls).toEqual([]);
+  }, 10_000);
+
+  it("aborts a late end once, never retries it, and keeps the entry as unresolved (review 30 C5)", async () => {
+    await (await TreeRecord.create(root, "t", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    const { ops } = fakeOps({ 5: 50 });
+    let ends = 0, aborts = 0;
+    const endIdentity: SweepOps["endIdentity"] = (_target, _tree, signal) => { ends++; return new Promise((done) => signal!.addEventListener("abort", () => { aborts++; done("ended"); })); };
+    const report = await sweepTrees(root, { ...ops, endIdentity });
+    expect([ends, aborts]).toEqual([1, 1]);
+    expect(report).toMatchObject({ swept: 0, ended: [], left: [{ pid: 5 }], kept: [{ id: "t", reason: expect.stringContaining("whose end didn't finish within its limit") }] });
+  }, 20_000);
+
+  it("starts no operation once the budget is spent (review 30 C5)", async () => {
+    await (await TreeRecord.create(root, "t", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    const { ops, calls } = fakeOps({ 5: 50 });
+    let reads = 0, probes = 0;
+    const now = () => (reads++ < 2 ? 0 : 9_500); // The reading gets its budget; then it is spent.
+    const report = await sweepTrees(root, { ...ops, now, probe: async (pid) => { probes++; return ops.probe(pid); } });
+    expect([probes, calls]).toEqual([0, []]);
+    expect(report).toMatchObject({ swept: 0, kept: [{ id: "t", reason: "the post office's state couldn't be told" }] });
+  });
+
+  it("keeps an entry whose check throws, and still sweeps the others (review 30 C11)", async () => {
+    await (await TreeRecord.create(root, "a", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 5, startTime: 50 });
+    await (await TreeRecord.create(root, "b", { pid: 3, startTime: 30 })).add({ kind: "cli", pid: 6, startTime: 60 });
+    const { ops, calls } = fakeOps({ 5: 50, 6: 60 });
+    const trust = async (paths: { path: string }[]) => {
+      if (paths.some((one) => one.path.endsWith("a.jsonl"))) throw new Error("EIO");
+      return paths.map(() => undefined);
+    };
+    const report = await sweepTrees(root, { ...ops, trust });
+    expect(report).toMatchObject({ swept: 1, ended: [{ pid: 6 }], kept: [{ id: "a", reason: expect.stringContaining("couldn't be read") }] });
+    expect(calls).toEqual(["end 6"]);
+    expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["a"]);
+  });
+
   it("keeps a file with no post office line, and reports nothing when there are no trees (C7)", async () => {
     expect(await sweepTrees(root, fakeOps({}).ops)).toMatchObject({ running: 0, swept: 0, kept: [] });
     mkdirSync(treesDir(root), { recursive: true });
@@ -184,6 +227,14 @@ describe("the sweep (PO-16, M1-AC16)", () => {
       spawnSync("chmod", ["777", join(root, ".shadow", "v2")]);
       await expect(readVerifiedTrees(root)).rejects.toThrow(/owner's alone/);
     } finally { rmSync(other, { recursive: true, force: true }); }
+  });
+
+  posixOnly("keeps an entry whose lstat fails for any reason but absence (review 30 C11)", async () => {
+    await TreeRecord.create(root, "mine", { pid: 3, startTime: 30 });
+    chmodSync(treesDir(root), 0o600); // Listable, but no entry in it can be looked up: EACCES.
+    try {
+      expect(await readVerifiedTrees(root, null)).toEqual([{ id: "mine", lines: [], untrusted: "couldn't be read (EACCES)" }]);
+    } finally { chmodSync(treesDir(root), 0o700); }
   });
 
   it("has no operations for macOS until PO-17's helper exists", () => {
