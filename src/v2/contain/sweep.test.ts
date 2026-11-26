@@ -108,6 +108,23 @@ describe("the sweep (PO-16, M1-AC16)", () => {
       expect(await ops.startTimeOf(bystander.pid!)).toBeDefined();
     } finally { orphan.kill("SIGKILL"); bystander.kill("SIGKILL"); }
   });
+
+  const windows = it.runIf(process.platform === "win32");
+  windows("reads Windows start times in the records' unit, FILETIME ticks since 2020, and sweeps a real orphan by them", async () => {
+    const ops = systemOps();
+    const orphan = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+    try {
+      const before = (Date.now() - Date.UTC(2020, 0, 1) - 60_000) * 10_000;
+      const orphanStart = (await ops.startTimeOf(orphan.pid!))!;
+      expect(orphanStart).toBeGreaterThan(before);
+      expect(orphanStart).toBeLessThan((Date.now() - Date.UTC(2020, 0, 1)) * 10_000);
+      const record = await TreeRecord.create(root, "real", { pid: 2 ** 22 - 1, startTime: 1 });
+      await record.add({ kind: "git", pid: orphan.pid!, startTime: orphanStart });
+      const report = await sweepTrees(root, ops);
+      expect(report.ended.map((one) => one.pid)).toEqual([orphan.pid]);
+      expect(existsSync(join(treesDir(root), "real.jsonl"))).toBe(false);
+    } finally { orphan.kill(); }
+  }, 30_000);
 });
 
 describe("the one-shot entry (PO-16)", () => {
