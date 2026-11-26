@@ -71,6 +71,27 @@ export interface ArmyView {
   ascii: boolean;
 }
 
+/** One post office message. `from` and `to` are soldier ids, "monarch" or "you". */
+export interface Message {
+  time: string;
+  from: string;
+  to: string;
+  kind: "brief" | "summary" | "peer" | "ask";
+  text: string;
+  status: "delivered" | "answered" | "waiting" | "queued";
+}
+/** The Monarch panel's numbers: briefs, and the cost only where a CLI reported one. */
+export interface Briefs {
+  sent: number;
+  answered: number;
+  queued: number;
+  sinceFirst?: string;
+  /** The sum the CLIs reported. Left out when none did; never an estimate. */
+  costUsd?: number;
+  /** Words after the soldier-to-soldier line. */
+  talkNote?: string;
+}
+
 // The post office's shapes, mirrored (src/v2/postOffice.ts and channel.ts on the M1b stack); never imported.
 export interface OfficeEventShape { soldier?: string; type: string; data: unknown }
 export type NativeErrorKind = "rate_limit" | "context_overflow" | "login_needed" | "transport" | "other";
