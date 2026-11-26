@@ -10,10 +10,12 @@ import { credential, until } from "./fixture-main.testutil.js";
 import { Locks } from "../workspace/locks.js";
 
 // C4: a hook that runs right after an apply, before the office reads the folder again.
-const hooks = vi.hoisted(() => ({ afterApply: undefined as undefined | (() => void) }));
+const hooks = vi.hoisted(() => ({ afterApply: undefined as undefined | (() => void), cleanup: undefined as string | undefined }));
 vi.mock("./apply.js", async (load) => {
   const real = await load<typeof import("./apply.js")>();
-  return { applyAudited: async (...args: Parameters<typeof real.applyAudited>) => { const out = await real.applyAudited(...args); hooks.afterApply?.(); return out; } };
+  return { applyAudited: async (...args: Parameters<typeof real.applyAudited>) => {
+    const out = await real.applyAudited(...args); hooks.afterApply?.(); return hooks.cleanup ? { ...out, cleanup: hooks.cleanup } : out;
+  } };
 });
 
 const offices: PostOffice[] = [];
@@ -22,6 +24,7 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   hooks.afterApply = undefined;
+  hooks.cleanup = undefined;
   await Promise.all(offices.splice(0).map((office) => office.close().catch(() => {})));
   repos.splice(0).forEach((repo) => repo.cleanup());
 });
@@ -162,6 +165,16 @@ describe("post office fixes from the M1a pre-review", () => {
     expect((await o.send("tank", "a")).write?.apply).toMatchObject({ applied: true, files: [{ change: "A", path: "src/new.ts" }] });
     release();
     expect((await medic).status).toBe("completed");
+  }, 30_000);
+
+  it("#94 C14: a failed cleanup after the apply keeps the applied files and reports the cleanup as a warning", async () => {
+    const { repo, office: o } = await office({ tank: [async (cwd) => { await put(cwd, "src/a.ts", "tank\n"); return "completed"; }] });
+    await o.open("tank", { claims: ["src/a.ts"] });
+    hooks.cleanup = "EBUSY";
+    const result = await o.send("tank", "a");
+    expect(result.write?.apply).toMatchObject({ applied: true, files: [{ change: "M", path: "src/a.ts" }] });
+    expect(result.logFailure).toContain("cleanup failed: EBUSY");
+    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("tank\n");
   }, 30_000);
 
   it("#94 C12: an owner's full staging of an empty file another soldier added still fails the guard", async () => {

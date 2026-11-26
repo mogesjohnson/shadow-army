@@ -9,10 +9,14 @@ export interface AppliedFile {
   path: string;
 }
 
-export type ApplyResult =
+export type ApplyResult = (
   | { applied: true; files: AppliedFile[] }
   /** `left` is set only when taking the edits back out failed: the paths that may still be changed. */
-  | { applied: false; reason: string; clashes: string[]; left?: string[] };
+  | { applied: false; reason: string; clashes: string[]; left?: string[] }
+) & {
+  /** #94 C14: the temporary patch could not be removed. A warning only: the outcome above stands. */
+  cleanup?: string;
+};
 
 /** Every path `git status --porcelain=v1 -z` mentions, both sides of a rename included. */
 function changedPaths(out: string): string[] {
@@ -36,8 +40,25 @@ function changedPaths(out: string): string[] {
  * failure, since a run's work is done by then; the branch is never touched either way.
  */
 export async function applyToCheckout(root: string, base: string, branch: string): Promise<ApplyResult> {
-  const files: AppliedFile[] = [];
   const dir = await mkdtemp(join(tmpdir(), "sa-apply-"));
+  let result: ApplyResult;
+  try {
+    result = await applyWith(root, base, branch, dir);
+  } catch (e) {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+  // #94 C14: by now git may have changed the owner's checkout, so a failed cleanup never hides the outcome.
+  try {
+    await rm(dir, { recursive: true, force: true });
+  } catch (e) {
+    return { ...result, cleanup: `the temporary patch folder ${dir} could not be removed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  return result;
+}
+
+async function applyWith(root: string, base: string, branch: string, dir: string): Promise<ApplyResult> {
+  const files: AppliedFile[] = [];
   try {
     const nameStatus = splitZ(await git(root, ["diff", "--name-status", "-z", "--no-renames", base, branch]));
     for (let i = 0; i + 1 < nameStatus.length; i += 2) files.push({ change: nameStatus[i]!, path: nameStatus[i + 1]! });
@@ -91,8 +112,6 @@ export async function applyToCheckout(root: string, base: string, branch: string
   } catch (e) {
     if (!(e instanceof GitError)) throw e;
     return { applied: false, reason: e.message, clashes: [] };
-  } finally {
-    await rm(dir, { recursive: true, force: true });
   }
   return { applied: true, files };
 }
@@ -107,6 +126,11 @@ const shellArg = (p: string, shell: Shell) =>
  * and which files clashed; the work is still on `branch`.
  */
 export function renderApply(result: ApplyResult, branch: string, shell: Shell = process.platform === "win32" ? "powershell" : "posix"): string {
+  const text = renderOutcome(result, branch, shell);
+  return result.cleanup ? `${text}\nWarning: ${result.cleanup}.` : text;
+}
+
+function renderOutcome(result: ApplyResult, branch: string, shell: Shell): string {
   if (!result.applied) {
     const lines = [`Not applied to your folder: ${result.reason}.`];
     if (result.clashes.length) lines.push(...result.clashes.map((p) => `  ${p}`));

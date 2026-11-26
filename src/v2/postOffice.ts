@@ -401,6 +401,8 @@ export class PostOffice {
         const others = [...this.sessions.values()].filter((other) => other !== session && other.guardBase);
         const before = others.length ? await captureState(this.root) : undefined;
         const applied = await applyAudited(this.root, audited);
+        // #94 C14: a temporary file left behind is a warning beside the outcome, never instead of it.
+        if (applied.cleanup) failure = `the apply's cleanup failed: ${applied.cleanup}`;
         // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
         // #92 C6: the folder has changed by now, so a failed carry is reported, never thrown; it only leaves the
         // other running turns' guards naming these paths (they fail closed).
