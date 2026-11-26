@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
+import type { Roster, SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
 import { captureState, diffState, type RepoState } from "../workspace/guard.js";
 import { Locks } from "../workspace/locks.js";
@@ -9,9 +9,10 @@ import { ensureShadowRoot, openWriteSession, type WriteSession } from "../worksp
 import { createSnapshot } from "../workspace/worktree.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
-import { buildStandingInstructions, shadowName } from "./instructions.js";
+import { buildStandingInstructions, InstructionsTooLargeError, MAX_INSTRUCTION_TOKENS } from "./instructions.js";
 import { redact, SessionLogs } from "./logs.js";
 import type { LeaseRecord } from "./lease.js";
+import { loadV2Roster, resolveShadowNames } from "./roster.js";
 
 export type LeaseEndReason = "Claude Code ended" | "the owner logged out" | "no renewal from the mod for 30 s";
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
@@ -19,6 +20,8 @@ export interface OfficeOptions {
   cwd: string;
   credential: string;
   roster?: Roster;
+  /** Soldier key to shadow name, for a supplied `roster`, checked like configured names. Default: each soldier's default name. A loaded roster brings its own. */
+  names?: ReadonlyMap<string, string>;
   channelFactory?: ChannelFactory;
   onEvent?: (event: OfficeEvent) => void;
   /** Waits before the first, second and third automatic restart (PO-1: 1, 5 and 30 seconds). */
@@ -79,6 +82,8 @@ function carryApply(sessions: Session[], before: RepoState, after: RepoState, pa
 export class PostOffice {
   readonly root: string;
   private readonly roster: Roster;
+  /** ARM-3: validated at construction, so a name clash refuses startup. */
+  private readonly names: ReadonlyMap<string, string>;
   private readonly logs: SessionLogs;
   private readonly sessions = new Map<string, Session>();
   private readonly opening = new Map<string, Promise<Session>>();
@@ -93,7 +98,11 @@ export class PostOffice {
 
   private constructor(root: string, private readonly options: OfficeOptions) {
     this.root = root;
-    this.roster = options.roster ?? loadRoster(root);
+    const loaded = options.roster
+      ? { roster: options.roster, names: resolveShadowNames([...options.roster.soldiers.keys()], options.names ? Object.fromEntries(options.names) : {}) }
+      : loadV2Roster(root);
+    this.roster = loaded.roster;
+    this.names = loaded.names;
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
     this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets);
@@ -129,7 +138,7 @@ export class PostOffice {
     this.check();
     return [...this.roster.soldiers.values()].map((spec) => {
       const session = this.sessions.get(spec.key);
-      return { ...spec, name: shadowName(spec.key), supported: spec.cli === "claude", state: session?.down ? "down" : session?.active ? "working" : session ? "idle" : "closed", restarts: session?.restarts ?? 0 };
+      return { ...spec, name: this.names.get(spec.key) ?? spec.key, supported: spec.cli === "claude", state: session?.down ? "down" : session?.active ? "working" : session ? "idle" : "closed", restarts: session?.restarts ?? 0 };
     });
   }
 
@@ -176,9 +185,15 @@ export class PostOffice {
     if (spec.cli !== "claude") throw new Error(`${key}: ${spec.cli} live channels are not implemented in M1`);
     // Hard rule: writes need the build role and a soldier the roster lets write. Nothing starts otherwise.
     if (claims?.length && (!spec.write || !spec.roles.includes("build"))) throw new Error(`${key} cannot write: claims need the build role and write access in the roster`);
+    // SI-3: the size refusal comes first, so nothing is allocated for a soldier that cannot open, and the log keeps the count and section.
+    let instructions: string;
+    try { instructions = buildStandingInstructions(this.roster, spec, { readOnly: !claims?.length, names: this.names }); }
+    catch (error) {
+      if (error instanceof InstructionsTooLargeError) this.record({ soldier: key, type: "refused", data: { reason: "standing instructions too large", estimate: error.estimate, limit: MAX_INSTRUCTION_TOKENS, section: `## ${key}`, message: error.message } });
+      throw error;
+    }
     // Bad or overlapping claims throw here, naming the holder, before any process starts (WSP-2).
     const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS }) : undefined;
-    const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
     let cwd: string;
     try { cwd = ws ? ws.cwd : (await createSnapshot(this.root, join(this.root, ".shadow", "v2"), "HEAD", id)).path; }
