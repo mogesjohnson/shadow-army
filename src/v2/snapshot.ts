@@ -55,11 +55,16 @@ export function validateSnapshotRoot(value: string | undefined, ctx: { home: str
 }
 /** Deletes `path` only if it lies strictly inside `root` once links are resolved, and is no link itself. A path already gone is no error. */
 export function removeInside(root: string, path: string) {
+  const real = insidePath(root, path);
+  if (real !== undefined) rmSync(real, { recursive: true, force: true, maxRetries: 3 });
+}
+/** `path`'s real path if it exists strictly inside `root` and is no link; `undefined` if it is gone; throws otherwise. */
+function insidePath(root: string, path: string) {
   const link = (() => { try { return lstatSync(path).isSymbolicLink(); } catch { return undefined; } })();
-  if (link === undefined) return;
+  if (link === undefined) return undefined;
   const real = realish(path);
   if (link || real === realish(root) || !within(realish(root), real)) throw new SnapshotError(`refusing to remove ${path}: not a folder inside ${root}`);
-  rmSync(real, { recursive: true, force: true, maxRetries: 3 });
+  return real;
 }
 export interface Snapshot { path: string; subfolder: string; gitDir: string; commonDir: string }
 export interface OpenOptions { root: string; folder: string; sessionId: string; repo: { gitDir: string; workTree: string; commonDir: string }; git: GitFactory; ref?: string }
@@ -113,11 +118,19 @@ function hashedPaths(root: string) {
   }
   return found;
 }
+/** `lstat`, or nothing when the path is gone, one of its folders having become a file included. */
+function statOf(file: string) {
+  try { return lstatSync(file); } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
+    throw error;
+  }
+}
 async function fingerprint(snapshot: Snapshot, run: RunGit) {
   const prints: Record<string, string> = {};
   for (const path of new Set([...await changedPaths(run), ...hashedPaths(snapshot.path)])) {
     const file = join(snapshot.path, path);
-    prints[path] = lstatSync(file, { throwIfNoEntry: false }) ? hashOf(file) : "gone";
+    const info = statOf(file);
+    prints[path] = !info ? "gone" : info.isDirectory() ? "dir" : hashOf(file);
   }
   return prints;
 }
@@ -136,24 +149,85 @@ export async function beginTurn(snapshot: Snapshot, git: GitFactory): Promise<Tu
   return { head, ignores, prints: await fingerprint(snapshot, run) };
 }
 
+/** Every `.gitignore` file in the snapshot, tracked or not, found on disk with no git process. */
+function gitignoreFiles(root: string) {
+  const found: string[] = [];
+  const walk = (rel: string) => {
+    for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
+      const path = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && entry.name !== ".git") walk(path);
+      else if (entry.isFile() && entry.name === ".gitignore") found.push(path);
+    }
+  };
+  walk("");
+  return found;
+}
+/**
+ * Clears what a turn left in the way of the file `path` in `root`: a link or file where a folder was, or anything but
+ * a plain file at the end. The post office is not sandboxed, so it never follows a link the soldier made. True if it cleared one.
+ */
+function clearWay(root: string, path: string) {
+  const parts = path.split("/");
+  for (let i = 0, at = root; i < parts.length; i++) {
+    const info = statOf(at = join(at, parts[i]));
+    if (!info) return false;
+    if (i < parts.length - 1 ? info.isDirectory() : info.isFile()) continue;
+    rmSync(at, { recursive: true, force: true });
+    return true;
+  }
+  return false;
+}
+/** The snapshot's HEAD read from its git dir: a commit, or the commit of the branch it names (the name itself if none). */
+function headOf(snapshot: Snapshot) {
+  const head = readFileSync(join(snapshot.gitDir, "HEAD"), "utf8").trim();
+  const ref = /^ref:\s*(\S+)$/.exec(head)?.[1];
+  if (!ref) return head;
+  for (const dir of [snapshot.gitDir, snapshot.commonDir]) {
+    try { return readFileSync(join(dir, ref), "utf8").trim(); } catch { /* not a loose ref here */ }
+  }
+  try {
+    const line = readFileSync(join(snapshot.commonDir, "packed-refs"), "utf8").split(/\r?\n/).find((l) => l.endsWith(` ${ref}`));
+    if (line) return line.split(" ")[0];
+  } catch { /* no packed refs */ }
+  return head;
+}
+
+/**
+ * `beginTurn` for a snapshot `openSnapshot` has just made, before anything ran in it: a fresh checkout is clean,
+ * so its start is read from the files alone (HEAD, every `.gitignore`, ARM-6's files) and costs no git process.
+ */
+export function freshStart(snapshot: Snapshot): TurnStart {
+  const head = readFileSync(join(snapshot.gitDir, "HEAD"), "utf8").trim();
+  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head)) throw new SnapshotError(`snapshot is not detached at a commit: ${head}`);
+  const ignores: Record<string, string> = {};
+  for (const path of gitignoreFiles(snapshot.path)) ignores[path] = readFileSync(join(snapshot.path, path)).toString("base64");
+  const prints: Record<string, string> = {};
+  for (const path of hashedPaths(snapshot.path)) prints[path] = hashOf(join(snapshot.path, path));
+  return { head, ignores, prints };
+}
+
 /**
  * The turn's writes: files git doesn't ignore by the rules the turn began with, ARM-6's paths even where
  * git ignores them, and a moved HEAD. Rules the turn changed or added are put back first, so they hide nothing.
- * Other ignored output is not a write.
+ * Other ignored output is not a write. New `.gitignore` files and HEAD are read from disk: one git process in all.
  */
 export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitFactory): Promise<ReadViolation | undefined> {
   const run = own(snapshot, git);
   const files = new Set<string>();
-  for (const path of (await run(["ls-files", "-z", "--others"], "guard")).stdout.split("\0")) {
-    if (basename(path) === ".gitignore" && !(path in start.ignores)) { files.add(path); rmSync(join(snapshot.path, path), { force: true }); }
+  for (const path of gitignoreFiles(snapshot.path)) {
+    if (!(path in start.ignores)) { files.add(path); rmSync(join(snapshot.path, path), { force: true }); }
   }
   for (const [path, data] of Object.entries(start.ignores)) {
-    const file = join(snapshot.path, path), bytes = Buffer.from(data, "base64");
-    if (!existsSync(file) || !readFileSync(file).equals(bytes)) { files.add(path); writeFileSync(file, bytes); }
+    const cleared = clearWay(snapshot.path, path), file = join(snapshot.path, path), bytes = Buffer.from(data, "base64");
+    if (!cleared && existsSync(file) && readFileSync(file).equals(bytes)) continue;
+    files.add(path);
+    mkdirSync(dirname(file), { recursive: true });
+    rmSync(file, { force: true });                                // a new file, so a hard link's other name keeps its bytes
+    writeFileSync(file, bytes, { flag: "wx" });
   }
   const now = await fingerprint(snapshot, run);
   for (const path of new Set([...Object.keys(now), ...Object.keys(start.prints)])) if (now[path] !== start.prints[path]) files.add(path);
-  const head = (await run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+  const head = headOf(snapshot);
   if (files.size === 0 && head === start.head) return undefined;
   return { files: [...files].sort(), ...(head === start.head ? {} : { head: { from: start.head, to: head } }) };
 }
@@ -167,10 +241,20 @@ export async function discardWrites(snapshot: Snapshot, start: TurnStart, git: G
   }
 }
 
-/** Removes the snapshot, and its subfolder once nothing but the path file is left. */
+/**
+ * Removes the snapshot's own worktree entry, never by a repository-wide prune that would touch other worktrees'
+ * entries, then its subfolder once nothing but the path file is left. A git failure throws and keeps the snapshot;
+ * a removal interrupted after the folder went is finished by deleting its own entry.
+ */
 export async function removeSnapshot(snapshot: Snapshot, root: string, repo: OpenOptions["repo"], git: GitFactory) {
+  const entries = realish(join(snapshot.commonDir, "worktrees")), entry = realish(snapshot.gitDir);
+  if (fold(entry) === fold(entries) || !within(entries, entry)) throw new SnapshotError(`refusing to remove ${snapshot.gitDir}: not a worktree entry`);
+  if (insidePath(root, snapshot.path) !== undefined) {
+    const result = await runIn(git, repo)(["worktree", "remove", "--force", "--force", snapshot.path], "other");
+    if (result.code !== 0) throw new SnapshotError(`snapshot could not be removed: ${result.stderr.trim() || `git exited with ${result.code}`}`);
+  }
+  rmSync(entry, { recursive: true, force: true, maxRetries: 3 });
   removeInside(root, snapshot.path);
-  await runIn(git, repo)(["worktree", "prune"], "other");
   dropEmptySubfolder(snapshot.subfolder);
 }
 function dropEmptySubfolder(subfolder: string) {

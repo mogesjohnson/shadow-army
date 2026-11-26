@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { armyMark } from "./snapshot.js";
+import { armyMark, type GitFactory } from "./snapshot.js";
+import { HarnessGit } from "./git/harness.js";
 import { git } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
@@ -17,6 +18,10 @@ import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 const snapshots = mkdtempSync(join(homedir(), ".sa-test-snapshots-"));
 process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
 afterAll(() => rmSync(snapshots, { recursive: true, force: true }));
+/** Each restart makes a fresh snapshot (WSP-11): about 7.5 s of harness git on Windows, past `until`'s 6 s bound. */
+const untilRestart = async (check: () => boolean): Promise<void> => {
+  for (const end = performance.now() + 60_000; !check(); await new Promise((done) => setTimeout(done, 20))) if (performance.now() > end) throw new Error("expected restart did not arrive");
+};
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 async function setup() {
@@ -168,7 +173,7 @@ describe("M1 office integration with synthetic native processes", () => {
     await office.send("scout", "delivered once");
     for (let i = 0; i < 4; i++) {
       channels[i]!.options.onEvent({ type: "closed", data: { crash: i } });
-      await until(() => i < 3 ? channels.length === i + 2 : events.some((event) => event.type === "down"));
+      await untilRestart(() => i < 3 ? channels.length === i + 2 : events.some((event) => event.type === "down"));
     }
     expect(channels).toHaveLength(4);
     expect(channels.map((channel) => channel.sent)).toEqual([["delivered once"], [], [], []]);
@@ -176,7 +181,7 @@ describe("M1 office integration with synthetic native processes", () => {
     await expect(office.send("scout", "must not replay")).rejects.toThrow("reconnect explicitly");
     await office.open("scout"); expect(channels).toHaveLength(5);
     expect(channels[4]!.sent).toEqual([]);
-  }, 30_000);
+  }, 120_000);
 
   it("blocks restart and owner reconnect when native descendant termination is uncertain", async () => {
     const repo = makeRepo(); repos.push(repo);
@@ -536,6 +541,38 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     // Two offices in one folder close one after the other, so their git calls don't race the folder's removal.
     await first.close().catch(() => {}); await second.close();
   }, 30_000);
+
+  it("keeps a left snapshot whose removal fails and logs it retained, never deleting it as unmade", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: idle() }); offices.push(first);
+    const opened = await first.open("scout");
+    await writeFile(join(opened.cwd, "soldier.txt"), "a write\n");
+    const hooksDir = mkdtempSync(join(snapshots, "hooks-"));
+    const failing: GitFactory = (r) => {
+      const real = new HarnessGit({ repo: r, hooksDir });
+      return { run: async (args, kind, cwd) => args[0] === "worktree" && args[1] === "remove" ? { code: 128, stdout: "", stderr: "locked" } : real.run(args, kind, cwd) };
+    };
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), gitFactory: failing, onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(events.find((event) => event.type === "read_violation")?.data).toMatchObject({ session: opened.session, files: ["soldier.txt"] });
+    expect(events.filter((event) => event.type === "snapshot").map((event) => event.data)).toEqual([expect.objectContaining({ session: opened.session, removed: false, retained: true })]);
+    expect(existsSync(join(opened.cwd, "soldier.txt"))).toBe(true);
+    await first.close().catch(() => {}); await second.close();
+  }, 30_000);
+
+  it("finishes at startup a snapshot removal interrupted after its folder went (C4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: idle() }); offices.push(first);
+    const opened = await first.open("scout");
+    const entry = join(repo.dir, ".git", "worktrees", opened.session);
+    expect(existsSync(entry)).toBe(true);
+    rmSync(opened.cwd, { recursive: true, force: true });                     // the folder went, the entry stayed
+    const events: OfficeEvent[] = [];
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), onEvent: (event) => events.push(event), channelFactory: idle() }); offices.push(second);
+    expect(existsSync(entry)).toBe(false);
+    expect(events.filter((event) => event.type === "snapshot").map((event) => event.data)).toEqual([{ session: opened.session, removed: true, resumed: true }]);
+    await first.close().catch(() => {}); await second.close();
+  }, 30_000);
 });
 
 describe("M1b-27 the guard waits for background work, and a backlog pauses soldiers (PO-8, WSP-11, PO-7)", () => {
@@ -728,4 +765,147 @@ describe("M1b-27 the guard waits for background work, and a backlog pauses soldi
     office.backlog(false);
     expect(calls).toEqual(["c1 pause", "c2 pause", "c1 resume", "c2 resume"]);
   });
+});
+
+describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-AC4, M1-AC11)", () => {
+  const two = makeRoster({ scout: { cli: "claude", model: "m", roles: ["review"], write: false }, spy: { cli: "claude", model: "m", roles: ["review"], write: false } });
+  /** Fake channels: each turn runs `during` with the channel's options; `channels` keeps every one made, in order. */
+  async function fakeOffice(during: (options: ChannelOptions, text: string) => Promise<void> | void = () => {}, gitFactory?: GitFactory) {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [], channels: ChannelOptions[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: two, processOps: null, gitFactory, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
+      channelFactory: (options): NativeChannel => {
+        channels.push(options);
+        return { async send(text) { await during(options, text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+      } }); offices.push(office);
+    return { repo, office, events, channels };
+  }
+  const lines = (events: OfficeEvent[], type: string) => events.filter((event) => event.type === type).map((event) => (event.data as { line: string }).line);
+
+  it("a working tree made inside the folder during a turn, edited and removed after it, passes the turn with one line each (M1-AC11)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      // As `claude --worktree fix-1` makes it: on a new branch of its own (C2).
+      await git(repo.dir, ["worktree", "add", "-b", "worktree-fix-1", ".claude/worktrees/fix-1"]);
+      await writeFile(join(repo.dir, ".claude/worktrees/fix-1/README.md"), "the owner's edit\n");
+    });
+    expect((await office.send("scout", "go")).status).toBe("completed");
+    expect(lines(events, "worktree")).toEqual([expect.stringMatching(/added at .*\.claude\/worktrees\/fix-1$/)]);
+    await git(repo.dir, ["worktree", "remove", "--force", ".claude/worktrees/fix-1"]);
+    await office.close();
+    expect(lines(events, "worktree")[1]).toMatch(/fix-1 was removed$/);
+    expect(events.some((event) => event.type === "harness_git_held")).toBe(false);
+  });
+
+  /** Writes a linked tree's admin files by hand, as a soldier could, for a tree at `rel`; `backLink` adds its `.git` file. */
+  async function forge(dir: string, rel: string, backLink: boolean) {
+    const admin = join(dir, ".git", "worktrees", "forged"), head = (await git(dir, ["rev-parse", "HEAD"])).trim();
+    await mkdir(admin, { recursive: true });
+    await writeFile(join(admin, "gitdir"), `${join(dir, rel, ".git")}\n`);
+    await writeFile(join(admin, "commondir"), "../..\n");
+    await writeFile(join(admin, "HEAD"), `${head}\n`);
+    if (backLink) await writeFile(join(dir, rel, ".git"), `gitdir: ${admin}\n`);
+  }
+
+  it("a forged working tree over tracked files does not hide a checkout change from the guard (C1)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      await forge(repo.dir, "src", true);
+      await writeFile(join(repo.dir, "src/a.ts"), "changed\n");
+    });
+    expect((await office.send("scout", "go")).status).toBe("failed");
+    const guard = events.find((event) => event.type === "guard")!.data as { changes: string[] };
+    expect(guard.changes.join("\n")).toMatch(/src\/a\.ts/);
+  });
+
+  it("a stale admin entry, with no tree that names it back, does not hide new files from the guard (C1)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      await mkdir(join(repo.dir, "notes"), { recursive: true });
+      await forge(repo.dir, "notes", false);
+      await writeFile(join(repo.dir, "notes/plan.md"), "new\n");
+    });
+    expect((await office.send("scout", "go")).status).toBe("failed");
+    const guard = events.find((event) => event.type === "guard")!.data as { changes: string[] };
+    expect(guard.changes.join("\n")).toMatch(/notes\/plan\.md/);
+  });
+
+  it("lists working trees with no option git 2.34 lacks, so a turn passes there (HOST-2)", async () => {
+    const hooksDir = mkdtempSync(join(snapshots, "hooks-"));
+    // `git worktree list -z` arrived in git 2.36; an older git exits with this usage error.
+    const old: GitFactory = (repo) => {
+      const real = new HarnessGit({ repo, hooksDir });
+      return { run: async (args, kind, cwd) => args[0] === "worktree" && args.includes("-z") ? { code: 129, stdout: "", stderr: "error: unknown switch `z'" } : real.run(args, kind, cwd) };
+    };
+    const { office } = await fakeOffice(() => {}, old);
+    expect((await office.send("scout", "go")).status).toBe("completed");
+  }, 60_000);
+
+  it("a ref made beside a branch-backed working tree is still guarded (C2)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      await git(repo.dir, ["worktree", "add", "-b", "worktree-fix-2", ".claude/worktrees/fix-2"]);
+      await git(repo.dir, ["branch", "other"]);
+    });
+    expect((await office.send("scout", "go")).status).toBe("failed");
+    const guard = events.find((event) => event.type === "guard")!.data as { changes: string[] };
+    expect(guard.changes).toEqual(["refs/heads/other was created"]);
+  });
+
+  it("one soldier's crash, restart and close leave the other's turn and snapshot running", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    const { office, events, channels } = await fakeOffice(async (_options, text) => { if (text === "wait") await gate; });
+    await office.open("scout");
+    const spy = await office.open("spy");
+    const turn = office.send("spy", "wait");
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await untilRestart(() => events.some((event) => event.type === "restarted"));
+    await office.closeSession("scout");
+    release();
+    expect((await turn).status).toBe("completed");
+    expect(existsSync(spy.cwd)).toBe(true);
+    expect(office.army()).toEqual([expect.objectContaining({ key: "scout", state: "closed" }), expect.objectContaining({ key: "spy", state: "idle" })]);
+    expect((await office.send("spy", "again")).status).toBe("completed");
+  }, 120_000);
+
+  it("a restart reports the old snapshot's writes, opens a fresh one and says the session is new; a close reports them too (M1-AC4)", async () => {
+    const { office, events, channels } = await fakeOffice();
+    const { cwd } = await office.open("scout");
+    await writeFile(join(cwd, "note.txt"), "written after the turn\n");
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await untilRestart(() => events.some((event) => event.type === "restarted"));
+    const types = events.map((event) => event.type);
+    expect(types.indexOf("read_violation")).toBeLessThan(types.indexOf("restarted"));
+    expect(types.indexOf("restarting")).toBeGreaterThan(-1);                 // C4: the swap is logged before the old snapshot goes
+    expect(types.indexOf("restarting")).toBeLessThan(types.indexOf("read_violation"));
+    expect(lines(events, "read_violation")).toEqual([expect.stringMatching(/read-only snapshot had writes before its restart: note.txt$/)]);
+    expect(lines(events, "restarted")[0]).toContain("this is a new session, and its earlier context is gone");
+    expect(channels[1]!.cwd).toBe(cwd);
+    expect(existsSync(join(cwd, "note.txt"))).toBe(false);
+    expect((await office.send("scout", "after")).status).toBe("completed");
+    await writeFile(join(cwd, "late.txt"), "x\n");
+    await office.closeSession("scout");
+    expect(lines(events, "read_violation")[1]).toMatch(/read-only snapshot had writes at its close: late.txt$/);
+    expect(existsSync(cwd)).toBe(false);
+  }, 120_000);
+
+  it("a close reports a moved snapshot HEAD and a write its own new ignore rule hides (C3)", async () => {
+    const { office, events } = await fakeOffice();
+    const { cwd } = await office.open("scout");
+    await writeFile(join(cwd, ".gitignore"), "hidden.txt\n");
+    await writeFile(join(cwd, "hidden.txt"), "x\n");
+    await git(cwd, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "moved"]);
+    await office.closeSession("scout");
+    const data = events.find((event) => event.type === "read_violation")?.data as { files: string[]; head?: { from: string; to: string } };
+    expect(data.files).toEqual([".gitignore", "hidden.txt"]);
+    expect(data.head?.from).not.toBe(data.head?.to);
+    expect(existsSync(cwd)).toBe(false);
+  }, 120_000);
+
+  it("a close whose report can't be logged keeps the snapshot (C3)", async () => {
+    const { repo, office } = await fakeOffice();
+    const { cwd, session } = await office.open("scout");
+    await writeFile(join(cwd, "note.txt"), "x\n");
+    const log = join(repo.dir, ".shadow", "v2", "logs", `${session}.jsonl`);
+    rmSync(log, { force: true }); await mkdir(log, { recursive: true });
+    await office.closeSession("scout").catch(() => {});
+    expect(existsSync(join(cwd, "note.txt"))).toBe(true);
+  }, 120_000);
 });

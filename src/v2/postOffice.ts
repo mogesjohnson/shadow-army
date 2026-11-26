@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { loadRoster, type Roster, type SoldierSpec } from "../core/roster.js";
 import { applyAudited } from "./apply.js";
 import { captureState, diffState, type RepoState } from "../workspace/guard.js";
@@ -10,7 +10,7 @@ import { Locks } from "../workspace/locks.js";
 import { ensureShadowRoot, openWriteSession, type WriteSession } from "../workspace/session.js";
 import { HarnessGit } from "./git/harness.js";
 import { HarnessHold, type GitRepo } from "./git/hold.js";
-import { openSnapshot, posixInspect, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, type GitFactory, type Snapshot } from "./snapshot.js";
+import { findWrites, freshStart, openSnapshot, posixInspect, realish, removeInside, removeSnapshot, snapshotSubfolder, validateSnapshotRoot, within, type GitFactory, type Snapshot, type TurnStart } from "./snapshot.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, shadowName } from "./instructions.js";
@@ -46,6 +46,35 @@ const turnsDir = (root: string) => join(root, ".shadow", "v2", "turns");
 const stateToJson = (state: RepoState) => ({ ...state, dirty: [...state.dirty], index: [...state.index], refs: [...state.refs] });
 const stateFromJson = (value: ReturnType<typeof stateToJson>): RepoState => ({ head: value.head, branch: value.branch, dirty: new Map(value.dirty), index: new Map(value.index), refs: new Map(value.refs) });
 const machineOps = (): SweepOps | undefined => { try { return systemOps(); } catch { return undefined; } };
+/** A path as compared between git's output and the office's own: forward slashes, no trailing one, and on Windows lower-cased. */
+const slash = (path: string) => { const one = (process.platform === "win32" ? path.replace(/\\/g, "/") : path).replace(/\/+$/, ""); return process.platform === "win32" ? one.toLowerCase() : one; };
+/** WSP-11: a linked working tree inside the folder, as git lists it, and the admin folder its `.git` file names. */
+interface Tree { path: string; admin: string; branch?: string; }
+/** A file's text; "" when it or its folder is gone or it is a folder. Any other failure throws: membership is then unknown. */
+const readKnown = (file: string) => readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => {
+  if (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EISDIR") return "";
+  throw error;
+});
+/**
+ * WSP-11: the trees a turn's guard leaves out. One listed at the open counts only while the close lists it with the same admin
+ * folder; one new at the close counts only if the open saw no checkout file under it. Only the branch a new tree was made
+ * on is left out of the refs, and only if the turn created it (M1-AC11).
+ */
+const verifiedTrees = (opened: Map<string, Tree>, closed: Map<string, Tree>, base: RepoState) => {
+  const inside: string[] = [], refs = new Set<string>();
+  for (const [rel, tree] of closed) {
+    const was = opened.get(rel);
+    if (was) { if (was.admin === tree.admin) inside.push(rel); continue; }
+    if ([...base.dirty.keys()].some((path) => slash(path) === rel || slash(path).startsWith(`${rel}/`))) continue;
+    inside.push(rel);
+    if (tree.branch && !base.refs.has(tree.branch)) refs.add(tree.branch);
+  }
+  for (const rel of opened.keys()) if (!closed.has(rel)) inside.push(rel);
+  return { inside, refs };
+};
+/** WSP-11: a working tree nested in the folder, with everything under it, is not the checkout. */
+const outsideTrees = (state: RepoState, inside: readonly string[], refs: ReadonlySet<string> = new Set()): RepoState => !inside.length ? state
+  : { ...state, refs: new Map([...state.refs].filter(([name]) => !refs.has(name))), dirty: new Map([...state.dirty].filter(([path]) => !inside.some((tree) => slash(path) === tree || slash(path).startsWith(`${tree}/`)))) };
 
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
@@ -56,6 +85,8 @@ export interface OfficeOptions {
   onEvent?: (event: OfficeEvent) => void;
   /** Waits before the first, second and third automatic restart (PO-1: 1, 5 and 30 seconds). */
   restartDelaysMs?: readonly number[];
+  /** The clock for that wait: calls `fire` after `ms` and returns its cancel. Tests pass their own. */
+  restartTimer?: (fire: () => void, ms: number) => () => void;
   /** Harness git for a repository (WSP-10); tests pass their own. */
   gitFactory?: GitFactory;
   /** The machine's processes (PO-15, PO-16); tests pass fakes. `null` where the platform has none yet (macOS: M1b-18). */
@@ -77,6 +108,7 @@ export function findRepo(cwd: string): GitRepo {
 /** v1's heartbeat stops at the first audit, so the office renews the claims lease for the session's whole life and at every turn (WSP-2). */
 const WRITE_LEASE_MS = 60 * 60_000;
 const RESTART_DELAYS_MS = [1_000, 5_000, 30_000];
+const restartTimer = (fire: () => void, ms: number) => { const timer = setTimeout(fire, ms); return () => clearTimeout(timer); };
 /** PO-1: a fourth crash within 10 minutes of the first leaves a channel down; 10 minutes without a crash resets the count. */
 const CRASH_WINDOW_MS = 10 * 60_000;
 /** How often a turn's guard checks whether a process that joined the tree during the turn has exited. */
@@ -106,6 +138,8 @@ interface Session {
   active?: Promise<TurnResult>;
   restart?: Promise<void>;
   restartPending: boolean;
+  /** WSP-11: the read-only snapshot as it opened (HEAD, ignore rules, audited files); its close and restart report against it. */
+  snapshotStart?: TurnStart;
   stopRequested?: boolean;
   containmentFailed?: boolean;
   /** WSP-11's throwaway snapshot of HEAD, outside the folder; a read-only session's working directory. */
@@ -163,6 +197,8 @@ export class PostOffice {
   private openTurns = 0;
   /** PO-7: the event writer's backlog is full, so soldiers' output is paused. */
   private paused = false;
+  /** WSP-11: the repository's other working trees, but Shadow Army's own, as the last guard check listed them. */
+  private trees?: Map<string, string>;
 
   private constructor(root: string, private readonly repo: GitRepo, private readonly git: GitFactory,
     private readonly snapshots: { ok: true; root: string } | { ok: false; reason: string }, private readonly options: OfficeOptions) {
@@ -240,16 +276,45 @@ export class PostOffice {
     for (const entry of await readdir(subfolder, { withFileTypes: true }).catch(() => [])) {
       if (!entry.isDirectory() || await running(entry.name)) continue;
       const path = join(subfolder, entry.name);
+      let gitDir: string;
       try {
-        const gitDir = resolve(path, (await readFile(join(path, ".git"), "utf8")).replace(/^gitdir:\s*/, "").trim());
-        const status = await this.git({ gitDir, workTree: path, commonDir: this.repo.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
-        const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
-        if (files.length) this.record({ type: "read_violation", data: { session: entry.name, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
-        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+        gitDir = resolve(path, (await readFile(join(path, ".git"), "utf8")).replace(/^gitdir:\s*/, "").trim());
       } catch (error) {
         // A snapshot started but not made: removed as one that timed out (WSP-10).
-        removeInside(root, path);
+        try { removeInside(root, path); } catch (failed) {
+          this.record({ type: "snapshot", data: { session: entry.name, removed: false, made: false, reason: String(failed) } });
+          continue;
+        }
         this.record({ type: "snapshot", data: { session: entry.name, removed: true, made: false, reason: String(error) } });
+        continue;
+      }
+      // A made snapshot goes only once its writes are checked and logged; any failure keeps it for the owner.
+      try {
+        const status = await this.git({ gitDir, workTree: path, commonDir: this.repo.commonDir }).run(["status", "--porcelain", "--untracked-files=all"], "guard");
+        if (status.code !== 0) throw new Error(`its writes could not be checked: ${status.stderr.trim() || `git exited with ${status.code}`}`);
+        const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
+        if (files.length) this.record({ type: "read_violation", data: { session: entry.name, files, line: `a read-only snapshot the last post office left had writes: ${files.join(", ")}` } });
+        await this.logPending;
+        if (this.logFailure) throw this.logFailure;
+        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+      } catch (error) {
+        this.record({ type: "snapshot", data: { session: entry.name, removed: false, retained: true, reason: String(error) } });
+      }
+    }
+    // C4: a removal interrupted after its folder went leaves the snapshot's worktree entry; it is finished here.
+    const entries = join(this.repo.commonDir, "worktrees"), mine = realish(subfolder);
+    for (const name of await readdir(entries).catch(() => [] as string[])) {
+      const gitDir = join(entries, name);
+      let path: string;
+      try { path = dirname(resolve(gitDir, (await readFile(join(gitDir, "gitdir"), "utf8")).trim())); } catch { continue; }
+      const parent = realish(dirname(path)), session = basename(path);
+      // A locked entry is kept, as git's own prune keeps it.
+      if (existsSync(path) || existsSync(join(gitDir, "locked")) || !within(mine, parent) || !within(parent, mine) || await running(session)) continue;
+      try {
+        await removeSnapshot({ path, subfolder, gitDir, commonDir: this.repo.commonDir }, root, this.repo, this.git);
+        this.record({ type: "snapshot", data: { session, removed: true, resumed: true } });
+      } catch (error) {
+        this.record({ type: "snapshot", data: { session, removed: false, resumed: true, reason: String(error) } });
       }
     }
     await this.logPending;
@@ -335,16 +400,17 @@ export class PostOffice {
     const ws = claims?.length ? await openWriteSession({ cwd: this.root, soldier: key, claims, ttlMs: WRITE_LEASE_MS }) : undefined;
     const instructions = buildStandingInstructions(this.roster, spec, { readOnly: !ws });
     const id = `session-${randomUUID()}`;
-    let snapshot: Snapshot | undefined, tree: TreeRecord | undefined;
+    let snapshot: Snapshot | undefined, tree: TreeRecord | undefined, snapshotStart: TurnStart | undefined;
     try {
       // PO-16: the tree's record exists before anything of the session does; one that can't be written starts nothing (PO-15).
       tree = await this.treeRecord(key, id);
       // WSP-11: a soldier whose snapshot can't be made does not start, and never runs in the folder itself.
       if (!ws && !this.snapshots.ok) throw new Error(`${key} can't start: ${this.snapshots.reason}`);
       if (!ws && this.snapshots.ok) snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: id, repo: this.repo, git: this.git });
+      if (snapshot) snapshotStart = freshStart(snapshot);
     } catch (error) { await tree?.remove().catch(() => {}); await ws?.release(); throw error; }
     const cwd = ws ? ws.cwd : snapshot!.path;
-    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, tasks: new Set(), ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
+    const session: Session = { spec, id, cwd, instructions, ...(snapshot ? { snapshot, snapshotStart } : {}), ...(tree ? { tree } : {}), generation: 0, restarts: 0, crashes: [], down: false, tainted: false, restartPending: false, tasks: new Set(), ...(ws ? { write: { ws, claims: [...claims!] } } : {}) };
     this.sessions.set(key, session);
     if (ws) await this.holdLease(session);
     if (this.closed) { session.down = true; await this.releaseWrite(session); throw new Error("post office closed while opening session"); }
@@ -459,14 +525,30 @@ export class PostOffice {
       }
       // PO-1: wait 1, 5, then 30 seconds before each restart; closing the session ends the wait.
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delays[session.crashes.length - 1] ?? 0);
-        session.wake = () => { clearTimeout(timer); resolve(); };
+        const cancel = (this.options.restartTimer ?? restartTimer)(resolve, delays[session.crashes.length - 1] ?? 0);
+        session.wake = () => { cancel(); resolve(); };
       });
       session.wake = undefined;
       if (this.closed || session.down) return;
       session.restarts = session.crashes.length;
+      // WSP-11: a restart opens a fresh session, so it gets a new snapshot; the old one's writes are reported before it goes.
+      // Its preparation is timed apart from the wait: it takes seconds of harness git on Windows.
+      let snapshotMs: number | undefined;
+      if (session.snapshot && this.snapshots.ok) {
+        const began = performance.now();
+        // C4: the swap is logged before anything goes (reportWrites waits for the log), so an interrupted one can be finished from it.
+        this.record({ soldier: session.spec.key, type: "restarting", data: { attempt: session.restarts, session: session.id, snapshot: session.snapshot.path, entry: session.snapshot.gitDir } }, session);
+        await this.reportWrites(session, "before its restart");
+        await removeSnapshot(session.snapshot, this.snapshots.root, this.repo, this.git);
+        session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: session.id, repo: this.repo, git: this.git });
+        session.snapshotStart = freshStart(session.snapshot);
+        session.cwd = session.snapshot.path;
+        snapshotMs = Math.round(performance.now() - began);
+        if (this.closed || session.down) return;
+      }
       this.start(session);
-      this.record({ soldier: session.spec.key, type: "restarted", data: { attempt: session.restarts, replayed: false } }, session);
+      this.record({ soldier: session.spec.key, type: "restarted", data: { attempt: session.restarts, replayed: false, cwd: session.cwd, ...(snapshotMs === undefined ? {} : { snapshotMs }),
+        line: `${shadowName(session.spec.key)} restarted (attempt ${session.restarts}): this is a new session, and its earlier context is gone` } }, session);
     })().catch((error: unknown) => {
       session.down = true;
       this.record({ soldier: session.spec.key, type: "down", data: { reason: String(error) } }, session);
@@ -498,6 +580,8 @@ export class PostOffice {
     // A write session has no read-only snapshot to guard: the claim audit takes its place.
     const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
     session.guardBase = await this.exclusive(() => captureState(this.root));
+    // WSP-11: a list that fails here fails the turn's guard at its close.
+    const treesOpen = await this.exclusive(() => this.worktrees(session)).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
     const turnFile = join(turnsDir(this.root), `${session.id}.json`);
     await mkdir(turnsDir(this.root), { recursive: true })
       .then(() => writeFile(turnFile, JSON.stringify({ soldier: session.spec.key, time: new Date().toISOString(), base: stateToJson(session.guardBase!) }), { mode: 0o600 }))
@@ -529,10 +613,19 @@ export class PostOffice {
     try {
       // Both captures settle before the turn ends: a failed one must not leave the other's git running in the folder.
       const settled = await Promise.allSettled([
-        this.exclusive(async () => { const after = await captureState(this.root); const base = session.guardBase!; session.guardBase = undefined; return diffState(base, after); }),
+        this.exclusive(async () => {
+          const after = await captureState(this.root), base = session.guardBase!;
+          session.guardBase = undefined;
+          // WSP-11: a verified working tree inside the folder, listed when the guard opened or closes, is not the checkout.
+          if (treesOpen instanceof Error) throw treesOpen;
+          const { inside, refs } = verifiedTrees(treesOpen, await this.worktrees(session), base);
+          return diffState(outsideTrees(base, inside), outsideTrees(after, inside, refs));
+        }),
         snapshotBefore ? captureState(session.cwd) : undefined]);
       const [checkout, snapshotAfter] = settled.map((item) => { if (item.status === "rejected") throw item.reason; return item.value; }) as [string[], RepoState | undefined];
-      changes = [...checkout, ...(snapshotBefore && snapshotAfter ? diffState(snapshotBefore, snapshotAfter).map((message) => `read-only snapshot: ${message}`) : [])];
+      // Refs are shared with the checkout, whose guard above already judges them; the snapshot compares its own tree only.
+      const ownTree = (state: RepoState): RepoState => ({ ...state, refs: new Map() });
+      changes = [...checkout, ...(snapshotBefore && snapshotAfter ? diffState(ownTree(snapshotBefore), ownTree(snapshotAfter)).map((message) => `read-only snapshot: ${message}`) : [])];
     } catch (error) {
       session.guardBase = undefined;
       changes = [`checkout guard could not complete: ${String(error)}`];
@@ -636,6 +729,80 @@ export class PostOffice {
     return [...problems];
   }
 
+  /**
+   * WSP-11: git's own list of the repository's working trees, read with harness git at a guard's open and close and at the
+   * office's close. Each one added or removed since the last check, but the folder itself, Shadow Army's snapshots and its
+   * `shadow/` worktrees, gets one line; the first check only learns them. Returns the trees inside the folder whose membership
+   * is verified: git does not call it prunable, its `.git` file names an admin folder in the common git folder that names it
+   * back, and none of the checkout's tracked files lie under it. A list that fails throws, so the guard fails closed.
+   */
+  private async worktrees(session?: Session): Promise<Map<string, Tree>> {
+    const git = this.git(this.repo);
+    // Line output: `-z` needs git 2.36, and HOST-2 supports 2.34.
+    const listed = await git.run(["worktree", "list", "--porcelain"], "guard");
+    if (listed.code !== 0) throw new Error(`the repository's working trees could not be listed: ${listed.stderr.trim()}`);
+    const top = slash(this.root), snaps = this.snapshots.ok ? slash(this.snapshots.root) : undefined;
+    const now = new Map<string, string>(), nested = new Map<string, Tree>();
+    for (const block of listed.stdout.replace(/\r\n/g, "\n").split("\n\n")) {
+      const fields = block.split("\n").filter(Boolean), field = (name: string) => fields.find((one) => one === name || one.startsWith(`${name} `));
+      // A path holding a line break splits into lines git never writes: the list can't be trusted.
+      const odd = fields.find((one) => !/^(worktree|HEAD|branch|bare|detached|locked|prunable)( |$)/.test(one));
+      if (odd !== undefined) throw new Error(`the repository's working trees could not be listed: unexpected line ${JSON.stringify(odd)}`);
+      const path = field("worktree")?.slice(9), branch = field("branch")?.slice(7);
+      if (!path || slash(path) === top || (snaps && slash(path).startsWith(`${snaps}/`)) || branch?.startsWith("refs/heads/shadow/")) continue;
+      now.set(slash(path), path);
+      if (!slash(path).startsWith(`${top}/`) || field("prunable")) continue;
+      const admin = await this.adminOf(path);
+      if (admin) nested.set(slash(path).slice(top.length + 1), { path, admin, ...(branch ? { branch } : {}) });
+    }
+    if (nested.size) {
+      // A tree git really added starts in an empty folder, so a listed one over the checkout's tracked files is not trusted.
+      const magic = process.platform === "win32" ? ":(literal,icase)" : ":(literal)";
+      const tracked = await git.run(["ls-files", "-z", "--", ...[...nested.keys()].map((rel) => `${magic}${rel}`)], "guard");
+      if (tracked.code !== 0) throw new Error(`the checkout's tracked files could not be listed: ${tracked.stderr.trim()}`);
+      for (const file of tracked.stdout.split("\0").filter(Boolean)) for (const rel of nested.keys()) if (slash(file).startsWith(`${rel}/`)) nested.delete(rel);
+    }
+    const who = session ? { soldier: session.spec.key } : {};
+    for (const [key, path] of this.trees ? now : []) if (!this.trees!.has(key)) this.record({ ...who, type: "worktree", data: { added: path, line: `a working tree of the repository was added at ${path}` } }, session);
+    for (const [key, path] of this.trees ?? []) if (!now.has(key)) this.record({ ...who, type: "worktree", data: { removed: path, line: `the working tree at ${path} was removed` } }, session);
+    this.trees = now;
+    return nested;
+  }
+
+  /** WSP-11: the admin folder a linked tree's `.git` file names, if it lies in the common git folder and names the tree back. */
+  private async adminOf(path: string): Promise<string | undefined> {
+    const dotGit = join(path, ".git"), named = /^gitdir:\s*(.+)$/m.exec(await readKnown(dotGit))?.[1]?.trim();
+    if (!named) return undefined;
+    const admin = resolve(path, named);
+    if (slash(dirname(admin)) !== slash(join(this.repo.commonDir, "worktrees"))) return undefined;
+    const back = (await readKnown(join(admin, "gitdir"))).trim();
+    return back && slash(resolve(admin, back)) === slash(dotGit) ? admin : undefined;
+  }
+
+  /**
+   * WSP-11: a read-only snapshot's writes since it opened (a moved HEAD and ignored ARM-6 files included) are
+   * logged durably before it is removed (PO-5); one that can't be read, or whose report can't be logged, is kept.
+   */
+  private async reportWrites(session: Session, when: string): Promise<void> {
+    const strict: GitFactory = (repo) => {
+      const handle = this.git(repo);
+      return { run: async (args, kind, cwd) => {
+        const result = await handle.run(args, kind, cwd);
+        if (result.code !== 0) throw new Error(`the snapshot's writes could not be read: ${result.stderr.trim()}`);
+        return result;
+      } };
+    };
+    if (!session.snapshotStart) throw new Error("the snapshot's writes could not be read: no record of how it opened");
+    const found = await findWrites(session.snapshot!, session.snapshotStart, strict);
+    if (found) {
+      const moved = found.head ? `${found.files.length ? "; " : ""}HEAD moved from ${found.head.from.slice(0, 12)} to ${found.head.to.slice(0, 12)}` : "";
+      this.record({ soldier: session.spec.key, type: "read_violation", data: { session: session.id, files: found.files, ...(found.head ? { head: found.head } : {}),
+        line: `${shadowName(session.spec.key)}'s read-only snapshot had writes ${when}: ${found.files.join(", ")}${moved}` } }, session);
+    }
+    await this.logPending;
+    if (this.logFailure) throw new Error(`the snapshot's report could not be logged: ${this.logFailure.message}`);
+  }
+
   /** PO-11: the channel's tree listing, `undefined` for a channel that can't list; a failed list says why. */
   private async listTree(session: Session): Promise<Listing | undefined> {
     const channel = session.channel as ListedChannel | undefined;
@@ -728,7 +895,8 @@ export class PostOffice {
     // WSP-11: the snapshot goes with its session. A tainted one keeps the partial work its guard line names.
     let retained = !session.snapshot || session.tainted;
     if (!retained && this.snapshots.ok) {
-      await removeSnapshot(session.snapshot!, this.snapshots.root, this.repo, this.git)
+      const root = this.snapshots.root;
+      await this.reportWrites(session, "at its close").then(() => removeSnapshot(session.snapshot!, root, this.repo, this.git))
         .catch((error: unknown) => { retained = true; this.record({ soldier: key, type: "snapshot", data: { removed: false, reason: String(error) } }, session); });
     }
     this.sessions.delete(key);
@@ -760,6 +928,8 @@ export class PostOffice {
       this.closed = true;
       await Promise.allSettled(this.opening.values());
       const ended = await Promise.allSettled([...this.sessions.keys()].map((key) => this.closeSession(key)));
+      // WSP-11: a working tree removed after the last guard closed shows here.
+      if (this.trees) await this.exclusive(() => this.worktrees()).catch((error: unknown) => this.record({ type: "worktree", data: { listed: false, reason: String(error) } }));
       this.record({ type: "closed", data: { retained: true } });
       await this.logPending;
       const failed = ended.filter((item): item is PromiseRejectedResult => item.status === "rejected");

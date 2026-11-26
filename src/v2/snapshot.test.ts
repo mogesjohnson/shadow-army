@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { HarnessGit } from "./git/harness.js";
 import {
-  armyMark, beginTurn, closeSnapshot, discardWrites, findWrites, FOLDER_FILE, ignoredEntries, openSnapshot, removeInside,
+  armyMark, beginTurn, closeSnapshot, discardWrites, findWrites, FOLDER_FILE, ignoredEntries, openSnapshot, removeInside, removeSnapshot,
   snapshotSubfolder, sweepOrphans, validateSnapshotRoot, within, type FolderFacts, type GitFactory, type Orphan,
 } from "./snapshot.js";
 
@@ -133,11 +133,50 @@ describe("a snapshot's life", () => {
     put(join(snap.path, ".gitignore"), "*\n"); put(join(snap.path, "sub", ".gitignore"), "*\n"); put(join(snap.path, "sub", "hidden.txt"), "w");
     expect((await findWrites(snap, start, factory))?.files).toEqual([".gitignore", "sub/.gitignore", "sub/hidden.txt"]);
   });
+  it("never restores a .gitignore through a link the turn left in its path", async () => {
+    const r = makeRepo();
+    put(join(r.folder, "pkg", ".gitignore"), "out/\n");
+    git(r.folder, "add", "."); git(r.folder, "commit", "-q", "-m", "pkg");
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s5", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory), outside = temp();
+    put(join(outside, ".gitignore"), "the owner's\n");
+    rmSync(join(snap.path, "pkg"), { recursive: true }); link(outside, join(snap.path, "pkg"));
+    expect((await findWrites(snap, start, factory))?.files).toContain("pkg/.gitignore");
+    expect(readFileSync(join(outside, ".gitignore"), "utf8")).toBe("the owner's\n");
+  }, 60_000);
+  it("reports, and does not throw on, a repository or folder the turn made where files were", async () => {
+    const r = makeRepo();
+    put(join(r.folder, "pkg", ".gitignore"), "out/\n");
+    git(r.folder, "add", "."); git(r.folder, "commit", "-q", "-m", "pkg");
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s6", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory);
+    rmSync(join(snap.path, "pkg"), { recursive: true });                      // a folder that held a .gitignore, gone
+    rmSync(join(snap.path, ".gitignore")); put(join(snap.path, ".gitignore", "x"), "w");
+    rmSync(join(snap.path, "src.txt")); put(join(snap.path, "src.txt", "y"), "w");
+    mkdirSync(join(snap.path, "nested")); git(join(snap.path, "nested"), "init", "-q"); put(join(snap.path, "nested", "z"), "w");
+    const found = await findWrites(snap, start, factory);
+    expect(found?.files).toEqual(expect.arrayContaining([".gitignore", "nested/", "pkg/.gitignore", "src.txt"]));
+  }, 60_000);
   it("refuses to start when the snapshot can't be made", async () => {
     const r = makeRepo();
     await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "s3", repo: r.repo, git: factory, ref: "nope" })).rejects.toThrow(/snapshot could not be made/);
     await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "../x", repo: r.repo, git: factory })).rejects.toThrow(/bad session id/);
   });
+  it("removes only its own worktree entry, fails on a git error, and finishes a removal the folder already left (C4)", async () => {
+    const r = makeRepo(), stale = join(temp(), "stale");
+    git(r.folder, "worktree", "add", "-q", "--detach", stale);
+    rmSync(stale, { recursive: true, force: true });                         // another worktree's stale entry: not ours to prune
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s4", repo: r.repo, git: factory });
+    const failing: GitFactory = (repo) => ({ run: async (args, kind, cwd) => (args[1] === "remove" ? { code: 128, stdout: "", stderr: "boom" } : factory(repo).run(args, kind, cwd)) });
+    await expect(removeSnapshot(snap, r.root, r.repo, failing)).rejects.toThrow(/boom/);
+    expect(existsSync(snap.path)).toBe(true);
+    await removeSnapshot(snap, r.root, r.repo, factory);
+    expect([existsSync(snap.path), existsSync(snap.gitDir), existsSync(join(r.repo.commonDir, "worktrees", "stale"))]).toEqual([false, false, true]);
+    const again = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s5", repo: r.repo, git: factory });
+    rmSync(again.path, { recursive: true, force: true });                     // an interrupted removal: the folder went, the entry stayed
+    await removeSnapshot(again, r.root, r.repo, factory);
+    expect([existsSync(again.gitDir), existsSync(join(r.repo.commonDir, "worktrees", "stale"))]).toEqual([false, true]);
+  }, 60_000);
   it("lists ignored entries outside .shadow/ (W12-4)", async () => {
     const r = makeRepo();
     put(join(r.folder, "dist", "a.js"), "x"); put(join(r.folder, ".shadow", "v2", "log"), "x");
