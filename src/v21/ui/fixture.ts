@@ -2,6 +2,7 @@
 import type { ArmyView, Briefs, Message, Soldier } from "./model.js";
 import type { TableCard, TableScene } from "./tableRows.js";
 import type { Summary } from "./summaryRows.js";
+import type { LedgerLine } from "./ledgerRows.js";
 
 /** The design's whole roster, in roster order; the strip tests compare all six with the canvas frames. */
 export const ROSTER: Soldier[] = [
@@ -98,3 +99,13 @@ export const SUMMARY: Summary = {
   changes: "none (a review)", tests: "not run", applied: "nothing to apply",
   worktrees: [{ soldier: "iron", line: "2 files · +42 −2 on shadow/iron · tests ✓ passed · applied ○ not yet" }],
 };
+
+export const LEDGER_SCENE: TableScene = {
+  ...FINISHED_SCENE, hint: "the ledger counts briefs, answers, peak context, time and cost per soldier",
+};
+export const LEDGER: LedgerLine[] = [
+  { soldier: "iron", briefs: 2, answers: 2, peakK: 112, time: "2:14", costUsd: 0.22, outcome: { mark: "✓", text: "2 files +42 −2 on shadow/iron" } },
+  { soldier: "igris", briefs: 1, answers: 1, peakK: 200, peakMark: "handoff", time: "2:45", costUsd: 0.29, outcome: { mark: "⇥", text: "handed off once, then a fresh session" } },
+  { soldier: "kaisel", briefs: 1, answers: 1, peakK: 142, peakMark: "cold", time: "0:22", costUsd: 0.09, outcome: { mark: "✓", text: "no blocking findings · began cold" } },
+  { soldier: "beru", briefs: 1, answers: 1, peakK: 64, time: "2:23", costUsd: 0.04, outcome: { mark: "!", text: "1 ask · answered Allow once" } },
+];

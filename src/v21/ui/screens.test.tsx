@@ -2,9 +2,11 @@ import React from "react";
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { renderToString } from "ink";
-import { FINISHED_SCENE, SUMMARY, finishedTable } from "./fixture.js";
+import { FINISHED_SCENE, LEDGER, LEDGER_SCENE, SUMMARY, finishedTable } from "./fixture.js";
 import { summaryRows } from "./summaryRows.js";
 import { Summary } from "./Summary.js";
+import { ledgerRows } from "./ledgerRows.js";
+import { Ledger } from "./Ledger.js";
 import { plain, rowWidth, type Row } from "./layout.js";
 import type { ArmyView } from "./model.js";
 
@@ -42,10 +44,33 @@ const SUMMARY_110 = String.raw`
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
  army  ○ Iron 58k  ○ Igris 142k  ○ Beru 71k  ○ Tusk 38k  ○ Kaisel 64k  · Bellion`.slice(1).split("\n");
 
+// The "ledger 110" frame is the same board under its own focus line and drawer.
+const LEDGER_110 = [
+  SUMMARY_110[0],
+  " focus: pane  nothing needs you   the ledger counts briefs, answers, peak context, time and cost per soldier",
+  ...SUMMARY_110.slice(2, 23),
+  ...String.raw`
+╭─ ✓ war ledger  what each soldier did this run  t summary ──────────────────────────────────────────────────╮
+│ soldier  briefs answers  peak ctx   time    cost   outcome                                                 │
+│ Iron          2       2  112k       2:14   $0.22   ✓ 2 files +42 −2 on shadow/iron                         │
+│ Igris         1       1  200k ⇥     2:45   $0.29   ⇥ handed off once, then a fresh session                 │
+│ Kaisel        1       1  142k ❄     0:22   $0.09   ✓ no blocking findings · began cold                     │
+│ Beru          1       1  64k        2:23   $0.04   ! 1 ask · answered Allow once                           │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯`.slice(1).split("\n"),
+  SUMMARY_110[30],
+];
+
 const text = (rows: Row[]) => rows.map((r) => plain(r).trimEnd());
 const SCREENS: [string, (view: ArmyView, h: number) => Row[], (view: ArmyView) => React.ReactElement, string[]][] = [
   ["summary", (v, h) => summaryRows(v, FINISHED_SCENE, SUMMARY, h), (v) => <Summary view={v} scene={FINISHED_SCENE} summary={SUMMARY} height={31} />, SUMMARY_110],
+  ["ledger", (v, h) => ledgerRows(v, LEDGER_SCENE, LEDGER, h), (v) => <Ledger view={v} scene={LEDGER_SCENE} ledger={LEDGER} height={31} />, LEDGER_110],
 ];
+
+it("shows a dash for a cost no CLI reported", () => {
+  const unpriced = LEDGER.map(({ costUsd: _, ...line }) => line);
+  const rows = text(ledgerRows(finishedTable(110), LEDGER_SCENE, unpriced, 31));
+  expect(rows.find((r) => r.startsWith("│ Beru "))).toContain("2:23       —   ! 1 ask");
+});
 
 describe.each(SCREENS)("%s screen", (_name, rowsOf, element, frame) => {
   it("matches the 110 frame", () => {
