@@ -2,7 +2,9 @@ import React from "react";
 import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it } from "vitest";
 import { renderToString } from "ink";
-import { FINISHED_SCENE, LEDGER, LEDGER_SCENE, SUMMARY, finishedTable } from "./fixture.js";
+import { FINISHED_SCENE, LEDGER, LEDGER_SCENE, REPLAY, REPLAY_SCENE, SUMMARY, finishedTable, replayTable } from "./fixture.js";
+import { replayRows } from "./replayRows.js";
+import { Replay } from "./Replay.js";
 import { summaryRows } from "./summaryRows.js";
 import { Summary } from "./Summary.js";
 import { ledgerRows } from "./ledgerRows.js";
@@ -60,10 +62,45 @@ const LEDGER_110 = [
   SUMMARY_110[30],
 ];
 
+const REPLAY_110 = String.raw`
+ REPLAY   14:31:40  ◂ [  2/5  ] ▸  14:31 ■·◆·····□····!···■ 14:33                                 history only
+ focus: pane  the table as it was at 14:31:40   a dash is something the records do not hold · esc back to live
+ ╭─  ▶ Iron  ──────────────────────╮ ╭─ Igris ─────────────────────────╮ ╭─ Beru ──────────────────────────╮
+ │ ◐ working  0:38   claude-sonnet │ │ ◐ working             codex-sol │ │ ○ idle                     grok │
+ │ build · toggle in settings      │ │ build · theme tokens            │ │ build · no message yet          │
+ │ from the records: delivered     │ │ from the records: sent          │ │                                 │
+ │ ░░░░░░░░░░ — not in the records │ │ ░░░░░░░░░░ — not in the records │ │ ░░░░░░░░░░ — not in the records │
+ │                                 │ │                                 │ │                                 │
+ ╰────────────────┬────────────────╯ ╰────────────────┬────────────────╯ ╰────────────────┬────────────────╯
+                  │                                   │                                   │
+╔═ MONARCH you + Claude ═════════════════════════════════════════════════════════════════════════════════════╗
+║ briefs  2 sent · 0 answered                                                                       14:31:40 ║
+║ from the records                                                                              history only ║
+║ talk  Igris ◆▸ Iron  "tokens ready: bg.dark, text.dark"  (one line in Claude's transcript, MSG-6)          ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+                  │                                   │                                   ┆
+ ╭─ Tusk ─────────┴────────────────╮ ╭─ Kaisel ───────┴────────────────╮ ╭┄ Bellion ┄┄┄┄┄┄┴┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╮
+ │ ◐ working                   agy │ │ ○ idle              claude-opus │ ┆ · not started       codex-astra ┆
+ │ research · lint scan            │ │ review · review of the toggle   │ ┆ orchestrate · not started       ┆
+ │ from the records: delivered     │ │                                 │ ┆                                 ┆
+ │ ░░░░░░░░░░ — not in the records │ │ ░░░░░░░░░░ — not in the records │ ┆                                 ┆
+ │                                 │ │                                 │ ┆                                 ┆
+ ╰─────────────────────────────────╯ ╰─────────────────────────────────╯ ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+╭─ messages  ■ brief   □ summary   ◆ soldier to soldier   ! asks you ────────────────────────────────────────╮
+│ 14:31:02  Monarch ■ Iron     brief "dark-mode toggle…"                                         ✓ delivered │
+│ 14:31:40  Igris   ◆ Iron     "tokens ready: bg.dark, text.dark"                                → delivered │
+│ 14:32:11  Tusk    □ Monarch  summary · lint scan · 0 findings                                   ✓ answered │
+│ 14:32:30  Beru    ! you      asks: Run this command?                                        waiting on you │
+│ 14:32:40  Monarch ■ Kaisel   brief "review the toggle" · queued, cold                             … queued │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ army  ◐ Iron  ◐ Igris  ○ Beru  ◐ Tusk  ○ Kaisel  · Bellion`.slice(1).split("\n");
+
 const text = (rows: Row[]) => rows.map((r) => plain(r).trimEnd());
-const SCREENS: [string, (view: ArmyView, h: number) => Row[], (view: ArmyView) => React.ReactElement, string[]][] = [
-  ["summary", (v, h) => summaryRows(v, FINISHED_SCENE, SUMMARY, h), (v) => <Summary view={v} scene={FINISHED_SCENE} summary={SUMMARY} height={31} />, SUMMARY_110],
-  ["ledger", (v, h) => ledgerRows(v, LEDGER_SCENE, LEDGER, h), (v) => <Ledger view={v} scene={LEDGER_SCENE} ledger={LEDGER} height={31} />, LEDGER_110],
+type Table = (width: number, ascii?: boolean) => ArmyView;
+const SCREENS: [string, (view: ArmyView, h: number) => Row[], (view: ArmyView) => React.ReactElement, string[], Table][] = [
+  ["summary", (v, h) => summaryRows(v, FINISHED_SCENE, SUMMARY, h), (v) => <Summary view={v} scene={FINISHED_SCENE} summary={SUMMARY} height={31} />, SUMMARY_110, finishedTable],
+  ["ledger", (v, h) => ledgerRows(v, LEDGER_SCENE, LEDGER, h), (v) => <Ledger view={v} scene={LEDGER_SCENE} ledger={LEDGER} height={31} />, LEDGER_110, finishedTable],
+  ["replay", (v, h) => replayRows(v, REPLAY_SCENE, REPLAY, h), (v) => <Replay view={v} scene={REPLAY_SCENE} replay={REPLAY} height={31} />, REPLAY_110, replayTable],
 ];
 
 it("shows a dash for a cost no CLI reported", () => {
@@ -72,21 +109,34 @@ it("shows a dash for a cost no CLI reported", () => {
   expect(rows.find((r) => r.startsWith("│ Beru "))).toContain("2:23       —   ! 1 ask");
 });
 
-describe.each(SCREENS)("%s screen", (_name, rowsOf, element, frame) => {
+it("replays no meter, window or cost, whatever the view and the scene carry", () => {
+  const priced = { ...REPLAY_SCENE, briefs: { ...REPLAY_SCENE.briefs, costUsd: 0.64 }, cards: FINISHED_SCENE.cards };
+  for (const [w, h] of [[110, 31], [80, 24]]) {
+    const all = text(replayRows(finishedTable(w), priced, REPLAY, h)).join("\n");
+    expect(all).not.toMatch(/\d+k\b|% window|\$\d|▓/);
+    expect(all).toContain("not in the records");
+  }
+});
+
+it("keeps the way back to live on a narrow focus line", () => {
+  expect(text(replayRows(replayTable(80), REPLAY_SCENE, REPLAY, 24))[1]).toContain("esc back to live");
+});
+
+describe.each(SCREENS)("%s screen", (_name, rowsOf, element, frame, table) => {
   it("matches the 110 frame", () => {
-    expect(text(rowsOf(finishedTable(110), 31))).toEqual(frame);
+    expect(text(rowsOf(table(110), 31))).toEqual(frame);
   });
   it("is exactly the asked size at every width and height, and pure ASCII on request", () => {
     const bad: string[] = [];
     for (let w = 44; w <= 160; w++) for (let h = 16; h <= 50; h++) for (const ascii of [false, true]) {
-      const rows = rowsOf(finishedTable(w, ascii), h);
+      const rows = rowsOf(table(w, ascii), h);
       const fits = rows.length === h && rows.every((r) => rowWidth(r) === w);
       if (!fits || (ascii && !rows.every((r) => /^[\x20-\x7e]*$/.test(plain(r))))) bad.push(`${w}x${h} ${ascii}`);
     }
     expect(bad.slice(0, 5)).toEqual([]);
   }, 60_000);
   it("renders through Ink as the plain rows", () => {
-    const out = renderToString(element(finishedTable(110)), { columns: 110 });
+    const out = renderToString(element(table(110)), { columns: 110 });
     expect(stripVTControlCharacters(out).split("\n").map((l) => l.trimEnd())).toEqual(frame);
   });
 });
