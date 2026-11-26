@@ -328,7 +328,7 @@ export class HarnessHold {
     const known = this.repos.find((other) => keyOf(other) === keyOf(repo));
     if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
     if (!known) this.repos.push(repo);
-    const { state, problems } = await readState(this.options.repo, repo, this.options.gitFor, this.options.limits);
+    const { state, problems } = await readState(this.options.repo, known ?? repo, this.options.gitFor, this.options.limits);
     if (problems.length) throw new Uninspectable(problems.join(", "), "the repository can't be trusted");
     this.trusted = { ...this.trusted, [keyOf(repo)]: state };
     this.save();
