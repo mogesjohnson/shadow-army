@@ -165,6 +165,12 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
     expect(row).toBe(`Shadow Army · Tank · completed\n1\n2\n3\n4\n5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nApplied: src/a.ts, src/b.ts`);
   });
 
+  it("shows the applied files and the warning when the office failed after the apply (#92 C6)", async () => {
+    const { send } = await mod(() => ({ ...turn("s", { apply: { applied: true, files: [{ change: "M", path: "src/a.ts" }] } }), logFailure: "post office log failed: disk full" }));
+    const row = await send("claude-sonnet --claim src/** go");
+    expect(row).toContain("\nApplied: src/a.ts\nWarning: post office log failed: disk full");
+  });
+
   it("gives the reason when nothing was applied, and names a reverted file", async () => {
     const { send } = await mod(() => turn("s", { outOfScope: ["docs/x.md"], reverted: true, apply: { applied: false, reason: "your folder has changes to the same files", clashes: ["src/a.ts"] } }));
     const row = await send("claude-sonnet --claim src/** go");

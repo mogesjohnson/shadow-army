@@ -202,7 +202,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
 
 interface Soldier { key: string; name: string; roles: string[]; supported: boolean }
 /** The turn result the post office returns. The claim audit and the apply (B3, B4) put their outcome in `write`. */
-type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write" | "refusal">;
+type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write" | "refusal" | "logFailure">;
 
 /** SEC-6: each Cc or Cf character except newline and tab shows as a placeholder such as \u{1b}. */
 function show(text: unknown): string {
@@ -255,7 +255,9 @@ export function card(soldier: Soldier, delivery: Delivery, log: string, credenti
   const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];
   const reverted = outside.length ? `
 Reverted, outside its claims: ${outside.join(", ")}` : "";
-  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}${delivery.refusal ? " (refused)" : ""}\n${summary}${error}\nLog: ${log}\n${files}${reverted}`), credential);
+  // #92 C6: the office failed after the apply (its log, an observer), so the session log may be incomplete.
+  const warning = delivery.logFailure ? `\nWarning: ${five(delivery.logFailure)}` : "";
+  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}${delivery.refusal ? " (refused)" : ""}\n${summary}${error}\nLog: ${log}\n${files}${warning}${reverted}`), credential);
 }
 
 async function send($: EngineInterface, args: string): Promise<string> {

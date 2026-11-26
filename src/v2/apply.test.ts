@@ -175,6 +175,19 @@ describe("M1-AC28: the audited change lands in the owner's folder, uncommitted",
     expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("claimed edit\n");
   }, 30_000);
 
+  it("#92 C6: a step that throws after the apply still returns the applied files and names the failure", async () => {
+    const { repo, office, events } = await writer({ "src/a.ts": "claimed edit\n" });
+    const push = events.push.bind(events);
+    vi.spyOn(events, "push").mockImplementation((...items) => {
+      if (items.some((event) => event.type === "audit")) throw new Error("observer broke");
+      return push(...items);
+    });
+    const result = await office.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.write?.apply).toEqual({ applied: true, files: [{ change: "M", path: "src/a.ts" }] });
+    expect(result.logFailure).toContain("observer broke");
+    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("claimed edit\n");
+  }, 30_000);
+
   it("applyAudited refuses a non-applicable outcome without touching git", async () => {
     const write = { applicable: false, reason: "the turn failed", base: "x", branch: "y" } as WriteOutcome;
     expect(await applyAudited("/does/not/exist", write)).toEqual({ applied: false, reason: "the turn failed", clashes: [] });

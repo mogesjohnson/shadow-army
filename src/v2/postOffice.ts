@@ -56,6 +56,7 @@ interface Session {
 }
 
 /** The blob `rev:path` names, or undefined when the path is absent there. */
+const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 /** An index entry as `git add -N` writes it: the empty blob (SHA-1 or SHA-256) at stage 0. */
 const INTENT_TO_ADD = /^100(644|755) (e69de29bb2d1d6434b8b29ae775ad8c2e48c5391|473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813) 0\n$/;
 const blob = (root: string, rev: string, path: string) => git(root, ["rev-parse", "--verify", "-q", `${rev}:${path}`]).then((out) => out.trim() || undefined, () => undefined);
@@ -386,6 +387,7 @@ export class PostOffice {
     if (session.write && write) session.write.tip = write.tip;
     // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder, and only its own
     // audited delta, `start..tip`, as resolved at the audit.
+    let failure: string | undefined;
     if (write?.applicable) {
       const audited = write;
       const apply = await this.exclusive(async () => {
@@ -393,7 +395,12 @@ export class PostOffice {
         const before = others.length ? await captureState(this.root) : undefined;
         const applied = await applyAudited(this.root, audited);
         // W12-3: Shadow Army's own apply is no change in another running turn's checkout guard; anything else still is.
-        if (before && applied.applied && applied.files.length) await carryApply(this.root, others, before, await captureState(this.root), applied.files, audited.tip!);
+        // #92 C6: the folder has changed by now, so a failed carry is reported, never thrown; it only leaves the
+        // other running turns' guards naming these paths (they fail closed).
+        if (before && applied.applied && applied.files.length) {
+          try { await carryApply(this.root, others, before, await captureState(this.root), applied.files, audited.tip!); }
+          catch (error) { failure = `other running turns' guards were not moved past this apply: ${message(error)}`; }
+        }
         return applied;
       });
       write = { ...write, apply };
@@ -408,16 +415,23 @@ export class PostOffice {
       this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
     }
     if (write) result = { ...result, write };
-    this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
-    if (write) this.record({ soldier: session.spec.key, type: "audit", data: { ...write, diff: undefined } }, session);
     result = { ...result, summary: result.text.split(/\r?\n/).slice(0, 5).join("\n") };
-    this.record({ soldier: session.spec.key, type: "delivery", data: { state: result.status === "completed" ? "answered" : "interrupted", result } }, session);
-    await this.logPending;
-    if (this.logFailure) {
-      // Once files reached the owner's folder, say which, so a log failure never looks like nothing happened.
-      if (!write?.apply?.applied || !write.apply.files.length) throw this.logFailure;
-      result = { ...result, logFailure: `post office log failed: ${this.logFailure.message}` };
+    // #92 C6: once files reached the owner's folder, no later failure (an observer, the log) hides which.
+    const applied = !!write?.apply?.applied && write.apply.files.length > 0;
+    try {
+      this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
+      if (write) this.record({ soldier: session.spec.key, type: "audit", data: { ...write, diff: undefined } }, session);
+      this.record({ soldier: session.spec.key, type: "delivery", data: { state: result.status === "completed" ? "answered" : "interrupted", result } }, session);
+      await this.logPending;
+    } catch (error) {
+      if (!applied) throw error;
+      failure = [failure, `the post office failed after the apply: ${message(error)}`].filter(Boolean).join("; ");
     }
+    if (this.logFailure) {
+      if (!applied) throw this.logFailure;
+      failure = [failure, `post office log failed: ${this.logFailure.message}`].filter(Boolean).join("; ");
+    }
+    if (failure) result = { ...result, logFailure: failure };
     return redact(result, this.secrets) as TurnResult;
   }
 
