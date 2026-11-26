@@ -246,7 +246,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
 // Embedded in the compiled module: published dist/ needs no source-tree script or native package.
 // Compiled once per source version into the owner's cache (supervisorBinary). Bootstrap is read
 // from stdin and never passed to the CLI; session credentials cannot enter argv.
-const SUPERVISOR_SOURCE = String.raw`
+export const SUPERVISOR_SOURCE = String.raw`
 using System;
 using System.IO;
 using System.IO.Pipes;
@@ -425,7 +425,9 @@ public static class ShadowJobSupervisor {
 }
 `;
 
-const SOURCE_HASH = createHash("sha256").update(SUPERVISOR_SOURCE).digest("hex");
+/** Hashes the launcher's C# source: the build records it beside the launcher it compiles. */
+export const SUPERVISOR_SOURCE_SHA256 = createHash("sha256").update(SUPERVISOR_SOURCE).digest("hex");
+const SOURCE_HASH = SUPERVISOR_SOURCE_SHA256;
 /** Names this source version's files in the cache: `<key>.json` (the record) and `<key>-<sha256>.exe`. */
 const SUPERVISOR_KEY = SOURCE_HASH.slice(0, 32);
 const COMPILE_SCRIPT = "$ErrorActionPreference = 'Stop'\nAdd-Type -ReferencedAssemblies System.Web.Extensions -TypeDefinition ([IO.File]::ReadAllText($args[0])) -OutputAssembly $args[1] -OutputType ConsoleApplication\n";
