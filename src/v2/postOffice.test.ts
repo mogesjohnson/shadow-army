@@ -1,8 +1,11 @@
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { git } from "../workspace/git.js";
+import { Locks } from "../workspace/locks.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
+import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
@@ -22,12 +25,13 @@ async function setup() {
   return { repo, office, events, deliveries };
 }
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(offices.splice(0).map((office) => office.close()));
   repos.splice(0).forEach((repo) => repo.cleanup());
 });
 
 describe("M1 office integration with synthetic native processes", () => {
-  it("keeps two messages in one process, preserves owner changes and redacts credentials in replies, events and logs", async () => {
+  windowsOnly("keeps two messages in one process, preserves owner changes and redacts credentials in replies, events and logs", async () => {
     const { repo, office, events, deliveries } = await setup();
     const first = await office.send("scout", "inspect");
     const second = await office.send("scout", "inspect");
@@ -50,7 +54,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("owner's uncommitted work\n");
   }, 30_000);
 
-  it.each(["die", "partial"])("finalizes both guards after %s, retains partial work, then requires explicit reconnect without replay", async (prompt) => {
+  windowsOnly.each(["die", "partial"])("finalizes both guards after %s, retains partial work, then requires explicit reconnect without replay", async (prompt) => {
     const { repo, office, events } = await setup();
     const opened = await office.open("scout");
     const pending = office.send("scout", prompt);
@@ -74,7 +78,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
   }, 30_000);
 
-  it("retains a successful Edit followed by provider failure and requires an explicit fresh retry without replay", async () => {
+  windowsOnly("retains a successful Edit followed by provider failure and requires an explicit fresh retry without replay", async () => {
     const { office, events, deliveries } = await setup();
     const opened = await office.open("scout");
     const result = await office.send("scout", "partial-success-fail");
@@ -83,6 +87,9 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(events.find((event) => event.type === "error")?.data).toMatchObject({ kind: "rate_limit" });
     expect(result.status).toBe("failed");
     expect(result.error?.message).toContain("partial work is retained");
+    // W11-1, PO-8: the CLI's own kind and words survive the guard failure.
+    expect(result.error?.kind).toBe("rate_limit");
+    expect(result.error?.message).toContain("API Error after successful Edit: rate limit");
     expect(events.filter((event) => event.type === "guard")).toHaveLength(1);
     await expect(office.send("scout", "partial-success-fail")).rejects.toThrow("reconnect explicitly");
     expect(deliveries).toEqual(["partial-success-fail"]);
@@ -93,7 +100,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("successful first edit\n");
   }, 30_000);
 
-  it("keeps rate limits, context overflow, login and refusal distinct without restart or automatic retry", async () => {
+  windowsOnly("keeps rate limits, context overflow, login and refusal distinct without restart or automatic retry", async () => {
     const { office, events } = await setup();
     for (const [text, kind] of [["rate", "rate_limit"], ["context", "context_overflow"], ["login", "login_needed"]]) {
       const result = await office.send("scout", text!);
@@ -106,7 +113,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(events.filter((event) => event.type === "restarted")).toHaveLength(0);
   }, 30_000);
 
-  it("passes through provider usage/cache fields and leaves missing usage unknown", async () => {
+  windowsOnly("passes through provider usage/cache fields and leaves missing usage unknown", async () => {
     const { office } = await setup();
     const meters = await office.send("scout", "meters");
     expect(meters.contextTokens).toBe(22);
@@ -116,7 +123,7 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(unknown.usage).toBeUndefined(); expect(unknown.contextTokens).toBeUndefined();
   }, 30_000);
 
-  it("rejects a credential inside an approval response without consuming the native owner request", async () => {
+  windowsOnly("rejects a credential inside an approval response without consuming the native owner request", async () => {
     const { office, events } = await setup();
     const opened = await office.open("scout");
     const pending = office.send("scout", "approval");
@@ -148,7 +155,7 @@ describe("M1 office integration with synthetic native processes", () => {
     const repo = makeRepo(); repos.push(repo);
     const channels: { options: ChannelOptions; sent: string[] }[] = [];
     const events: OfficeEvent[] = [];
-    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
       const channel = { options, sent: [] as string[] }; channels.push(channel);
       return { async send(text) { channel.sent.push(text); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
     } }); offices.push(office);
@@ -240,7 +247,7 @@ describe("M1 office integration with synthetic native processes", () => {
     await expect(office.open("scout")).rejects.toThrow("closed");
   }, 30_000);
 
-  it.each(["model", "system instructions"])("preserves a native reported cache hit after changing only %s in a fresh session", async (changed) => {
+  windowsOnly.each(["model", "system instructions"])("preserves a native reported cache hit after changing only %s in a fresh session", async (changed) => {
     const repo = makeRepo(); repos.push(repo);
     const custom = makeRoster({ scout: { cli: "claude", model: "first-model", roles: ["review"], write: false } });
     custom.rules.all = "FIRST SYSTEM INSTRUCTION";
@@ -271,4 +278,169 @@ describe("M1 office integration with synthetic native processes", () => {
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster: makeRoster({ other: { cli: "codex", model: "fake", roles: ["review"] } }), channelFactory: (options) => { starts++; return factory(options); } }); offices.push(office);
     await expect(office.open("other")).rejects.toThrow("not implemented in M1"); expect(starts).toBe(0);
   });
+});
+
+describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC26, M1-AC27)", () => {
+  const builders = makeRoster({
+    tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true },
+    medic: { cli: "claude", model: "synthetic", roles: ["build"], write: true },
+    scout: { cli: "claude", model: "synthetic", roles: ["review"], write: false },
+  });
+  /** A channel that writes the given files into the cwd it was started in, and records what it saw. */
+  async function writer(files: Record<string, string>, extra?: (cwd: string, repo: ReturnType<typeof makeRepo>) => Promise<void>) {
+    const repo = makeRepo(); repos.push(repo);
+    const started: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      started.push(options);
+      return { async send() {
+        for (const [name, body] of Object.entries(files)) { await mkdir(dirname(join(options.cwd, name)), { recursive: true }); await writeFile(join(options.cwd, name), body); }
+        await extra?.(options.cwd, repo);
+        return { status: "completed", text: "done", refusal: false };
+      }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    return { repo, office, started, events };
+  }
+
+  it("runs a claims turn in its own worktree on a shadow branch, with write instructions and one process across two turns", async () => {
+    const { repo, office, started } = await writer({ "src/a.ts": "changed\n" });
+    const opened = await office.open("tank", { claims: ["src/**"] });
+    expect(opened.branch).toMatch(/^shadow\//);
+    expect(opened.cwd).toContain(".shadow");
+    expect(opened.cwd).not.toBe(repo.dir);
+    expect(started).toHaveLength(1);
+    expect(started[0]!.instructions).not.toContain("read-only session");
+    const first = await office.send("tank", "edit", { claims: ["src/**"] });
+    const second = await office.send("tank", "edit again");
+    expect(first.write?.applicable).toBe(true);
+    expect(second.write?.branch).toBe(opened.branch);
+    // The second turn wrote the same bytes: the earlier turn's commit is not this turn's change.
+    expect(second.write?.applicable).toBe(false);
+    expect(second.write?.reason).toBe("the soldier changed nothing");
+    expect(started).toHaveLength(1);
+    // The first turn's audited change reaches the owner's folder uncommitted (B4, M1-AC28).
+    expect(first.write?.apply?.applied).toBe(true);
+    expect(await readFile(join(repo.dir, "src/a.ts"), "utf8")).toBe("changed\n");
+  }, 30_000);
+
+  it("reverts a file outside the claims, names it, and commits only the claimed change with its diff", async () => {
+    const { office } = await writer({ "src/a.ts": "claimed edit\n", "README.md": "out of scope\n", "notes.txt": "new and unclaimed\n" });
+    const result = await office.send("tank", "edit", { claims: ["src/a.ts"] });
+    const write = result.write!;
+    expect(result.status).toBe("completed");
+    expect(write.outOfScope.sort()).toEqual(["README.md", "notes.txt"]);
+    expect(write.reverted).toBe(true);
+    expect(write.inScope).toEqual(["src/a.ts"]);
+    expect(write.applicable).toBe(true);
+    expect(write.diff).toContain("+claimed edit");
+    expect(write.diff).not.toContain("out of scope");
+    expect(await readFile(join(write.worktree, "README.md"), "utf8")).toBe("hello\n");
+    await expect(readFile(join(write.worktree, "notes.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    const changed = (await git(write.worktree, ["diff", "--name-only", write.base, "HEAD"])).trim();
+    expect(changed).toBe("src/a.ts");
+  }, 30_000);
+
+  it("fails the turn and applies nothing when the owner's folder changes during it, naming the path", async () => {
+    const { office, events } = await writer({ "src/a.ts": "claimed edit\n" }, async (_cwd, owner) => { owner.write("README.md", "changed under the turn\n"); });
+    const result = await office.send("tank", "edit", { claims: ["src/a.ts"] });
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toContain("README.md");
+    expect(result.write?.applicable).toBe(false);
+    expect(result.write?.reason).toContain("README.md");
+    expect((events.find((event) => event.type === "guard")!.data as { changes: string[] }).changes.join(" ")).toContain("README.md");
+    await expect(office.send("tank", "again")).rejects.toThrow("reconnect explicitly");
+  }, 30_000);
+
+  it("raises nothing for an edit made between turns, and a shadow branch is no change", async () => {
+    let turn = 0;
+    const { repo, office } = await writer({}, async (cwd) => { await writeFile(join(cwd, "src/a.ts"), `claimed edit ${++turn}\n`); });
+    expect((await office.send("tank", "edit", { claims: ["src/a.ts"] })).write?.applicable).toBe(true);
+    repo.write("README.md", "owner edit between turns\n");
+    const second = await office.send("tank", "edit again");
+    expect(second.status).toBe("completed");
+    expect(second.write?.applicable).toBe(true);
+  }, 30_000);
+
+  it("refuses overlapping claims naming the holder, and claims for a soldier that cannot write, starting nothing", async () => {
+    const { office, started } = await writer({ "src/a.ts": "x\n" });
+    await office.open("tank", { claims: ["src/**"] });
+    await expect(office.open("medic", { claims: ["src/a.ts"] })).rejects.toThrow(/tank/);
+    await expect(office.open("scout", { claims: ["src/a.ts"] })).rejects.toThrow("cannot write");
+    await expect(office.send("tank", "x", { claims: ["README.md"] })).rejects.toThrow("holds claims");
+    await expect(office.send("medic", "x", { claims: ["../outside"] })).rejects.toThrow();
+    expect(started).toHaveLength(1);
+  }, 30_000);
+
+  windowsOnly("keeps the claimed work of a cut-short turn on the branch, unusable until the owner decides", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event), channelFactory: factory }); offices.push(office);
+    const opened = await office.open("tank", { claims: ["partial.txt"] });
+    const pending = office.send("tank", "partial");
+    await until(() => events.some((event) => event.type === "tool_call"));
+    await office.interrupt("tank");
+    const result = await pending;
+    expect(result.status).not.toBe("completed");
+    expect(result.write?.applicable).toBe(false);
+    expect(result.write?.inScope).toEqual(["partial.txt"]);
+    expect(result.write?.worktree).toBe(opened.cwd);
+    expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+  }, 30_000);
+
+  it("C1: a no-op turn after an interrupted one never makes the retained edit applicable; reconnecting starts fresh", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event), channelFactory: factory }); offices.push(office);
+    const opened = await office.open("tank", { claims: ["partial.txt"] });
+    const pending = office.send("tank", "partial");
+    await until(() => events.some((event) => event.type === "tool_call"));
+    await office.interrupt("tank");
+    const first = await pending;
+    expect(first.write?.applicable).toBe(false);
+    expect(first.write?.reason).toContain("reconnect");
+    await expect(office.send("tank", "inspect")).rejects.toThrow("reconnect explicitly");
+    const reopened = await office.open("tank", { claims: ["partial.txt"] });
+    expect(reopened.cwd).not.toBe(opened.cwd);
+    const noop = await office.send("tank", "inspect");
+    expect(noop.status).toBe("completed");
+    expect(noop.write?.applicable).toBe(false);
+    expect(noop.write?.diff).not.toContain("partial edit");
+    expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+  }, 30_000);
+
+  it("C2: a send that overlaps a pending open with different claims is refused before any brief is sent", async () => {
+    const { repo, office, started } = await writer({ "README.md": "edited under the wrong claims\n" });
+    const [opened, sent] = await Promise.allSettled([office.open("tank", { claims: ["src/a.ts"] }), office.send("tank", "edit", { claims: ["README.md"] })]);
+    expect(opened.status).toBe("fulfilled");
+    expect(sent.status).toBe("rejected");
+    expect(String((sent as PromiseRejectedResult).reason)).toContain("holds claims");
+    expect(started).toHaveLength(1);
+    const worktree = (opened as PromiseFulfilledResult<{ cwd: string }>).value.cwd;
+    expect(await readFile(join(worktree, "README.md"), "utf8")).toBe("hello\n");
+    expect(await readFile(join(repo.dir, "README.md"), "utf8")).toBe("hello\n");
+  }, 30_000);
+
+  it("C3: keeps the claims lease alive across turns, and fails closed once it expired and changed hands (fake clock)", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    let turn = 0;
+    const { repo, office, events } = await writer({}, async (cwd) => { await writeFile(join(cwd, "src/a.ts"), `edit ${++turn}\n`); });
+    const locks = new Locks(join(repo.dir, ".shadow"));
+    expect((await office.send("tank", "edit", { claims: ["src/a.ts"] })).write?.applicable).toBe(true);
+    // The owner keeps the first turn, so the second turn's apply meets no uncommitted change (#99 C1 takes a refused apply down).
+    await git(repo.dir, ["commit", "-qam", "keep the first turn"]);
+    // The first audit stopped v1's heartbeat; the office's own keeps the lease for 80 minutes past a 60-minute TTL.
+    for (let step = 0; step < 4; step++) {
+      const before = (await locks.list())[0]!.expiresAt;
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      await until(async () => ((await locks.list())[0]?.expiresAt ?? 0) > before);
+    }
+    await expect(locks.acquire({ owner: "medic", claims: ["src/a.ts"] })).rejects.toThrow(/tank/);
+    expect((await office.send("tank", "edit")).write?.applicable).toBe(true);
+    // A lease that expires without renewal (the process slept) is taken by another soldier.
+    vi.setSystemTime(Date.now() + 61 * 60_000);
+    await locks.acquire({ owner: "medic", claims: ["src/a.ts"], ttlMs: 60 * 60_000 });
+    await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
+    expect(turn).toBe(2);
+    expect(events.some((event) => event.type === "down")).toBe(true);
+  }, 30_000);
 });

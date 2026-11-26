@@ -3,6 +3,7 @@ import { createServer, type Server, type IncomingMessage } from "node:http";
 import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { PostOffice, type OfficeOptions } from "./postOffice.js";
+import type { TurnResult } from "./channel.js";
 import { redact } from "./logs.js";
 import { SessionLease, type LeaseOptions } from "./lease.js";
 
@@ -34,6 +35,38 @@ async function folderLock(root: string): Promise<() => Promise<void>> {
   }
   try { await file.writeFile(record); } finally { await file.close(); }
   return async () => { if (await readFile(path, "utf8").catch(() => "") === record) await unlink(path); };
+}
+
+/** `/send --claim` arrives as `claims`: a nonempty list of non-empty path patterns, or nothing. */
+function turnOptions(claims: unknown): { claims?: string[] } {
+  if (claims === undefined) return {};
+  // An explicit empty list is refused, never read as "no claims", which would reuse a writer's claims.
+  if (!Array.isArray(claims) || !claims.length || claims.some((c) => typeof c !== "string" || !c.trim())) throw new Error("claims must be a nonempty list of non-empty path patterns");
+  return { claims: claims as string[] };
+}
+
+/**
+ * The `send` result: the turn, plus the fields the mod's summary card reads at the top level
+ * (`Delivery` in `plugins/shadow-army/hooks/register.ts`). `write` keeps the full audit for other callers.
+ */
+export type SendResponse = TurnResult & {
+  /** Paths now uncommitted in the owner's folder. Absent when nothing was applied. */
+  applied?: string[];
+  /** Paths the soldier changed outside its claims, which the audit reverted. Absent when none. */
+  reverted?: string[];
+  /** Why a write turn applied nothing. */
+  reason?: string;
+};
+
+export function sendResponse(result: TurnResult): SendResponse {
+  const write = result.write;
+  if (!write) return result;
+  const apply = write.apply;
+  return {
+    ...result,
+    ...(apply?.applied ? { applied: apply.files.map((file) => file.path) } : { reason: apply?.reason ?? write.reason ?? "no change was applied" }),
+    ...(write.outOfScope.length ? { reverted: write.outOfScope } : {}),
+  };
 }
 
 export async function startOfficeServer(options: ServerOptions): Promise<OfficeServer> {
@@ -72,10 +105,6 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
           const command = await body(request);
           lease?.assertActive();
           const key = typeof command.soldier === "string" ? command.soldier : "";
-          // C15: this build has no claim audit or apply (#94 brings them), so a claimed call is refused before any dispatch.
-          if ((command.action === "open" || command.action === "send") && command.claims !== undefined && !(Array.isArray(command.claims) && command.claims.length === 0)) {
-            throw new Error("claims are not available in this build: the post office has no claim audit, so a claimed brief is refused before dispatch");
-          }
           let value: unknown;
           switch (command.action) {
             case "renew":
@@ -87,10 +116,19 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
               office.leaseEnded(lease.session, "released");
               value = { ok: true }; break;
             case "army": value = office.army(); break;
-            case "open": value = await office.open(key); break;
-            case "send":
+            case "open": value = await office.open(key, turnOptions(command.claims)); break;
+            case "send": {
               if (typeof command.text !== "string") throw new Error("send requires text");
-              value = await office.send(key, command.text); break;
+              const options = turnOptions(command.claims);
+              // #94 C10: role and use are the office's own state for the session it holds, never what a request asked for.
+              // The mod opens without claims, then sends with them. A read-only session no turn has used
+              // yet is replaced by the claimed writer session before this send; a used one stays and refuses.
+              const held = office.held(key);
+              if (options.claims && held && !held.used && !held.writer) await office.closeSession(key, held.session);
+              // `exact`: the office checks the claims against the session it selects, so an overlapping request cannot skip them.
+              value = sendResponse(await office.send(key, command.text, { ...options, exact: true }));
+              break;
+            }
             case "interrupt": await office.interrupt(key); value = { ok: true }; break;
             case "approval":
               if (typeof command.requestId !== "string") throw new Error("approval requires requestId");

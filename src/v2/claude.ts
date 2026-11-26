@@ -15,6 +15,8 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 /** CH-1: one unparseable line is an error and the session carries on; this many in a row is a lost connection. */
 export const MAX_BAD_LINES_IN_A_ROW = 10;
 const BAD_LINE_EXCERPT = 200;
+/** A turn quiet this long after an unparseable line may have lost its result; long tool runs emit no frames. */
+const BAD_LINE_QUIET_MS = 10 * 60_000;
 
 interface PendingTurn {
   id: string;
@@ -84,9 +86,10 @@ export class ClaudeChannel implements NativeChannel {
   private closingResult?: TurnResult;
   private reason: NativeError = { kind: "transport", message: "Claude channel closed" };
   private stopTimer?: NodeJS.Timeout;
+  private badLineTimer?: NodeJS.Timeout;
   private instructionDirectory?: string;
 
-  constructor(private readonly options: ChannelOptions) {
+  constructor(private readonly options: ChannelOptions & { badLineQuietMs?: number }) {
     this.process = this.spawn();
     this.ready = this.open();
     // Spawn/initialization errors must remain observed even if the owner closes before sending.
@@ -157,10 +160,13 @@ export class ClaudeChannel implements NativeChannel {
       const excerpt = redacted.length > BAD_LINE_EXCERPT ? `${redacted.slice(0, BAD_LINE_EXCERPT)}...` : redacted;
       const message = `Claude emitted an unparseable line: ${excerpt}`;
       this.emit("raw", { type: "unparseable_line", text: redacted });
+      // Review 3 C3: every line, the tenth included, keeps its own diagnostic before the connection is lost.
+      this.emit("error", { kind: "other", message } satisfies NativeError);
       if (this.badLines >= MAX_BAD_LINES_IN_A_ROW) void this.failTransport(`Claude connection lost: ${MAX_BAD_LINES_IN_A_ROW} unparseable lines in a row`);
-      else this.emit("error", { kind: "other", message } satisfies NativeError);
+      else if (this.current && !this.current.stopped && !this.badLineTimer) this.armBadLineTimer(this.current);
       return;
     }
+    // Only a settled turn disarms recovery: a valid frame that belongs to no turn proves nothing about this one.
     this.badLines = 0;
     this.emit("raw", frame);
     if (typeof frame.session_id === "string") this.sessionId = frame.session_id;
@@ -192,6 +198,10 @@ export class ClaudeChannel implements NativeChannel {
     const turn = this.current;
     if (frame.type === "result") { this.result(frame); return; }
     if (!turn) return;
+    // The turn's own progress extends the quiet window; other valid frames leave its deadline as it was.
+    // A subagent's output (a parent tool use) is auxiliary: it cannot show the main turn still has a result coming (#94 C11).
+    const auxiliary = typeof frame.parent_tool_use_id === "string";
+    if (this.badLineTimer && !auxiliary && ["stream_event", "assistant", "user", "rate_limit_event", "model_refusal_no_fallback"].includes(frame.type as string)) this.armBadLineTimer(turn);
     if (frame.type === "rate_limit_event") {
       const info = object(frame.rate_limit_info);
       if (info?.status === "rejected") {
@@ -332,12 +342,55 @@ export class ClaudeChannel implements NativeChannel {
     else this.finish(result);
   }
 
+  /** (Re)starts the quiet window after an unparseable line; it ends only when the turn settles. */
+  private armBadLineTimer(turn: PendingTurn): void {
+    clearTimeout(this.badLineTimer);
+    this.badLineTimer = setTimeout(() => {
+      this.badLineTimer = undefined;
+      // A turn waiting for the owner's approval is not silent: keep the window armed instead of stopping it.
+      if (this.current === turn && this.approvals.size) this.armBadLineTimer(turn);
+      else void this.recover(turn);
+    }, this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS);
+    this.badLineTimer.unref();
+  }
+
+  /**
+   * The bad line may have been the turn's result. After a quiet window, ask Claude to stop the
+   * turn natively. An acknowledged interrupt with no result in a second window means the turn was
+   * already over, so it settles locally as failed and the connection stays open. An interrupt that
+   * is never acknowledged may leave the native turn running: that takes the bounded containment
+   * close, and the turn settles only after containment is classified.
+   */
+  private async recover(turn: PendingTurn): Promise<void> {
+    if (this.current !== turn || turn.stopped || this.closed) return;
+    const quiet = this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS;
+    turn.stopped = true;
+    const diagnostic: NativeError = { kind: "other", message: `Claude made no progress on the turn within ${quiet} ms of an unparseable line` };
+    // A typed provider error seen earlier (a rate-limit reset, a login requirement) stays the turn's
+    // error; the recovery diagnostic is recorded beside it as its own event (#94 C13).
+    if (!turn.error || turn.error.kind === "other") turn.error = diagnostic;
+    this.emit("error", diagnostic);
+    this.approvals.clear();
+    let acknowledged = false;
+    this.stopTimer = setTimeout(() => {
+      if (this.current !== turn) return;
+      if (!acknowledged) { void this.failTransport("Claude did not confirm a stop within 30 seconds of an unparseable line"); return; }
+      // The lost result's cost is unknown: the next total only restores the baseline (#96 C7).
+      this.missingCostBoundary = true;
+      this.finish({ status: "failed", text: turn.text, refusal: false, sessionId: this.sessionId, contextTokens: turn.contextTokens, usage: this.eventUsage(turn), error: turn.error });
+    }, this.options.interruptTimeoutMs ?? 30_000);
+    this.stopTimer.unref();
+    await this.control({ subtype: "interrupt" }).then(() => { acknowledged = true; }, () => undefined);
+  }
+
   private finish(result: TurnResult): void {
     const turn = this.current;
     if (!turn) return;
     this.current = undefined;
     clearTimeout(this.stopTimer);
     this.stopTimer = undefined;
+    clearTimeout(this.badLineTimer);
+    this.badLineTimer = undefined;
     this.approvals.clear();
     this.emit("turn_end", result);
     turn.resolve(result);
@@ -406,6 +459,7 @@ export class ClaudeChannel implements NativeChannel {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
     clearTimeout(this.stopTimer);
+    clearTimeout(this.badLineTimer);
     this.approvals.clear();
     for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error(this.reason.message)); }
     this.controls.clear();
@@ -426,7 +480,11 @@ export class ClaudeChannel implements NativeChannel {
       }
       // A failed containment check must unblock callers without claiming cleanup succeeded.
       // The post office keeps such a channel down and never automatically resumes its queue.
-      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: this.reason });
+      // A typed provider error the turn already saw (a rate-limit reset, a login requirement) stays the
+      // turn's error; the transport diagnostic stays on the error and closed events (#94 C17). Failed
+      // containment outranks it: native work may still be running, so the turn must not read as a wait.
+      const typed = containmentStopped && this.current?.error && this.current.error.kind !== "other" && this.current.error.kind !== "transport" ? this.current.error : undefined;
+      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: typed ?? this.reason });
       this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped });
     })();
     return this.closePromise;

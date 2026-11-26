@@ -1,6 +1,7 @@
 import type {
   EngineInterface, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register, Timer,
 } from "claude-code";
+import type { TurnResult } from "../../../src/v2/channel.js";
 
 interface Runtime {
   session: string;
@@ -200,8 +201,8 @@ async function ensure($: EngineInterface): Promise<Runtime> {
 }
 
 interface Soldier { key: string; name: string; roles: string[]; supported: boolean }
-/** The turn result the post office returns; `applied`, `reverted` and `reason` come from the claim audit and the apply (B3, B4). */
-interface Delivery { status: string; summary?: string; error?: { message?: string }; applied?: string[]; reverted?: string[]; reason?: string }
+/** The turn result the post office returns. The claim audit and the apply (B3, B4) put their outcome in `write`. */
+type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write" | "refusal" | "logFailure">;
 
 /** SEC-6: each Cc or Cf character except newline and tab shows as a placeholder such as \u{1b}. */
 function show(text: unknown): string {
@@ -214,30 +215,57 @@ function uiLog($: EngineInterface, text: string, credential = ""): void {
 }
 
 /**
- * `/send <soldier> <brief>`. This build has no claim audit or apply (C15), so a brief that starts with `--claim`
- * is refused as `error` before any session opens, instead of being sent as text.
+ * `/send <soldier> --claim <path-or-glob> ... <brief>`. A claim with a space sits in double or single quotes
+ * (`--claim "docs/Project Notes.md"`); the closing quote must be followed by a space or the end. The brief is
+ * everything after the last claim, untouched. A missing or unclosed claim comes back as `error`, before any session opens.
  */
-function parseSend(args: string): { name?: string; brief: string; error?: string } {
-  const text = args.trim();
-  const name = /^\S+/.exec(text)?.[0];
-  const brief = text.slice(name?.length ?? 0).trimStart();
-  if (/^--claim(?=\s|$)/.test(brief)) return { name, brief, error: "--claim is not available in this build: there is no claim audit yet, so a claimed brief is not sent." };
-  return { name, brief };
+function parseSend(args: string): { name?: string; claims: string[]; brief: string; error?: string } {
+  let rest = args.trim();
+  const name = /^\S+/.exec(rest)?.[0];
+  rest = rest.slice(name?.length ?? 0).trimStart();
+  const claims: string[] = [];
+  for (let flag; (flag = /^--claim(?=\s|$)\s*/.exec(rest));) {
+    rest = rest.slice(flag[0].length);
+    const quoted = /^["']/.test(rest);
+    const match = quoted ? /^(["'])(.*?)\1(?=\s|$)\s*/.exec(rest) : /^()(\S+)\s*/.exec(rest);
+    if (quoted && !match) return { name, claims, brief: rest, error: "a quoted --claim is not closed, or its closing quote is not followed by a space." };
+    const claim = match?.[2]?.trim();
+    if (!match || !claim || claim === "--claim") return { name, claims, brief: rest, error: "--claim needs a path or glob; put one with a space in quotes." };
+    rest = rest.slice(match[0].length);
+    claims.push(claim);
+  }
+  return { name, claims, brief: rest };
 }
 
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
-function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
-  // Choose the summary, or else the error, first; then cap whichever it is at five lines (CRLF and lone CR count as line breaks).
-  const summary = (delivery.summary || delivery.error?.message || "no summary").split(/\r\n|\r|\n/).slice(0, 5).join("\n");
-  const files = delivery.applied?.length ? `Applied: ${delivery.applied.join(", ")}` : `Not applied: ${delivery.reason ?? "no change was applied"}`;
-  const reverted = delivery.reverted?.length ? `\nReverted, outside its claims: ${delivery.reverted.join(", ")}` : "";
-  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}\n${summary}\nLog: ${log}\n${files}${reverted}`), credential);
+export function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
+  // At most five lines of anything the soldier or the office wrote (CRLF and lone CR count as line breaks).
+  const five = (value: string | undefined) => value?.split(/\r\n|\r|\n/).slice(0, 5).join("\n");
+  const text = five(delivery.summary) ?? "";
+  const summary = text || "no summary";
+  // M1-AC25: when the turn did not complete or the claim audit left no `write`, the error says why (a thrown audit leaves no other trace).
+  const why = delivery.status !== "completed" || !delivery.write ? five(delivery.error?.message) : undefined;
+  // With a write outcome the "Not applied" line gives the audit's reason, not the native error, so show the error then too.
+  const error = why && (text || delivery.write) ? `\nError: ${why}` : "";
+  const apply = delivery.write?.apply;
+  // M1-AC27: a failed turn's error (a guard or audit failure names the path) is the reason even after partial text.
+  // #94 C9: a failed rollback may leave the edits in the owner's folder, so the card warns and lists every path #101 names.
+  const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`
+    : apply && !apply.applied && apply.left ? `Warning: your folder was NOT put back (${apply.reason}). These files may still carry the soldier's edits: ${apply.left.join(", ")}`
+    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || why || "no change was applied"}`;
+  const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];
+  const reverted = outside.length ? `
+Reverted, outside its claims: ${outside.join(", ")}` : "";
+  // #92 C6: the office failed after the apply (its log, an observer), so the session log may be incomplete.
+  const warning = delivery.logFailure ? `\nWarning: ${five(delivery.logFailure)}` : "";
+  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}${delivery.refusal ? " (refused)" : ""}\n${summary}${error}\nLog: ${log}\n${files}${warning}${reverted}`), credential);
 }
 
 async function send($: EngineInterface, args: string): Promise<string> {
-  const { name, brief, error } = parseSend(args);
+  const { name, claims, brief, error } = parseSend(args);
   if (name && error) return `Nothing sent: ${error}`;
-  if (!name || !brief) return "Usage: /send <soldier> <brief>";
+  if (!name || !brief) return "Usage: /send <soldier> --claim <path-or-glob> <brief>";
+  if (!claims.length) return "Nothing sent: /send needs at least one --claim <path-or-glob>, so the soldier's changes can be audited.";
   const runtime = await ensure($);
   const soldiers = await post($, runtime, { action: "army" }) as Soldier[];
   if (!Array.isArray(soldiers)) throw new Error("invalid army response");
@@ -245,14 +273,14 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (!soldier) return "Nothing sent: unknown soldier.";
   if (!soldier.supported || !soldier.roles.includes("build")) return show(`Nothing sent: ${soldier.name} is not a claude soldier with the build role.`);
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
-  const opened = await post($, runtime, { action: "open", soldier: soldier.key }) as { session?: string };
-  const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief }) as Delivery;
+  const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
+  const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
   return card(soldier, delivery, `${runtime.root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
 
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
-    await $.command.register({ name: "send", description: "Send one brief to a claude soldier and wait for its summary.", argumentHint: "<soldier> <brief>", immediate: true });
+    await $.command.register({ name: "send", description: "Send one brief to a claude soldier and wait for its summary.", argumentHint: "<soldier> --claim <path-or-glob> <brief>", immediate: true });
     return next(e);
   });
   on("command.run", { command: "send" }, async ($, e) => {

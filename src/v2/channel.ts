@@ -1,4 +1,5 @@
 import type { Autonomy } from "../adapters/Adapter.js";
+import type { ApplyResult } from "../workspace/apply.js";
 
 export type NativeErrorKind = "rate_limit" | "context_overflow" | "login_needed" | "transport" | "other";
 export interface NativeError {
@@ -14,6 +15,33 @@ export interface TurnUsage {
   costSource?: "native_cli_estimate";
   raw: Record<string, unknown>;
 }
+/** What a turn with claims leaves in the soldier's worktree for the apply (B4) and the card. */
+export interface WriteOutcome {
+  worktree: string;
+  branch: string;
+  base: string;
+  /** Short sha of the branch tip when it holds any change. */
+  commit?: string;
+  /** Full commit ID of the tip the audit committed; the apply uses it, never the movable branch name. */
+  tip?: string;
+  /** Full commit ID this turn started from: the previous turn's audited tip, or the base. Only `start..tip` is this turn's. */
+  start: string;
+  claims: string[];
+  inScope: string[];
+  /** Changed outside the claims and reverted. */
+  outOfScope: string[];
+  reverted: boolean;
+  leaseLost: boolean;
+  /** The owner's folder had uncommitted changes the worktree (made from HEAD) does not contain. */
+  uncommittedIgnored: boolean;
+  /** This turn's audited change: `git diff start tip` in the worktree, claimed files only. */
+  diff: string;
+  /** True only when the turn completed and passed the guard and the audit with a change to apply. */
+  applicable: boolean;
+  reason?: string;
+  /** What B4 did with the change: the files now uncommitted in the owner's folder, or why none. Absent unless applicable. */
+  apply?: ApplyResult;
+}
 export interface TurnResult {
   status: "completed" | "failed" | "interrupted";
   text: string;
@@ -24,6 +52,13 @@ export interface TurnResult {
   error?: NativeError;
   /** Office summaries are bounded independently of the native full reply retained in logs. */
   summary?: string;
+  write?: WriteOutcome;
+  /**
+   * Something failed after the apply had already changed the owner's folder, so the turn is reported instead of thrown:
+   * the session log could not be written, a later record step failed, or the other running turns' guards were not moved
+   * past the apply. Reasons are joined with "; ". `write.apply` still says what the apply changed.
+   */
+  logFailure?: string;
 }
 export interface ChannelEvent {
   type: "text" | "thinking" | "tool_call" | "tool_result" | "approval" | "usage" | "turn_end" | "error" | "closed" | "raw";
