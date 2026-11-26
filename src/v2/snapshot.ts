@@ -136,6 +136,34 @@ export async function beginTurn(snapshot: Snapshot, git: GitFactory): Promise<Tu
   return { head, ignores, prints: await fingerprint(snapshot, run) };
 }
 
+/** Every `.gitignore` file in the snapshot, tracked or not, found on disk with no git process. */
+function gitignoreFiles(root: string) {
+  const found: string[] = [];
+  const walk = (rel: string) => {
+    for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
+      const path = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && entry.name !== ".git") walk(path);
+      else if (entry.isFile() && entry.name === ".gitignore") found.push(path);
+    }
+  };
+  walk("");
+  return found;
+}
+/** The snapshot's HEAD read from its git dir: a commit, or the commit of the branch it names (the name itself if none). */
+function headOf(snapshot: Snapshot) {
+  const head = readFileSync(join(snapshot.gitDir, "HEAD"), "utf8").trim();
+  const ref = /^ref:\s*(\S+)$/.exec(head)?.[1];
+  if (!ref) return head;
+  for (const dir of [snapshot.gitDir, snapshot.commonDir]) {
+    try { return readFileSync(join(dir, ref), "utf8").trim(); } catch { /* not a loose ref here */ }
+  }
+  try {
+    const line = readFileSync(join(snapshot.commonDir, "packed-refs"), "utf8").split(/\r?\n/).find((l) => l.endsWith(` ${ref}`));
+    if (line) return line.split(" ")[0];
+  } catch { /* no packed refs */ }
+  return head;
+}
+
 /**
  * `beginTurn` for a snapshot `openSnapshot` has just made, before anything ran in it: a fresh checkout is clean,
  * so its start is read from the files alone (HEAD, every `.gitignore`, ARM-6's files) and costs no git process.
@@ -144,14 +172,7 @@ export function freshStart(snapshot: Snapshot): TurnStart {
   const head = readFileSync(join(snapshot.gitDir, "HEAD"), "utf8").trim();
   if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head)) throw new SnapshotError(`snapshot is not detached at a commit: ${head}`);
   const ignores: Record<string, string> = {};
-  const walk = (rel: string) => {
-    for (const entry of readdirSync(join(snapshot.path, rel), { withFileTypes: true })) {
-      const path = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory() && entry.name !== ".git") walk(path);
-      else if (entry.isFile() && entry.name === ".gitignore") ignores[path] = readFileSync(join(snapshot.path, path)).toString("base64");
-    }
-  };
-  walk("");
+  for (const path of gitignoreFiles(snapshot.path)) ignores[path] = readFileSync(join(snapshot.path, path)).toString("base64");
   const prints: Record<string, string> = {};
   for (const path of hashedPaths(snapshot.path)) prints[path] = hashOf(join(snapshot.path, path));
   return { head, ignores, prints };
@@ -160,13 +181,13 @@ export function freshStart(snapshot: Snapshot): TurnStart {
 /**
  * The turn's writes: files git doesn't ignore by the rules the turn began with, ARM-6's paths even where
  * git ignores them, and a moved HEAD. Rules the turn changed or added are put back first, so they hide nothing.
- * Other ignored output is not a write.
+ * Other ignored output is not a write. New `.gitignore` files and HEAD are read from disk: one git process in all.
  */
 export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitFactory): Promise<ReadViolation | undefined> {
   const run = own(snapshot, git);
   const files = new Set<string>();
-  for (const path of (await run(["ls-files", "-z", "--others"], "guard")).stdout.split("\0")) {
-    if (basename(path) === ".gitignore" && !(path in start.ignores)) { files.add(path); rmSync(join(snapshot.path, path), { force: true }); }
+  for (const path of gitignoreFiles(snapshot.path)) {
+    if (!(path in start.ignores)) { files.add(path); rmSync(join(snapshot.path, path), { force: true }); }
   }
   for (const [path, data] of Object.entries(start.ignores)) {
     const file = join(snapshot.path, path), bytes = Buffer.from(data, "base64");
@@ -174,7 +195,7 @@ export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitF
   }
   const now = await fingerprint(snapshot, run);
   for (const path of new Set([...Object.keys(now), ...Object.keys(start.prints)])) if (now[path] !== start.prints[path]) files.add(path);
-  const head = (await run(["rev-parse", "HEAD"], "guard")).stdout.trim();
+  const head = headOf(snapshot);
   if (files.size === 0 && head === start.head) return undefined;
   return { files: [...files].sort(), ...(head === start.head ? {} : { head: { from: start.head, to: head } }) };
 }
