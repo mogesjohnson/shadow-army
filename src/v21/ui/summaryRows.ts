@@ -2,7 +2,7 @@
 import { safeText, toAscii, type ArmyView, type Soldier, type Tone } from "./model.js";
 import { cardRows, type CardInfo } from "./cardRows.js";
 import { monarchRows } from "./boardRows.js";
-import { lr, type Row, type Seg } from "./layout.js";
+import { cells, fit, lr, rowWidth, type Row, type Seg } from "./layout.js";
 import { tableRows, type TableScene } from "./tableRows.js";
 
 /** What the last answer said, and what each worktree holds. */
@@ -14,35 +14,10 @@ export interface Summary {
 // tableRows' own threshold: under it the board folds to the tree.
 const BOARD_WIDTH = 110, BOARD_HEIGHT = 28, SEATS = 6, BOARD_DRAWER_AT = 23;
 
-// Terminal columns, not code points: wide characters take two cells (the rule tableRows.ts uses; copied because that file is not exported).
-const graphemes = new Intl.Segmenter();
-const WIDE = [[0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe30, 0xfe6f], [0xff00, 0xff60], [0xffe0, 0xffe6], [0x1f300, 0x1faff], [0x20000, 0x3fffd]];
-const cols = (g: string): number => {
-  const cp = g.codePointAt(0)!;
-  return WIDE.some(([a, b]) => cp >= a && cp <= b) || g.includes("️") ? 2 : 1;
-};
+// Widths and clipping are layout.ts's (string-width cells); only the grapheme split for breaking a long word lives here.
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const parts = (text: string): string[] => Array.from(graphemes.segment(text), (x) => x.segment);
-const textWidth = (text: string): number => parts(text).reduce((n, g) => n + cols(g), 0);
-export const rw = (r: Row): number => r.reduce((n, x) => n + textWidth(x.text), 0);
-/** Clip to w terminal columns with an ellipsis, then pad. */
-export function fitCols(r: Row, w: number): Row {
-  const n = rw(r);
-  if (n <= w) return n < w ? [...r, { text: " ".repeat(w - n) }] : r;
-  const out: Row = [];
-  let used = 0;
-  for (const x of r) {
-    const keep: string[] = [];
-    for (const g of parts(x.text)) {
-      if (used + cols(g) > w - 1) {
-        out.push({ ...x, text: keep.join("") + "…" });
-        return used + 1 < w ? [...out, { text: " ".repeat(w - used - 1) }] : out;
-      }
-      keep.push(g); used += cols(g);
-    }
-    out.push(x);
-  }
-  return out;
-}
+export const rw = rowWidth;
 /** Words of a row wrapped to `w` columns, tones kept; a word wider than a line is broken between characters. */
 export function wrapRow(row: Row, w: number): Row[] {
   const lines: Row[] = [[]];
@@ -51,13 +26,13 @@ export function wrapRow(row: Row, w: number): Row[] {
   const next = () => { lines.push([]); used = 0; };
   for (const x of row) {
     for (const token of x.text.split(/(\s+)/).filter(Boolean)) {
-      const width = textWidth(token);
+      const width = cells(token);
       if (/^\s+$/.test(token)) { if (used && used + width <= w) put(token, x, width); continue; }
       if (used && used + width > w) next();
       if (width <= w) { put(token, x, width); continue; }
       for (const g of parts(token)) {
-        if (used && used + cols(g) > w) next();
-        put(g, x, cols(g));
+        if (used && used + cells(g) > w) next();
+        put(g, x, cells(g));
       }
     }
   }
@@ -76,10 +51,10 @@ const own = (rows: Row[], ascii: boolean): Row[] =>
 export function drawerBox(view: ArmyView, title: Row, body: Row[], height: number): Row[] {
   if (height < 3) return [];
   const w = view.width, side = seg("│", "ok");
-  const label: Row = [seg(" "), ...fitCols(title, Math.min(rw(title), w - 5)), seg(" ")];
+  const label: Row = [seg(" "), ...fit(title, Math.min(rw(title), w - 5)), seg(" ")];
   return own([
     [seg("╭─", "ok"), ...label, seg("─".repeat(w - 3 - rw(label)) + "╮", "ok")],
-    ...body.slice(0, height - 2).map((r) => [side, seg(" "), ...fitCols(r, w - 4), seg(" "), side]),
+    ...body.slice(0, height - 2).map((r) => [side, seg(" "), ...fit(r, w - 4), seg(" "), side]),
     [seg("╰" + "─".repeat(w - 2) + "╯", "ok")],
   ], view.ascii);
 }
@@ -104,8 +79,8 @@ export function finishedRows(view: ArmyView, scene: TableScene, height: number, 
   const need = drawer(Infinity).length;
   const board = w >= BOARD_WIDTH && height >= BOARD_HEIGHT && view.soldiers.length <= SEATS && height - 1 - BOARD_DRAWER_AT >= need;
   const base = tableRows(view, { ...scene, messages: [talk] }, board ? height : Math.min(height, BOARD_HEIGHT - 1));
-  const rows = [...base.slice(0, -1), ...Array.from({ length: height - base.length }, () => fitCols([], w)), base[base.length - 1]];
-  const put = (at: number, next: Row[]) => next.forEach((r, i) => { if (at + i < height - 1) rows[at + i] = fitCols(r, w); });
+  const rows = [...base.slice(0, -1), ...Array.from({ length: height - base.length }, () => fit([], w)), base[base.length - 1]];
+  const put = (at: number, next: Row[]) => next.forEach((r, i) => { if (at + i < height - 1) rows[at + i] = fit(r, w); });
 
   const name: Row = [seg(" SHADOW ARMY ", "ac", true), seg(" war table", undefined, true)];
   const run = seg(`  run ${safeText(scene.runId)} · finished`, "dm");
@@ -135,7 +110,7 @@ export function finishedRows(view: ArmyView, scene: TableScene, height: number, 
     const edge = own([[seg("║", "ac")]], view.ascii)[0];
     const lines = own([
       lr([seg("✓ nothing in flight", "ok")], cost ? [seg(`${cost} where the CLIs report a cost`, "dm")] : [], w - 4),
-      fitCols([seg("talk", "dm"), seg("  nothing in flight", "fa")], w - 4),
+      fit([seg("talk", "dm"), seg("  nothing in flight", "fa")], w - 4),
     ], view.ascii);
     put(10, [panel[0], panel[1], ...lines.map((r) => [...edge, seg(" "), ...r, seg(" "), ...edge]), panel[4]]);
     at = BOARD_DRAWER_AT;
