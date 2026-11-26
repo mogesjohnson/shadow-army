@@ -370,6 +370,8 @@ export class ClaudeChannel implements NativeChannel {
     this.stopTimer = setTimeout(() => {
       if (this.current !== turn) return;
       if (!acknowledged) { void this.failTransport("Claude did not confirm a stop within 30 seconds of an unparseable line"); return; }
+      // The lost result's cost is unknown: the next total only restores the baseline (#96 C7).
+      this.missingCostBoundary = true;
       this.finish({ status: "failed", text: turn.text, refusal: false, sessionId: this.sessionId, contextTokens: turn.contextTokens, usage: this.eventUsage(turn), error: turn.error });
     }, this.options.interruptTimeoutMs ?? 30_000);
     this.stopTimer.unref();

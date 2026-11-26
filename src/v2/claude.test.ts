@@ -438,6 +438,14 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("interrupted");
   }, 15_000);
 
+  windowsOnly("marks a missing cost boundary when recovery settles a turn without a usable total (#96 C7)", async () => {
+    const { channel } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 50 });
+    expect((await channel.send("one")).usage?.costUsd).toBeCloseTo(0.03, 6);
+    expect((await channel.send("malformed-idle-cost")).status).toBe("failed");
+    // This total includes the lost turn's cost, so it only restores the baseline.
+    expect((await channel.send("two")).usage?.costUsd).toBeUndefined();
+    expect((await channel.send("three")).usage?.costUsd).toBeCloseTo(0.03, 6);
+  }, 15_000);
 
   windowsOnly("uses only the main conversation for the meter and preserves native terminal/cache usage", async () => {
     const { channel, events } = await setup();

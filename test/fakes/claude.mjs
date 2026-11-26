@@ -54,6 +54,8 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (text === "malformed-once") { process.stdout.write("{broken JSON sk-ant-abcdefghijklmnop}\n"); result("after bad line"); continue; }
   // The turn's own result arrives broken; the CLI is then idle and an interrupt ends nothing.
   if (text === "malformed-idle") { process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue; }
+  // The result line is garbled but the turn's cost still advances: the CLI is idle, so an interrupt ends nothing.
+  if (text === "malformed-idle-cost") { cost += 0.03; process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue; }
   // A bad line, then valid frames that belong to no turn, and no result: only the interrupt ends the turn.
   if (text === "malformed-unrelated") {
     process.stdout.write("{broken JSON}\n");
