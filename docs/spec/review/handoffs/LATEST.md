@@ -1,45 +1,47 @@
-# Handoff: orchestrator 51 (`300d1f3f`) to orchestrator 52 (2026-11-26 ~05:20 UTC)
+# Handoff: orchestrator 52 (`b8b684ea`) to orchestrator 53 (2026-11-26 ~05:40 UTC)
 
-Self-contained: do not read older handoffs. Range `29de50a` (orch-50's handoff) to this commit. orch-51 handed off early (startup reads cost 140k). The 5-hour figure reset at 05:00 UTC: 21% at 05:11 with three Opus workers (it climbs about 2% a minute). Start no worker at 80% or more.
+Self-contained: do not read older handoffs. Range `6a49cf8` (orch-51's handoff) to this commit. The 5-hour figure was 59% at 05:34 (window reset 05:00); start no worker at 80% or more. Free RAM was 1.5 GB at 05:34: no new worker below 1.5 GB, at most three.
 
 ## Running workers (report to the newest orch; check with `check_workers.py <your id prefix>`)
 
 | Worker | Session | Task | Files | Codex file |
 |---|---|---|---|---|
-| w159-fix144-c1c6 | `ea73c2a3` | #144 C1 [P0], C6 [P1]: back to PO-19's packaged launcher, precompiled at `npm run build`, no runtime compile | `src/v2/contain/windows.ts` + test, `scripts/build-windows-launcher.mjs`, `package.json` | 68 |
-| w160-fix132-c1c5 | `eecee9fd` | #132 C1 [P0], C5, C10, C11 [P1], C12 [P2], the sweep | `src/v2/contain/sweep.ts` + test, `src/v2/sweepMain.ts`, `native/linux/sa-contain.c` | 69 |
-| w161-fix136-c1-finish | new | #136 C1 [P0] finish: w158's `## Left` (tests, the worktree left after a hold, self-review, reply, body) | `postOffice.ts`, `apply.ts`, `src/v2/git/hold.ts`, `harness.ts` + tests | 67 |
+| w161-fix136-c1-finish | `db47b10d` | #136 C1 [P0] finish (tests, hold leftovers, self-review, reply, body) | `postOffice.ts`, `apply.ts`, `src/v2/git/hold.ts`, `harness.ts` + tests | 67 |
+| w166-fix110-c5c6 | `67728a77` | #110 C5, C6 [P1]: full static ELF check, private temp artifact; merges #109's new head first | `scripts/build-native.mjs` + test | 74 |
 
-Briefs: `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md`. w159 was at 135k at 05:10: expect its 150k stop and a `## Left` soon; give the rest to a fresh worker the same way (w161's brief is the pattern). Next worker number: w162. **Next Codex file: 70.**
+Briefs: `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md`. Next worker: w167. **Next Codex file: 75.**
 
-## Done this session (verified on the remote)
+## Fixes pushed this session (verified on the remote; waiting for Codex)
 
-- #107: w157 merged `claude/63-m1b` (`22fd08d`) into `claude/63-m1b-lease`, head `83e99d9` (one import conflict, no follow-up commit; Windows checks pass; Linux skipped slice/modRelay). Codex file 66. **Merge #107 into `claude/63-m1b` as soon as Codex approves `83e99d9`** (no PR is stacked on it).
-- #136: w158 pushed `35fe77a` (hold checked before and after each harness git command) and `ed47e43` (apply the audited commit by id through held harness git); tests unfinished (w161).
-- Flatten plan written: `.shadow/v2-tools/tasks/orch-51-flatten.md` (42 main-lane PRs -> about 14). Waits for the owner (below).
-- orch-50's tab was already gone at start.
+- #144 `8c3fab9` (w159): C6 launcher precompiled at `npm run build`, C1 runtime cache removed. File 68.
+- #132 `aacc654` (w160 code `494b7d8`, w162 tests): C1, C5, C10, C11, C12. File 69. **Known limitation, decided:** C1 reads records through `Add-Type -TypeDefinition` (runtime C# compile), the same defect as #144 review 29 (PO-13, PO-19). No spec change: once #144's and #132's stacks reach `claude/63-m1b`, a worker adds a records-read op to the packaged launcher (`scripts/build-windows-launcher.mjs`, from #144) and the sweep calls it. Codex may flag it again meanwhile; answer with this plan.
+- #115 `3e03066` (w163): C5. File 70. #113 `da90ba6` (w163): C4. File 71.
+- #109 `957dd9a` (w164): C8, C9. File 72. #111 `18dc8bd` (w165): C8, C9. File 73.
+- #107: still waiting for Codex at `83e99d9` (file 66). Merge into `claude/63-m1b` as soon as approved.
 
 ## Queue (main lane; one lane until M1 is merged)
 
-1. Answer Codex on files 65 to 69 as they land; merge on approval (bottom-up, merge script in its own tab, RUNBOOK 0.2).
-2. When w159, w160, w161 finish: next fixes by Codex's latest review, P0s first. Unfixed at head since review 14/15 (2026-11-25): #90, #92, #93, #99, #101 (M1a), #106, #109, #110, #111, #113, #115, #116, #121, #124, #126, #130, #133, #137, #139, #141, #142, #143. Fixes pushed and waiting for re-review: #95, #94, #96. Pick ones whose files no live worker holds. Brief template: `tasks/w160-fix132-c1c5.md`.
-3. Folds from the flatten plan, once the owner says yes.
+1. Codex ticks (last `2026-11-26T05:35:05Z`). Worker replies show in `codex_tick.sh` too; Codex's own reviews carry `[P0]`/`[P1]` findings or an approval. Merge on approval, bottom-up, merge script in its own tab (RUNBOOK 0.2).
+2. **Every open P0 is in files w161 holds**, so they wait for its report: #106 C7 (`harness.ts:74`), #121 C9 (`hold.ts:347`), #137 C1, #139 C1, #141 C1, #142 C1 (+`contain/trees.ts`), #143 C1 to C5 (`postOffice.ts`, `trust.ts`). They share `postOffice.ts`: run them one at a time, bottom of stack first, Opus medium, with a finisher planned for each.
+3. P1s also behind `postOffice.ts`: #90 C7 C8, #92 C6, #93 C7 (C6 is `server.ts`), #99 C7 C8, #116 C10. Free files now: #101 C3 (`src/workspace/apply*`), #116 C9 (`logs.ts`), and #124, #126, #130, #133 (not scanned yet).
+4. Scan: `bash C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tools/p0scan.sh <PR numbers>` prints head, base, latest review and P0/P1 counts per PR. To read the findings: `gh api repos/mogesjohnson/shadow-army/pulls/<n>/reviews --jq '[.[] | select(.body | test("P[0-3]"))] | last | .body' | grep -E "P[01]"` (no backslashes in jq under Git Bash).
+5. Folds from the flatten plan, once the owner says yes.
 
-## Waiting on the owner
+## Waiting on the owner (unchanged)
 
-1. Flatten plan: may child PRs be closed (GitHub marks them merged) when their branches fold into the parent? Plan file above.
+1. Flatten plan (`.shadow/v2-tools/tasks/orch-51-flatten.md`): may child PRs be closed when their branches fold into the parent?
 2. #138 C6 (P0): change the profile ACL that grants Modify to `CodexSandboxUsers`, or change the check?
 3. Spec Q11 (viewer credential and port), before M7.
 4. Remove the unused worktree `AIConnections-worktrees/ui-v21-monarch`?
 
 ## Owner's instructions in force
 
-- Speed-up five ("yes do all five", 2026-11-26): flat PRs with `Overrides: V6, "yes do all five", 2026-11-26`; self-review before push; one lane (Ink #145 to #151 wait, merge if approved); Sonnet for most fixes, Opus for concurrency, process termination, security stores; merge on approval, unasked, at Codex's exact head (`gh pr ready`, `gh pr merge <n> --merge --match-head-commit <sha>`). Branch deletion needs the owner.
-- A Codex file for every pushed fix or new PR in `C:/Users/johns/codex-reviews/shadow-army/`. Last Codex tick `2026-11-26T05:10:32Z`.
-- Timers: hi 50 min, watch 5 min. No new worker below 1.5 GB free RAM; at most three.
+- Speed-up five ("yes do all five", 2026-11-26): flat PRs with `Overrides: V6, "yes do all five", 2026-11-26`; self-review before push; one lane (Ink #145 to #151 wait); Sonnet for most fixes, Opus for concurrency, process termination, security stores; merge on approval, unasked, at Codex's exact head (`gh pr ready`, `gh pr merge <n> --merge --match-head-commit <sha>`). Branch deletion needs the owner.
+- A Codex file for every pushed fix or new PR in `C:/Users/johns/codex-reviews/shadow-army/`.
+- Timers: hi 50 min, watch 5 min.
 
 ## Lessons
 
-- An orchestrator's startup costs about 120k here (prompt, briefs, PR map). Read nothing the next step does not need: `verdicts.py`-style one-liners, `cut -c1-200`, no full PR lists.
-- Opus fix workers reach 150k in about 10 minutes of work; write briefs so they push early, and plan a finisher worker per P0.
+- Reading only RUNBOOK section 0 and this file kept orch-52's startup to about 70k. Each launch or close costs about 5k.
+- Opus fix workers spend 100k to 120k on startup reads alone. Name exact file:line and the fix in the brief, and keep one or two findings per worker.
 - Repository Actions is disabled: `Validation:` says CI `blocked`, macOS `not_run`.
