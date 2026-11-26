@@ -118,11 +118,19 @@ function hashedPaths(root: string) {
   }
   return found;
 }
+/** `lstat`, or nothing when the path is gone, one of its folders having become a file included. */
+function statOf(file: string) {
+  try { return lstatSync(file); } catch (error) {
+    if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
+    throw error;
+  }
+}
 async function fingerprint(snapshot: Snapshot, run: RunGit) {
   const prints: Record<string, string> = {};
   for (const path of new Set([...await changedPaths(run), ...hashedPaths(snapshot.path)])) {
     const file = join(snapshot.path, path);
-    prints[path] = lstatSync(file, { throwIfNoEntry: false }) ? hashOf(file) : "gone";
+    const info = statOf(file);
+    prints[path] = !info ? "gone" : info.isDirectory() ? "dir" : hashOf(file);
   }
   return prints;
 }
@@ -153,6 +161,21 @@ function gitignoreFiles(root: string) {
   };
   walk("");
   return found;
+}
+/**
+ * Clears what a turn left in the way of the file `path` in `root`: a link or file where a folder was, or anything but
+ * a plain file at the end. The post office is not sandboxed, so it never follows a link the soldier made. True if it cleared one.
+ */
+function clearWay(root: string, path: string) {
+  const parts = path.split("/");
+  for (let i = 0, at = root; i < parts.length; i++) {
+    const info = statOf(at = join(at, parts[i]));
+    if (!info) return false;
+    if (i < parts.length - 1 ? info.isDirectory() : info.isFile()) continue;
+    rmSync(at, { recursive: true, force: true });
+    return true;
+  }
+  return false;
 }
 /** The snapshot's HEAD read from its git dir: a commit, or the commit of the branch it names (the name itself if none). */
 function headOf(snapshot: Snapshot) {
@@ -195,8 +218,12 @@ export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitF
     if (!(path in start.ignores)) { files.add(path); rmSync(join(snapshot.path, path), { force: true }); }
   }
   for (const [path, data] of Object.entries(start.ignores)) {
-    const file = join(snapshot.path, path), bytes = Buffer.from(data, "base64");
-    if (!existsSync(file) || !readFileSync(file).equals(bytes)) { files.add(path); writeFileSync(file, bytes); }
+    const cleared = clearWay(snapshot.path, path), file = join(snapshot.path, path), bytes = Buffer.from(data, "base64");
+    if (!cleared && existsSync(file) && readFileSync(file).equals(bytes)) continue;
+    files.add(path);
+    mkdirSync(dirname(file), { recursive: true });
+    rmSync(file, { force: true });                                // a new file, so a hard link's other name keeps its bytes
+    writeFileSync(file, bytes, { flag: "wx" });
   }
   const now = await fingerprint(snapshot, run);
   for (const path of new Set([...Object.keys(now), ...Object.keys(start.prints)])) if (now[path] !== start.prints[path]) files.add(path);

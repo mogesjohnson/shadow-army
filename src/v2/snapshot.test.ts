@@ -133,6 +133,30 @@ describe("a snapshot's life", () => {
     put(join(snap.path, ".gitignore"), "*\n"); put(join(snap.path, "sub", ".gitignore"), "*\n"); put(join(snap.path, "sub", "hidden.txt"), "w");
     expect((await findWrites(snap, start, factory))?.files).toEqual([".gitignore", "sub/.gitignore", "sub/hidden.txt"]);
   });
+  it("never restores a .gitignore through a link the turn left in its path", async () => {
+    const r = makeRepo();
+    put(join(r.folder, "pkg", ".gitignore"), "out/\n");
+    git(r.folder, "add", "."); git(r.folder, "commit", "-q", "-m", "pkg");
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s5", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory), outside = temp();
+    put(join(outside, ".gitignore"), "the owner's\n");
+    rmSync(join(snap.path, "pkg"), { recursive: true }); link(outside, join(snap.path, "pkg"));
+    expect((await findWrites(snap, start, factory))?.files).toContain("pkg/.gitignore");
+    expect(readFileSync(join(outside, ".gitignore"), "utf8")).toBe("the owner's\n");
+  }, 60_000);
+  it("reports, and does not throw on, a repository or folder the turn made where files were", async () => {
+    const r = makeRepo();
+    put(join(r.folder, "pkg", ".gitignore"), "out/\n");
+    git(r.folder, "add", "."); git(r.folder, "commit", "-q", "-m", "pkg");
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s6", repo: r.repo, git: factory });
+    const start = await beginTurn(snap, factory);
+    rmSync(join(snap.path, "pkg"), { recursive: true });                      // a folder that held a .gitignore, gone
+    rmSync(join(snap.path, ".gitignore")); put(join(snap.path, ".gitignore", "x"), "w");
+    rmSync(join(snap.path, "src.txt")); put(join(snap.path, "src.txt", "y"), "w");
+    mkdirSync(join(snap.path, "nested")); git(join(snap.path, "nested"), "init", "-q"); put(join(snap.path, "nested", "z"), "w");
+    const found = await findWrites(snap, start, factory);
+    expect(found?.files).toEqual(expect.arrayContaining([".gitignore", "nested/", "pkg/.gitignore", "src.txt"]));
+  }, 60_000);
   it("refuses to start when the snapshot can't be made", async () => {
     const r = makeRepo();
     await expect(openSnapshot({ root: r.root, folder: r.folder, sessionId: "s3", repo: r.repo, git: factory, ref: "nope" })).rejects.toThrow(/snapshot could not be made/);
