@@ -2,7 +2,7 @@
 import { RANK, STATES, needs, safeText, toAscii, type ArmyView, type Briefs, type Message, type Soldier, type Tone } from "./model.js";
 import { cardRows, type CardInfo } from "./cardRows.js";
 import { messageRows, monarchRows } from "./boardRows.js";
-import { fit, lr, rowWidth, stripRow, type Row, type Seg } from "./layout.js";
+import { lr, stripRow, type Row, type Seg } from "./layout.js";
 
 /** A card's words. `tokensK` is for a card that differs from the strip; `short` is the folded tree's note. */
 export type TableCard = CardInfo & { tokensK?: number; short?: string };
@@ -27,6 +27,36 @@ export interface TableScene {
 // The design's threshold: below it the board folds to a tree. The board also holds only two rows of three.
 const BOARD_WIDTH = 110, BOARD_HEIGHT = 28, SEATS = 6;
 
+// Terminal columns, not code points: wide characters take two cells. Same rule as Ink's own measuring, with no new dependency.
+const graphemes = new Intl.Segmenter();
+const WIDE = [[0x1100, 0x115f], [0x2e80, 0xa4cf], [0xac00, 0xd7a3], [0xf900, 0xfaff], [0xfe30, 0xfe6f], [0xff00, 0xff60], [0xffe0, 0xffe6], [0x1f300, 0x1faff], [0x20000, 0x3fffd]];
+const cols = (g: string): number => {
+  const cp = g.codePointAt(0)!;
+  return WIDE.some(([a, b]) => cp >= a && cp <= b) || g.includes("️") ? 2 : 1;
+};
+const parts = (text: string): string[] => Array.from(graphemes.segment(text), (x) => x.segment);
+const textWidth = (text: string): number => parts(text).reduce((n, g) => n + cols(g), 0);
+const rw = (r: Row): number => r.reduce((n, x) => n + textWidth(x.text), 0);
+/** Like `fit`, in terminal columns: clip with an ellipsis, then pad. */
+function fitCols(r: Row, w: number): Row {
+  const n = rw(r);
+  if (n <= w) return n < w ? [...r, { text: " ".repeat(w - n) }] : r;
+  const out: Row = [];
+  let used = 0;
+  for (const x of r) {
+    const keep: string[] = [];
+    for (const g of parts(x.text)) {
+      if (used + cols(g) > w - 1) {
+        out.push({ ...x, text: keep.join("") + "…" });
+        return used + 1 < w ? [...out, { text: " ".repeat(w - used - 1) }] : out;
+      }
+      keep.push(g); used += cols(g);
+    }
+    out.push(x);
+  }
+  return out;
+}
+
 const seg = (text: string, tone?: Tone, bold?: boolean): Seg => ({ text, tone, bold });
 // The glyphs of this file's own rows that the slice's ASCII table lacks.
 const TABLE_ASCII: Record<string, string> = {
@@ -50,7 +80,7 @@ function titleRow(view: ArmyView, scene: TableScene, folded: boolean): Row {
   if (cold && !folded) right.push(seg("  "), seg(`${cold} cold`, "in"));
   const name: Row = [seg(" SHADOW ARMY ", "ac", true), seg(" war table", undefined, true)];
   const run = seg(`  run ${safeText(scene.runId)} · ${view.soldiers.length} soldiers`, "dm");
-  const left = folded || rowWidth([...name, run, ...right]) >= view.width ? name : [...name, run];
+  const left = folded || rw([...name, run, ...right]) >= view.width ? name : [...name, run];
   return lr(left, right, view.width);
 }
 
@@ -81,24 +111,21 @@ function panel(view: ArmyView, scene: TableScene): Row[] {
   return rows.map((r, i) => (i === 2 ? [...edge, seg(" "), ...line, seg(" "), ...edge] : r));
 }
 
-/** Words of a row wrapped to `w` cells, tones kept; a word wider than a line is broken. */
+/** Words of a row wrapped to `w` columns, tones kept; a word wider than a line is broken between characters. */
 function wrap(row: Row, w: number): Row[] {
   const lines: Row[] = [[]];
   let used = 0;
-  const put = (text: string, s: Seg) => {
-    const piece: Seg = { ...s, text };
-    lines[lines.length - 1].push(piece);
-    used += rowWidth([piece]);
-  };
-  for (const s of row) {
-    for (const token of s.text.split(/(\s+)/).filter(Boolean)) {
-      const width = rowWidth([{ ...s, text: token }]);
-      if (/^\s+$/.test(token)) { if (used && used + width <= w) put(token, s); continue; }
-      if (used && used + width > w) { lines.push([]); used = 0; }
-      if (width <= w) { put(token, s); continue; }
-      for (const ch of Array.from(token)) {
-        if (used && used + rowWidth([{ ...s, text: ch }]) > w) { lines.push([]); used = 0; }
-        put(ch, s);
+  const put = (text: string, x: Seg, width: number) => { lines[lines.length - 1].push({ ...x, text }); used += width; };
+  const next = () => { lines.push([]); used = 0; };
+  for (const x of row) {
+    for (const token of x.text.split(/(\s+)/).filter(Boolean)) {
+      const width = textWidth(token);
+      if (/^\s+$/.test(token)) { if (used && used + width <= w) put(token, x, width); continue; }
+      if (used && used + width > w) next();
+      if (width <= w) { put(token, x, width); continue; }
+      for (const g of parts(token)) {
+        if (used && used + cols(g) > w) next();
+        put(g, x, cols(g));
       }
     }
   }
@@ -128,18 +155,29 @@ function decisionRows(view: ArmyView, scene: TableScene, p: PinnedCard, height: 
   const dm = (text: string): Row[] => wrap([seg(text, "dm")], inner);
   const worktree = dm(`worktree  ${safeText(p.worktree)}      asked  ${safeText(p.askedAt)}      waiting  ${safeText(p.waiting)}`);
   // The prompt, the command and every option come first when rows run out; a line too narrow is reflowed, not cut.
-  const spread = (tail: Row): Row[] => rowWidth([...answers, ...tail]) <= inner
+  const spread = (tail: Row): Row[] => rw([...answers, ...tail]) <= inner
     ? [[...answers, ...tail]] : [...options.flatMap((o) => wrap(o, inner)), ...(tail.length ? wrap(tail, inner) : [])];
-  const body: Row[] = folded
+  const full: Row[] = folded
     ? [...wrap(ask, inner), ...spread([]), ...wrap([seg(safeText(p.source), "fa")], inner),
       ...(next ? dm(`Tab: next → ${nextName} ${STATES[next.state].glyph} ${STATES[next.state].word}`) : [[]])]
     : [...worktree, ...wrap(ask, inner), ...spread([seg(`      ${safeText(p.source)}`, "fa")]), ...dm(facts), ...dm(safeText(p.keys))];
+  // A decision taller than its room keeps the prompt and every numbered answer; the command gives up its last lines.
+  const room = height - 2;
+  let body = full;
+  if (full.length > room) {
+    const prompt = wrap([seg(safeText(p.asks)), seg(" "), seg(safeText(p.question))], inner);
+    const command = wrap([seg(safeText(p.command), "tx", true)], inner);
+    const choices = spread([]);
+    const left = Math.max(0, room - prompt.length - choices.length);
+    const shown = command.length <= left ? command : left ? [...command.slice(0, left - 1), [seg(`… ${command.length - left + 1} more command lines`, "dm")]] : [];
+    body = [...prompt, ...shown, ...choices, ...full.slice(wrap(ask, inner).length + choices.length)];
+  }
   if (height < 3) return [];
-  const label = [...fit(title, Math.min(rowWidth(title), w - 5)), seg(" ")];
+  const label = [...fitCols(title, Math.min(rw(title), w - 5)), seg(" ")];
   const side = seg("┃", "wn");
   return own([
-    [seg("┏━", "wn"), ...label, seg("━".repeat(w - 3 - rowWidth(label)) + "┓", "wn")],
-    ...body.slice(0, height - 2).map((r) => [side, seg(" "), ...fit(r, w - 4), seg(" "), side]),
+    [seg("┏━", "wn"), ...label, seg("━".repeat(w - 3 - rw(label)) + "┓", "wn")],
+    ...body.slice(0, height - 2).map((r) => [side, seg(" "), ...fitCols(r, w - 4), seg(" "), side]),
     [seg("┗" + "━".repeat(w - 2) + "┛", "wn")],
   ], view.ascii);
 }
@@ -218,9 +256,13 @@ export function tableRows(view: ArmyView, scene: TableScene, height: number): Ro
   }
   const room = Math.max(0, height - 1);
   // The rows above the drawer give way first, from the bottom.
-  if (scene.pinned) top = top.slice(0, Math.max(0, room - decisionRows(view, scene, scene.pinned, Infinity, !full).length));
+  // A taller decision is capped, so the title and focus lines stay above it.
+  if (scene.pinned) {
+    const need = Math.min(decisionRows(view, scene, scene.pinned, Infinity, !full).length, room - 2);
+    top = top.slice(0, Math.max(2, room - need));
+  }
   const body = [...top, ...drawer(view, scene, room - top.length, !full)].slice(0, room);
   while (body.length < height - 1) body.push([]);
   // A cut row ends in an ellipsis, which the ASCII profile swaps too.
-  return [...body, stripRow(view)].slice(0, height).map((r) => own([fit(r, w)], view.ascii)[0]);
+  return [...body, stripRow(view)].slice(0, height).map((r) => own([fitCols(r, w)], view.ascii)[0]);
 }
