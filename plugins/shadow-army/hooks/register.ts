@@ -37,7 +37,7 @@ interface Runtime {
   lift: () => void;
   /** The relay's own terminal result, once its stream ended without failing (C5). */
   exit?: ProcessSpawnResult;
-  /** Reading the relay's stream failed: it was abandoned, so its post office's end was not seen (C5). */
+  /** Reading or processing the relay's stream failed: it was abandoned, so its post office's end was not seen (C5). */
   broken?: boolean;
   /** The post office's exit as the relay observed it: the only proof that it closed (C5). */
   officeExit?: { code: number | null; signal: string | null };
@@ -267,6 +267,11 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
     if (!runtime.closing) throw new Error(`post office relay ended${runtime.diagnostic ? `: ${runtime.diagnostic}` : ""}`);
     // A relay ended from outside also returns a terminal result: only one that confirms its post office's exit is a shutdown (C5).
     if (!runtime.officeExit) throw new Error(`post office relay ${unseen(runtime)}`);
+  } catch (error) {
+    // Any failure after launch abandons the stream: a chunk read but not processed (malformed, oversized) is as
+    // unseen as a failed read, and the relay's later return proves only the relay's end (C5, review 35).
+    if (!runtime.exit) runtime.broken = true;
+    throw error;
   } finally {
     cancelTimers(runtime);
   }

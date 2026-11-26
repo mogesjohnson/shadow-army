@@ -40,8 +40,8 @@ type Env = {
   gate?: Promise<void>;
   /** The relay ends on its own once this settles, as after its client closed its post office; a rejection fails its stream. */
   ends?: Promise<void>;
-  /** What that relay reports of its post office's exit before it ends, or `none` for no report (C5); default code 0. */
-  office?: { code: number | null; signal: string | null } | "none";
+  /** What that relay reports of its post office's exit before it ends, `none` for no report or `garbled` for a line that is not JSON (C5); default code 0. */
+  office?: { code: number | null; signal: string | null } | "none" | "garbled";
   /** That relay's own terminal result; default code 0. */
   result?: { code: number | null; signal: string | null };
   /** The relay starts but never reports ready. Read at each start, so a test can change it between two. */
@@ -922,6 +922,19 @@ describe("a relay that ends or breaks outside a stall (PO-7, C5, review 28)", ()
     env.ends = undefined;
     expect(await send("claude-sonnet --claim a go")).toContain("Tank");
     expect(spawns).toHaveLength(2);
+  });
+
+  it("refuses every retry when a chunk is read but its event is malformed, though the relay's return then succeeds (C5, review 35)", async () => {
+    let close!: () => void;
+    const env: Env = { office: "garbled", ends: new Promise<void>((done) => { close = done; }) };
+    const { send, spawns } = await mod(OK, env);
+    expect(await send("claude-sonnet --claim a go")).toContain("Tank");
+    close();
+    await flush();
+    env.ends = undefined;
+    env.office = undefined;
+    for (let i = 0; i < 2; i++) expect(await send("claude-sonnet --claim a go")).toMatch(/won't start the army: the last relay failed before it could close its post office/);
+    expect(spawns).toHaveLength(1);
   });
 
   it("holds the next start behind a stream that dies before the stall deadline, then refuses it and every retry", async () => {
