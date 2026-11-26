@@ -6,6 +6,8 @@ import type { TurnResult } from "../../../src/v2/channel.js";
 interface Runtime {
   session: string;
   cwd: string;
+  /** The canonical repository root the relay reports; the post office keeps `.shadow` there (M1-AC25). */
+  root?: string;
   credential: string;
   closing: boolean;
   ready: Promise<void>;
@@ -98,7 +100,10 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     if (runtime.url) throw new Error("post office sent ready more than once");
     const url = value.data?.url ?? value.url;
     if (typeof url !== "string" || !/^http:\/\/(?:127\.0\.0\.1|\[::1\]):\d+$/.test(url)) throw new Error("invalid post office loopback endpoint");
+    const root = value.data?.root;
+    if (typeof root !== "string" || !root) throw new Error("post office sent no repository root");
     runtime.url = url;
+    runtime.root = root;
     runtime.deadline?.cancel();
     runtime.deadline = undefined;
     if (runtime.closing) {
@@ -197,7 +202,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
 
 interface Soldier { key: string; name: string; roles: string[]; supported: boolean }
 /** The turn result the post office returns. The claim audit and the apply (B3, B4) put their outcome in `write`. */
-type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write">;
+type Delivery = Pick<TurnResult, "status" | "summary" | "error" | "write" | "refusal">;
 
 /** SEC-6: each Cc or Cf character except newline and tab shows as a placeholder such as \u{1b}. */
 function show(text: unknown): string {
@@ -215,15 +220,19 @@ function parseSend(args: string): { name?: string; claims: string[]; brief: stri
 
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
 export function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
-  const summary = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n") || "no summary";
+  const text = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n");
+  const summary = text || "no summary";
+  // M1-AC25: when the turn did not complete or the claim audit left no `write`, the error says why (a thrown audit leaves no other trace).
+  const why = delivery.status !== "completed" || !delivery.write ? delivery.error?.message : undefined;
+  const error = why && text ? `\nError: ${why}` : "";
   const apply = delivery.write?.apply;
   // M1-AC27: a failed turn's error (a guard or audit failure names the path) is the reason even after partial text.
   const files = apply?.applied && apply.files.length ? `Applied: ${apply.files.map((file) => file.path).join(", ")}`
-    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || delivery.error?.message || "no change was applied"}`;
+    : `Not applied: ${(apply && !apply.applied ? [apply.reason, ...apply.clashes].filter(Boolean).join(": ") : delivery.write?.reason) || why || "no change was applied"}`;
   const outside = delivery.write?.reverted ? delivery.write.outOfScope : [];
   const reverted = outside.length ? `
 Reverted, outside its claims: ${outside.join(", ")}` : "";
-  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}\n${summary}\nLog: ${log}\n${files}${reverted}`), credential);
+  return safeText(show(`Shadow Army · ${soldier.name} · ${delivery.status}${delivery.refusal ? " (refused)" : ""}\n${summary}${error}\nLog: ${log}\n${files}${reverted}`), credential);
 }
 
 async function send($: EngineInterface, args: string): Promise<string> {
@@ -239,19 +248,7 @@ async function send($: EngineInterface, args: string): Promise<string> {
   if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
   const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
-  const root = await gitRoot($, runtime.cwd);
-  return card(soldier, delivery, `${root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
-}
-
-/** The folder the post office keeps `.shadow` in: the nearest one at or above `cwd` holding `.git`, as `git rev-parse --show-toplevel` finds it. */
-async function gitRoot($: EngineInterface, cwd: string): Promise<string> {
-  let dir = cwd.replace(/[\\/]+$/, "");
-  for (;;) {
-    if (await $.fs.exists(`${dir}/.git`)) return dir;
-    const parent = dir.replace(/[\\/][^\\/]*$/, "");
-    if (!parent || parent === dir) return cwd;
-    dir = parent;
-  }
+  return card(soldier, delivery, `${runtime.root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
 }
 
 export const register: Register = (on) => {
