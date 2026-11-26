@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; root?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), relay: { before?: any[]; after?: any[]; ready?: boolean; cwd?: string; root?: string } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -30,7 +30,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const logs: string[] = [];
   const registered: any[] = [];
   const $ = {
-    session: { id: async () => "session-1", cwd: async () => env.cwd ?? "/repo" },
+    session: { id: async () => "session-1", cwd: async () => relay.cwd ?? "/repo" },
     plugin: { root: "/x/plugins/shadow-army" },
     fs: { exists: async () => true },
     clock: { every: () => ({ cancel() {} }), after: () => ({ cancel() {} }) },
@@ -43,7 +43,10 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
         const closed = new Promise<void>((done) => { stop = done; });
         return {
           async *[Symbol.asyncIterator]() {
-            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: env.root ?? "/repo" } })}\n` };
+            for (const chunk of relay.before ?? []) yield chunk;
+            if (relay.ready === false) return;
+            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: relay.root ?? "/repo" } })}\n` };
+            for (const chunk of relay.after ?? []) yield chunk;
             await closed;
           },
           return: async () => { stop(); return { done: true }; },
@@ -108,6 +111,24 @@ describe("the /send command (M1-AC23)", () => {
     expect(await send("grok --claim a do it")).toMatch(/Beru is not a claude soldier with the build role/);
     expect(await send("codex --claim a do it")).toMatch(/Igris is not a claude soldier/);
     expect(commands.some((c) => c.action === "send")).toBe(false);
+  });
+
+  it("takes a quoted claim with a space whole, and keeps the brief's own quotes and spacing", async () => {
+    const { send, commands } = await mod(() => ({ status: "completed" }));
+    await send(`Tank --claim "docs/Project Notes.md" --claim 'my dir/**' --claim plain.ts  rewrite "the notes"  now`);
+    expect(commands.find((c) => c.action === "send")).toEqual({
+      action: "send", soldier: "claude-sonnet", text: `rewrite "the notes"  now`, claims: ["docs/Project Notes.md", "my dir/**", "plain.ts"],
+    });
+  });
+
+  it("rejects a missing or unclosed claim before opening a session", async () => {
+    const { send, spawns, commands } = await mod();
+    for (const args of [
+      "Tank --claim", "Tank --claim ", `Tank --claim "" go`, "Tank --claim --claim a go", `Tank --claim "docs/Project Notes.md go`,
+      `Tank --claim "a"b go`, `Tank --claim a --claim 'b c go`,
+    ]) expect(await send(args), args).toMatch(/^Nothing sent: (--claim needs a path or glob|a quoted --claim is not closed)/);
+    expect(spawns).toHaveLength(0);
+    expect(commands).toHaveLength(0);
   });
 
   it("shows a post office refusal as one row, with the credential redacted", async () => {
@@ -185,5 +206,42 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
   it("marks a refusal as refused although its status is completed (W12-6b)", async () => {
     const { send } = await mod(() => ({ ...turn("I can't help with that."), refusal: true }));
     expect(await send("claude-sonnet --claim a go")).toContain("Shadow Army · Tank · completed (refused)\nI can't help with that.\n");
+  });
+
+  it("refuses a relay that reports no repository root rather than guessing the log path (C16)", async () => {
+    const { send, commands } = await mod(() => turn("s"), { root: "" });
+    expect(await send("claude-sonnet --claim a go")).toContain("post office sent no repository root");
+    expect(commands.some((c) => c.action === "send")).toBe(false);
+  });
+
+  it("caps a CRLF summary at five lines", async () => {
+    const { send } = await mod(() => turn("1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7"));
+    expect(await send("claude-sonnet --claim a go")).toBe("Shadow Army · Tank · completed\n1\n2\n3\n4\n5\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nNot applied: no change was applied");
+  });
+
+  it("caps the error given as the reason at five lines, with LF and CRLF", async () => {
+    for (const eol of ["\n", "\r\n"]) {
+      const message = ["e1", "e2", "e3", "e4", "e5", "e6", "e7"].join(eol);
+      const { send } = await mod(() => ({ status: "failed", error: { message } }));
+      expect(await send("claude-sonnet --claim a go")).toBe("Shadow Army · Tank · failed\nno summary\nLog: /repo/.shadow/v2/logs/tank-1.jsonl\nNot applied: e1\ne2\ne3\ne4\ne5");
+    }
+  });
+});
+
+describe("relay diagnostics in the UI log (SEC-6)", () => {
+  it("shows format characters in a channel event as placeholders", async () => {
+    const event = { type: "error", soldier: "Ta‪nk", data: { message: "bad\u007F ‮" } };
+    const { send, logs } = await mod(() => ({ status: "completed" }), { after: [{ stream: "stdout", text: `${JSON.stringify(event)}\n` }] });
+    await send("claude-sonnet --claim a go");
+    await new Promise((done) => setTimeout(done, 0));
+    expect(logs).toEqual([`Shadow Army · Ta\\u{202a}nk: {"message":"bad\\u{7f} \\u{202e}"}`]);
+  });
+
+  it("shows a startup diagnostic with control characters as placeholders and redacts the credential", async () => {
+    const secret = "a".repeat(64);
+    const { send, logs } = await mod(() => ({}), { before: [{ stream: "stderr", text: `boom‮\u001B[0m ${secret}` }], ready: false });
+    const row = await send("claude-sonnet --claim a go");
+    expect(row).toContain("boom\\u{202e}\\u{1b}[0m [redacted]");
+    expect(logs).toEqual(["Shadow Army: Error: post office relay ended: boom\\u{202e}\\u{1b}[0m [redacted]"]);
   });
 });

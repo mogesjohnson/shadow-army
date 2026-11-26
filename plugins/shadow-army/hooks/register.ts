@@ -78,7 +78,7 @@ function fail($: EngineInterface, runtime: Runtime, error: unknown): void {
   cancelTimers(runtime);
   runtime.reject(new Error(message));
   if (active === runtime) active = undefined;
-  if (!wasClosing) $.ui.log(`Shadow Army: ${message}`);
+  if (!wasClosing) uiLog($, `Shadow Army: ${message}`, runtime.credential);
   // The native stream owns only the relay. Returning it cannot skip the
   // detached post office's independent expiry/containment/finalization path.
   if (runtime.stream) void runtime.stream.return({ code: null, signal: null }).catch(() => {});
@@ -122,7 +122,7 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
   // M1 observes the event stream without adding another model turn/context.
   // The richer pane and transcript cards belong to the later mod milestones.
   if (!runtime.closing && ["error", "channel_down", "containment_uncertain"].includes(value.type)) {
-    $.ui.log(safeText(`Shadow Army${value.soldier ? ` · ${value.soldier}` : ""}: ${JSON.stringify(value.data)}`, runtime.credential));
+    uiLog($, `Shadow Army${value.soldier ? ` · ${value.soldier}` : ""}: ${JSON.stringify(value.data)}`, runtime.credential);
   }
 }
 
@@ -209,21 +209,42 @@ function show(text: unknown): string {
   return String(text).replace(/[\p{Cc}\p{Cf}]/gu, (char) => char === "\n" || char === "\t" ? char : `\\u{${char.codePointAt(0)!.toString(16)}}`);
 }
 
-function parseSend(args: string): { name?: string; claims: string[]; brief: string } {
+/** SEC-6: every line this mod puts in the UI log is redacted and shown with placeholders, including relay diagnostics. */
+function uiLog($: EngineInterface, text: string, credential = ""): void {
+  $.ui.log(safeText(show(text), credential));
+}
+
+/**
+ * `/send <soldier> --claim <path-or-glob> ... <brief>`. A claim with a space sits in double or single quotes
+ * (`--claim "docs/Project Notes.md"`); the closing quote must be followed by a space or the end. The brief is
+ * everything after the last claim, untouched. A missing or unclosed claim comes back as `error`, before any session opens.
+ */
+function parseSend(args: string): { name?: string; claims: string[]; brief: string; error?: string } {
   let rest = args.trim();
-  const word = () => { const match = /^(\S+)\s*/.exec(rest); rest = rest.slice(match?.[0].length ?? 0); return match?.[1]; };
-  const name = word();
+  const name = /^\S+/.exec(rest)?.[0];
+  rest = rest.slice(name?.length ?? 0).trimStart();
   const claims: string[] = [];
-  while (rest.startsWith("--claim ")) { word(); const path = word(); if (path) claims.push(path); }
+  for (let flag; (flag = /^--claim(?=\s|$)\s*/.exec(rest));) {
+    rest = rest.slice(flag[0].length);
+    const quoted = /^["']/.test(rest);
+    const match = quoted ? /^(["'])(.*?)\1(?=\s|$)\s*/.exec(rest) : /^()(\S+)\s*/.exec(rest);
+    if (quoted && !match) return { name, claims, brief: rest, error: "a quoted --claim is not closed, or its closing quote is not followed by a space." };
+    const claim = match?.[2]?.trim();
+    if (!match || !claim || claim === "--claim") return { name, claims, brief: rest, error: "--claim needs a path or glob; put one with a space in quotes." };
+    rest = rest.slice(match[0].length);
+    claims.push(claim);
+  }
   return { name, claims, brief: rest };
 }
 
 /** HOST-11's summary card: the soldier, at most five lines of summary, the session log, and what was applied or why not. */
 export function card(soldier: Soldier, delivery: Delivery, log: string, credential: string): string {
-  const text = (delivery.summary ?? "").split("\n").slice(0, 5).join("\n");
+  // At most five lines of anything the soldier or the office wrote (CRLF and lone CR count as line breaks).
+  const five = (value: string | undefined) => value?.split(/\r\n|\r|\n/).slice(0, 5).join("\n");
+  const text = five(delivery.summary) ?? "";
   const summary = text || "no summary";
   // M1-AC25: when the turn did not complete or the claim audit left no `write`, the error says why (a thrown audit leaves no other trace).
-  const why = delivery.status !== "completed" || !delivery.write ? delivery.error?.message : undefined;
+  const why = delivery.status !== "completed" || !delivery.write ? five(delivery.error?.message) : undefined;
   const error = why && text ? `\nError: ${why}` : "";
   const apply = delivery.write?.apply;
   // M1-AC27: a failed turn's error (a guard or audit failure names the path) is the reason even after partial text.
@@ -236,7 +257,8 @@ Reverted, outside its claims: ${outside.join(", ")}` : "";
 }
 
 async function send($: EngineInterface, args: string): Promise<string> {
-  const { name, claims, brief } = parseSend(args);
+  const { name, claims, brief, error } = parseSend(args);
+  if (name && error) return `Nothing sent: ${error}`;
   if (!name || !brief) return "Usage: /send <soldier> --claim <path-or-glob> <brief>";
   if (!claims.length) return "Nothing sent: /send needs at least one --claim <path-or-glob>, so the soldier's changes can be audited.";
   const runtime = await ensure($);

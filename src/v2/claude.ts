@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
+import { redact } from "./logs.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 type Frame = Record<string, unknown>;
@@ -11,6 +12,9 @@ const object = (value: unknown): Frame | undefined => value !== null && typeof v
 const number = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 const string = (value: unknown): string | undefined => typeof value === "string" ? value : undefined;
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+/** CH-1: one unparseable line is an error and the session carries on; this many in a row is a lost connection. */
+export const MAX_BAD_LINES_IN_A_ROW = 10;
+const BAD_LINE_EXCERPT = 200;
 
 interface PendingTurn {
   id: string;
@@ -32,6 +36,8 @@ export function claudeChannelArgs(options: ChannelOptions, instructionPath?: str
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
     "--model", options.model, "--permission-mode", permission,
+    // CH-2: --settings outranks user, project and local settings, so none turns auto memory back on.
+    "--settings", JSON.stringify({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } }),
     ...(instructionPath ? ["--append-system-prompt-file", instructionPath] : ["--append-system-prompt", options.instructions]),
   ];
 }
@@ -74,6 +80,7 @@ export class ClaudeChannel implements NativeChannel {
   private closed = false;
   private acceptFrames = true;
   private drainTerminal = false;
+  private badLines = 0;
   private closingResult?: TurnResult;
   private reason: NativeError = { kind: "transport", message: "Claude channel closed" };
   private stopTimer?: NodeJS.Timeout;
@@ -96,7 +103,11 @@ export class ClaudeChannel implements NativeChannel {
       instructionPath = join(this.instructionDirectory, "instructions.txt");
       await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
     }
-    return spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd });
+    // CH-2: auto memory off over any inherited value, so a soldier neither loads nor writes the owner's memory.
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "CLAUDE_CODE_DISABLE_AUTO_MEMORY")), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
+    const child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env });
+    if (child.droppedPath.length) this.emit("raw", { type: "path_dropped", entries: child.droppedPath });
+    return child;
   }
 
   private emit(type: ChannelEvent["type"], data: unknown): void {
@@ -138,7 +149,19 @@ export class ClaudeChannel implements NativeChannel {
   private parseLine(line: string): void {
     let frame: Frame | undefined;
     try { frame = object(JSON.parse(line)); } catch { /* A malformed protocol cannot safely delimit the active turn. */ }
-    if (!frame || typeof frame.type !== "string") { void this.failTransport("Claude emitted malformed JSON frame"); return; }
+    if (!frame || typeof frame.type !== "string") {
+      this.badLines++;
+      // CH-1: redact the whole line (already bounded by MAX_FRAME_BYTES) first, so no secret is cut in
+      // half; the record keeps the full redacted diagnostic and the message shows its excerpt.
+      const redacted = String(redact(line));
+      const excerpt = redacted.length > BAD_LINE_EXCERPT ? `${redacted.slice(0, BAD_LINE_EXCERPT)}...` : redacted;
+      const message = `Claude emitted an unparseable line: ${excerpt}`;
+      this.emit("raw", { type: "unparseable_line", text: redacted });
+      if (this.badLines >= MAX_BAD_LINES_IN_A_ROW) void this.failTransport(`Claude connection lost: ${MAX_BAD_LINES_IN_A_ROW} unparseable lines in a row`);
+      else this.emit("error", { kind: "other", message } satisfies NativeError);
+      return;
+    }
+    this.badLines = 0;
     this.emit("raw", frame);
     if (typeof frame.session_id === "string") this.sessionId = frame.session_id;
     const response = object(frame.response);
@@ -258,7 +281,11 @@ export class ClaudeChannel implements NativeChannel {
   private result(frame: Frame): void {
     const turn = this.current;
     // A notification or stale result cannot change another turn's usage/cost boundary.
-    if (!turn || object(frame.origin)?.kind === "task-notification" || typeof frame.user_message_uuid === "string" && frame.user_message_uuid !== turn.id) return;
+    if (!turn || object(frame.origin)?.kind === "task-notification") return;
+    // CH-2: a result ends this turn only when its uuid, or its uuid list, names this turn's message.
+    // A result naming no message stays a log-only raw frame: it settles nothing and moves no baseline.
+    const named = [frame.user_message_uuid, ...(Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : [])];
+    if (!named.includes(turn.id)) return;
     const errors = Array.isArray(frame.errors) ? frame.errors.filter((value): value is string => typeof value === "string") : [];
     const text = string(frame.result) ?? (errors.length ? errors.join("\n") : turn.text);
     const failed = frame.is_error === true || string(frame.subtype)?.startsWith("error_") === true;
@@ -277,7 +304,8 @@ export class ClaudeChannel implements NativeChannel {
     const recoverUsage = interrupted || nativeInterrupted || zeroExecutionResult;
     const unusableCost = recoverUsage && (cumulative === undefined || cumulative === 0 || cumulative < (previous ?? 0));
     const costGap = this.missingCostBoundary;
-    if (unusableCost) this.missingCostBoundary = true;
+    // A result with no cumulative total leaves its turn's cost unknown; the next total only restores the baseline.
+    if (unusableCost || cumulative === undefined) this.missingCostBoundary = true;
     else if (cumulative !== undefined) { this.cumulativeCost = cumulative; this.missingCostBoundary = false; }
     const terminal = { ...nativeUsage, ...(frame.modelUsage === undefined ? {} : { modelUsage: frame.modelUsage }), ...(cumulative === undefined ? {} : { total_cost_usd: cumulative }) };
     const costUsage = cumulative === undefined || unusableCost ? undefined : {

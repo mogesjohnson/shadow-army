@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as managedProcesses from "./processTree.js";
-import type { ChannelEvent } from "./channel.js";
+import type { ChannelEvent, NativeError } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs } from "./claude.js";
 
 const channels: ClaudeChannel[] = [];
@@ -45,7 +45,7 @@ async function s6Protocol() {
     }
   });
   const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
-    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
+    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {}, droppedPath: [],
   });
   const events: ChannelEvent[] = [];
   const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event) });
@@ -57,7 +57,7 @@ async function s6Protocol() {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send };
+  return { channel, events, emit, send, stdout };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -204,10 +204,72 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(await pending).toMatchObject({ status: "completed", text: "Already completed", usage: { costUsd: 0.03 } });
   });
 
+  it("ends a turn only on a result whose uuid list names its message (CH-2, C2)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("earlier");
+    emit({ type: "result", subtype: "success", user_message_uuids: [first.id], result: "first reply", total_cost_usd: 0.03 });
+    expect(await first.pending).toMatchObject({ status: "completed", text: "first reply" });
+    const second = await send("later");
+    emit({ type: "result", subtype: "success", user_message_uuids: [first.id], result: "stale earlier reply", total_cost_usd: 0.05 });
+    emit({ type: "result", subtype: "success", user_message_uuids: ["unrelated", second.id], result: "true reply", total_cost_usd: 0.1 });
+    const result = await second.pending;
+    expect(result).toMatchObject({ status: "completed", text: "true reply" });
+    // The stale result moved no usage baseline: the delta runs from the first turn's total.
+    expect(result.usage?.costUsd).toBeCloseTo(0.07);
+  });
+
+  it("redacts the whole malformed line before logging it, then excerpts the redacted text (CH-1, C12)", async () => {
+    const { events, stdout, send } = await s6Protocol();
+    await send("bad line");
+    // The secret straddles the 200-character excerpt boundary; the diagnostic sits past it.
+    const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
+    stdout.write(`{broken ${"x".repeat(180)} ${secret} diagnostic-tail\n`);
+    await until(() => events.some((event) => event.type === "error"));
+    const raw = events.find((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")!.data as { text: string };
+    const error = events.find((event) => event.type === "error")!.data as NativeError;
+    expect(raw.text).toContain("diagnostic-tail");
+    for (const text of [raw.text, error.message]) expect(text).not.toMatch(/sk-ant-a/);
+    expect(error.message.length).toBeLessThan(400);
+  });
+
+  it("leaves a result naming no message as a log-only frame (CH-2, C10)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("earlier");
+    emit({ type: "result", subtype: "success", user_message_uuid: first.id, result: "first reply", total_cost_usd: 0.03 });
+    await first.pending;
+    const second = await send("later");
+    let settled = false;
+    void second.pending.then(() => { settled = true; });
+    emit({ type: "result", subtype: "success", result: "unbound", total_cost_usd: 0.05 });
+    emit({ type: "result", subtype: "success", user_message_uuid: "", user_message_uuids: [], result: "empty", total_cost_usd: 0.06 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    emit({ type: "result", subtype: "success", user_message_uuid: second.id, result: "true reply", total_cost_usd: 0.1 });
+    const result = await second.pending;
+    expect(result).toMatchObject({ status: "completed", text: "true reply" });
+    // Neither unbound result moved the usage baseline.
+    expect(result.usage?.costUsd).toBeCloseTo(0.07);
+  });
+
+  it("marks a completed result without a cost total as a gap, not part of the next turn's estimate (C5)", async () => {
+    const { emit, send } = await s6Protocol();
+    const costs: (number | undefined)[] = [];
+    for (const total of [0.03, undefined, 0.1, 0.12]) {
+      const { pending, id } = await send(`turn ${costs.length}`);
+      emit({ type: "result", subtype: "success", user_message_uuid: id, result: "done", usage: { input_tokens: 1, output_tokens: 1 }, ...(total === undefined ? {} : { total_cost_usd: total }) });
+      costs.push((await pending).usage?.costUsd);
+    }
+    expect(costs[0]).toBeCloseTo(0.03);
+    expect(costs.slice(1, 3)).toEqual([undefined, undefined]);
+    expect(costs[3]).toBeCloseTo(0.02);
+  });
+
   it.runIf(process.platform === "win32")("preserves multiline standing text through a real Windows batch shim and removes its append file", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "sa-native-claude-batch-"));
-    folders.push(cwd);
-    const batch = join(cwd, "fake-claude.cmd");
+    // The shim sits outside the soldier's folder: an executable inside it is refused (C11).
+    const bin = await mkdtemp(join(tmpdir(), "sa-native-claude-bin-"));
+    folders.push(cwd, bin);
+    const batch = join(bin, "fake-claude.cmd");
     await writeFile(batch, `@echo off\r\n"${process.execPath}" "${resolve("test/fakes/claude.mjs")}" %*\r\n`);
     const instructions = "First line 🌙\r\nSecond line with \"quotes\" & literal %values%.\nThird line.";
     const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions, onEvent: () => {}, command: { file: batch } });
@@ -216,6 +278,8 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(inspection.appendText).toBe(instructions);
     expect(inspection.args).not.toContain("--system-prompt-file");
     expect(inspection.args).not.toContain(instructions);
+    // The settings JSON survives both cmd.exe passes intact (CH-2, C3).
+    expect(JSON.parse(inspection.args[inspection.args.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
     const instructionPath = inspection.args[inspection.args.indexOf("--append-system-prompt-file") + 1];
     await channel.close();
     await expect(readFile(instructionPath)).rejects.toThrow();
@@ -256,6 +320,19 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(second.usage?.raw.total_cost_usd).toBe(0.06);
   }, 15_000);
 
+  it("turns auto memory off in the environment and in --settings over an inherited 0 (CH-2, C3)", async () => {
+    const previous = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "0";
+    try {
+      const { channel } = await setup();
+      const inspection = JSON.parse((await channel.send("inspect")).text);
+      expect(inspection.autoMemoryOff).toBe("1");
+      expect(JSON.parse(inspection.args[inspection.args.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY; else process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = previous;
+    }
+  }, 15_000);
+
   it("uses each native autonomy mode without disabling native tools", () => {
     const opts = { cwd: ".", model: "fake", instructions: "", onEvent: () => {} };
     expect(claudeChannelArgs(opts)).toContain("plan");
@@ -270,13 +347,30 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["split 🌙"]);
   }, 15_000);
 
-  it("fails a malformed protocol explicitly and settles the pending turn once", async () => {
+  it("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
-    const result = await channel.send("malformed");
+    const result = await channel.send("malformed-once");
+    expect(result.status).toBe("completed");
+    expect(result.text).toBe("after bad line");
+    const errors = events.filter((event) => event.type === "error").map((event) => event.data as NativeError);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].kind).toBe("other");
+    expect(errors[0].message).toContain("broken JSON");
+    expect(errors[0].message).not.toContain("sk-ant-abcdefghijklmnop");
+    expect(events.some((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")).toBe(true);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 15_000);
+
+  it("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
+    const { channel, events } = await setup();
+    const survived = await channel.send("malformed-nine-then-ok");
+    expect(survived.status).toBe("completed");
+    const result = await channel.send("malformed-ten");
     expect(result.status).toBe("interrupted");
-    expect(result.error?.message).toContain("malformed JSON");
+    expect(result.error?.kind).toBe("transport");
+    expect(result.error?.message).toContain("10 unparseable lines in a row");
     await channel.close();
-    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
     expect(events.filter((event) => event.type === "closed")).toHaveLength(1);
   }, 15_000);
 

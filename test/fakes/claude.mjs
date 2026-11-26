@@ -51,6 +51,9 @@ for await (const line of createInterface({ input: process.stdin })) {
   const text = frame.message.content;
   history.push(text);
   if (text === "malformed") { process.stdout.write("{broken JSON}\n"); continue; }
+  if (text === "malformed-once") { process.stdout.write("{broken JSON sk-ant-abcdefghijklmnop}\n"); result("after bad line"); continue; }
+  if (text === "malformed-ten") { for (let i = 0; i < 10; i++) process.stdout.write("{broken JSON}\n"); continue; }
+  if (text === "malformed-nine-then-ok") { for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); assistant("ok"); for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); result("survived"); continue; }
   if (text === "split") {
     const bytes = Buffer.from(`${JSON.stringify({ type: "assistant", parent_tool_use_id: null, session_id: session, message: { content: [{ type: "text", text: "split 🌙" }], usage: { input_tokens: 12 }, stop_reason: "end_turn" } })}\n`);
     const moon = bytes.indexOf(Buffer.from("🌙"));
@@ -95,11 +98,11 @@ for await (const line of createInterface({ input: process.stdin })) {
     assistant("subagent text", { input_tokens: 99999, cache_read_input_tokens: 99999 }, { parent_tool_use_id: "agent-tool" });
     assistant("main text"); result("main text"); continue;
   }
-  if (text === "unknown-usage") { emit({ type: "result", subtype: "success", is_error: false, result: "No usage available", terminal_reason: "completed" }); current = undefined; continue; }
+  if (text === "unknown-usage") { emit({ type: "result", subtype: "success", is_error: false, result: "No usage available", terminal_reason: "completed", user_message_uuid: current?.uuid }); current = undefined; continue; }
   if (text === "inspect") {
     const args = process.argv.slice(2);
     const appendPath = args[args.indexOf("--append-system-prompt-file") + 1];
-    result(JSON.stringify({ pid: process.pid, args, history, ...(args.includes("--append-system-prompt-file") ? { appendText: await readFile(appendPath, "utf8") } : {}) })); continue;
+    result(JSON.stringify({ pid: process.pid, args, history, autoMemoryOff: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, ...(args.includes("--append-system-prompt-file") ? { appendText: await readFile(appendPath, "utf8") } : {}) })); continue;
   }
   if (text === "partial-events") {
     emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "first " } } });
