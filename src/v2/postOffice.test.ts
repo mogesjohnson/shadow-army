@@ -1,7 +1,8 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { git } from "../workspace/git.js";
+import { Locks } from "../workspace/locks.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
@@ -23,6 +24,7 @@ async function setup() {
   return { repo, office, events, deliveries };
 }
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(offices.splice(0).map((office) => office.close()));
   repos.splice(0).forEach((repo) => repo.cleanup());
 });
@@ -308,6 +310,9 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     const second = await office.send("tank", "edit again");
     expect(first.write?.applicable).toBe(true);
     expect(second.write?.branch).toBe(opened.branch);
+    // The second turn wrote the same bytes: the earlier turn's commit is not this turn's change.
+    expect(second.write?.applicable).toBe(false);
+    expect(second.write?.reason).toBe("the soldier changed nothing");
     expect(started).toHaveLength(1);
     // The first turn's audited change reaches the owner's folder uncommitted (B4, M1-AC28).
     expect(first.write?.apply?.applied).toBe(true);
@@ -343,7 +348,8 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
   }, 30_000);
 
   it("raises nothing for an edit made between turns, and a shadow branch is no change", async () => {
-    const { repo, office } = await writer({ "src/a.ts": "claimed edit\n" });
+    let turn = 0;
+    const { repo, office } = await writer({}, async (cwd) => { await writeFile(join(cwd, "src/a.ts"), `claimed edit ${++turn}\n`); });
     expect((await office.send("tank", "edit", { claims: ["src/a.ts"] })).write?.applicable).toBe(true);
     repo.write("README.md", "owner edit between turns\n");
     const second = await office.send("tank", "edit again");
@@ -375,5 +381,60 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(result.write?.inScope).toEqual(["partial.txt"]);
     expect(result.write?.worktree).toBe(opened.cwd);
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+  }, 30_000);
+
+  it("C1: a no-op turn after an interrupted one never makes the retained edit applicable; reconnecting starts fresh", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event), channelFactory: factory }); offices.push(office);
+    const opened = await office.open("tank", { claims: ["partial.txt"] });
+    const pending = office.send("tank", "partial");
+    await until(() => events.some((event) => event.type === "tool_call"));
+    await office.interrupt("tank");
+    const first = await pending;
+    expect(first.write?.applicable).toBe(false);
+    expect(first.write?.reason).toContain("reconnect");
+    await expect(office.send("tank", "inspect")).rejects.toThrow("reconnect explicitly");
+    const reopened = await office.open("tank", { claims: ["partial.txt"] });
+    expect(reopened.cwd).not.toBe(opened.cwd);
+    const noop = await office.send("tank", "inspect");
+    expect(noop.status).toBe("completed");
+    expect(noop.write?.applicable).toBe(false);
+    expect(noop.write?.diff).not.toContain("partial edit");
+    expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+  }, 30_000);
+
+  it("C2: a send that overlaps a pending open with different claims is refused before any brief is sent", async () => {
+    const { repo, office, started } = await writer({ "README.md": "edited under the wrong claims\n" });
+    const [opened, sent] = await Promise.allSettled([office.open("tank", { claims: ["src/a.ts"] }), office.send("tank", "edit", { claims: ["README.md"] })]);
+    expect(opened.status).toBe("fulfilled");
+    expect(sent.status).toBe("rejected");
+    expect(String((sent as PromiseRejectedResult).reason)).toContain("holds claims");
+    expect(started).toHaveLength(1);
+    const worktree = (opened as PromiseFulfilledResult<{ cwd: string }>).value.cwd;
+    expect(await readFile(join(worktree, "README.md"), "utf8")).toBe("hello\n");
+    expect(await readFile(join(repo.dir, "README.md"), "utf8")).toBe("hello\n");
+  }, 30_000);
+
+  it("C3: keeps the claims lease alive across turns, and fails closed once it expired and changed hands (fake clock)", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    let turn = 0;
+    const { repo, office, events } = await writer({}, async (cwd) => { await writeFile(join(cwd, "src/a.ts"), `edit ${++turn}\n`); });
+    const locks = new Locks(join(repo.dir, ".shadow"));
+    expect((await office.send("tank", "edit", { claims: ["src/a.ts"] })).write?.applicable).toBe(true);
+    // The first audit stopped v1's heartbeat; the office's own keeps the lease for 80 minutes past a 60-minute TTL.
+    for (let step = 0; step < 4; step++) {
+      const before = (await locks.list())[0]!.expiresAt;
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      await until(async () => ((await locks.list())[0]?.expiresAt ?? 0) > before);
+    }
+    await expect(locks.acquire({ owner: "medic", claims: ["src/a.ts"] })).rejects.toThrow(/tank/);
+    expect((await office.send("tank", "edit")).write?.applicable).toBe(true);
+    // A lease that expires without renewal (the process slept) is taken by another soldier.
+    vi.setSystemTime(Date.now() + 61 * 60_000);
+    await locks.acquire({ owner: "medic", claims: ["src/a.ts"], ttlMs: 60 * 60_000 });
+    await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
+    expect(turn).toBe(2);
+    expect(events.some((event) => event.type === "down")).toBe(true);
   }, 30_000);
 });
