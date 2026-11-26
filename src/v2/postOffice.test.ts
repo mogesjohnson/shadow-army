@@ -751,7 +751,8 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
 
   it("a working tree made inside the folder during a turn, edited and removed after it, passes the turn with one line each (M1-AC11)", async () => {
     const { repo, office, events } = await fakeOffice(async () => {
-      await git(repo.dir, ["worktree", "add", "--detach", ".claude/worktrees/fix-1"]);
+      // As `claude --worktree fix-1` makes it: on a new branch of its own (C2).
+      await git(repo.dir, ["worktree", "add", "-b", "worktree-fix-1", ".claude/worktrees/fix-1"]);
       await writeFile(join(repo.dir, ".claude/worktrees/fix-1/README.md"), "the owner's edit\n");
     });
     expect((await office.send("scout", "go")).status).toBe("completed");
@@ -760,6 +761,47 @@ describe("M1b-27 worktree lines, two soldiers and M1 restarts (WSP-11, PO-1, M1-
     await office.close();
     expect(lines(events, "worktree")[1]).toMatch(/fix-1 was removed$/);
     expect(events.some((event) => event.type === "harness_git_held")).toBe(false);
+  });
+
+  /** Writes a linked tree's admin files by hand, as a soldier could, for a tree at `rel`; `backLink` adds its `.git` file. */
+  async function forge(dir: string, rel: string, backLink: boolean) {
+    const admin = join(dir, ".git", "worktrees", "forged"), head = (await git(dir, ["rev-parse", "HEAD"])).trim();
+    await mkdir(admin, { recursive: true });
+    await writeFile(join(admin, "gitdir"), `${join(dir, rel, ".git")}\n`);
+    await writeFile(join(admin, "commondir"), "../..\n");
+    await writeFile(join(admin, "HEAD"), `${head}\n`);
+    if (backLink) await writeFile(join(dir, rel, ".git"), `gitdir: ${admin}\n`);
+  }
+
+  it("a forged working tree over tracked files does not hide a checkout change from the guard (C1)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      await forge(repo.dir, "src", true);
+      await writeFile(join(repo.dir, "src/a.ts"), "changed\n");
+    });
+    expect((await office.send("scout", "go")).status).toBe("failed");
+    const guard = events.find((event) => event.type === "guard")!.data as { changes: string[] };
+    expect(guard.changes.join("\n")).toMatch(/src\/a\.ts/);
+  });
+
+  it("a stale admin entry, with no tree that names it back, does not hide new files from the guard (C1)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      await mkdir(join(repo.dir, "notes"), { recursive: true });
+      await forge(repo.dir, "notes", false);
+      await writeFile(join(repo.dir, "notes/plan.md"), "new\n");
+    });
+    expect((await office.send("scout", "go")).status).toBe("failed");
+    const guard = events.find((event) => event.type === "guard")!.data as { changes: string[] };
+    expect(guard.changes.join("\n")).toMatch(/notes\/plan\.md/);
+  });
+
+  it("a ref made beside a branch-backed working tree is still guarded (C2)", async () => {
+    const { repo, office, events } = await fakeOffice(async () => {
+      await git(repo.dir, ["worktree", "add", "-b", "worktree-fix-2", ".claude/worktrees/fix-2"]);
+      await git(repo.dir, ["branch", "other"]);
+    });
+    expect((await office.send("scout", "go")).status).toBe("failed");
+    const guard = events.find((event) => event.type === "guard")!.data as { changes: string[] };
+    expect(guard.changes).toEqual(["refs/heads/other was created"]);
   });
 
   it("one soldier's crash, restart and close leave the other's turn and snapshot running", async () => {

@@ -47,10 +47,34 @@ const stateToJson = (state: RepoState) => ({ ...state, dirty: [...state.dirty], 
 const stateFromJson = (value: ReturnType<typeof stateToJson>): RepoState => ({ head: value.head, branch: value.branch, dirty: new Map(value.dirty), index: new Map(value.index), refs: new Map(value.refs) });
 const machineOps = (): SweepOps | undefined => { try { return systemOps(); } catch { return undefined; } };
 /** A path as compared between git's output and the office's own: forward slashes, no trailing one, and on Windows lower-cased. */
-const slash = (path: string) => { const one = path.replace(/\\/g, "/").replace(/\/+$/, ""); return process.platform === "win32" ? one.toLowerCase() : one; };
+const slash = (path: string) => { const one = (process.platform === "win32" ? path.replace(/\\/g, "/") : path).replace(/\/+$/, ""); return process.platform === "win32" ? one.toLowerCase() : one; };
+/** WSP-11: a linked working tree inside the folder, as git lists it, and the admin folder its `.git` file names. */
+interface Tree { path: string; admin: string; branch?: string; }
+/** A file's text; "" when it or its folder is gone or it is a folder. Any other failure throws: membership is then unknown. */
+const readKnown = (file: string) => readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => {
+  if (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "EISDIR") return "";
+  throw error;
+});
+/**
+ * WSP-11: the trees a turn's guard leaves out. One listed at the open counts only while the close lists it with the same admin
+ * folder; one new at the close counts only if the open saw no checkout file under it. Only the branch a new tree was made
+ * on is left out of the refs, and only if the turn created it (M1-AC11).
+ */
+const verifiedTrees = (opened: Map<string, Tree>, closed: Map<string, Tree>, base: RepoState) => {
+  const inside: string[] = [], refs = new Set<string>();
+  for (const [rel, tree] of closed) {
+    const was = opened.get(rel);
+    if (was) { if (was.admin === tree.admin) inside.push(rel); continue; }
+    if ([...base.dirty.keys()].some((path) => slash(path) === rel || slash(path).startsWith(`${rel}/`))) continue;
+    inside.push(rel);
+    if (tree.branch && !base.refs.has(tree.branch)) refs.add(tree.branch);
+  }
+  for (const rel of opened.keys()) if (!closed.has(rel)) inside.push(rel);
+  return { inside, refs };
+};
 /** WSP-11: a working tree nested in the folder, with everything under it, is not the checkout. */
-const outsideTrees = (state: RepoState, inside: readonly string[]): RepoState => !inside.length ? state
-  : { ...state, dirty: new Map([...state.dirty].filter(([path]) => !inside.some((tree) => slash(path) === tree || slash(path).startsWith(`${tree}/`)))) };
+const outsideTrees = (state: RepoState, inside: readonly string[], refs: ReadonlySet<string> = new Set()): RepoState => !inside.length ? state
+  : { ...state, refs: new Map([...state.refs].filter(([name]) => !refs.has(name))), dirty: new Map([...state.dirty].filter(([path]) => !inside.some((tree) => slash(path) === tree || slash(path).startsWith(`${tree}/`)))) };
 
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
@@ -514,7 +538,8 @@ export class PostOffice {
     // A write session has no read-only snapshot to guard: the claim audit takes its place.
     const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
     session.guardBase = await this.exclusive(() => captureState(this.root));
-    const treesOpen = await this.exclusive(() => this.worktrees(session));
+    // WSP-11: a list that fails here fails the turn's guard at its close.
+    const treesOpen = await this.exclusive(() => this.worktrees(session)).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
     const turnFile = join(turnsDir(this.root), `${session.id}.json`);
     await mkdir(turnsDir(this.root), { recursive: true })
       .then(() => writeFile(turnFile, JSON.stringify({ soldier: session.spec.key, time: new Date().toISOString(), base: stateToJson(session.guardBase!) }), { mode: 0o600 }))
@@ -549,9 +574,10 @@ export class PostOffice {
         this.exclusive(async () => {
           const after = await captureState(this.root), base = session.guardBase!;
           session.guardBase = undefined;
-          // WSP-11: a working tree inside the folder, as listed when the guard opened or closes, is not the checkout.
-          const inside = [...new Set([...treesOpen, ...await this.worktrees(session)])];
-          return diffState(outsideTrees(base, inside), outsideTrees(after, inside));
+          // WSP-11: a verified working tree inside the folder, listed when the guard opened or closes, is not the checkout.
+          if (treesOpen instanceof Error) throw treesOpen;
+          const { inside, refs } = verifiedTrees(treesOpen, await this.worktrees(session), base);
+          return diffState(outsideTrees(base, inside), outsideTrees(after, inside, refs));
         }),
         snapshotBefore ? captureState(session.cwd) : undefined]);
       const [checkout, snapshotAfter] = settled.map((item) => { if (item.status === "rejected") throw item.reason; return item.value; }) as [string[], RepoState | undefined];
@@ -660,26 +686,49 @@ export class PostOffice {
   }
 
   /**
-   * WSP-11: lists the repository's working trees at a guard's open or close, and at the office's close. Each one added or
-   * removed since the last check, but the folder itself, Shadow Army's snapshots and its `shadow/` worktrees, gets one line;
-   * the first check only learns them. Returns those inside the folder, relative to it, as `slash` gives them.
+   * WSP-11: git's own list of the repository's working trees, read with harness git at a guard's open and close and at the
+   * office's close. Each one added or removed since the last check, but the folder itself, Shadow Army's snapshots and its
+   * `shadow/` worktrees, gets one line; the first check only learns them. Returns the trees inside the folder whose membership
+   * is verified: git does not call it prunable, its `.git` file names an admin folder in the common git folder that names it
+   * back, and none of the checkout's tracked files lie under it. A list that fails throws, so the guard fails closed.
    */
-  private async worktrees(session?: Session): Promise<string[]> {
-    // Read as `git worktree list` reads them, from each linked tree's `gitdir` and `HEAD`: no process, so no hold check per turn.
-    const admin = join(this.repo.commonDir, "worktrees");
-    const top = slash(this.root), snaps = this.snapshots.ok ? slash(this.snapshots.root) : undefined, now = new Map<string, string>();
-    for (const name of await readdir(admin).catch(() => [] as string[])) {
-      const gitdir = (await readFile(join(admin, name, "gitdir"), "utf8").catch(() => "")).trim();
-      const branch = (await readFile(join(admin, name, "HEAD"), "utf8").catch(() => "")).trim().replace(/^ref:\s*/, "");
-      const path = gitdir ? dirname(resolve(admin, name, gitdir)).replace(/\\/g, "/") : "";
-      if (!path || slash(path) === top || (snaps && slash(path).startsWith(`${snaps}/`)) || branch.startsWith("refs/heads/shadow/")) continue;
+  private async worktrees(session?: Session): Promise<Map<string, Tree>> {
+    const git = this.git(this.repo);
+    const listed = await git.run(["worktree", "list", "--porcelain", "-z"], "guard");
+    if (listed.code !== 0) throw new Error(`the repository's working trees could not be listed: ${listed.stderr.trim()}`);
+    const top = slash(this.root), snaps = this.snapshots.ok ? slash(this.snapshots.root) : undefined;
+    const now = new Map<string, string>(), nested = new Map<string, Tree>();
+    for (const block of listed.stdout.split("\0\0")) {
+      const fields = block.split("\0").filter(Boolean), field = (name: string) => fields.find((one) => one === name || one.startsWith(`${name} `));
+      const path = field("worktree")?.slice(9), branch = field("branch")?.slice(7);
+      if (!path || slash(path) === top || (snaps && slash(path).startsWith(`${snaps}/`)) || branch?.startsWith("refs/heads/shadow/")) continue;
       now.set(slash(path), path);
+      if (!slash(path).startsWith(`${top}/`) || field("prunable")) continue;
+      const admin = await this.adminOf(path);
+      if (admin) nested.set(slash(path).slice(top.length + 1), { path, admin, ...(branch ? { branch } : {}) });
+    }
+    if (nested.size) {
+      // A tree git really added starts in an empty folder, so a listed one over the checkout's tracked files is not trusted.
+      const magic = process.platform === "win32" ? ":(literal,icase)" : ":(literal)";
+      const tracked = await git.run(["ls-files", "-z", "--", ...[...nested.keys()].map((rel) => `${magic}${rel}`)], "guard");
+      if (tracked.code !== 0) throw new Error(`the checkout's tracked files could not be listed: ${tracked.stderr.trim()}`);
+      for (const file of tracked.stdout.split("\0").filter(Boolean)) for (const rel of nested.keys()) if (slash(file).startsWith(`${rel}/`)) nested.delete(rel);
     }
     const who = session ? { soldier: session.spec.key } : {};
     for (const [key, path] of this.trees ? now : []) if (!this.trees!.has(key)) this.record({ ...who, type: "worktree", data: { added: path, line: `a working tree of the repository was added at ${path}` } }, session);
     for (const [key, path] of this.trees ?? []) if (!now.has(key)) this.record({ ...who, type: "worktree", data: { removed: path, line: `the working tree at ${path} was removed` } }, session);
     this.trees = now;
-    return [...now.keys()].filter((key) => key.startsWith(`${top}/`)).map((key) => key.slice(top.length + 1));
+    return nested;
+  }
+
+  /** WSP-11: the admin folder a linked tree's `.git` file names, if it lies in the common git folder and names the tree back. */
+  private async adminOf(path: string): Promise<string | undefined> {
+    const dotGit = join(path, ".git"), named = /^gitdir:\s*(.+)$/m.exec(await readKnown(dotGit))?.[1]?.trim();
+    if (!named) return undefined;
+    const admin = resolve(path, named);
+    if (slash(dirname(admin)) !== slash(join(this.repo.commonDir, "worktrees"))) return undefined;
+    const back = (await readKnown(join(admin, "gitdir"))).trim();
+    return back && slash(resolve(admin, back)) === slash(dotGit) ? admin : undefined;
   }
 
   /** WSP-11: a read-only snapshot's writes are reported before it is removed; one that can't be read is not removed. */
@@ -817,7 +866,7 @@ export class PostOffice {
       await Promise.allSettled(this.opening.values());
       const ended = await Promise.allSettled([...this.sessions.keys()].map((key) => this.closeSession(key)));
       // WSP-11: a working tree removed after the last guard closed shows here.
-      if (this.trees) await this.exclusive(() => this.worktrees());
+      if (this.trees) await this.exclusive(() => this.worktrees()).catch((error: unknown) => this.record({ type: "worktree", data: { listed: false, reason: String(error) } }));
       this.record({ type: "closed", data: { retained: true } });
       await this.logPending;
       const failed = ended.filter((item): item is PromiseRejectedResult => item.status === "rejected");
