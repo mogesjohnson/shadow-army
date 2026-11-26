@@ -100,9 +100,12 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
   const now = ops.now ?? (() => performance.now());
   const report: SweepReport = { running: 0, swept: 0, ended: [], left: [], unhandled: 0, unverified: 0 };
   const bounded = boundedBy(now);
-  // Reading and verifying the records has a limit of its own, like each tree (C10).
+  // Reading and verifying the records has a limit of its own, like each tree, its file reads included (C10): a
+  // listing not done by then ends nothing, and every record stays for the next sweep.
   const readUntil = now() + limitMs;
-  for (const { id, lines, verified } of await readTrees(root, (path, stats) => bounded((until) => ops.owned(path, stats, until), false, readUntil))) {
+  const trees = await bounded(() => readTrees(root, (path, stats) => bounded((until) => ops.owned(path, stats, until), false, readUntil)), null, readUntil);
+  if (trees === null) report.unhandled++;
+  for (const { id, lines, verified } of trees ?? []) {
     // A record anyone else could have written or swapped is no evidence to end a process on (PO-5, PO-16).
     if (!verified) { report.unverified++; report.unhandled++; continue; }
     const postOffice = lines.find((line) => line.kind === "post-office");
@@ -125,6 +128,19 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
     const compared = async (until?: number) => Promise.all(targets.map(async (target) => ({ target, match: judge(target, await startTimeOf(target.pid, until)) })));
     const matching = async () => (await compared()).filter(({ match }) => match === "same").map(({ target }) => target);
     const named = new Map<number, string | undefined>();
+    // A tree an earlier sweep left incomplete stays unresolved, its entry kept, until this sweep ends it whole or
+    // nothing it may have left still runs: its parent having gone proves nothing about its descendants (C9).
+    const marker = join(treesDir(root), `${id}.incomplete`);
+    const earlier = await readIncomplete(marker);
+    const save = (targets: Iterable<Identity>) => {
+      const text = [...targets].map((target) => `${JSON.stringify({ kind: "git", pid: target.pid, startTime: target.startTime, ...(target.creationTime === undefined ? {} : { creationTime: target.creationTime }) })}\n`).join("");
+      const saved = text !== "" ? writeFile(marker, text, { mode: 0o600 }) : unlink(marker).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
+      return saved.then(() => true, () => false);
+    };
+    // The trees the marker on disk names. A tree is added before its end starts, so a crash or a failed write after
+    // that start never leaves the next sweep with only its vanished parent's record (C9).
+    const recorded = new Map((earlier ?? []).map((target) => [target.pid, target] as const));
+    const unsaved = new Set<number>();
     // Trees whose end left descendants unconfirmed, and trees ended and confirmed whole, in this sweep.
     const incomplete = new Map<number, Identity>();
     const complete = new Set<number>();
@@ -134,6 +150,11 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
         // The identity is checked again just before the signal: the pid may have been reused since the listing.
         if (judge(target, await startTimeOf(target.pid)) !== "same") continue;
         const tree = target.kind === "git";
+        if (tree && !recorded.has(target.pid)) {
+          // No end starts on a tree the next sweep might not know of: it is kept, running, and reported.
+          if (unsaved.has(target.pid) || earlier === null || !await save([...recorded.values(), target])) { if (!unsaved.has(target.pid)) { unsaved.add(target.pid); unhandled++; } continue; }
+          recorded.set(target.pid, target);
+        }
         const result = await bounded((until) => ops.endProcess(target, tree, until).catch(() => "incomplete" as const), "incomplete" as const, deadline);
         if (tree && result === "incomplete") { incomplete.set(target.pid, target); complete.delete(target.pid); } else { incomplete.delete(target.pid); complete.add(target.pid); }
       }
@@ -141,10 +162,6 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
     }
     const lastUntil = Math.max(deadline, now()) + limitMs / LAST_CHECK_SHARE;
     const last = await compared(lastUntil);
-    // A tree an earlier sweep left incomplete stays unresolved, its entry kept, until this sweep ends it whole or
-    // nothing it may have left still runs: its parent having gone proves nothing about its descendants (C9).
-    const marker = join(treesDir(root), `${id}.incomplete`);
-    const earlier = await readIncomplete(marker);
     const unresolved = new Map(incomplete);
     for (const target of earlier ?? []) {
       if (unresolved.has(target.pid) || complete.has(target.pid)) continue;
@@ -157,10 +174,9 @@ async function sweepAll(root: string, ops: SweepOps, limitMs: number): Promise<S
     const swept = (pid: number): SweptProcess => ({ pid, ...(named.get(pid) === undefined ? {} : { command: redact(named.get(pid)) as string }) });
     for (const pid of named.keys()) (left.has(pid) ? report.left : report.ended).push(swept(pid));
     if (earlier !== null) {
-      // Kept for the next sweep; a marker that can't be written leaves the entry unhandled, never forgotten.
-      const lines = [...unresolved.values()].map((target) => `${JSON.stringify({ kind: "git", pid: target.pid, startTime: target.startTime, ...(target.creationTime === undefined ? {} : { creationTime: target.creationTime }) })}\n`);
-      const saved = lines.length > 0 ? writeFile(marker, lines.join(""), { mode: 0o600 }) : unlink(marker).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
-      if (!await saved.then(() => true, () => false)) unhandled++;
+      // Kept for the next sweep. A marker that can't be written leaves the entry unhandled and the marker as it was,
+      // naming every tree whose end started: never forgotten.
+      if (!await save(unresolved.values())) unhandled++;
     }
     report.unhandled += unhandled;
     if (left.size === 0 && unhandled === 0) { await unlink(join(treesDir(root), `${id}.jsonl`)).catch(() => {}); report.swept++; }

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -161,6 +161,26 @@ describe("the sweep (PO-16, M1-AC16)", () => {
     expect([existsSync(join(treesDir(root), "git.incomplete")), (await readTrees(root)).length]).toEqual([false, 0]);
   });
 
+  it("records a tree as unresolved before its end starts, so a crash after the start never forgets it (C9)", async () => {
+    const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
+    await record.add({ kind: "git", pid: 8, startTime: 80 });
+    const marker = join(treesDir(root), "git.incomplete");
+    const { ops } = fakeOps({ 8: 80 });
+    let onDisk: string | undefined;
+    // The marker as a crash just after the start would leave it; the parent then goes, its descendants may not.
+    const crashing: SweepOps = { ...ops, endProcess: async (target, tree) => { onDisk = existsSync(marker) ? readFileSync(marker, "utf8") : undefined; await ops.endProcess(target, tree); return "incomplete"; } };
+    await sweepTrees(root, crashing);
+    expect(onDisk).toBe(`${JSON.stringify({ kind: "git", pid: 8, startTime: 80 })}\n`);
+    writeFileSync(marker, onDisk!);
+    expect(await sweepTrees(root, fakeOps({}).ops)).toMatchObject({ swept: 0, left: [{ pid: 8 }] });
+    // A marker that can't be written or read: no tree end starts, and the entry is kept.
+    rmSync(marker); mkdirSync(marker);
+    const { ops: unwritable, calls } = fakeOps({ 8: 80 });
+    expect(await sweepTrees(root, unwritable)).toMatchObject({ swept: 0, left: [{ pid: 8 }] });
+    expect(calls).toEqual([]);
+    expect((await readTrees(root)).map((tree) => tree.id)).toEqual(["git"]);
+  });
+
   it("starts no operation past its deadline, and gives each one the deadline it must stop by (C10)", async () => {
     const record = await TreeRecord.create(root, "git", { pid: 4, startTime: 40 });
     await record.add({ kind: "git", pid: 8, startTime: 80 });
@@ -172,8 +192,8 @@ describe("the sweep (PO-16, M1-AC16)", () => {
       startTimeOf: async (pid, until) => { started.push(`probe ${pid} ${until}`); return ops.startTimeOf(pid); },
       endProcess: async (target, tree, until) => { started.push(`end ${target.pid} ${until}`); return ops.endProcess(target, tree); },
     };
-    // An exhausted budget starts nothing, the owner checks included: the record stays, unverified.
-    expect(await sweepTrees(root, watched, 0)).toMatchObject({ swept: 0, unverified: 1 });
+    // An exhausted budget starts nothing, the listing and owner checks included: the record stays, unhandled.
+    expect(await sweepTrees(root, watched, 0)).toMatchObject({ swept: 0, unhandled: 1, unverified: 0 });
     expect(started).toEqual([]);
     expect(await sweepTrees(root, watched, 1_000)).toMatchObject({ swept: 1, ended: [{ pid: 8 }] });
     expect(started).toEqual(["owned 1000", "owned 1000", "owned 1000", "owned 1000", "probe 4 1000", "probe 8 1000", "probe 8 1000", "end 8 1000", "probe 8 1000", "probe 8 1200"]);
