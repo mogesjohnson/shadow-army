@@ -228,6 +228,12 @@ describe("the summary card (M1-AC25, SEC-6)", () => {
     expect(row).not.toContain("Error:"); expect(row).not.toContain("refused");
   });
 
+  it("names the error of a failed turn with no reply text even when the audit left a write outcome (self-review 94)", async () => {
+    const { send } = await mod(() => ({ ...turn("", { reverted: false }), status: "failed", summary: "", error: { kind: "rate_limit", message: "429 too many requests" } }));
+    const row = await send("claude-sonnet --claim a go");
+    expect(row).toContain("no summary\nError: 429 too many requests\n");
+  });
+
   it("marks a refusal as refused although its status is completed (W12-6b)", async () => {
     const { send } = await mod(() => ({ ...turn("I can't help with that."), refusal: true }));
     expect(await send("claude-sonnet --claim a go")).toContain("Shadow Army · Tank · completed (refused)\nI can't help with that.\n");

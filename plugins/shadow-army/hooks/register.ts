@@ -245,7 +245,8 @@ export function card(soldier: Soldier, delivery: Delivery, log: string, credenti
   const summary = text || "no summary";
   // M1-AC25: when the turn did not complete or the claim audit left no `write`, the error says why (a thrown audit leaves no other trace).
   const why = delivery.status !== "completed" || !delivery.write ? five(delivery.error?.message) : undefined;
-  const error = why && text ? `\nError: ${why}` : "";
+  // With a write outcome the "Not applied" line gives the audit's reason, not the native error, so show the error then too.
+  const error = why && (text || delivery.write) ? `\nError: ${why}` : "";
   const apply = delivery.write?.apply;
   // M1-AC27: a failed turn's error (a guard or audit failure names the path) is the reason even after partial text.
   // #94 C9: a failed rollback may leave the edits in the owner's folder, so the card warns and lists every path #101 names.
