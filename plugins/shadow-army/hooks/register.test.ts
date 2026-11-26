@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TurnResult, WriteOutcome } from "../../../src/v2/channel.js";
 
 /** A turn result in the post office's own type, so a fake cannot drift from what the card reads. */
@@ -610,13 +614,14 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
         cwd: LINKED, lists: { [ADMIN]: ["w9", "w2"] },
         files: {
           [`${LINKED}/.git`]: `gitdir: ${ADMIN}/w9\n`, [`${ADMIN}/w9/gitdir`]: `${fwd(LINKED)}/.git\n`, [`${ADMIN}/w9/commondir`]: "../..\n",
+          // The mod reads the same file by the spelling git's registry gives it, with forward slashes.
+          [`${fwd(LINKED)}/.git`]: `gitdir: ${ADMIN}/w9\n`,
           [`${ADMIN}/w2/gitdir`]: `${fwd(OTHER)}/.git\n`, [`${fwd(OTHER)}/.git`]: `gitdir: ${ADMIN}/w2\n`, ...files,
         },
       });
 
-      /** The main checkout, with `w9` and `w2` registered as its worktrees (git's files spell their checkouts with forward slashes). */
-      const main = (files: Record<string, string | undefined> = {}): Env =>
-        ({ ...linked({ [`${fwd(LINKED)}/.git`]: `gitdir: ${ADMIN}/w9\n`, ...files }), cwd: ROOT });
+      /** The main checkout, with `w9` and `w2` registered as its worktrees. */
+      const main = (files: Record<string, string | undefined> = {}): Env => ({ ...linked(files), cwd: ROOT });
 
       it("refuses entries in the main checkout, its worktrees folder and every registered worktree", async () => {
         const dirs = [where(ROOT, "bin"), where(`${ROOT}-worktrees`, "x", "bin"), where(LINKED, "bin"), where(OTHER, "bin"), BIN];
@@ -625,12 +630,54 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
         expect(spawns).toHaveLength(1);
       });
 
-      it("starts nothing from a linked checkout whose files all agree, since nothing proves which folder is the primary checkout (C9, review 45)", async () => {
-        // A separated git folder at <primary>/.git (`git init --separate-git-dir`) gives these same files, with the real primary elsewhere.
-        const { probes, spawns, line } = await launched({ ...linked(), dirs: [BIN] });
-        expect(line).toMatch(/^Shadow Army: .+ is a linked worktree, and nothing proves which folder is its primary checkout · .+ · nothing started$/);
+      it("starts from a linked worktree whose registry agrees, and bars it, the primary checkout and every registered worktree (C13)", async () => {
+        const dirs = [where(LINKED, "bin"), where(ROOT, "bin"), where(`${ROOT}-worktrees`, "x", "bin"), where(OTHER, "bin"), BIN];
+        const { probes, spawns } = await launched({ ...linked(), dirs });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+        expect(spawns).toHaveLength(1);
+      });
+
+      it.each<[string, Env]>([
+        ["its admin folder's commondir cannot be read", linked({ [`${ADMIN}/w9/commondir`]: undefined })],
+        ["its admin folder is not directly in the common folder's worktrees", linked({ [`${ADMIN}/w9/commondir`]: "../../../x/.git\n" })],
+        ["its admin folder's gitdir cannot be read", linked({ [`${ADMIN}/w9/gitdir`]: undefined })],
+        ["its admin folder's gitdir names another checkout", linked({ [`${ADMIN}/w9/gitdir`]: `${fwd(OTHER)}/.git\n` })],
+        ["the registry does not list it", { ...linked(), lists: { [ADMIN]: ["w2"] } }],
+        ["there is no registry to list", { ...linked(), lists: {} }],
+        ["another registered worktree does not agree", linked({ [`${fwd(OTHER)}/.git`]: "nonsense\n" })],
+        ["its admin config moves the work tree", linked({ [`${ADMIN}/w9/config.worktree`]: "[core]\n\tworktree = /primary\n" })],
+      ])("starts nothing from a linked worktree when %s (C13)", async (_case, env) => {
+        const { probes, spawns, line } = await launched({ ...env, dirs: [BIN] });
+        expect(line).toMatch(/^Shadow Army: the git worktrees of .+ cannot be verified · nothing started$/);
         expect(probes).toEqual([]);
         expect(spawns).toEqual([]);
+      });
+
+      // `git init --separate-git-dir <ROOT>/.git` gives ROOT's files, with the real primary checkout elsewhere and recorded nowhere in them.
+      const HIDDEN = process.platform === "win32" ? "G:\\real\\primary" : "/real/primary";
+      it.each<[string, () => Env]>([["a linked worktree", linked], ["the folder holding the git folder", () => main()]])(
+        "never takes an executable from a primary checkout no record names, starting from %s (C9, review 45)", async (_case, env) => {
+          const dirs = [where(HIDDEN, "bin"), where(`${HIDDEN}-worktrees`, "x", "bin"), BIN];
+          const hidden = { [`${fwd(HIDDEN)}/.git`]: `gitdir: ${fwd(ROOT)}/.git\n` };
+          const run = env();
+          const { probes } = await launched({ ...run, files: { ...run.files, ...hidden }, dirs });
+          expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+        });
+
+      it("takes nothing at all when the drive or file system root is itself a checkout of this repository (C13)", async () => {
+        const top = process.platform === "win32" ? "C:/.git" : "/.git";
+        const { probes, spawns } = await launched({ ...linked({ [top]: `gitdir: ${fwd(ROOT)}/.git\n` }), dirs: [BIN] });
+        expect(probes).toEqual([]);
+        expect(spawns).toEqual([]);
+      });
+
+      it.each<[string, Env]>([
+        ["cannot be read",{ files: { [`${fwd(HIDDEN)}/.git`]: "nonsense\n" } }],
+        ["leads nowhere", { dangling: [`${fwd(HIDDEN)}/.git`] }],
+      ])("drops an executable under a folder whose .git %s (C13)", async (_case, broken) => {
+        const run = linked(broken.files);
+        const { probes } = await launched({ ...run, dangling: broken.dangling, dirs: [where(HIDDEN, "bin"), BIN] });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
       });
 
       it.each([
@@ -669,6 +716,67 @@ describe("the executables the preflight vets (HOST-2, CH-1, C1)", () => {
       it("still bars a registered worktree whose checkout is gone, and starts (C9, review 24)", async () => {
         const dirs = [where(OTHER, "bin"), BIN];
         const { probes, spawns } = await launched({ ...main(), dirs, unresolved: [`${fwd(OTHER)}/.git`] });
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+        expect(spawns).toHaveLength(1);
+      });
+    });
+
+    describe("checkouts that git itself made (C13)", () => {
+      const made: string[] = [];
+      afterEach(() => { for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
+      /** A repository with one commit and a worktree from `git worktree add`; `store` puts its git folder elsewhere (`--separate-git-dir`). */
+      const repository = (store?: string) => {
+        const base = realpathSync.native(mkdtempSync(join(tmpdir(), "sa-c13-")));
+        made.push(base);
+        const [primary, added] = [join(base, "primary"), join(base, "added")];
+        const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { stdio: "pipe" });
+        if (store) mkdirSync(join(base, store, ".."), { recursive: true });
+        git("init", "-q", ...(store ? [`--separate-git-dir=${join(base, store)}`] : []), primary);
+        git("-C", primary, "commit", "-q", "--allow-empty", "-m", "one");
+        git("-C", primary, "worktree", "add", "-q", "--detach", added);
+        return { base, primary, added };
+      };
+      /** The mod started in `cwd`, with the real file system under `base` and the fake one everywhere else. */
+      const startedIn = async (base: string, cwd: string, dirs: string[]) => {
+        const run = await mod(OK, { cwd, dirs });
+        const fake = { ...run.$.fs };
+        const real = (path: string) => path.replace(/\\/g, "/").startsWith(`${base.replace(/\\/g, "/")}/`) && !/[\\/](node|git)(\.exe)?$/.test(path);
+        Object.assign(run.$.fs, {
+          exists: async (path: string) => real(path) ? existsSync(path) : fake.exists(path),
+          stat: async (path: string, options?: { resolve?: boolean }) => {
+            if (!real(path)) return fake.stat(path, options);
+            const found = statSync(path);
+            return { kind: found.isDirectory() ? "directory" : "file", size: 0, mtimeMs: 0, isLink: false, ...(options?.resolve ? { realPath: realpathSync.native(path) } : {}) };
+          },
+          read: async (path: string) => real(path) ? readFileSync(path, "utf8") : fake.read(path),
+          list: async (path: string) => real(path)
+            ? readdirSync(path, { withFileTypes: true }).map((e) => ({ name: e.name, kind: e.isDirectory() ? "directory" : "file", size: 0, mtimeMs: 0, isLink: false }))
+            : fake.list(path),
+        });
+        const line = await run.send("claude-sonnet --claim a go");
+        return { ...run, line };
+      };
+
+      it("starts in a git worktree add checkout, taking nothing from it or its primary checkout", async () => {
+        const { base, primary, added } = repository();
+        const { probes, spawns } = await startedIn(base, added, [join(added, "bin"), join(primary, "bin"), BIN]);
+        expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
+        expect(spawns).toHaveLength(1);
+      });
+
+      it("starts nothing once that checkout's registry disagrees", async () => {
+        const { base, primary, added } = repository();
+        writeFileSync(join(primary, ".git", "worktrees", "added", "gitdir"), `${join(base, "elsewhere", ".git")}\n`);
+        const { probes, line } = await startedIn(base, added, [BIN]);
+        expect(line).toMatch(/cannot be verified · nothing started$/);
+        expect(probes).toEqual([]);
+      });
+
+      it("takes nothing from the real primary checkout when the git folder sits in another folder (C9, review 45)", async () => {
+        const { base, primary, added } = repository(join("decoy", ".git"));
+        mkdirSync(join(primary, "bin"));
+        const { probes, spawns } = await startedIn(base, added, [join(primary, "bin"), BIN]);
         expect(probes.map((p) => p.argv[0])).toEqual([exeIn(BIN, "node"), exeIn(BIN, "git")]);
         expect(spawns).toHaveLength(1);
       });
