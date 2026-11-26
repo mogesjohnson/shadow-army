@@ -228,6 +228,10 @@ function replaceable(snapshot: Snapshot, rel: string) {
 export interface TurnStart { head: string; ignores: Record<string, string>; excludes: string[]; prints: Record<string, string> }
 export interface ReadViolation { files: string[]; head?: { from: string; to: string } }
 
+/** Whether anything is at `file` (a dangling link counts); only a missing path, or a file where a folder should be, is absent. */
+function onDisk(file: string) {
+  try { return lstatSync(file, { throwIfNoEntry: false }) !== undefined; } catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOTDIR"; }
+}
 const readText = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return ""; } };
 /** The text of `core.excludesFile`, or of git's default `$XDG_CONFIG_HOME/git/ignore` when it is unset; a missing file is empty. */
 async function globalExcludes(run: RunGit, workTree: string) {
@@ -258,7 +262,8 @@ export async function findWrites(snapshot: Snapshot, start: TurnStart, git: GitF
   const run = own(snapshot, git);
   const files = new Set<string>();
   for (const path of entries(await must(run, ["ls-files", "-z", "--cached", "--others"]))) {
-    if (basename(path) === ".gitignore" && !(path in start.ignores)) { files.add(path); replaceable(snapshot, path); }
+    // A path absent from disk at the start and still absent hides nothing and is no write; nothing is made for it.
+    if (basename(path) === ".gitignore" && !(path in start.ignores) && onDisk(join(snapshot.path, path))) { files.add(path); replaceable(snapshot, path); }
   }
   for (const [path, data] of Object.entries(start.ignores)) {
     const file = join(snapshot.path, path), bytes = Buffer.from(data, "base64");

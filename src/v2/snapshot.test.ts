@@ -339,4 +339,15 @@ describe("Codex review 31", () => {
     put(join(snap.path, "sub", "hidden.out"), "w");
     expect((await findWrites(snap, start, factory))?.files).toEqual(["sub/.gitignore", "sub/hidden.out"]);
   }, 60_000);
+  it("C12: a tracked .gitignore already absent when the turn began is no write and makes no folder", async () => {
+    const r = makeRepo();
+    put(join(r.folder, "sub", ".gitignore"), "*.out\n"); git(r.folder, "add", "sub/.gitignore"); git(r.folder, "commit", "-q", "-m", "sub");
+    const snap = await openSnapshot({ root: r.root, folder: r.folder, sessionId: "s1", repo: r.repo, git: factory });
+    rmSync(join(snap.path, "sub"), { recursive: true });
+    const start = await beginTurn(snap, factory);
+    expect(await findWrites(snap, start, factory)).toBeUndefined();
+    expect(existsSync(join(snap.path, "sub"))).toBe(false);
+    put(join(snap.path, "sub", ".gitignore"), "*\n");                       // a turn that brings it back is still reported
+    expect((await findWrites(snap, start, factory))?.files).toContain("sub/.gitignore");
+  }, 60_000);
 });
