@@ -1,38 +1,31 @@
-# Handoff: orchestrator 56 (`f26aac18`) to orchestrator 57 (2026-11-26 ~17:05 UTC)
+# Handoff: orchestrator 57 (`c71d0154`) to orchestrator 58 (2026-11-26 ~18:20 UTC)
 
-Self-contained: do not read older handoffs. Range `77713ba` (orch-55's handoff) to this commit. 5-hour window at 25% (resets 20:00). RAM about 3.5 GB free; no new worker below 1.5 GB. Claude Code killed orch-56's background timers once for low memory (16:30): restart yours only if memory allows.
+Self-contained: do not read older handoffs. 5-hour window at 61% (resets 20:00 local 15:00). RAM ~3.5 GB free; Claude Code killed orch-57's hi and watch timers for low memory at ~18:00: restart yours only if memory allows (the note says not to restart unasked; the owner was told).
 
-## Running worker (report to orch-57; tell it your name)
+## THE OWNER'S NEW ORDER: bottom-first (2026-11-26, "we will have main as current then we do new stuff, begin this")
 
-- **w190-fix141** (Opus medium): #141 C3 then C4. Brief `w190-fix141.md` (points at `## Left` in `w186-fix141.md`). Pushed head `4716010` (C1/C2 done, all 17 M1b-27 tests pass). Unpushed C3 commit `e0a7974` on local `w182-fix141` in w182's worktree: its 2 new tests pass but 5 slow tests time out (3 held git calls at close instead of 1); the fix is in the brief.
+51 open PRs, none merged: we chased Codex's newest findings at the top while the bottom was never finished. Now: work only the lowest unapproved PR, get Codex approval, merge (merge commit, `--match-head-commit`, script in its own tab), repeat. No new PRs, no new `base-*` branches until the stack is a handful. Recorded on #63 (comment 7200367879) and in memory `bottom-first.md`.
 
-## Done this session
+The stack, bottom up:
+1. **#95** `claude/63-m1a-transport` <- `main`, head `31e1448` (includes merged #89, #91 mod). Open: C10, C11, C12 P1 (claude.ts:284 UUID correlation, processTree.ts:46 `..name` boundary, claude.ts:154 redact before truncating), C13/C14 P2.
+2. **M1a chain:** #90 <- transport, #92, #93, #94 (head branch `claude/63-m1a-slice`), with #96, #99, #101 on the slice. Plan: fold #90, #92, #93, #96, #99, #101 into #94 once Codex's list (below) says what is open.
+3. **`claude/63-m1b`** has NO PR (86 commits ahead of main; ~15 PRs #106 to #123 target it). Open a draft PR for it onto the M1a slice when #94 is near approval.
+4. M1b PRs bottom-up. `base-*` branches (`base-po-chain2`, `base-guardian`, `base-po-trust`) have no PRs: fold 3 removes them.
 
-- #128 C13 finished at `42d45cc` (w184), #139 C2 at `2daab49` (w185): both wait for Codex re-review (files 87, 88).
-- Flatten fold 2 (owner said go, 2026-11-26): #110 into #109 (`d147d65`), #120 and #121 into #106 (`df93be1`), #124 into #111 (`59a7441`, conflict resolved by w189). The four children show merged. #124's C6 P1 is now open on #111. Codex files 89, 90.
-- Removed worktrees `ui-v21-monarch`, `w174-fix137`, `w174-fix137-finish-*` (owner yes). w188's worktree `w188-fold124-*` holds an obsolete uncommitted merge: remove it when convenient (`git merge --abort` first; detached, nothing to lose).
-- Decisions posted: #139 C4 (paused close ending by the 10 s force) accepted as a build note. #138 C6 / CodexSandboxUsers: machine ACLs unchanged (Codex needs them); trust check stays strict; the trees record moves to an owner-only folder under `%LOCALAPPDATA%` (and #137's check likewise).
+## Running
 
-## Queue (one lane; `postOffice.ts` tasks one at a time)
+- **w195-fix95** (Opus medium): #95 C10 to C12 with fail-first tests, then replies, Validation, next Codex file. Brief `tasks/w195-fix95.md`. Worktree `AIConnections-worktrees/w195-fix95`.
+- **Codex review 94** (`~/codex-reviews/shadow-army/11-26-2026-codex-review-94.md`): owner said Codex starts ~18:30. Part 1 reviews #95 at `31e1448`; Part 2 posts one ranked list of open findings for the M1a chain on #94. Read its `## Result`, then: fold the chain into #94 (one worker, Sonnet medium), fix the list bottom-up.
+- **w194-fix141**: done and stopped; its tab is still open (TRACE refused: elevated window in front). Close it.
 
-1. #141 (w190), then its C5, C6, self-review, replies, Codex file if w190 runs out.
-2. #139 self-review P1 C3 follow-up (Windows systemOps has no `commandOf`; a late MCP server can hold a turn): `postOffice.ts` + `contain/sweep.ts`; owner said go.
-3. #138: C6 per the decision above, plus C9, C10 (P1, `contain/sweep.ts`). Opus medium.
-4. #142 (C1 P0 `postOffice.ts:363`, C2 to C4 P1, C5 P2), then #143 (C1 to C5 P0, C6/C7 P1, C8 P2). Write new briefs; findings via `gh pr view <n> --json reviews -q '.reviews|last|.body' | grep -oE 'C[0-9]+ ?\[?P[0-9]'`.
-5. #111: #124's C6 P1 (Sonnet medium; `src/v2/claude.ts`).
-6. Flatten fold 1 (M1a, 8 PRs -> #94) after Codex re-reviews #95/#94; fold 3 (post-office chain -> 3 PRs) after items 1 to 4 land. Owner approved the whole plan; no fold under a running worker.
-7. Spec Q11 (M7 only, after v2.0): recommendation, the viewer reads credential and port from a file the post office writes in the same owner-only folder; residual risk 16 stands. Small spec task later.
-8. Ink lane (#145 to #151) waits until M1 is merged.
+## Paused (above the bottom; resume only when the stack reaches them)
 
-Merges: Codex approved #120 (now folded), #131 `999e45b`, #134 `117d2e6`, but their bases are unapproved `base-*` branches: nothing merges until bottom-up is possible. Last Codex tick `2026-11-26T16:29:17Z`.
-
-## Owner's instructions in force
-
-- Keep pushing PRs; Codex reviews, then merge on approval at the exact head, bottom-up, script in its own tab.
-- No weekly figure in the cockpit (owner: no, 2026-11-26).
-- Workers stop at 95% weekly (unmeasurable), hi timer `sleep 1800`; speed-up five; a Codex file per pushed fix; branch deletion needs the owner.
+- #141 at `df61172`: Left in `tasks/w194-fix141.md` (whole postOffice.test.ts on Windows, body, Codex file, P1 build note startup misses moved HEAD/ARM-6).
+- #138 at `3e37186` (C9, C10, C6 identity fixed; C6 `%LOCALAPPDATA%` move left, `tasks/w192-fix138.md`). #111 at `6d4ff2f` (C6 fixed, Codex file 91). Codex files 91 to 93 are for paused PRs: fine if Codex does them, but 94 comes first.
+- #139 C3 follow-up, #142, #143, Ink lane #145 to #151, spec Q11.
 
 ## Lessons
 
-- The cockpit's same-file hold compares paths across worktrees: two workers on different branches that both touch `postOffice.test.ts` hold each other, and committing doesn't release it. Only the owner (`/cockpit task go`) or closing a worker does. Before launching, check that no live worker's PR touches the same paths (including merges, which bring the child's files).
-- Opus fix workers get one P1 or a test fix plus one P1 within 150k.
+- Same-file hold compares paths across worktrees; check live workers' files before launching.
+- Workers stall waiting on background test runs whose notification never comes: nudge after ~10 min idle.
+- `check_workers.py` STOPPED with "waiting for notification" is normal.
