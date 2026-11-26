@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { HarnessGitHeld, type GitResult, type HarnessKind } from "./harness.js";
 
@@ -15,7 +16,12 @@ export type TrustedState = Record<string, string>;
 
 /** Where git for a repository is: what harness git is given as GIT_DIR, GIT_WORK_TREE and GIT_COMMON_DIR. */
 export interface GitRepo { gitDir: string; workTree: string; commonDir: string }
-export interface GitRunner { run(args: string[], kind?: HarnessKind): Promise<GitResult> }
+export interface GitRunner { run(args: string[], kind?: HarnessKind, cwd?: string): Promise<GitResult> }
+/**
+ * The files a full read found git reading, for the check before and after each command: "tree" is a folder hashed
+ * file by file, "file" a file's bytes (or that it is a folder, or missing). Hashed without running git.
+ */
+export type Watch = Map<string, "file" | "tree">;
 
 export interface HoldEvent { event: "trusted" | "held" | "released"; files?: string[]; hashes?: TrustedState; reason?: string }
 
@@ -49,14 +55,32 @@ function hashFolder(folder: string, label: string, into: TrustedState) {
   }
 }
 
+/** What the watched files hold now, by path. Any difference from the last full read sends the check back to git. */
+export function hashWatch(watch: Watch): TrustedState {
+  const into: TrustedState = {};
+  for (const [path, kind] of watch) {
+    if (kind === "tree") { hashFolder(path, path, into); continue; }
+    try { into[path] = isFolder(path) ? "folder" : sha(readFileSync(path)); } catch { into[path] = "missing"; }
+  }
+  return into;
+}
+
+/** The global config files git may read, read or not: a new one is a change too. */
+function globalConfigs(): string[] {
+  if (process.env.GIT_CONFIG_GLOBAL) return [resolve(process.env.GIT_CONFIG_GLOBAL)];
+  const home = process.env.HOME || homedir();
+  return [join(home, ".gitconfig"), join(process.env.XDG_CONFIG_HOME || join(home, ".config"), "git", "config")];
+}
+
 /** The config git reads, every scope but the command line, includes followed, one hash per file it came from. */
-async function hashConfig(git: GitRunner, label: (origin: string) => string, into: TrustedState) {
+async function hashConfig(git: GitRunner, label: (origin: string) => string, into: TrustedState, watch?: (origin: string, entry?: string) => void) {
   const result = await git.run(["config", "--list", "--show-origin", "--show-scope", "-z"]);
   if (result.code !== 0) throw new Error(`git config --list failed: ${result.stderr.trim()}`);
   const fields = result.stdout.split("\0");
   const groups = new Map<string, string[]>();
   for (let i = 0; i + 2 < fields.length; i += 3) {
     const [scope, origin, entry] = [fields[i]!, fields[i + 1]!, fields[i + 2]!];
+    if (origin.startsWith("file:")) watch?.(origin.slice("file:".length), entry);
     if (scope === "command" || !origin.startsWith("file:") || uncounted.test(entry)) continue;
     const key = label(origin.slice("file:".length));
     groups.set(key, [...(groups.get(key) ?? []), entry]);
@@ -65,8 +89,9 @@ async function hashConfig(git: GitRunner, label: (origin: string) => string, int
 }
 
 /** What a repository's git reads, and the same for each submodule checked out in it, at any depth. */
-export async function readState(options: Pick<HarnessHoldOptions, "repo" | "gitFor" | "maxDepth">): Promise<TrustedState> {
+export async function readState(options: Pick<HarnessHoldOptions, "repo" | "gitFor" | "maxDepth">, watch?: Watch): Promise<TrustedState> {
   const state: TrustedState = {};
+  for (const path of globalConfigs()) watch?.set(path, "file");
   const seen = new Set<string>();
   const walk = async (repo: GitRepo, depth: number) => {
     const where = (path: string) => {
@@ -74,9 +99,16 @@ export async function readState(options: Pick<HarnessHoldOptions, "repo" | "gitF
       return slash(rel.startsWith("..") || isAbsolute(rel) ? path : rel);
     };
     const git = options.gitFor(repo);
-    await hashConfig(git, (origin) => where(resolve(repo.workTree, origin)), state);
+    // Each config file read, the files its include paths name (there or not), the repository's own, and its index (gitlinks).
+    for (const path of [join(repo.commonDir, "config"), join(repo.gitDir, "config.worktree"), join(repo.gitDir, "index")]) watch?.set(path, "file");
+    await hashConfig(git, (origin) => where(resolve(repo.workTree, origin)), state, (origin, entry) => {
+      const file = resolve(repo.workTree, origin);
+      watch?.set(file, "file");
+      const named = /^include(?:if\..*)?\.path[\n=](.+)$/is.exec(entry ?? "")?.[1];
+      if (named) watch?.set(named.startsWith("~/") ? join(homedir(), named.slice(2)) : resolve(dirname(file), named), "file");
+    });
     for (const folder of new Set([repo.commonDir, repo.gitDir])) {
-      for (const name of ["hooks", "info"]) hashFolder(join(folder, name), where(join(folder, name)), state);
+      for (const name of ["hooks", "info"]) { hashFolder(join(folder, name), where(join(folder, name)), state); watch?.set(join(folder, name), "tree"); }
     }
     if (depth >= (options.maxDepth ?? 8)) return;
     const listed = await git.run(["ls-files", "-s", "-z"]);
@@ -86,6 +118,7 @@ export async function readState(options: Pick<HarnessHoldOptions, "repo" | "gitF
       if (!match) continue;
       const folder = join(repo.workTree, match[1]!);
       const dotGit = join(folder, ".git");
+      watch?.set(dotGit, "file");
       let gitDir: string | undefined;
       if (isFile(dotGit)) {
         const text = readFileSync(dotGit, "utf8");
@@ -95,6 +128,7 @@ export async function readState(options: Pick<HarnessHoldOptions, "repo" | "gitF
       } else if (isFolder(dotGit)) gitDir = dotGit;
       if (!gitDir || !isFolder(gitDir) || seen.has(real(gitDir))) continue;
       seen.add(real(gitDir));
+      watch?.set(gitDir, "file");
       let commonDir = gitDir;
       const commondir = join(gitDir, "commondir");
       if (isFile(commondir)) {
@@ -102,6 +136,7 @@ export async function readState(options: Pick<HarnessHoldOptions, "repo" | "gitF
         state[`submodule ${where(commondir)}`] = sha(text);
         commonDir = resolve(gitDir, text.trim());
       }
+      watch?.set(commondir, "file");
       state[`submodule ${where(gitDir)}`] = "present";
       await walk({ gitDir, workTree: folder, commonDir }, depth + 1);
     }
@@ -122,6 +157,8 @@ export class HarnessHold {
   private trusted: TrustedState = {};
   private files: string[] | undefined;
   private turnOpen = false;
+  /** The watched files as the last full read found them, and what they held just before it. */
+  private quick?: { watch: Watch; hashes?: TrustedState };
 
   constructor(private readonly options: HarnessHoldOptions) {}
 
@@ -134,7 +171,7 @@ export class HarnessHold {
    */
   async start(): Promise<HoldCheck> {
     const saved = this.load();
-    const current = await readState(this.options);
+    const current = await this.read();
     if (!saved || (!saved.held && !saved.turnOpen)) { this.trust(current); return { held: false }; }
     this.trusted = saved.trusted;
     this.turnOpen = saved.turnOpen === true;
@@ -145,23 +182,43 @@ export class HarnessHold {
 
   /** Before and after a command, and at each later use of the army: held while anything differs, and goes on once nothing does. */
   async check(): Promise<HoldCheck> {
-    const files = changedFiles(this.trusted, await readState(this.options));
+    // Nothing git reads changed since a full read that held nothing: no git needed. Otherwise git reads it all again.
+    if (!this.held && this.quick?.hashes && !changedFiles(this.quick.hashes, hashWatch(this.quick.watch)).length) return { held: false };
+    const files = changedFiles(this.trusted, await this.read());
     if (files.length) return this.hold(files, "changed");
     if (this.held) { this.files = undefined; this.save(); this.options.log?.({ event: "released" }); }
     return { held: false };
   }
 
   /** The owner answered y on the guard's card, or Shadow Army's own command changed these files: this is the trusted state. */
-  async accept(): Promise<void> { this.trust(await readState(this.options)); }
+  async accept(): Promise<void> { this.trust(await this.read()); }
 
   /** Run harness git between a check before and one after. A change on either side holds, and throws. */
-  async run(git: GitRunner, args: string[], kind: HarnessKind = "other"): Promise<GitResult> {
+  async run(git: GitRunner, args: string[], kind: HarnessKind = "other", cwd?: string): Promise<GitResult> {
     const before = await this.check();
     if (before.held) throw new HarnessGitHeld(before.line);
-    const result = await git.run(args, kind);
+    const result = await git.run(args, kind, ...(cwd === undefined ? [] : [cwd]));
     const after = await this.check();
     if (after.held) throw new HarnessGitHeld(after.line);
     return result;
+  }
+
+  /** WSP-10: harness git whose every command, not a batch of them, runs between a check before and one after. */
+  wrap(gitFor: (repo: GitRepo) => GitRunner): (repo: GitRepo) => GitRunner {
+    return (repo) => { const git = gitFor(repo); return { run: (args, kind, cwd) => this.run(git, args, kind, cwd) }; };
+  }
+
+  /**
+   * A full read through git. The watched files are hashed before it, so a change during the read shows at the next check;
+   * where the read found new files to watch, the next check reads in full again.
+   */
+  private async read(): Promise<TrustedState> {
+    const watch: Watch = new Map();
+    const before = this.quick ? hashWatch(this.quick.watch) : undefined;
+    const state = await readState(this.options, watch);
+    const same = this.quick && watch.size === this.quick.watch.size && [...watch].every(([path, kind]) => this.quick!.watch.get(path) === kind);
+    this.quick = { watch, ...(same && before ? { hashes: before } : {}) };
+    return state;
   }
 
   /** A turn's guard is open until it has closed (PO-8): a restart then trusts the saved state, not the current one. */

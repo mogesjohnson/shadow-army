@@ -95,6 +95,34 @@ describe("harness git hold", () => {
     expect(repo.ran()).toEqual([]);
   }, 60_000);
 
+  it("checks before and after each command, not each batch: a change between two holds the next before it runs (review 15 C1)", async () => {
+    const { repo, gitFor, main, open } = setup(), hold = open(), ran: string[] = [];
+    await hold.start();
+    const git = hold.wrap((where) => { const inner = gitFor(where); return { run: (args, kind, cwd) => { ran.push(args[0]!); return inner.run(args, kind, cwd); } }; })(main);
+    expect((await git.run(["status", "--porcelain"], "guard")).code).toBe(0);
+    const undo = plantChange(repo, "hook");
+    await expect(git.run(["ls-files"], "guard")).rejects.toBeInstanceOf(HarnessGitHeld);
+    expect(ran).toEqual(["status"]);
+    undo();
+    expect((await git.run(["ls-files"], "guard")).code).toBe(0);
+    expect(ran).toEqual(["status", "ls-files"]);
+  }, 60_000);
+
+  it("runs no git for a check while nothing git reads changed, and holds once a file an include names appears", async () => {
+    const { repo, main, gitFor } = setup(), calls: string[] = [];
+    appendFileSync(join(repo.gitDir, "config"), "[include]\n\tpath = extra.cfg\n");
+    const counting = (where: typeof main) => { const inner = gitFor(where); return { run: (args: string[], kind?: "guard") => { calls.push(args[0]!); return inner.run(args, kind); } }; };
+    const hold = new HarnessHold({ repo: main, gitFor: counting, statePath: join(repo.root, "..", "log", "quick.json") });
+    expect(await hold.start()).toEqual({ held: false });
+    expect(await hold.check()).toEqual({ held: false });
+    calls.length = 0;
+    expect(await hold.check()).toEqual({ held: false });
+    expect(calls).toEqual([]);
+    writeFileSync(join(repo.gitDir, "extra.cfg"), filter);
+    const check = await hold.check();
+    expect(check.held && check.files).toEqual([".git/extra.cfg"]);
+  }, 60_000);
+
   it("names the files that differ", () => {
     expect(changedFiles({ "config .git/config": "a", "x": "1" }, { "config .git/config": "b", "y": "2" })).toEqual([".git/config", "x", "y"]);
   });
