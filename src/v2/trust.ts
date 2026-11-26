@@ -88,17 +88,17 @@ async function load(deps: TrustDeps, commonDir: string): Promise<Loaded> {
   const path = recordPath(deps.home, commonDir);
   let raw: string;
   try { raw = await readFile(path, "utf8"); } catch (error) {
-    if (code(error) !== "ENOENT") deps.log?.(`trust record ${path} can't be read (${code(error) ?? String(error)}); it counts as none`);
+    if (code(error) !== "ENOENT") note(deps, `trust record ${path} can't be read (${code(error) ?? String(error)}); it counts as none`);
     return { record: null, raw: null };
   }
   let parsed: unknown;
   try { parsed = JSON.parse(raw); } catch {
-    deps.log?.(`trust record ${path} can't be parsed; it counts as none`);
+    note(deps, `trust record ${path} can't be parsed; it counts as none`);
     return { record: null, raw };
   }
   const result = recordSchema.safeParse(parsed);
   if (!result.success || result.data.commonDir !== commonDir) {
-    deps.log?.(`trust record ${path} can't be parsed; it counts as none`);
+    note(deps, `trust record ${path} can't be parsed; it counts as none`);
     return { record: null, raw };
   }
   return { record: result.data, raw };
@@ -204,7 +204,7 @@ async function commit(deps: TrustDeps, commonDir: string, change: (base: TrustRe
     if (!renamed) { await io.rm(temp, { force: true }).catch(() => undefined); continue; }
     if (releaseError === undefined) return { ok: true, record };
     const warning = `the trust record was written, but its lock ${path}.lock can't be removed: ${describe(releaseError)}`;
-    deps.log?.(warning);
+    note(deps, warning);
     return { ok: true, record, warning };
   }
   return { ok: false, reason: `the trust record kept changing during ${MAX_ATTEMPTS} attempts; nothing was accepted` };
@@ -290,6 +290,13 @@ async function rawNow(io: TrustIo, path: string): Promise<string | null> {
     if (code(error) === "ENOENT") return null;
     throw error;
   }
+}
+/** The log is best-effort: a sink that throws or rejects never changes a result, above all a committed one. */
+function note(deps: TrustDeps, message: string): void {
+  try {
+    const sent: unknown = deps.log?.(message);
+    if (sent && typeof (sent as PromiseLike<unknown>).then === "function") Promise.resolve(sent).catch(() => undefined);
+  } catch { /* the result stands without its log line */ }
 }
 function describe(error: unknown): string {
   if (code(error) === "ELOCKED") return (error as Error).message;

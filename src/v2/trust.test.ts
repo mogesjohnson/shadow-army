@@ -284,6 +284,24 @@ describe("committing the record", () => {
     expect(await leftovers(d)).toEqual([]);
   });
 
+  it("keeps a committed acceptance ok with its warning when the log callback throws or rejects", async () => {
+    const busyRm = async (path: string, options?: { force?: boolean }) => {
+      if (path.endsWith(".lock")) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      await rm(path, options);
+    };
+    const logs = [
+      () => { throw new Error("sink down"); },
+      () => Promise.reject(new Error("sink down")) as unknown as void,
+    ];
+    for (const log of logs) {
+      const d = await deps();
+      const mine = await oneFile(d, "mine");
+      const result = await accept({ ...d, log, io: { rm: busyRm } }, mine.input);
+      expect(result).toMatchObject({ ok: true, warning: expect.stringMatching(/was written, but its lock .* can't be removed: EBUSY/) });
+      expect((await check(d, "/r/.git", mine.folder)).untrusted).toEqual([]);
+    }
+  });
+
   it("never takes the lock from a live owner, however long it stalls, and takes it over once that owner is gone", async () => {
     const d = await deps();
     const mine = await oneFile(d, "mine");
