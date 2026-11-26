@@ -354,6 +354,30 @@ describe("the mod's preflight (HOST-2, M1b-29)", () => {
     expect(spawns).toHaveLength(1);
   });
 
+  it("asks for no roster once Claude Code retires the army after the runtime check (C10, HOST-2)", async () => {
+    let gap = 0;
+    for (let hops = 0; hops < 12; hops++) {
+      const env: { refuseOn?: string } = {};
+      const { send, commands, spawns, heartbeat, $ } = await mod(() => ({ status: "completed", summary: "ok" }), env);
+      await send("claude-sonnet --claim a go");
+      env.refuseOn = "renew";
+      let retired = -1;
+      const log = $.ui.log;
+      $.ui.log = (line: string) => { if (line.includes("refused the request")) retired = commands.length; return log(line); };
+      const sending = send("claude-sonnet --claim a go");
+      let wait = Promise.resolve();
+      for (let i = 0; i < hops; i++) wait = wait.then(() => {});
+      void wait.then(() => heartbeat()!.run());
+      await sending;
+      expect(retired).toBeGreaterThan(0);
+      // A retirement before the runtime check starts a new army; one after it must post nothing more, the roster included.
+      if (spawns.length > 1) continue;
+      gap++;
+      expect(commands.slice(retired)).toEqual([]);
+    }
+    expect(gap).toBeGreaterThan(0);
+  });
+
   it("ends a post office that never reports ready after 60 s, naming the step, and the next use starts a new one", async () => {
     const { send, after, spawns, logs, $ } = await mod(() => ({ status: "completed", summary: "ok" }));
     const spawn = $.process.spawn as (o: { argv: string[] }) => unknown;

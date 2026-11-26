@@ -60,7 +60,14 @@ function cancelTimers(runtime: Runtime): void {
   runtime.heartbeat = undefined;
 }
 
+/** A foreground command. C10, HOST-2: it checks retirement at dispatch, so nothing is sent once Claude Code refused. */
 async function post($: EngineInterface, runtime: Runtime, command: Record<string, unknown>): Promise<unknown> {
+  if (runtime.closing) throw new Error("The army ended before the command could run");
+  return transmit($, runtime, command);
+}
+
+/** Sends `command` whatever the army's state; only the intentional lease release uses it directly. */
+async function transmit($: EngineInterface, runtime: Runtime, command: Record<string, unknown>): Promise<unknown> {
   if (!runtime.url || !runtime.credential) throw new Error("post office is not connected");
   let response: { ok: boolean; status: number; text: string };
   try {
@@ -92,7 +99,7 @@ async function release($: EngineInterface, runtime: Runtime, reason?: string): P
   runtime.reject(new Error("Claude session ended before the post office was ready"));
   retiring.add(runtime);
   if (active === runtime) active = undefined;
-  if (runtime.url) await post($, runtime, { action: "release", session: runtime.session, ...(reason ? { reason } : {}) });
+  if (runtime.url) await transmit($, runtime, { action: "release", session: runtime.session, ...(reason ? { reason } : {}) });
   // The relay remains drained while the detached helper finishes cleanup. If
   // native unload kills the relay first, the independent helper's lease expires.
 }
@@ -134,7 +141,7 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     runtime.deadline = undefined;
     if (runtime.closing) {
       // An end event may beat relay startup. Release a late ready helper too.
-      void post($, runtime, { action: "release", session: runtime.session }).catch(() => {});
+      void transmit($, runtime, { action: "release", session: runtime.session }).catch(() => {});
       return;
     }
     runtime.heartbeat = $.clock.every(RENEW_EVERY_MS, () => renew($, runtime));
