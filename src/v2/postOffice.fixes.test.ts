@@ -180,6 +180,14 @@ describe("post office fixes from the M1a pre-review", () => {
     await o.open("medic", { claims: ["src/**"] });
   }, 30_000);
 
+  it("#93 C7: an open that overlaps a pending open with other claims is refused; matching claims share the session", async () => {
+    const { office: o } = await office({ tank: [] });
+    const [first, other, same] = await Promise.allSettled([o.open("tank", { claims: ["src/a.ts"] }), o.open("tank", { claims: ["src/**"] }), o.open("tank", { claims: ["src/a.ts"] })]);
+    expect(first.status).toBe("fulfilled");
+    expect(String((other as PromiseRejectedResult).reason)).toContain("holds claims src/a.ts");
+    expect((same as PromiseFulfilledResult<{ session: string }>).value.session).toBe((first as PromiseFulfilledResult<{ session: string }>).value.session);
+  }, 30_000);
+
   it("#90 C7: two matching sends at once run one turn; the other is refused before any brief", async () => {
     const steps: Record<string, Step[]> = { tank: [async (cwd) => { await put(cwd, "src/a.ts", "one\n"); return "completed"; }, async () => "completed"] };
     const { office: o } = await office(steps);
