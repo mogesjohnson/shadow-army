@@ -10,6 +10,7 @@ const history = [];
 let current;
 let cost = 0;
 let approval;
+let auxiliary;
 const emit = (frame) => process.stdout.write(`${JSON.stringify({ session_id: session, ...frame })}\n`);
 const assistant = (text, usage = { input_tokens: 10, output_tokens: 2, cache_creation_input_tokens: 5, cache_read_input_tokens: 7 }, extra = {}) => emit({
   type: "assistant", parent_tool_use_id: null,
@@ -31,7 +32,8 @@ for await (const line of createInterface({ input: process.stdin })) {
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
       emit({ type: "system", subtype: "init", model: "fake-claude", version: "synthetic-2.1.295" });
     } else if (frame.request.subtype === "interrupt") {
-      if (current?.message.content === "ignore-interrupt") continue;
+      if (["ignore-interrupt", "malformed-ignore-interrupt", "malformed-rate-ignore-interrupt"].includes(current?.message.content)) continue;
+      clearInterval(auxiliary);
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
       if (approval) emit({ type: "control_cancel_request", request_id: approval });
       approval = undefined;
@@ -52,6 +54,57 @@ for await (const line of createInterface({ input: process.stdin })) {
   history.push(text);
   if (text === "malformed") { process.stdout.write("{broken JSON}\n"); continue; }
   if (text === "malformed-once") { process.stdout.write("{broken JSON sk-ant-abcdefghijklmnop}\n"); result("after bad line"); continue; }
+  // The turn's own result arrives broken; the CLI is then idle and an interrupt ends nothing.
+  if (text === "malformed-idle") { process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue; }
+  // The result line is garbled but the turn's cost still advances: the CLI is idle, so an interrupt ends nothing.
+  if (text === "malformed-idle-cost") { cost += 0.03; process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue; }
+  // A bad line, then valid frames that belong to no turn, and no result: only the interrupt ends the turn.
+  if (text === "malformed-unrelated") {
+    process.stdout.write("{broken JSON}\n");
+    for (let i = 0; i < 20; i++) { emit({ type: "system", subtype: "status", status: null }); await new Promise((resolve) => setTimeout(resolve, 20)); }
+    continue;
+  }
+  // A typed provider error, then the turn's result line arrives broken: recovery must keep the typed error.
+  if (text === "malformed-rate") {
+    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } });
+    process.stdout.write("{broken JSON}\n");
+    continue;
+  }
+  // The same, but the interrupt is never answered: the containment close must keep the typed error.
+  if (text === "malformed-rate-ignore-interrupt") {
+    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } });
+    process.stdout.write("{broken JSON}\n");
+    continue;
+  }
+  if (text === "malformed-login-idle") {
+    assistant("Please login to Claude Code", undefined, { error: "authentication_failed" });
+    process.stdout.write("{\"type\":\"result\",broken}\n"); current = undefined; continue;
+  }
+  // A bad line, then only a subagent's output until the interrupt: auxiliary output is not the turn's progress.
+  if (text === "malformed-auxiliary") {
+    process.stdout.write("{broken JSON}\n");
+    let ticks = 0;
+    auxiliary = setInterval(() => {
+      if (++ticks > 150) { clearInterval(auxiliary); return; }
+      emit({ type: "stream_event", parent_tool_use_id: "agent-tool", event: { type: "content_block_delta", delta: { type: "text_delta", text: "sub " } } });
+      assistant("subagent working", undefined, { parent_tool_use_id: "agent-tool" });
+      emit({ type: "user", parent_tool_use_id: "agent-tool", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "sub-tool", content: "ok" }] } });
+    }, 20);
+    continue;
+  }
+  // A bad line, then the turn's own progress, then its result: the quiet window restarts at each step.
+  if (text === "malformed-then-progress") {
+    process.stdout.write("{broken JSON}\n");
+    for (let i = 0; i < 8; i++) { await new Promise((resolve) => setTimeout(resolve, 30)); assistant(`working ${i}`); }
+    result("progress finished"); continue;
+  }
+  // A bad line while a tool runs, and an interrupt that is never answered: the turn may still be running.
+  if (text === "malformed-ignore-interrupt") {
+    await writeFile(join(process.cwd(), "partial.txt"), "partial edit\n");
+    process.stdout.write("{broken JSON}\n");
+    continue;
+  }
+  if (text === "malformed-long") { process.stdout.write(`{broken ${"x".repeat(185)} sk-ant-abcdefghijklmnop ${"y".repeat(40)}}\n`); result("after long bad line"); continue; }
   if (text === "malformed-ten") { for (let i = 0; i < 10; i++) process.stdout.write("{broken JSON}\n"); continue; }
   if (text === "malformed-nine-then-ok") { for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); assistant("ok"); for (let i = 0; i < 9; i++) process.stdout.write("{broken JSON}\n"); result("survived"); continue; }
   if (text === "split") {
@@ -98,11 +151,11 @@ for await (const line of createInterface({ input: process.stdin })) {
     assistant("subagent text", { input_tokens: 99999, cache_read_input_tokens: 99999 }, { parent_tool_use_id: "agent-tool" });
     assistant("main text"); result("main text"); continue;
   }
-  if (text === "unknown-usage") { emit({ type: "result", subtype: "success", is_error: false, result: "No usage available", terminal_reason: "completed" }); current = undefined; continue; }
+  if (text === "unknown-usage") { emit({ type: "result", subtype: "success", is_error: false, result: "No usage available", terminal_reason: "completed", user_message_uuid: current?.uuid }); current = undefined; continue; }
   if (text === "inspect") {
     const args = process.argv.slice(2);
     const appendPath = args[args.indexOf("--append-system-prompt-file") + 1];
-    result(JSON.stringify({ pid: process.pid, args, history, ...(args.includes("--append-system-prompt-file") ? { appendText: await readFile(appendPath, "utf8") } : {}) })); continue;
+    result(JSON.stringify({ pid: process.pid, args, history, autoMemoryOff: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, ...(args.includes("--append-system-prompt-file") ? { appendText: await readFile(appendPath, "utf8") } : {}) })); continue;
   }
   if (text === "partial-events") {
     emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "first " } } });
