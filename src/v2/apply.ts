@@ -57,21 +57,28 @@ export async function applyAudited(run: RunGit, write: WriteOutcome, since?: str
       const why = [...check.stderr.matchAll(/error:\s*([^\n]+)/g)].at(-1)?.[1]?.trim();
       return { applied: false, reason: `the changes no longer apply to your checkout, which has moved on since the run started${why ? ` (${why})` : ""}`, clashes: [] };
     }
-    // git apply is all or nothing. New paths are then marked intent-to-add, by literal pathspec; if that fails, the edits come back out.
-    // A hold seen after git apply ran, or its time limit, can leave the edits in the folder: the outcome says what is there.
+    // New paths are then marked intent-to-add, by literal pathspec; if that fails, the edits come back out.
+    // A failure, a hold seen after git apply ran, or its time limit can leave edits in the folder: the outcome says what is there.
+    const partial = (error: unknown) => ({ applied: false as const, reason: `${(error as Error).message}; part of the run's changes may be in your folder: ${files.map((file) => file.path).join(", ")}`, clashes: [] });
     try { await git(["apply", "--whitespace=nowarn", patch]); }
     catch (error) {
-      const where = await landed(run, patch, error);
+      const where = await landed(run, patch, error, false);
       if (where === "none") throw error;
-      if (where === "some") return { applied: false, reason: `${(error as Error).message}; part of the run's changes may be in your folder: ${files.map((file) => file.path).join(", ")}`, clashes: [] };
+      if (where === "some") return partial(error);
     }
     const added = files.filter((file) => file.change === "A").map((file) => `:(literal)${file.path}`);
     if (added.length) {
       try { await git(["add", "-N", "-f", "--", ...added]); }
       catch (error) {
         // Not applied only if the edits came back out; a held harness git can't take them out, so they are reported as applied.
-        const undo = await run(["apply", "-R", "--whitespace=nowarn", patch]).catch(() => undefined);
-        if (undo?.code === 0) throw error;
+        let where: "all" | "none" | "some" = "none";
+        try { await git(["apply", "-R", "--whitespace=nowarn", patch]); }
+        catch (undo) {
+          if (!(undo instanceof GitFailed || undo instanceof HarnessGitHeld || undo instanceof HarnessGitTimeout)) throw undo;
+          where = await landed(run, patch, undo, true);
+        }
+        if (where === "none") throw error;
+        if (where === "some") return partial(error);
       }
     }
   } catch (error) {
@@ -83,10 +90,16 @@ export async function applyAudited(run: RunGit, write: WriteOutcome, since?: str
   return { applied: true, files };
 }
 
-/** Whether a git apply that ended in `error` changed the folder: all of the patch, none of it, or some (or it can't be told). */
-async function landed(run: RunGit, patch: string, error: unknown): Promise<"all" | "none" | "some"> {
-  if (error instanceof HarnessGitHeldAfter) return error.result.code === 0 ? "all" : "none"; // git apply is all or nothing
-  if (!(error instanceof HarnessGitTimeout)) return "none"; // it failed, or the check before it held, so it never ran
+/**
+ * How much of the patch is in the folder after a git apply (`reverse`: apply -R) that ended in `error`: all, none, or some
+ * (or it can't be told). Only a command that never ran, or one that ran and succeeded, is known without asking git:
+ * a failed write or a stopped process can leave part of it.
+ */
+async function landed(run: RunGit, patch: string, error: unknown, reverse: boolean): Promise<"all" | "none" | "some"> {
+  const ran = error instanceof HarnessGitHeldAfter, succeeded = ran && error.result.code === 0;
+  if (succeeded) return reverse ? "none" : "all";
+  if (!ran && error instanceof HarnessGitHeld) return reverse ? "all" : "none"; // the check before it held: it never ran
+  if (!(ran || error instanceof GitFailed || error instanceof HarnessGitTimeout)) return reverse ? "all" : "none";
   const fits = async (args: string[]) => (await run(["apply", ...args, "--check", "--whitespace=nowarn", patch]).catch(() => undefined))?.code === 0;
   if (await fits(["-R"])) return "all";
   return await fits([]) ? "none" : "some";

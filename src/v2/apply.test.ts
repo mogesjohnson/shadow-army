@@ -170,6 +170,7 @@ describe("M1-AC28: the audited change lands in the owner's folder, uncommitted",
       if (before) return before;
       const result = await harness.run(args, kind, cwd);
       if (args[0] === "apply" && args.length === 3 && result.code === 0) { applied = true; const after = fail(["after", ...args], applied); if (after instanceof Error) throw after; }
+      if (args[0] === "apply" && args[1] === "-R" && args.length === 4) { const after = fail(["after-undo"], applied); if (after instanceof Error) throw after; }
       return result;
     };
     const result = await applyAudited(run, { applicable: true, base, commit, branch: "shadow/tank/t1" } as WriteOutcome);
@@ -180,7 +181,7 @@ describe("M1-AC28: the audited change lands in the owner's folder, uncommitted",
 
   it("reports the edits as applied when a hold after git apply leaves them in the folder and nothing can take them out (#136 self-review)", async () => {
     // Held by the check after `apply`: every later command is held too, `add -N` and `apply -R` included.
-    const held = await interrupted((args, applied) => (args[0] === "after" || applied) ? new HarnessGitHeldAfter("held", { code: 0, stdout: "", stderr: "" }) : undefined);
+    const held = await interrupted((args, applied) => args[0] === "after" ? new HarnessGitHeldAfter("held", { code: 0, stdout: "", stderr: "" }) : applied ? new HarnessGitHeld("held") : undefined);
     expect(held.a).toBe("audited\n");
     expect(held.result).toEqual({ applied: true, files: both });
     // Held before `add -N` runs.
@@ -200,5 +201,13 @@ describe("M1-AC28: the audited change lands in the owner's folder, uncommitted",
     const failed = await interrupted((args) => args[0] === "add" ? { code: 1, stdout: "", stderr: "fatal: no" } : undefined);
     expect(failed).toMatchObject({ a: "a\n", result: { applied: false, reason: "fatal: no" } });
     expect(existsSync(join(failed.repo.dir, "src/new.ts"))).toBe(false);
+    // The undo ran and took the edits out, then a hold was seen after it: still nothing applied.
+    const undone = await interrupted((args) => args[0] === "add" ? { code: 1, stdout: "", stderr: "fatal: no" } : args[0] === "after-undo" ? new HarnessGitHeldAfter("held", { code: 0, stdout: "", stderr: "" }) : undefined);
+    expect(undone).toMatchObject({ a: "a\n", result: { applied: false, reason: "fatal: no" } });
+  }, 60_000);
+
+  it("says part of the changes may be in the folder when git apply failed and a hold stops finding out (self-review P1)", async () => {
+    const held = await interrupted((args, applied) => args[0] === "after" ? new HarnessGitHeldAfter("held", { code: 1, stdout: "", stderr: "" }) : applied ? new HarnessGitHeld("held") : undefined);
+    expect(held.result).toMatchObject({ applied: false, reason: expect.stringContaining("may be in your folder: src/a.ts, src/new.ts") });
   }, 60_000);
 });
