@@ -480,7 +480,11 @@ export class ClaudeChannel implements NativeChannel {
       }
       // A failed containment check must unblock callers without claiming cleanup succeeded.
       // The post office keeps such a channel down and never automatically resumes its queue.
-      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: this.reason });
+      // A typed provider error the turn already saw (a rate-limit reset, a login requirement) stays the
+      // turn's error; the transport diagnostic stays on the error and closed events (#94 C17). Failed
+      // containment outranks it: native work may still be running, so the turn must not read as a wait.
+      const typed = containmentStopped && this.current?.error && this.current.error.kind !== "other" && this.current.error.kind !== "transport" ? this.current.error : undefined;
+      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: typed ?? this.reason });
       this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped });
     })();
     return this.closePromise;

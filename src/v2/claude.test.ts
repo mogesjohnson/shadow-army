@@ -462,6 +462,33 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("interrupted");
   }, 15_000);
 
+  windowsOnly("keeps a typed provider error on the turn when recovery's interrupt is never confirmed (#94 C17)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+    const result = await channel.send("malformed-rate-ignore-interrupt");
+    expect(result.status).toBe("interrupted");
+    expect(result.error).toEqual({ kind: "rate_limit", message: "rate_limit_event: rejected", resetAt: new Date(1900000000 * 1000).toISOString() });
+    // The transport diagnostic stays on the channel's own error and close events.
+    expect(events.some((event) => event.type === "error" && (event.data as NativeError).kind === "transport")).toBe(true);
+    const closed = events.find((event) => event.type === "closed")?.data as { reason?: NativeError; containmentStopped?: boolean } | undefined;
+    expect(closed?.reason?.kind).toBe("transport");
+    expect(closed?.containmentStopped).toBe(true);
+  }, 15_000);
+
+  windowsOnly("reports failed containment over an earlier typed provider error (#94 C17)", async () => {
+    const original = managedProcesses.spawnManagedProcess;
+    const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockImplementationOnce(async (options) => {
+      const child = await original(options);
+      return { ...child, close: async () => { await child.close(); throw new Error("injected containment uncertainty"); } };
+    });
+    try {
+      const { channel } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+      const result = await channel.send("malformed-rate-ignore-interrupt");
+      // Native work may still be running, so the turn must not read as a rate limit to wait out.
+      expect(result.error?.kind).toBe("transport");
+      expect(result.error?.message).toContain("containment failed");
+    } finally { injected.mockRestore(); }
+  }, 15_000);
+
   windowsOnly("marks a missing cost boundary when recovery settles a turn without a usable total (#96 C7)", async () => {
     const { channel } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 50 });
     expect((await channel.send("one")).usage?.costUsd).toBeCloseTo(0.03, 6);

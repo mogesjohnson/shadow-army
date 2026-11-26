@@ -32,7 +32,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
       emit({ type: "system", subtype: "init", model: "fake-claude", version: "synthetic-2.1.295" });
     } else if (frame.request.subtype === "interrupt") {
-      if (current?.message.content === "ignore-interrupt" || current?.message.content === "malformed-ignore-interrupt") continue;
+      if (["ignore-interrupt", "malformed-ignore-interrupt", "malformed-rate-ignore-interrupt"].includes(current?.message.content)) continue;
       clearInterval(auxiliary);
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
       if (approval) emit({ type: "control_cancel_request", request_id: approval });
@@ -66,6 +66,12 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   // A typed provider error, then the turn's result line arrives broken: recovery must keep the typed error.
   if (text === "malformed-rate") {
+    emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } });
+    process.stdout.write("{broken JSON}\n");
+    continue;
+  }
+  // The same, but the interrupt is never answered: the containment close must keep the typed error.
+  if (text === "malformed-rate-ignore-interrupt") {
     emit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } });
     process.stdout.write("{broken JSON}\n");
     continue;
