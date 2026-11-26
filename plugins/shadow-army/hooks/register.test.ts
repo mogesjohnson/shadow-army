@@ -980,6 +980,27 @@ describe("a relay that ends or breaks outside a stall (PO-7, C5, review 28)", ()
     expect(spawns).toHaveLength(1);
     expect(logs).toHaveLength(1);
   });
+
+  it("keeps refusing after a stream failure when the relay's cleanup times out and its end then arrives late (C5, review 45)", async () => {
+    let broke!: (error: Error) => void;
+    let open!: () => void;
+    const env: Env = { silent: true, gate: new Promise<void>((done) => { open = done; }), ends: new Promise<void>((_done, failed) => { broke = failed; }) };
+    const { send, after, spawns } = await mod(OK, env);
+    const first = send("claude-sonnet --claim a go");
+    await flush();
+    broke(new Error("stream broke"));
+    expect(await first).toMatch(/stream broke/);
+    env.silent = false;
+    env.ends = undefined;
+    const next = send("claude-sonnet --claim a go");
+    await flush();
+    after.find((t) => t.ms === 30_000 && !t.cancelled)!.run();
+    expect(await next).toMatch(/won't start the army: the last relay failed before it could close its post office/);
+    open();
+    await flush();
+    for (let i = 0; i < 2; i++) expect(await send("claude-sonnet --claim a go")).toMatch(/the last relay failed before it could close its post office/);
+    expect(spawns).toHaveLength(1);
+  });
 });
 
 describe("the acceptance scenarios (M1-AC1, M1-AC12, C6)", () => {

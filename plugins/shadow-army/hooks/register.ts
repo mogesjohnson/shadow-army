@@ -168,7 +168,8 @@ function refuse($: EngineInterface, runtime: Runtime, words: string): void {
 /**
  * Ends the relay after a failure. The host may kill it outright, so this confirms the relay's end only, not its
  * post office's (whose lease then ends it, PO-7). A timer is never taken as confirmation: a failed or late end
- * refuses every start until the host confirms it, which may be never (then the army stays refused, C5).
+ * refuses every start until the host confirms it, which may be never (then the army stays refused, C5). A relay whose
+ * post office's exit went unseen keeps `fail`'s refusal whatever the cleanup gives: only that exit could lift it (C5, review 45).
  */
 async function endRelay($: EngineInterface, runtime: Runtime): Promise<RelayEnd> {
   let timer: Timer | undefined;
@@ -176,7 +177,7 @@ async function endRelay($: EngineInterface, runtime: Runtime): Promise<RelayEnd>
   const ended = Promise.resolve(runtime.stream?.return({ code: null, signal: null })).then(() => "ended" as const, () => "failed" as const);
   const outcome = await Promise.race([ended, bound]);
   timer?.cancel();
-  if (outcome === "ended") return outcome;
+  if (outcome === "ended" || unseen(runtime)) return outcome;
   unconfirmedEnd = `Shadow Army won't start the army: the last relay's end ${outcome === "failed" ? "failed" : `was not confirmed in ${CLEANUP_WAIT_MS / 1000} s`} at step: ${runtime.step}, so its post office may still be running`;
   const mine = unconfirmedEnd;
   if (outcome === "late") void ended.then((how) => { if (how === "ended" && unconfirmedEnd === mine) unconfirmedEnd = undefined; });
