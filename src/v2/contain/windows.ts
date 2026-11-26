@@ -1,10 +1,12 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import type { BigIntStats } from "node:fs";
+import { access, lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, extname, isAbsolute, join, resolve, win32 } from "node:path";
 import { Writable, type Readable } from "node:stream";
+import { windowsIdentity, type Identity } from "./trees.js";
 
 export interface ProcessExit { code: number | null; signal: NodeJS.Signals | null }
 export interface ManagedProcess {
@@ -21,7 +23,45 @@ export interface ManagedProcess {
    * exited) ends the whole tree at once, as loss of the owner does (PO-10).
    */
   close(options?: { grace?: boolean }): Promise<void>;
+  /** PO-9: the process that holds the containment, once it has started. */
+  readonly guardian?: Identity;
+  /**
+   * PO-11: every live process in the containment, each with an identity a reused pid can't match.
+   * Windows returns a TreeListing; the Linux driver's /proc walk still returns a plain array.
+   */
+  list?(): Promise<TreeListing | Identity[]>;
 }
+
+/**
+ * PO-11's listing, typed so that missing evidence never reads as an empty tree. "listed" is a
+ * successful query (empty only when the job really is). "ended" only once the guardian has
+ * confirmed teardown. "incomplete" is any other outcome: a query that failed or timed out, a
+ * process whose identity could not be read, a malformed reply, or a lost control pipe. It carries
+ * the identities of the last complete listing.
+ */
+export type TreeListing =
+  | { status: "listed"; processes: Identity[] }
+  | { status: "ended" }
+  | { status: "incomplete"; reason: string; lastVerified: Identity[] };
+
+/** Reads one supervisor "list" reply. Exported for its tests. */
+export function listingFrom(event: { processes?: unknown; unverified?: unknown; message?: string }, lastVerified: Identity[]): TreeListing {
+  const incomplete = (reason: string): TreeListing => ({ status: "incomplete", reason, lastVerified });
+  if (!Array.isArray(event.processes)) return incomplete(`Windows process listing failed: ${event.message ?? "no processes"}`);
+  const processes = event.processes.map(identityFrom);
+  if (!processes.every((one): one is Identity => one !== undefined)) return incomplete("Windows process listing returned a malformed entry");
+  if (Array.isArray(event.unverified) && event.unverified.length > 0) return incomplete(`Windows process listing could not read the identity of pid ${event.unverified.join(", ")}`);
+  return { status: "listed", processes };
+}
+
+/** How long a listing may take before it is reported incomplete. */
+const LIST_TIMEOUT_MS = 10_000;
+
+/** The supervisor names a process by its pid and exact creation time, a FILETIME sent as a string (PO-11). */
+const identityFrom = (value: unknown): Identity | undefined => {
+  const { pid, creationTime } = (value ?? {}) as { pid?: unknown; creationTime?: unknown };
+  return windowsIdentity(pid, creationTime);
+};
 export interface ManagedProcessOptions {
   file: string;
   args?: string[];
@@ -29,6 +69,8 @@ export interface ManagedProcessOptions {
   env?: NodeJS.ProcessEnv;
   /** How long the CLI gets to exit after stdin EOF before its tree is ended. Defaults to PO-10's 10 s; tests inject less. */
   exitGraceMs?: number;
+  /** Tests only: the supervisor holds each listing this long, to prove close and owner loss are not delayed by one. */
+  listDelayMs?: number;
 }
 
 /** PO-10: once the CLI has exited, or 10 seconds after it was asked to, every process still in the tree is killed. */
@@ -88,6 +130,11 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
+  let guardian: Identity | undefined;
+  let ended = false;
+  let listSequence = 0;
+  const listings = new Map<string, (listing: TreeListing) => void>();
+  let lastVerified: Identity[] = [];
   let settleExit!: (exit: ProcessExit) => void;
   const exited = new Promise<ProcessExit>((done) => { settleExit = done; });
   let started!: () => void;
@@ -100,22 +147,36 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     socket.on("error", () => {});
     socket.on("data", (data: string) => {
       buffer += data;
-      if (buffer.length > 16_384) { socket.destroy(); return; }
+      // A listing of a large tree is one long line; only an unauthenticated peer is held to 16 KiB.
+      if (buffer.length > (authenticated ? 4_194_304 : 16_384)) { socket.destroy(); return; }
       for (let end; (end = buffer.indexOf("\n")) >= 0;) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-        let event: { token?: string; kind?: string; pid?: number; code?: number; message?: string };
+        let event: { token?: string; kind?: string; pid?: number; code?: number; message?: string; id?: string; guardian?: unknown; processes?: unknown; unverified?: unknown };
         try { event = JSON.parse(line); } catch { socket.destroy(); return; }
         if (!authenticated) {
           if (control || event.token !== token) { socket.destroy(); return; }
           authenticated = true; control = socket;
         }
-        if (event.kind === "started" && typeof event.pid === "number") { rootPid = event.pid; started(); }
+        if (event.kind === "started" && typeof event.pid === "number") {
+          rootPid = event.pid;
+          guardian = identityFrom(event.guardian);
+          started();
+        } else if (event.kind === "list" && typeof event.id === "string") {
+          const waiting = listings.get(event.id);
+          listings.delete(event.id);
+          if (!waiting) continue;
+          const listing = listingFrom(event, lastVerified);
+          if (listing.status === "listed") lastVerified = listing.processes;
+          waiting(listing);
+        }
         else if (event.kind === "exited") settleExit({ code: event.code ?? null, signal: null });
         else if (event.kind === "closed") treeClosed = true;
         else if (event.kind === "error") failed(new Error(event.message ?? "Windows process containment failed"));
       }
     });
   });
+  const endedOrIncomplete = (): TreeListing => treeClosed ? { status: "ended" }
+    : { status: "incomplete", reason: "Windows supervisor stopped without confirming the tree ended", lastVerified };
   let child: ChildProcessWithoutNullStreams | undefined;
   try {
     await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(`\\\\.\\pipe\\${pipeName}`, done); });
@@ -130,17 +191,37 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     wrapper.stdin.on("error", () => {});
     wrapper.once("error", failed);
     const wrapperClosed = new Promise<void>((done) => wrapper.once("close", () => {
+      // Only a guardian that confirmed teardown ("closed") proves the tree ended; any other exit
+      // leaves the listing incomplete, with the last verified identities.
+      ended = true;
+      for (const waiting of listings.values()) waiting(endedOrIncomplete());
+      listings.clear();
       settleExit({ code: wrapper.exitCode, signal: wrapper.signalCode });
       failed(new Error(`Windows supervisor exited before launch${diagnostic ? `: ${diagnostic}` : ""}`));
       done();
     }));
-    wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token, exitGraceMs })}\n`);
+    wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token, exitGraceMs, ...(options.listDelayMs ? { listDelayMs: options.listDelayMs } : {}) })}\n`);
     const launchTimer = setTimeout(() => failed(new Error(`Windows supervisor did not launch within 15 seconds${diagnostic ? `: ${diagnostic}` : ""}`)), 15_000);
     try { await ready; } finally { clearTimeout(launchTimer); }
     wrapper.stderr.off("data", captureDiagnostic);
     let closing: Promise<void> | undefined;
     return {
-      pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited,
+      pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, guardian,
+      list() {
+        if (ended || treeClosed) return Promise.resolve(endedOrIncomplete());
+        if (!control || control.destroyed) return Promise.resolve({ status: "incomplete", reason: "Windows supervisor control pipe is closed", lastVerified });
+        const id = String(++listSequence);
+        const socket = control;
+        return new Promise<TreeListing>((done) => {
+          const timer = setTimeout(() => {
+            listings.delete(id);
+            done({ status: "incomplete", reason: `Windows process listing took over ${LIST_TIMEOUT_MS} ms`, lastVerified });
+          }, LIST_TIMEOUT_MS);
+          timer.unref();
+          listings.set(id, (listing) => { clearTimeout(timer); done(listing); });
+          socket.write(`list ${id}\n`);
+        });
+      },
       close({ grace = true }: { grace?: boolean } = {}) {
         if (closing && !grace) control?.write("kill\n"); // Escalates a graceful close in progress.
         return closing ??= (async () => {
@@ -208,7 +289,48 @@ public static class ShadowJobSupervisor {
   [DllImport("kernel32.dll",SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
   [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint timeout);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int kind,IntPtr info,uint length,IntPtr result);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool result);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentProcessId();
   static void Check(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+  // JobGate keeps the job handle open while a listing reads it; WriteGate keeps report lines whole.
+  // They are separate so that teardown's reports never wait on a listing's enumeration.
+  static readonly object JobGate=new object(),WriteGate=new object(); static StreamWriter Events;
+  static void Emit(string line) { lock(WriteGate) { Events.WriteLine(line); } }
+  // PO-11: the exact creation time (FILETIME) from GetProcessTimes on a PROCESS_QUERY_LIMITED_INFORMATION
+  // handle. It is sent as a string: milliseconds can't tell a reused pid from the original, and a JSON
+  // number past 2^53 loses ticks. 0 when the process is known not to
+  // be a live member: it is gone (ERROR_INVALID_PARAMETER), it has ended (its exit time or exit code is
+  // set) or, given a job, it is not in it (its pid was reused). -1 when a query failed, so that
+  // missing evidence is never read as an absent member.
+  static long StartTimeOf(uint pid,IntPtr job) {
+    IntPtr handle=OpenProcess(0x1000,false,pid); if(handle==IntPtr.Zero) return Marshal.GetLastWin32Error()==87 ? 0 : -1;
+    try {
+      bool inside; if(job!=IntPtr.Zero) { if(!IsProcessInJob(handle,job,out inside)) return -1; if(!inside) return 0; }
+      // Termination is asynchronous: the exit code is set before the exit time, so either one means ended.
+      uint code; if(!GetExitCodeProcess(handle,out code)) return -1; if(code!=259) return 0;
+      long creation,exit,kernel,user; if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return -1; if(exit!=0) return 0;
+      return creation>0 ? creation : -1;
+    } finally { CloseHandle(handle); }
+  }
+  // Every live process in the job (JobObjectBasicProcessIdList), each with its identity; a pid
+  // whose identity could not be read goes to unverified instead of being dropped.
+  static List<object> JobProcesses(IntPtr job,List<uint> unverified) {
+    var found=new List<object>(); if(job==IntPtr.Zero) throw new Exception("the session job is closed");
+    for(int capacity=64;;capacity*=4) {
+      int bytes=8+capacity*IntPtr.Size; IntPtr buffer=Marshal.AllocHGlobal(bytes);
+      try {
+        if(!QueryInformationJobObject(job,3,buffer,(uint)bytes,IntPtr.Zero)) { int error=Marshal.GetLastWin32Error(); if(error==234 && capacity<65536) continue; throw new Win32Exception(error); }
+        int assigned=Marshal.ReadInt32(buffer,0),listed=Marshal.ReadInt32(buffer,4);
+        if(assigned>listed && capacity<65536) continue;
+        if(assigned>listed) throw new Exception("the job holds more processes than one listing can read");
+        for(int i=0;i<listed;i++) { uint pid=(uint)Marshal.ReadIntPtr(buffer,8+i*IntPtr.Size).ToInt64(); long start=StartTimeOf(pid,job); if(start>0) found.Add(new { pid=pid,creationTime=start.ToString(System.Globalization.CultureInfo.InvariantCulture) }); else if(start<0) unverified.Add(pid); }
+        return found;
+      } finally { Marshal.FreeHGlobal(buffer); }
+    }
+  }
   public static int Run() {
     IntPtr job=IntPtr.Zero,read=IntPtr.Zero,write=IntPtr.Zero,attributes=IntPtr.Zero,jobPointer=IntPtr.Zero;
     PROCESS_INFORMATION process=new PROCESS_INFORMATION();
@@ -219,11 +341,33 @@ public static class ShadowJobSupervisor {
       while((next=input.ReadByte())!=-1 && next!=10) { if(header.Length>=1048576) throw new Exception("bootstrap too large"); header.WriteByte((byte)next); }
       var config=serializer.Deserialize<Dictionary<string,object>>(Encoding.UTF8.GetString(header.ToArray()));
       pipe=new NamedPipeClientStream(".",(string)config["pipeName"],PipeDirection.InOut,PipeOptions.Asynchronous); pipe.Connect(10000);
-      events=new StreamWriter(pipe,new UTF8Encoding(false),1024,true); events.AutoFlush=true;
+      events=new StreamWriter(pipe,new UTF8Encoding(false),1024,true); events.AutoFlush=true; Events=events;
       var stop=new ManualResetEvent(false); var eofForwarded=new ManualResetEvent(false); int shutdownReason=0;
+      int listDelay=config.ContainsKey("listDelayMs") ? Convert.ToInt32(config["listDelayMs"]) : 0;
+      int listing=0;
       var control=new Thread(delegate() {
-        // "close" asks for a graceful exit; "kill" (a lost connection) ends the tree at once.
-        try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); string line; while((line=reader.ReadLine())!=null) { if(line=="kill") Interlocked.Exchange(ref shutdownReason,2); else Interlocked.CompareExchange(ref shutdownReason,1,0); stop.Set(); } } catch {}
+        try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); string line; while((line=reader.ReadLine())!=null) {
+          // "list <id>" asks for the job's processes (PO-11); "kill" (a lost connection) ends the
+          // tree at once; any other line ("close") asks for a graceful exit.
+          if(line.StartsWith("list ")) {
+            string id=line.Substring(5);
+            // One listing at a time, on its own thread: this thread keeps reading close, kill and owner loss.
+            if(Interlocked.CompareExchange(ref listing,1,0)!=0) { Emit(new JavaScriptSerializer().Serialize(new { kind="list",id=id,message="another listing is still running" })); continue; }
+            var lister=new Thread(delegate() {
+              var replies=new JavaScriptSerializer(); string reply;
+              try {
+                if(listDelay>0) Thread.Sleep(listDelay);
+                var unverified=new List<uint>(); List<object> found;
+                lock(JobGate) { found=JobProcesses(job,unverified); }
+                reply=replies.Serialize(new { kind="list",id=id,processes=found,unverified=unverified });
+              } catch(Exception error) { reply=replies.Serialize(new { kind="list",id=id,message=error.Message }); }
+              Interlocked.Exchange(ref listing,0);
+              try { Emit(reply); } catch {}
+            }); lister.IsBackground=true; lister.Start();
+            continue;
+          }
+          if(line=="kill") Interlocked.Exchange(ref shutdownReason,2); else Interlocked.CompareExchange(ref shutdownReason,1,0);
+          stop.Set(); } } catch {}
         // Control EOF means the owner disappeared; it must contain the job immediately.
         Interlocked.Exchange(ref shutdownReason,2); stop.Set();
       }); control.IsBackground=true; control.Start();
@@ -239,7 +383,9 @@ public static class ShadowJobSupervisor {
       // JOB_LIST assigns containment atomically during creation. No unassigned suspended-process window.
       Check(CreateProcess((string)config["file"],new StringBuilder((string)config["commandLine"]),IntPtr.Zero,IntPtr.Zero,true,0x08080004,IntPtr.Zero,(string)config["cwd"],ref startup,out process));
       Check(ResumeThread(process.thread)!=0xFFFFFFFF); CloseHandle(process.thread); process.thread=IntPtr.Zero; CloseHandle(read); read=IntPtr.Zero;
-      events.WriteLine(serializer.Serialize(new { token=config["token"],kind="started",pid=process.pid }));
+      // The guardian is this process: it holds the job's only handle (PO-9).
+      uint guardian=GetCurrentProcessId();
+      Emit(serializer.Serialize(new { token=config["token"],kind="started",pid=process.pid,guardian=new { pid=guardian,creationTime=StartTimeOf(guardian,IntPtr.Zero).ToString(System.Globalization.CultureInfo.InvariantCulture) } }));
       IntPtr inputWrite=write; write=IntPtr.Zero;
       var pump=new Thread(delegate() {
         bool ended=false;
@@ -250,7 +396,7 @@ public static class ShadowJobSupervisor {
       }); pump.IsBackground=true; pump.Start();
       bool rootExited=false;
       while(!stop.WaitOne(20)) {
-        if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; events.WriteLine(serializer.Serialize(new { kind="exited",code=code })); }
+        if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; Emit(serializer.Serialize(new { kind="exited",code=code })); }
       }
       // Native stdin EOF runs the CLI's own shutdown hooks. Ordinary close gives that exit
       // up to the grace (PO-10: ten seconds unless the owner injected less), timed from when the
@@ -264,18 +410,19 @@ public static class ShadowJobSupervisor {
         began=(uint)Environment.TickCount;
         while(WaitForSingleObject(process.process,20)!=0 && (uint)((uint)Environment.TickCount-began)<grace && Interlocked.CompareExchange(ref shutdownReason,0,0)!=2) {}
       }
-      if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; events.WriteLine(serializer.Serialize(new { kind="exited",code=code })); }
+      if(!rootExited && WaitForSingleObject(process.process,0)==0) { uint code; Check(GetExitCodeProcess(process.process,out code)); rootExited=true; Emit(serializer.Serialize(new { kind="exited",code=code })); }
       Check(TerminateJobObject(job,1));
       bool empty=false; for(int attempt=0;attempt<500;attempt++) { ACCOUNTING accounting; Check(QueryInformationJobObject(job,1,out accounting,(uint)Marshal.SizeOf(typeof(ACCOUNTING)),IntPtr.Zero)); if(accounting.active==0) { empty=true; break; } Thread.Sleep(20); }
       if(!empty) throw new Exception("session job did not empty within 10 seconds");
-      if(!rootExited) { uint code; Check(GetExitCodeProcess(process.process,out code)); events.WriteLine(serializer.Serialize(new { kind="exited",code=code })); }
-      events.WriteLine(serializer.Serialize(new { kind="closed" }));
+      if(!rootExited) { uint code; Check(GetExitCodeProcess(process.process,out code)); Emit(serializer.Serialize(new { kind="exited",code=code })); }
+      Emit(serializer.Serialize(new { kind="closed" }));
       return 0;
     } catch(Exception error) {
-      if(events!=null) { try { events.WriteLine(serializer.Serialize(new { kind="error",message=error.Message })); } catch {} }
+      if(events!=null) { try { Emit(serializer.Serialize(new { kind="error",message=error.Message })); } catch {} }
       Console.Error.WriteLine("Windows process containment: "+error.Message); return 1;
     } finally {
-      if(job!=IntPtr.Zero) CloseHandle(job);
+      // Under the gate, so a listing never queries a closed (or reused) handle.
+      lock(JobGate) { if(job!=IntPtr.Zero) CloseHandle(job); job=IntPtr.Zero; }
       if(process.thread!=IntPtr.Zero) CloseHandle(process.thread); if(process.process!=IntPtr.Zero) CloseHandle(process.process);
       if(read!=IntPtr.Zero) CloseHandle(read); if(write!=IntPtr.Zero) CloseHandle(write);
       if(attributes!=IntPtr.Zero) { DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); } if(jobPointer!=IntPtr.Zero) Marshal.FreeHGlobal(jobPointer);
@@ -286,3 +433,321 @@ public static class ShadowJobSupervisor {
 '@
 exit ([ShadowJobSupervisor]::Run())
 `;
+
+// PO-16's sweep on Windows. Each call opens the process once and checks it, and ends it, through that one handle:
+// a pid reused between the check and the end can't receive the end (taskkill takes a bare pid). A tree also ends
+// each child of the checked process, each checked on its own handle: its parent pid, and a creation time after
+// the parent's. "absent" when no such process runs; "unknown" when a query failed, never read as absent.
+// TerminateProcess only starts an exit, so each exit is confirmed by waiting on the same handle. "incomplete" when
+// a descendant could not be listed, opened, ended or confirmed: the parent alone is no evidence of an empty tree.
+const SWEEP_HELPER = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+public static class ShadowSweep {
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,uint pid);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetProcessTimes(IntPtr process,out long creation,out long exit,out long kernel,out long user);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool TerminateProcess(IntPtr process,uint code);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint ms);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32FirstW(IntPtr snapshot,ref ENTRY entry);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32NextW(IntPtr snapshot,ref ENTRY entry);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process,int kind,ref BASIC info,int length,IntPtr returned);
+  [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct ENTRY { public uint size,usage,pid; public IntPtr heap; public uint module,threads,parent; public int priority; public uint flags; [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string file; }
+  [StructLayout(LayoutKind.Sequential)] struct BASIC { public IntPtr exit,peb,affinity,priority,pid,parent; }
+  static string Open(uint pid,uint access,out IntPtr handle,out long creation) {
+    creation=0; handle=OpenProcess(access,false,pid);
+    if(handle==IntPtr.Zero) return Marshal.GetLastWin32Error()==87 ? "absent" : "unknown";
+    uint code; long exit,kernel,user;
+    if(!GetExitCodeProcess(handle,out code)) return "unknown"; if(code!=259) return "absent";
+    if(!GetProcessTimes(handle,out creation,out exit,out kernel,out user)) return "unknown";
+    return exit!=0 ? "absent" : null;
+  }
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateFileW(string name,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr file,out FILEINFO info);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(IntPtr handle,int type,uint info,IntPtr owner,IntPtr group,IntPtr dacl,IntPtr sacl,out IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandleEx(IntPtr file,int infoClass,out FILEID info,uint size);
+  [StructLayout(LayoutKind.Sequential)] struct FILEID { public ulong volume,idLow,idHigh; }
+  [StructLayout(LayoutKind.Sequential)] struct FILEINFO { public uint attributes,c1,c2,a1,a2,w1,w2,volume,sizeHigh,sizeLow,links,indexHigh,indexLow; }
+  // Write data, append, write EA, delete child, write attributes, DELETE, WRITE_DAC, WRITE_OWNER, MAXIMUM_ALLOWED, GENERIC_ALL, GENERIC_WRITE.
+  const int WriteRights=0x520D0156;
+  // PO-5 on the opened object itself, never on a second lookup by name (C6): no reparse point, one link for a file,
+  // this user as owner (an elevated token's default owner is a group: not enough), and a DACL that lets no one but
+  // this user, SYSTEM and Administrators write. Answers the volume serial and file index, which the caller matches
+  // with the handle it read. Any failure is "other": an unverified record.
+  public static string Owned(string path) {
+    // READ_CONTROL and FILE_READ_ATTRIBUTES; backup semantics open a folder; a reparse point is opened, never followed.
+    IntPtr file=CreateFileW(path,0x20080,7,IntPtr.Zero,3,0x02200000,IntPtr.Zero); if(file==new IntPtr(-1)) return "other";
+    IntPtr descriptor=IntPtr.Zero;
+    try {
+      FILEINFO info; if(!GetFileInformationByHandle(file,out info)) return "other";
+      if((info.attributes&0x400)!=0 || ((info.attributes&0x10)==0 && info.links!=1)) return "other";
+      if(GetSecurityInfo(file,1,0x5,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,out descriptor)!=0) return "other";
+      byte[] bytes=new byte[GetSecurityDescriptorLength(descriptor)]; Marshal.Copy(descriptor,bytes,0,bytes.Length);
+      RawSecurityDescriptor security=new RawSecurityDescriptor(bytes,0); SecurityIdentifier me=WindowsIdentity.GetCurrent().User;
+      if(security.Owner==null || !security.Owner.Equals(me) || security.DiscretionaryAcl==null) return "other";
+      foreach(GenericAce ace in security.DiscretionaryAcl) {
+        if((ace.AceFlags&AceFlags.InheritOnly)!=0) continue; QualifiedAce rule=ace as QualifiedAce; if(rule==null) return "other";
+        if(rule.AceQualifier!=AceQualifier.AccessAllowed || (rule.AccessMask&WriteRights)==0) continue;
+        string sid=rule.SecurityIdentifier.Value;
+        if(!rule.SecurityIdentifier.Equals(me) && sid!="S-1-5-18" && sid!="S-1-5-32-544" && sid!="S-1-3-4") return "other";
+      }
+      ulong index=((ulong)info.indexHigh<<32)|info.indexLow;
+      // The volume's 128-bit file ID (FileIdInfo), where it has one, must be that 64-bit index: on ReFS it may not be,
+      // and the index Node reads then proves nothing about which file the caller opened (C6).
+      FILEID id; if(GetFileInformationByHandleEx(file,18,out id,24) && (id.idHigh!=0 || id.idLow!=index || (uint)id.volume!=info.volume)) return "other";
+      return "owned "+info.volume.ToString(CultureInfo.InvariantCulture)+" "+index.ToString(CultureInfo.InvariantCulture);
+    } finally { if(descriptor!=IntPtr.Zero) LocalFree(descriptor); CloseHandle(file); }
+  }
+  public static string Probe(uint pid) {
+    IntPtr handle; long creation; string state=Open(pid,0x1000,out handle,out creation);
+    try { return state ?? creation.ToString(CultureInfo.InvariantCulture); } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
+  // SYNCHRONIZE, PROCESS_QUERY_LIMITED_INFORMATION and PROCESS_TERMINATE: checked, ended and waited on one handle.
+  const uint EndAccess=0x101001;
+  public static string End(uint pid,long expected,bool tree) {
+    IntPtr handle; long creation; string state=Open(pid,EndAccess,out handle,out creation);
+    try {
+      if(state!=null) return state; if(creation!=expected) return "different";
+      bool complete=!tree || EndChildren(pid,creation);
+      if(!Terminated(handle)) return "unknown";
+      return complete ? "ended" : "incomplete";
+    } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
+  // Ends the process on its handle and waits there for the exit: true only once it has exited.
+  static bool Terminated(IntPtr handle) { TerminateProcess(handle,1); return WaitForSingleObject(handle,3000)==0; }
+  static bool EndChildren(uint parent,long after) {
+    List<uint> children=Children(parent); if(children==null) return false;
+    bool complete=true; foreach(uint child in children) complete&=EndChild(child,parent,after); return complete;
+  }
+  // True when the pid is no descendant (gone, created before its parent, or another parent's) or was ended and confirmed.
+  static bool EndChild(uint pid,uint parent,long after) {
+    IntPtr handle; long creation; string state=Open(pid,EndAccess,out handle,out creation);
+    try {
+      if(state=="absent") return true; if(state!=null) return false;
+      BASIC info=new BASIC();
+      if(NtQueryInformationProcess(handle,0,ref info,Marshal.SizeOf(info),IntPtr.Zero)!=0) return false;
+      if(creation<after || info.parent.ToInt64()!=parent) return true;
+      bool complete=EndChildren(pid,creation);
+      return Terminated(handle) && complete;
+    } finally { if(handle!=IntPtr.Zero) CloseHandle(handle); }
+  }
+  // Every pid whose parent is this one; null when the processes could not be listed. The listing is complete
+  // only when Process32NextW stops with ERROR_NO_MORE_FILES (C9): any other failure leaves it unknown.
+  static List<uint> Children(uint parent) {
+    List<uint> found=new List<uint>(); IntPtr snapshot=CreateToolhelp32Snapshot(2,0); if(snapshot==new IntPtr(-1)) return null;
+    try {
+      ENTRY entry=new ENTRY(); entry.size=(uint)Marshal.SizeOf(typeof(ENTRY));
+      bool more=Process32FirstW(snapshot,ref entry); if(!more) return null;
+      for(;more;more=Process32NextW(snapshot,ref entry)) if(entry.parent==parent && entry.pid!=parent) found.Add(entry.pid);
+      if(Marshal.GetLastWin32Error()!=18) return null;
+    } finally { CloseHandle(snapshot); }
+    return found;
+  }
+  // A later sweep's check on a tree an earlier one left incomplete (C9): how many processes still name the recorded
+  // parent, created after it and before any process now holding its pid. It ends nothing: once the parent has
+  // gone, a parent pid alone can't prove a process was its child. "unknown" when the listing failed.
+  public static string Left(uint pid,long after) {
+    IntPtr handle; long holder; string state=Open(pid,0x1000,out handle,out holder); if(handle!=IntPtr.Zero) CloseHandle(handle);
+    if(state=="unknown") return "unknown"; long before=state==null && holder!=after ? holder : long.MaxValue;
+    List<uint> children=Children(pid); if(children==null) return "unknown";
+    int count=0;
+    foreach(uint child in children) {
+      IntPtr one; long creation; string seen=Open(child,0x1000,out one,out creation); if(one!=IntPtr.Zero) CloseHandle(one);
+      if(seen=="absent") continue; if(seen!=null) return "unknown"; if(creation>=after && creation<before) count++;
+    }
+    return count.ToString(CultureInfo.InvariantCulture);
+  }
+}
+'@
+`;
+
+const isWindowsPid = (pid: number): boolean => Number.isSafeInteger(pid) && pid > 0 && pid <= 0xffff_ffff;
+/**
+ * Windows's system directory: the folder Windows loaded this process's ntdll.dll from. The loader takes ntdll from
+ * the system's own known DLLs, never from this process's environment or PATH, which anyone starting it may set (C6).
+ */
+export function systemDirectoryOf(sharedObjects: readonly string[]): string {
+  const ntdll = sharedObjects.filter((path) => /^[A-Za-z]:\\(?:[^\\/:*?"<>|]+\\)+ntdll\.dll$/i.test(path));
+  if (ntdll.length !== 1) throw new Error("Windows's system directory is unknown");
+  return win32.dirname(ntdll[0]!);
+}
+/** PowerShell by its absolute path in the system directory, never by a name the PATH resolves (PO-16, C6). */
+export async function systemPowerShell(): Promise<{ path: string; root: string }> {
+  const report = process.report.getReport() as { sharedObjects?: unknown };
+  const loaded = Array.isArray(report.sharedObjects) ? report.sharedObjects.filter((one): one is string => typeof one === "string") : [];
+  const system = systemDirectoryOf(loaded);
+  const path = win32.join(system, "WindowsPowerShell", "v1.0", "powershell.exe");
+  const stats = await lstat(path);
+  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("PowerShell is not a plain file");
+  return { path, root: win32.dirname(system) };
+}
+// One line in, one answer line out: the helper is compiled once per session, never once per call (C10).
+const SWEEP_LOOP = String.raw`
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  $part = $line.Split(' ')
+  try {
+    $answer = switch ($part[0]) {
+      'probe' { [ShadowSweep]::Probe([uint32]$part[1]) }
+      'end' { [ShadowSweep]::End([uint32]$part[1], [long]$part[2], $part[3] -eq '1') }
+      'owned' { [ShadowSweep]::Owned([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($part[1]))) }
+      'left' { [ShadowSweep]::Left([uint32]$part[1], [long]$part[2]) }
+      default { 'unknown' }
+    }
+  } catch { $answer = 'unknown' }
+  [Console]::Out.WriteLine([string]$answer); [Console]::Out.Flush()
+}
+`;
+/** A call's limit, the helper's start and compile included: past it the session is ended and answers "unknown". */
+export const SWEEP_CALL_LIMIT_MS = 15_000;
+
+/** One PowerShell helper for a whole sweep: calls run one at a time, each bounded; `close` ends the process. */
+export interface SweepSession {
+  /**
+   * `until` is the caller's deadline on `performance.now()` (C10): a call whose turn comes after it is never sent,
+   * and one still running then is cancelled by ending the helper, so no work outlives its tree. Both answer "unknown".
+   */
+  call(line: string, until?: number): Promise<string>;
+  /** The helper's pid once started (for tests). */
+  readonly pid: number | undefined;
+  close(): void;
+}
+
+/** `locate` finds PowerShell (injected only by tests, to hold a startup at its lookup). */
+export function openSweepSession(callLimitMs = SWEEP_CALL_LIMIT_MS, locate = systemPowerShell): SweepSession {
+  const now = () => performance.now();
+  let child: ChildProcess | undefined;
+  let exit: Promise<void> = Promise.resolve(); // The running helper's exit.
+  let stopped: Promise<void> = Promise.resolve(); // The last ended helper's exit.
+  let closed = false;
+  let pending: ((answer: string) => void) | undefined;
+  let buffered = "";
+  let queue: Promise<unknown> = Promise.resolve();
+  // A failure, an exit or a timeout ends the helper and the pending call answers "unknown". A later call waits for
+  // that exit before starting a new helper, so cancelled work never runs beside the next call's.
+  const stop = () => {
+    const helper = child; child = undefined; buffered = "";
+    if (helper) { stopped = exit; helper.kill(); }
+    const answer = pending; pending = undefined; answer?.("unknown");
+  };
+  // `wanted` is the caller still waiting within its deadline: a start whose caller has expired, or whose session
+  // closed, while it awaited the lookup creates no child (C10).
+  const start = async (wanted: () => boolean): Promise<ChildProcess | undefined> => {
+    if (child) return child;
+    const script = Buffer.from(`${SWEEP_HELPER}\n${SWEEP_LOOP}`, "utf16le").toString("base64");
+    const { path, root } = await locate();
+    if (closed || !wanted()) return undefined;
+    // The system root it was found under, not the inherited one; and Windows PowerShell's own modules, not an
+    // inherited PSModulePath (PowerShell 7's, when the sweep starts from it).
+    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:systemroot|windir|psmodulepath)$/i.test(key))), SystemRoot: root, windir: root };
+    const helper = spawn(path, ["-NoProfile", "-NonInteractive", "-EncodedCommand", script], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"], env });
+    child = helper;
+    exit = new Promise((done) => { helper.once("exit", () => done()).once("error", () => done()); });
+    const end = () => { if (child === helper) stop(); };
+    helper.on("error", end).on("exit", end);
+    helper.stdin!.on("error", end);
+    helper.stdout!.setEncoding("utf8").on("data", (chunk: string) => {
+      if (child !== helper) return;
+      buffered += chunk;
+      for (let at = buffered.indexOf("\n"); at >= 0; at = buffered.indexOf("\n")) {
+        const line = buffered.slice(0, at).trim();
+        buffered = buffered.slice(at + 1);
+        const answer = pending; pending = undefined; answer?.(line);
+      }
+    });
+    // A session left open never holds the process alive; a pending call's timer does while it waits.
+    helper.unref(); (helper.stdin as unknown as { unref?(): void }).unref?.(); (helper.stdout as unknown as { unref?(): void }).unref?.();
+    return helper;
+  };
+  // A call's answer, and when its work has settled: the helper's stop, lookup and start included, not just its answer.
+  const send = (line: string, until: number): { answer: Promise<string>; settled: Promise<unknown> } => {
+    const limit = Math.min(until, now() + callLimitMs);
+    if (closed || !(now() < limit)) return { answer: Promise.resolve("unknown"), settled: Promise.resolve() }; // Past the deadline: never sent.
+    let finished = false;
+    let finish!: (answer: string) => void;
+    const answer = new Promise<string>((done) => { finish = (one) => { if (finished) return; finished = true; clearTimeout(timer); done(one); }; });
+    // The limit covers the helper's lookup and start too; past it, work in flight is cancelled with the helper.
+    const timer = setTimeout(() => { if (pending === finish) stop(); finish("unknown"); }, limit - now());
+    const wanted = () => !finished && !closed && now() < limit;
+    const settled = (async () => {
+      await stopped;
+      const helper = wanted() ? await start(wanted).catch(() => undefined) : undefined;
+      if (!helper || !wanted()) { finish("unknown"); return; }
+      pending = finish;
+      helper.stdin!.write(`${line}\n`);
+      await answer;
+    })();
+    return { answer, settled };
+  };
+  // A caller waiting in the queue still has its answer by its deadline: "unknown", and its turn then sends nothing.
+  const by = (answer: Promise<string>, until: number): Promise<string> => {
+    if (until === Infinity) return answer;
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<string>((done) => { timer = setTimeout(() => done("unknown"), Math.max(0, until - now())); });
+    return Promise.race([answer, late]).finally(() => clearTimeout(timer));
+  };
+  return {
+    // One call at a time, and one startup or shutdown at a time: the next call's turn comes only once the last call's
+    // work has settled, so a stale startup never runs beside the next one (C10).
+    call: (line, until = Infinity) => {
+      const turn = queue.then(() => send(line, until));
+      queue = turn.then((one) => one.settled).catch(() => {});
+      return by(turn.then((one) => one.answer), until);
+    },
+    get pid() { return child?.pid; },
+    close: () => { closed = true; stop(); },
+  };
+}
+/** Through the sweep's session, or a session of its own for this one call. */
+async function ask(session: SweepSession | undefined, line: string, until?: number): Promise<string> {
+  const own = session ?? openSweepSession();
+  try { return await own.call(line, until); } finally { if (!session) own.close(); }
+}
+
+/**
+ * A process's exact creation time (a FILETIME string); `undefined` when no such process runs; `null` when the
+ * probe failed. Unknown is never read as absent: the sweep keeps the record and reports it.
+ */
+export async function probeWindowsProcess(pid: number, session?: SweepSession, until?: number): Promise<string | undefined | null> {
+  // A pid Windows can't hold is a bad record, not a process known to have ended: unknown.
+  if (!isWindowsPid(pid)) return null;
+  const result = await ask(session, `probe ${pid}`, until);
+  return result === "absent" ? undefined : /^[1-9]\d*$/.test(result) ? result : null;
+}
+
+/**
+ * Whether this user owns the path and no one else can write it (C6). The helper checks the object it opened, and
+ * answers that object's volume and file index: they must be `opened`'s, the handle the caller read, or it is no proof.
+ */
+export async function ownedByCurrentUser(path: string, opened: Pick<BigIntStats, "dev" | "ino">, session?: SweepSession, until?: number): Promise<boolean> {
+  const answer = /^owned (\d{1,10}) (\d{1,20})$/.exec(await ask(session, `owned ${Buffer.from(path, "utf8").toString("base64")}`, until));
+  // Compared whole, as integers: a rounded file index could take another file's for the one read (C6).
+  return answer !== null && BigInt(answer[1]!) === opened.dev && BigInt(answer[2]!) === opened.ino;
+}
+
+const isFiletimeText = (value: string | undefined): value is string => value !== undefined && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) < 2n ** 63n;
+
+export type WindowsEnd = "ended" | "incomplete" | "absent" | "different" | "unknown";
+/** Ends the process only while its exact creation time (a FILETIME string) is the recorded one, through the checked handle. */
+export async function endWindowsProcess(pid: number, creationTime: string | undefined, tree: boolean, session?: SweepSession, until?: number): Promise<WindowsEnd> {
+  // An old millisecond record has no exact identity: nothing is ended on its evidence.
+  if (!isWindowsPid(pid) || !isFiletimeText(creationTime)) return "unknown";
+  const result = await ask(session, `end ${pid} ${creationTime} ${tree ? 1 : 0}`, until);
+  return (["ended", "incomplete", "absent", "different"] as const).find((one) => one === result) ?? "unknown";
+}
+
+/** How many processes an earlier, incomplete end may have left of this tree (see `Left` above), or `null` when unknown (C9). */
+export async function windowsLeft(pid: number, creationTime: string | undefined, session?: SweepSession, until?: number): Promise<number | null> {
+  if (!isWindowsPid(pid) || !isFiletimeText(creationTime)) return null;
+  const result = await ask(session, `left ${pid} ${creationTime}`, until);
+  return /^\d{1,10}$/.test(result) ? Number(result) : null;
+}

@@ -5,7 +5,9 @@ import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
+import type { Identity } from "./contain/trees.js";
 import { redact } from "./logs.js";
+import type { TreeListing } from "./contain/windows.js";
 import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 type Frame = Record<string, unknown>;
@@ -89,6 +91,7 @@ export class ClaudeChannel implements NativeChannel {
   // stderr carries no handshake, so a pause applies to it at once; both streams feed the same queue.
   private stderr?: Readable;
   private paused = false;
+  private managed?: ManagedProcess;
 
   constructor(private readonly options: ChannelOptions) {
     this.process = this.spawn();
@@ -116,6 +119,7 @@ export class ClaudeChannel implements NativeChannel {
 
   private async open(): Promise<void> {
     const child = await this.process;
+    this.managed = child;
     if (this.closed) return;
     child.stdout.on("data", (chunk: Buffer) => this.read(this.decoder.write(chunk)));
     child.stdout.on("end", () => {
@@ -150,6 +154,20 @@ export class ClaudeChannel implements NativeChannel {
   resume(): void {
     this.paused = false;
     if (!this.closed) { this.stdout?.resume(); this.stderr?.resume(); }
+  }
+
+  /** PO-9: the guardian holding this CLI's containment, once it has started. */
+  get guardian(): Identity | undefined {
+    return this.managed?.guardian;
+  }
+
+  /** PO-11: the processes in this CLI's containment, from the driver; "incomplete" where it can't list. */
+  async list(): Promise<TreeListing> {
+    const managed = await this.process.catch(() => undefined);
+    if (!managed) return { status: "incomplete", reason: "the Claude process did not start", lastVerified: [] };
+    if (!managed.list) return { status: "incomplete", reason: "this platform's containment driver cannot list its tree", lastVerified: [] };
+    const listing = await managed.list();
+    return Array.isArray(listing) ? { status: "listed", processes: listing.map(({ pid, startTime }) => ({ pid, startTime })) } : listing;
   }
 
   private read(chunk: string): void {

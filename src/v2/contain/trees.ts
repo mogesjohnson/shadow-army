@@ -1,9 +1,43 @@
-import { mkdir, open, readdir, readFile, unlink } from "node:fs/promises";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "../logs.js";
 
-/** PO-16: a process is named by its pid and its start time, so a reused pid never matches (PO-11). */
-export interface Identity { pid: number; startTime: number }
+/**
+ * PO-16: a process is named by its pid and its start time, so a reused pid never matches (PO-11).
+ * `startTime` is Linux's clock ticks since boot (exact), or Windows's creation time in Unix milliseconds.
+ * Milliseconds can't tell a reused pid from the original, so Windows also carries `creationTime`: the
+ * exact FILETIME (100 ns since 1601) as a decimal string, which a float can't hold.
+ */
+export interface Identity { pid: number; startTime: number; creationTime?: string }
+
+const FILETIME_UNIX_EPOCH = 116444736000000000n;
+const isFiletime = (value: unknown): value is string => typeof value === "string" && /^[1-9]\d{0,19}$/.test(value) && BigInt(value) < 2n ** 63n;
+
+/** A FILETIME's Unix milliseconds, rounded down as GetProcessTimes' callers always have. */
+export const unixMsOfFiletime = (filetime: string): number => Number((BigInt(filetime) - FILETIME_UNIX_EPOCH) / 10000n);
+
+/** An identity from a Windows FILETIME, or `undefined` when it is not one. */
+export function windowsIdentity(pid: unknown, creationTime: unknown): Identity | undefined {
+  return Number.isSafeInteger(pid) && (pid as number) > 0 && isFiletime(creationTime) && BigInt(creationTime) > FILETIME_UNIX_EPOCH
+    ? { pid: pid as number, startTime: unixMsOfFiletime(creationTime), creationTime } : undefined;
+}
+
+/**
+ * How a recorded identity compares with the process that holds its pid now. `now` is what the machine
+ * reports: Linux's clock ticks as a number, Windows's FILETIME as a string, `undefined` for no process.
+ * A Windows record in the old millisecond format can prove a difference but never a match: when its
+ * millisecond agrees, the answer is "unsure", which must never lead to ending a process (PO-16).
+ */
+export function compareStart(recorded: Identity, now: number | string | undefined): "same" | "different" | "unsure" {
+  if (now === undefined) return "different";
+  if (recorded.creationTime !== undefined) {
+    if (typeof now === "string") return now === recorded.creationTime ? "same" : "different";
+    return now === recorded.startTime ? "unsure" : "different";
+  }
+  if (typeof now === "string") return isFiletime(now) && unixMsOfFiletime(now) !== recorded.startTime ? "different" : "unsure";
+  return now === recorded.startTime ? "same" : "different";
+}
 
 /**
  * One line of a tree's file. It holds no secret and no nonce (PO-16). `git` is a harness git command's
@@ -33,8 +67,10 @@ export function parseTreeLine(text: string): TreeLine | undefined {
   }
   const kinds = ["post-office", "guardian", "cli", "process", "git"] as const;
   const kind = kinds.find((candidate) => candidate === line.kind);
-  return kind && isCount(line.pid) && line.pid > 0 && isCount(line.startTime)
-    ? { kind, pid: line.pid, startTime: line.startTime } : undefined;
+  if (!kind || !isCount(line.pid) || line.pid <= 0 || !isCount(line.startTime)) return undefined;
+  // A record from before exact creation times, or with one that isn't a FILETIME, is read without it:
+  // compareStart() then never lets it match (PO-16).
+  return { kind, pid: line.pid, startTime: line.startTime, ...(isFiletime(line.creationTime) ? { creationTime: line.creationTime } : {}) };
 }
 
 /** A reader skips a line that doesn't parse, as for logs (PO-5). */
@@ -42,18 +78,55 @@ export function parseTreeFile(text: string): TreeLine[] {
   return text.split("\n").flatMap((line) => parseTreeLine(line) ?? []);
 }
 
-/** Every tree file under the folder, as `{ id, lines }`. A file that can't be read is skipped. */
-export async function readTrees(root: string): Promise<{ id: string; lines: TreeLine[] }[]> {
+/** Whether this user owns a path (and, on POSIX, no one else can write it). The sweep acts only on records that pass (PO-16). */
+export type OwnerCheck = (path: string, stats: BigIntStats) => Promise<boolean>;
+
+/** POSIX's check: owned by this user, and not writable by its group or others. */
+export const posixOwned: OwnerCheck = async (_path, stats) => process.getuid !== undefined && stats.uid === BigInt(process.getuid()) && (stats.mode & 0o022n) === 0n;
+
+/** A tree file, and whether its folders and the opened file itself were verified as this user's own (PO-16). */
+export interface TreeFile { id: string; lines: TreeLine[]; verified: boolean }
+
+/** A real folder, not a link, that this user owns. */
+async function ownFolder(path: string, owned: OwnerCheck): Promise<boolean> {
+  try { const stats = await lstat(path, { bigint: true }); return stats.isDirectory() && !stats.isSymbolicLink() && await owned(path, stats); } catch { return false; }
+}
+
+/** Reads a file through one handle, and verifies that handle: the same file as the name (not a link), one link, this user's. */
+async function readOwnFile(path: string, owned: OwnerCheck): Promise<{ text: string; verified: boolean }> {
+  // Read as integers, never doubles: a 64-bit file index is compared whole (C6).
+  const named = await lstat(path, { bigint: true });
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const opened = await handle.stat({ bigint: true });
+    const verified = !named.isSymbolicLink() && opened.isFile() && opened.nlink === 1n && opened.dev === named.dev && opened.ino === named.ino
+      && await owned(path, opened).catch(() => false);
+    return { text: await handle.readFile("utf8"), verified };
+  } finally { await handle.close(); }
+}
+
+/**
+ * Every tree file under the folder, as `{ id, lines, verified }`. A file that can't be read is skipped. A record is
+ * verified only when `.shadow`, `.shadow/v2` and the trees folder are real folders this user owns, and the opened
+ * file passes `readOwnFile`'s checks: the sweep never acts on an unverified record, and keeps it (PO-16).
+ */
+export async function readTrees(root: string, owned: OwnerCheck = posixOwned): Promise<TreeFile[]> {
   const directory = treesDir(root);
   let names: string[];
   try { names = await readdir(directory); } catch { return []; }
+  const folders = [join(root, ".shadow"), join(root, ".shadow", "v2"), directory];
+  const foldersOwned = (await Promise.all(folders.map((folder) => ownFolder(folder, owned)))).every(Boolean);
   const trees = await Promise.all(names.filter((name) => name.endsWith(".jsonl")).map(async (name) => {
-    try { return { id: name.slice(0, -".jsonl".length), lines: parseTreeFile(await readFile(join(directory, name), "utf8")) }; } catch { return undefined; }
+    try {
+      const { text, verified } = await readOwnFile(join(directory, name), owned);
+      return { id: name.slice(0, -".jsonl".length), lines: parseTreeFile(text), verified: foldersOwned && verified };
+    } catch { return undefined; }
   }));
-  return trees.filter((tree): tree is { id: string; lines: TreeLine[] } => tree !== undefined);
+  return trees.filter((tree): tree is TreeFile => tree !== undefined);
 }
 
-const sameIdentity = (a: Identity, b: Identity): boolean => a.pid === b.pid && a.startTime === b.startTime;
+const sameIdentity = (a: Identity, b: Identity): boolean => a.pid === b.pid && a.startTime === b.startTime && a.creationTime === b.creationTime;
+const identityOf = ({ pid, startTime, creationTime }: Identity): Identity => ({ pid, startTime, ...(creationTime === undefined ? {} : { creationTime }) });
 
 /** One tree's entry under `.shadow/v2/trees/`: one JSON Lines file, each line flushed as it is written (PO-16). */
 export class TreeRecord {
@@ -99,8 +172,8 @@ export class TreeRecord {
     for (const process of processes) {
       if (this.listed.some((known) => sameIdentity(known, process))) continue;
       try {
-        await this.append({ kind: "process", pid: process.pid, startTime: process.startTime });
-        this.listed.push({ pid: process.pid, startTime: process.startTime });
+        await this.append({ kind: "process", ...identityOf(process) });
+        this.listed.push(identityOf(process));
       } catch (error) {
         if (!this.reported) { this.reported = true; this.onListingFailure(error); }
       }
@@ -115,8 +188,8 @@ export class TreeRecord {
 
 /** The processes' state on this machine: injected, so the failure path runs on a fake clock and fake processes. */
 export interface ProcessOps {
-  /** The process's start time, or `undefined` when no such process runs. */
-  startTimeOf(pid: number): Promise<number | undefined>;
+  /** The process's start time (Linux's clock ticks, or Windows's FILETIME as a string), or `undefined` when no such process runs. */
+  startTimeOf(pid: number): Promise<number | string | undefined>;
   /** Ends each process (the caller's own signal or kill). A process that is already gone is not an error. */
   end(processes: readonly Identity[]): Promise<void>;
 }
@@ -124,10 +197,13 @@ export interface ProcessOps {
 /** A process the post office could not end, named by identity and command line (PO-15). */
 export interface Leftover extends Identity { command: string }
 
-/** The leftovers whose pid still belongs to the same process. */
+async function compareAll(ops: ProcessOps, leftovers: readonly Leftover[]) {
+  return Promise.all(leftovers.map(async (leftover) => ({ leftover, match: compareStart(leftover, await ops.startTimeOf(leftover.pid)) })));
+}
+
+/** The leftovers whose pid may still belong to the same process: "unsure" counts as running (PO-15). */
 export async function stillRunning(ops: ProcessOps, leftovers: readonly Leftover[]): Promise<Leftover[]> {
-  const running = await Promise.all(leftovers.map(async (leftover) => (await ops.startTimeOf(leftover.pid)) === leftover.startTime));
-  return leftovers.filter((_, index) => running[index]);
+  return (await compareAll(ops, leftovers)).filter(({ match }) => match !== "different").map(({ leftover }) => leftover);
 }
 
 const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim().slice(0, 200);
@@ -175,9 +251,12 @@ export async function holdGuardOpen(
   if (leftovers === "unknown" || leftovers.length === 0) return "cut-short";
   const { intervalMs = 10_000, wait = (ms) => new Promise<void>((done) => setTimeout(done, ms)), signal } = options;
   for (let remaining = [...leftovers]; !signal?.aborted;) {
-    remaining = await stillRunning(ops, remaining);
+    const compared = (await compareAll(ops, remaining)).filter(({ match }) => match !== "different");
+    remaining = compared.map(({ leftover }) => leftover);
     if (remaining.length === 0) return "ended";
-    try { await ops.end(remaining); } catch { /* Tried again after the interval. */ }
+    // Only an exact match is ended; an "unsure" one is waited for, never signalled.
+    const same = compared.filter(({ match }) => match === "same").map(({ leftover }) => leftover);
+    if (same.length > 0) try { await ops.end(same); } catch { /* Tried again after the interval. */ }
     await wait(intervalMs);
   }
   return "cut-short";

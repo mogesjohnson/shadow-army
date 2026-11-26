@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  containmentFailedMessage, DownSoldiers, holdGuardOpen, parseTreeFile, parseTreeLine, readTrees, stillRunning, TreeRecord, treesDir,
-  type Leftover, type ProcessOps,
+  compareStart, containmentFailedMessage, DownSoldiers, holdGuardOpen, parseTreeFile, parseTreeLine, readTrees, stillRunning, TreeRecord, treesDir,
+  unixMsOfFiletime, type Leftover, type ProcessOps,
 } from "./trees.js";
 
 describe("tree records (PO-16, M1-AC16)", () => {
@@ -21,7 +21,8 @@ describe("tree records (PO-16, M1-AC16)", () => {
       '{"kind":"post-office","pid":10,"startTime":100}', '{"kind":"guardian","pid":11,"startTime":110}',
       '{"kind":"cli","pid":12,"startTime":120}', '{"kind":"job","label":"sa.job.1","coalition":"77"}', "",
     ].join("\n"));
-    expect(await readTrees(root)).toEqual([{ id: "iron-1", lines: parseTreeFile(readFileSync(file("iron-1"), "utf8")) }]);
+    const owned = async () => true;
+    expect(await readTrees(root, owned)).toEqual([{ id: "iron-1", lines: parseTreeFile(readFileSync(file("iron-1"), "utf8")), verified: true }]);
     await record.remove();
     await record.remove(); // Removing twice is fine.
     expect(await readTrees(root)).toEqual([]);
@@ -40,6 +41,29 @@ describe("tree records (PO-16, M1-AC16)", () => {
     writeFileSync(join(treesDir(root), "note.txt"), "x");
     mkdirSync(join(treesDir(root), "dir.jsonl")); // Unreadable as a file.
     expect(await readTrees(root)).toEqual([]);
+  });
+
+  it("verifies a record only when the opened file is this user's, has one link and is the named file (PO-16)", async () => {
+    await TreeRecord.create(root, "own", { pid: 1, startTime: 1 });
+    const verified = async (owned: () => Promise<boolean>) => Object.fromEntries((await readTrees(root, owned)).map((tree) => [tree.id, tree.verified]));
+    expect(await verified(async () => true)).toEqual({ own: true });
+    expect(await verified(async () => false)).toEqual({ own: false });
+    linkSync(file("own"), file("linked")); // A second name for the file: either may be swapped.
+    expect(await verified(async () => true)).toEqual({ own: false, linked: false });
+  });
+
+  const posix = it.runIf(process.platform !== "win32");
+  posix("on POSIX refuses a record that is a link, or that others can write, or in a folder others can write", async () => {
+    const record = await TreeRecord.create(root, "own", { pid: 1, startTime: 1 });
+    expect((await readTrees(root)).map((tree) => tree.verified)).toEqual([true]);
+    symlinkSync(file("own"), file("pointer"));
+    expect(Object.fromEntries((await readTrees(root)).map((tree) => [tree.id, tree.verified]))).toEqual({ own: true }); // O_NOFOLLOW refuses to open the link: never read, never acted on.
+    await record.remove(); rmSync(file("pointer"));
+    await TreeRecord.create(root, "open", { pid: 1, startTime: 1 });
+    chmodSync(file("open"), 0o666);
+    expect((await readTrees(root)).map((tree) => tree.verified)).toEqual([false]);
+    chmodSync(file("open"), 0o600); chmodSync(treesDir(root), 0o777);
+    expect((await readTrees(root)).map((tree) => tree.verified)).toEqual([false]);
   });
 
   it("refuses an id that is not a plain name, and a second entry under the same id", async () => {
@@ -65,6 +89,70 @@ describe("tree records (PO-16, M1-AC16)", () => {
     await record.listing([{ pid: 7, startTime: 70 }]);
     await record.listing([{ pid: 8, startTime: 80 }]);
     expect(errors).toHaveLength(1);
+  });
+});
+
+// Two Windows creation times in the same millisecond (FILETIME, 100 ns since 1601). As floats they would be equal.
+const MS = 1_795_000_000_007;
+const FIRST = "134394736000070001";
+const SECOND = "134394736000070002";
+
+describe("exact Windows creation times (PO-11, PO-16)", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "sa-trees-")); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it("converts a FILETIME to Unix milliseconds without a float", () => {
+    expect(Number(FIRST) === Number(SECOND)).toBe(true); // Why it is carried as a string.
+    expect(unixMsOfFiletime(FIRST)).toBe(MS);
+    expect(unixMsOfFiletime(SECOND)).toBe(MS);
+  });
+
+  it("records and reads back two processes created in the same millisecond as different processes", async () => {
+    const record = await TreeRecord.create(root, "t", { pid: 1, startTime: MS, creationTime: FIRST });
+    await record.listing([{ pid: 5, startTime: MS, creationTime: FIRST }, { pid: 5, startTime: MS, creationTime: SECOND }]);
+    const lines = parseTreeFile(readFileSync(join(treesDir(root), "t.jsonl"), "utf8"));
+    expect(lines).toEqual([
+      { kind: "post-office", pid: 1, startTime: MS, creationTime: FIRST },
+      { kind: "process", pid: 5, startTime: MS, creationTime: FIRST },
+      { kind: "process", pid: 5, startTime: MS, creationTime: SECOND },
+    ]);
+  });
+
+  it("still reads a record in the old millisecond format, and drops a creation time that is not a whole number", () => {
+    expect(parseTreeLine(`{"kind":"cli","pid":5,"startTime":${MS}}`)).toEqual({ kind: "cli", pid: 5, startTime: MS });
+    for (const bad of ['1.3439473600007e17', '"-1"', '"12x"', '134394736000070001', '""']) {
+      expect(parseTreeLine(`{"kind":"cli","pid":5,"startTime":${MS},"creationTime":${bad.startsWith('"') ? bad : JSON.stringify(Number(bad))}}`))
+        .toEqual({ kind: "cli", pid: 5, startTime: MS });
+    }
+  });
+
+  it("matches only an exact creation time, and lets a millisecond record prove only a difference", () => {
+    const exact = { pid: 5, startTime: MS, creationTime: FIRST };
+    expect(compareStart(exact, FIRST)).toBe("same");
+    expect(compareStart(exact, SECOND)).toBe("different"); // Same millisecond, another process.
+    expect(compareStart(exact, undefined)).toBe("different");
+    const old = { pid: 5, startTime: MS };
+    expect(compareStart(old, SECOND)).toBe("unsure"); // The old format can't tell these apart.
+    expect(compareStart(old, "134394736000080000")).toBe("different");
+    expect(compareStart(old, undefined)).toBe("different");
+    // Linux's clock ticks are exact as recorded.
+    expect(compareStart({ pid: 5, startTime: 77 }, 77)).toBe("same");
+    expect(compareStart({ pid: 5, startTime: 77 }, 78)).toBe("different");
+  });
+
+  it("counts a leftover in the same millisecond as gone, and never ends one it is unsure of", async () => {
+    const alive: Record<number, string> = { 5: SECOND, 6: FIRST };
+    const ended: number[][] = [];
+    const ops: ProcessOps = { startTimeOf: async (pid) => alive[pid], end: async (processes) => { ended.push(processes.map((one) => one.pid)); } };
+    const exact: Leftover = { pid: 5, startTime: MS, creationTime: FIRST, command: "a" };
+    const old: Leftover = { pid: 6, startTime: MS, command: "b" };
+    expect(await stillRunning(ops, [exact])).toEqual([]);
+    expect(await stillRunning(ops, [old])).toEqual([old]); // Kept as running: the soldier stays down.
+    const aborted = new AbortController();
+    const held = holdGuardOpen([old], ops, { wait: async () => { aborted.abort(); }, signal: aborted.signal });
+    expect(await held).toBe("cut-short");
+    expect(ended).toEqual([]);
   });
 });
 
