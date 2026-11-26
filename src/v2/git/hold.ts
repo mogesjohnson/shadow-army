@@ -126,9 +126,10 @@ export async function readState(options: Pick<HarnessHoldOptions, "repo" | "gitF
         const named = /^gitdir:\s*(.+?)\s*$/m.exec(text)?.[1];
         if (named) gitDir = resolve(folder, named);
       } else if (isFolder(dotGit)) gitDir = dotGit;
+      // Watched before a missing folder is skipped: its appearing later sends the quick check back to git.
+      if (gitDir) watch?.set(gitDir, "file");
       if (!gitDir || !isFolder(gitDir) || seen.has(real(gitDir))) continue;
       seen.add(real(gitDir));
-      watch?.set(gitDir, "file");
       let commonDir = gitDir;
       const commondir = join(gitDir, "commondir");
       if (isFile(commondir)) {
@@ -152,6 +153,11 @@ export function changedFiles(trusted: TrustedState, current: TrustedState): stri
 }
 
 export type HoldCheck = { held: false } | { held: true; files: string[]; line: string };
+
+/** Held by the check after a command that did run: `result` is what it returned, so a caller can tell what it changed. */
+export class HarnessGitHeldAfter extends HarnessGitHeld {
+  constructor(reason: string, readonly result: GitResult) { super(reason); }
+}
 
 export class HarnessHold {
   private trusted: TrustedState = {};
@@ -199,7 +205,7 @@ export class HarnessHold {
     if (before.held) throw new HarnessGitHeld(before.line);
     const result = await git.run(args, kind, ...(cwd === undefined ? [] : [cwd]));
     const after = await this.check();
-    if (after.held) throw new HarnessGitHeld(after.line);
+    if (after.held) throw new HarnessGitHeldAfter(after.line, result);
     return result;
   }
 

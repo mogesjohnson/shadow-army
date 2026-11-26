@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -170,5 +170,21 @@ describe("submodules", () => {
     await hold.start();
     addSubmodule(repo, "late");
     expect(await hold.check()).toMatchObject({ held: true, files: expect.arrayContaining(["late/.git"]) });
+  }, 60_000);
+
+  it("holds when the git folder a gitlink names was missing and then appears, quick check included (#136 self-review)", async () => {
+    const { repo, open, gitFor, main } = setup();
+    addSubmodule(repo, "sub", true);
+    const modules = join(repo.gitDir, "modules", "sub"), away = join(temp(), "sub");
+    renameSync(modules, away);
+    const calls: string[] = [];
+    const hold = new HarnessHold({ repo: main, statePath: join(temp(), "hold.json"), gitFor: (where) => { const inner = gitFor(where); return { run: (args, kind) => { calls.push(args[0]!); return inner.run(args, kind); } }; } });
+    expect(await hold.start()).toEqual({ held: false });
+    expect(await hold.check()).toEqual({ held: false });
+    calls.length = 0;
+    expect(await hold.check()).toEqual({ held: false });
+    expect(calls).toEqual([]); // the quick check is in use
+    renameSync(away, modules);
+    expect(await hold.check()).toMatchObject({ held: true, files: expect.arrayContaining([".git/modules/sub"]) });
   }, 60_000);
 });

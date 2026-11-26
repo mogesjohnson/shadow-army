@@ -5,6 +5,7 @@ import type { AppliedFile, ApplyResult } from "../workspace/apply.js";
 import { splitZ } from "../workspace/git.js";
 import type { WriteOutcome } from "./channel.js";
 import { HarnessGitHeld, HarnessGitTimeout } from "./git/harness.js";
+import { HarnessGitHeldAfter } from "./git/hold.js";
 import type { RunGit } from "./snapshot.js";
 
 class GitFailed extends Error {}
@@ -57,11 +58,21 @@ export async function applyAudited(run: RunGit, write: WriteOutcome, since?: str
       return { applied: false, reason: `the changes no longer apply to your checkout, which has moved on since the run started${why ? ` (${why})` : ""}`, clashes: [] };
     }
     // git apply is all or nothing. New paths are then marked intent-to-add, by literal pathspec; if that fails, the edits come back out.
-    await git(["apply", "--whitespace=nowarn", patch]);
+    // A hold seen after git apply ran, or its time limit, can leave the edits in the folder: the outcome says what is there.
+    try { await git(["apply", "--whitespace=nowarn", patch]); }
+    catch (error) {
+      const where = await landed(run, patch, error);
+      if (where === "none") throw error;
+      if (where === "some") return { applied: false, reason: `${(error as Error).message}; part of the run's changes may be in your folder: ${files.map((file) => file.path).join(", ")}`, clashes: [] };
+    }
     const added = files.filter((file) => file.change === "A").map((file) => `:(literal)${file.path}`);
     if (added.length) {
       try { await git(["add", "-N", "-f", "--", ...added]); }
-      catch (error) { await run(["apply", "-R", "--whitespace=nowarn", patch]).catch(() => undefined); throw error; }
+      catch (error) {
+        // Not applied only if the edits came back out; a held harness git can't take them out, so they are reported as applied.
+        const undo = await run(["apply", "-R", "--whitespace=nowarn", patch]).catch(() => undefined);
+        if (undo?.code === 0) throw error;
+      }
     }
   } catch (error) {
     if (!(error instanceof GitFailed || error instanceof HarnessGitHeld || error instanceof HarnessGitTimeout)) throw error;
@@ -70,4 +81,13 @@ export async function applyAudited(run: RunGit, write: WriteOutcome, since?: str
     await rm(dir, { recursive: true, force: true });
   }
   return { applied: true, files };
+}
+
+/** Whether a git apply that ended in `error` changed the folder: all of the patch, none of it, or some (or it can't be told). */
+async function landed(run: RunGit, patch: string, error: unknown): Promise<"all" | "none" | "some"> {
+  if (error instanceof HarnessGitHeldAfter) return error.result.code === 0 ? "all" : "none"; // git apply is all or nothing
+  if (!(error instanceof HarnessGitTimeout)) return "none"; // it failed, or the check before it held, so it never ran
+  const fits = async (args: string[]) => (await run(["apply", ...args, "--check", "--whitespace=nowarn", patch]).catch(() => undefined))?.code === 0;
+  if (await fits(["-R"])) return "all";
+  return await fits([]) ? "none" : "some";
 }

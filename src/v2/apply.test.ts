@@ -8,7 +8,8 @@ import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import type { ChannelOptions, NativeChannel, TurnResult, WriteOutcome } from "./channel.js";
 import { applyAudited } from "./apply.js";
-import { HarnessGit } from "./git/harness.js";
+import { HarnessGit, HarnessGitHeld, HarnessGitTimeout, type GitResult } from "./git/harness.js";
+import { HarnessGitHeldAfter } from "./git/hold.js";
 import type { RunGit } from "./snapshot.js";
 import { findRepo, PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, until } from "./fixture-main.testutil.js";
@@ -150,4 +151,54 @@ describe("M1-AC28: the audited change lands in the owner's folder, uncommitted",
     expect(ran).toContain("apply");
     repo.git("worktree", "remove", "--force", wt);
   }, 30_000);
+
+  /** A repository whose audited commit edits src/a.ts and adds src/new.ts, and harness git that fails as `fail` says once `apply` has run. */
+  async function interrupted(fail: (args: string[], applied: boolean) => Error | GitResult | undefined) {
+    const repo = makeRepo(); repos.push(repo);
+    const base = repo.git("rev-parse", "HEAD"), wt = mkdtempSync(join(tmpdir(), "sa-apply-wt-"));
+    repo.git("worktree", "add", "-q", "-b", "shadow/tank/t1", wt, base);
+    await writeFile(join(wt, "src/a.ts"), "audited\n");
+    await writeFile(join(wt, "src/new.ts"), "new\n");
+    await git(wt, ["add", "-A"]);
+    await git(wt, ["commit", "-qm", "audited"]);
+    const commit = (await git(wt, ["rev-parse", "HEAD"])).trim();
+    const harness = new HarnessGit({ repo: findRepo(repo.dir), hooksDir: mkdtempSync(join(tmpdir(), "sa-apply-hooks-")) });
+    let applied = false;
+    const run: RunGit = async (args, kind, cwd) => {
+      const before = fail(args, applied);
+      if (before instanceof Error) throw before;
+      if (before) return before;
+      const result = await harness.run(args, kind, cwd);
+      if (args[0] === "apply" && args.length === 3 && result.code === 0) { applied = true; const after = fail(["after", ...args], applied); if (after instanceof Error) throw after; }
+      return result;
+    };
+    const result = await applyAudited(run, { applicable: true, base, commit, branch: "shadow/tank/t1" } as WriteOutcome);
+    repo.git("worktree", "remove", "--force", wt);
+    return { repo, result, a: await readFile(join(repo.dir, "src/a.ts"), "utf8") };
+  }
+  const both = [{ change: "M", path: "src/a.ts" }, { change: "A", path: "src/new.ts" }];
+
+  it("reports the edits as applied when a hold after git apply leaves them in the folder and nothing can take them out (#136 self-review)", async () => {
+    // Held by the check after `apply`: every later command is held too, `add -N` and `apply -R` included.
+    const held = await interrupted((args, applied) => (args[0] === "after" || applied) ? new HarnessGitHeldAfter("held", { code: 0, stdout: "", stderr: "" }) : undefined);
+    expect(held.a).toBe("audited\n");
+    expect(held.result).toEqual({ applied: true, files: both });
+    // Held before `add -N` runs.
+    const before = await interrupted((args, applied) => applied && args[0] !== "after" ? new HarnessGitHeld("held") : undefined);
+    expect(before.a).toBe("audited\n");
+    expect(before.result).toEqual({ applied: true, files: both });
+  }, 60_000);
+
+  it("finds out whether a git apply stopped at its time limit landed, and reports nothing applied only when the folder is unchanged", async () => {
+    const landed = await interrupted((args) => args[0] === "after" ? new HarnessGitTimeout("other", 60_000) : undefined);
+    expect(landed).toMatchObject({ a: "audited\n", result: { applied: true, files: both } });
+    const none = await interrupted((args) => args[0] === "apply" && args.length === 3 ? new HarnessGitTimeout("other", 60_000) : undefined);
+    expect(none).toMatchObject({ a: "a\n", result: { applied: false, reason: expect.stringContaining("git took longer") } });
+  }, 60_000);
+
+  it("takes the edits back out when add -N fails and the undo works, and says nothing was applied", async () => {
+    const failed = await interrupted((args) => args[0] === "add" ? { code: 1, stdout: "", stderr: "fatal: no" } : undefined);
+    expect(failed).toMatchObject({ a: "a\n", result: { applied: false, reason: "fatal: no" } });
+    expect(existsSync(join(failed.repo.dir, "src/new.ts"))).toBe(false);
+  }, 60_000);
 });
