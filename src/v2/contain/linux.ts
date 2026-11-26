@@ -41,6 +41,8 @@ export function parseStat(pid: number, text: string): TreeProcess | null {
   return Number.isInteger(ppid) && Number.isInteger(startTime) ? { pid, ppid, startTime } : null;
 }
 
+const LIST_ATTEMPTS = 20;
+
 /** Every process whose chain of parents reaches `root`, the root left out (PO-11). */
 export function treeOf(processes: readonly TreeProcess[], root: number): TreeProcess[] {
   const parent = new Map(processes.map((entry) => [entry.pid, entry.ppid]));
@@ -55,11 +57,29 @@ export function treeOf(processes: readonly TreeProcess[], root: number): TreePro
 }
 
 export async function listTree(root: number, proc = "/proc"): Promise<TreeProcess[]> {
-  const names = (await readdir(proc)).filter((name) => /^[1-9]\d*$/.test(name));
-  const read = await Promise.all(names.map(async (name) => {
-    try { return parseStat(Number(name), await readFile(join(proc, name, "stat"), "latin1")); } catch { return null; }
-  }));
-  return treeOf(read.filter((entry): entry is TreeProcess => entry !== null), root);
+  const incomplete = (why: string) => new Error(`Linux tree listing incomplete: ${why}`);
+  // A process that vanished mid-scan, or one whose parent the scan lacks, may hide a child: scan the tree again.
+  for (let attempt = 0; attempt < LIST_ATTEMPTS; attempt++) {
+    const names = (await readdir(proc)).filter((name) => /^[1-9]\d*$/.test(name));
+    let whole = true;
+    const read = await Promise.all(names.map(async (name) => {
+      let text: string;
+      try { text = await readFile(join(proc, name, "stat"), "latin1"); } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ESRCH") throw incomplete(`process ${name} unreadable (${code})`);
+        whole = false;
+        return null;
+      }
+      const entry = parseStat(Number(name), text);
+      if (!entry) throw incomplete(`process ${name} has an unreadable stat`);
+      return entry;
+    }));
+    const found = read.filter((entry): entry is TreeProcess => entry !== null);
+    const pids = new Set(found.map((entry) => entry.pid));
+    if (whole && found.every((entry) => entry.ppid === 0 || pids.has(entry.ppid))) return treeOf(found, root);
+    await new Promise((done) => setTimeout(done, 10));
+  }
+  throw incomplete(`processes kept changing over ${LIST_ATTEMPTS} scans`);
 }
 
 /** The helper starts only an absolute path and never searches PATH, so the driver does, as a direct start would. */
@@ -140,7 +160,13 @@ export async function spawnManagedProcess(options: ManagedProcessOptions, helper
   let closing: Promise<void> | undefined;
   return {
     pid: cliPid, guardianPid: guardian.pid!, stdin: guardian.stdin, stdout: guardian.stdout, stderr: guardian.stderr, exited,
-    list: () => listTree(guardian.pid!),
+    async list() {
+      const found = await listTree(guardian.pid!);
+      // A dead guardian's descendants have moved away, so its empty tree proves nothing. Alive after the scan means alive through it.
+      const state = await readFile(`/proc/${guardian.pid}/stat`, "latin1").then((text) => text[text.lastIndexOf(")") + 2], () => undefined);
+      if (guardian.exitCode !== null || guardian.signalCode !== null || state === undefined || "ZX".includes(state)) throw new Error("Linux tree listing incomplete: the guardian has ended");
+      return found;
+    },
     close({ grace = true } = {}) {
       return closing ??= (async () => {
         const timers: NodeJS.Timeout[] = [];

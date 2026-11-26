@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,10 @@ import { windowsOnly } from "./windowsOnly.testutil.js";
 import * as managedProcesses from "./processTree.js";
 import type { ChannelEvent, NativeError } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs } from "./claude.js";
+import { helperPath } from "./contain/linux.js";
+import { credential, roster } from "./fixture-main.testutil.js";
+import { PostOffice, type OfficeEvent } from "./postOffice.js";
+import { makeRepo } from "../workspace/testRepo.testutil.js";
 
 const channels: ClaudeChannel[] = [];
 const folders: string[] = [];
@@ -30,7 +35,7 @@ async function until(check: () => boolean): Promise<void> {
  * Owner's Claude 2.1.296 probe observed error_during_execution/is_error with zero usage
  * after interrupt. Streaming usage shapes follow the vendor SDK/API documentation.
  */
-async function s6Protocol() {
+async function s6Protocol(close: () => Promise<void> = async () => {}) {
   const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
   const sent: Record<string, unknown>[] = [];
   let buffer = "";
@@ -46,7 +51,7 @@ async function s6Protocol() {
     }
   });
   const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
-    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
+    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close,
   });
   const events: ChannelEvent[] = [];
   const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", onEvent: (event) => events.push(event) });
@@ -58,7 +63,7 @@ async function s6Protocol() {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send, stdout };
+  return { channel, events, emit, send, stdout, stderr };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -424,18 +429,129 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
       await until(() => seen(events).length === 1);
     });
 
-    it("resumes a paused stream when the channel closes, so the CLI can exit and its last frames are read", async () => {
-      const { channel, events, emit, send, stdout } = await s6Protocol();
+    const stderrTexts = (events: ChannelEvent[]) => events.filter((event) => event.type === "raw" && (event.data as { type?: string }).type === "stderr").map((event) => (event.data as { text: string }).text);
+
+    it("holds stderr with stdout, so raw stderr cannot fill the event queue while it is paused", async () => {
+      const { channel, events, send, stderr } = await s6Protocol();
+      void (await send()).pending.catch(() => {});
+      stderr.write("one");
+      await until(() => stderrTexts(events).length === 1);
+      channel.pause();
+      stderr.write("two");
+      await settle();
+      expect(stderrTexts(events)).toEqual(["one"]);
+      channel.resume();
+      await until(() => stderrTexts(events).length === 2);
+      expect(stderrTexts(events)).toEqual(["one", "two"]);
+    });
+
+    it("holds stderr once the handshake is answered when paused before it, never starving the handshake", async () => {
+      const { channel, events, send, stderr } = await s6Protocol();
+      channel.pause();
+      expect((channel as unknown as { stderr?: unknown }).stderr).toBeUndefined(); // not held before the reply
+      void (await send()).pending.catch(() => {});
+      await until(() => stderr.isPaused());
+      stderr.write("held");
+      await settle();
+      expect(stderrTexts(events)).toEqual([]);
+      channel.resume();
+      await until(() => stderrTexts(events).length === 1);
+    });
+
+    it("stays paused while containment runs, then reads what the pipes held before the channel's last word", async () => {
+      let release!: () => void;
+      const contained = new Promise<void>((done) => { release = done; });
+      const { channel, events, emit, send, stdout, stderr } = await s6Protocol(() => contained);
       void (await send()).pending.catch(() => {});
       channel.pause();
-      expect(stdout.isPaused()).toBe(true);
       emit({ type: "system", n: 1 });
+      stderr.write("late");
+      const closing = channel.close();
       await settle();
+      expect(stdout.isPaused()).toBe(true);
+      expect(stderr.isPaused()).toBe(true);
       expect(seen(events)).toEqual([]);
-      await channel.close();
-      expect(stdout.isPaused()).toBe(false);
+      channel.resume(); channel.pause(); // a backlog that drains and refills during teardown still governs it
+      expect(stdout.isPaused()).toBe(true);
+      release();
+      await until(() => seen(events).length === 1);
+      stdout.end(); stderr.end();
+      await closing;
+      expect(seen(events)).toEqual([1]);
+      expect(stderrTexts(events)).toEqual(["late"]);
+      expect(events.at(-1)!.type).toBe("closed");
       channel.resume(); channel.pause(); // late calls on a closed channel change nothing
       expect(stdout.isPaused()).toBe(false);
     });
   });
+});
+
+// #139 C2: the real channel lists its contained tree, and the guard holds the next message for a child the turn started.
+const contained = process.platform === "win32" || process.platform === "linux" && existsSync(helperPath());
+/** A hand-written stream-json CLI (no provider): "bg" starts a child that outlives the result by `argv[3]` ms. */
+const backgroundCli = String.raw`
+const fs = require("node:fs"), { spawn } = require("node:child_process");
+const [log, childMs] = process.argv.slice(2);
+const emit = (frame) => process.stdout.write(JSON.stringify({ session_id: "s1", ...frame }) + "\n");
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+  const frame = JSON.parse(line);
+  if (frame.type === "control_request") { if (frame.request.subtype === "initialize") emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } }); return; }
+  if (frame.type !== "user") return;
+  const text = frame.message.content;
+  fs.appendFileSync(log, "got " + text + " " + Date.now() + "\n");
+  if (text === "bg") spawn(process.execPath, ["-e", "setTimeout(()=>require('fs').appendFileSync(process.argv[1],'child-end '+Date.now()+require('os').EOL),Number(process.argv[2]))", log, childMs], { stdio: "ignore", windowsHide: true });
+  emit({ type: "result", subtype: "success", is_error: false, result: text, user_message_uuid: frame.uuid, terminal_reason: "completed", stop_reason: "end_turn", total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 } });
+});
+`;
+
+describe("the real channel's tree listing (#139 C2, PO-11, M1-AC11)", () => {
+  it("lists an empty tree once containment confirmed it stopped, so a closed channel fails no guard", async () => {
+    const { channel } = await setup();
+    expect((await channel.list()).some((one) => one.cli)).toBe(process.platform === "win32" || process.platform === "linux");
+    const closing = channel.close();
+    await expect(channel.list()).resolves.toEqual([]);
+    await closing;
+  }, 30_000);
+
+  it("rejects a listing when containment could not confirm the tree stopped, never reading it as empty", async () => {
+    const { channel } = await setup();
+    const child = await (channel as unknown as { process: Promise<{ close(): Promise<void> }> }).process;
+    const close = child.close.bind(child);
+    child.close = async () => { throw new Error("teardown unconfirmed"); };
+    try {
+      await channel.close();
+      await expect(channel.list()).rejects.toThrow(/not confirmed stopped/);
+    } finally { await close(); }
+  }, 30_000);
+
+  it.runIf(contained)("lists the CLI's child, and a second message waits for the guard until that child ends (refused while it runs)", async () => {
+    const snapshots = await mkdtemp(join(homedir(), ".sa-test-snapshots-"));
+    const previous = process.env.SHADOW_ARMY_SNAPSHOTS;
+    process.env.SHADOW_ARMY_SNAPSHOTS = snapshots;
+    const scratch = await mkdtemp(join(tmpdir(), "sa-c2-guard-")); folders.push(scratch);
+    const cli = join(scratch, "cli.cjs"), log = join(scratch, "log.txt");
+    await writeFile(cli, backgroundCli, "utf8"); await writeFile(log, "", "utf8");
+    const repo = makeRepo();
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: (options) => new ClaudeChannel({ ...options, command: { file: process.execPath, args: [cli, log, "2500"] } }) });
+    try {
+      const first = office.send("scout", "bg");
+      await until(() => events.some((event) => event.type === "background_work"));
+      // The guard holds the turn open for the listed child: the next message can't start yet.
+      await expect(office.send("scout", "next")).rejects.toThrow(/already has a running turn/);
+      expect((await first).status).toBe("completed");
+      expect((await office.send("scout", "next")).status).toBe("completed");
+      const lines = (await readFile(log, "utf8")).trim().split(/\r?\n/);
+      expect(lines.map((line) => line.split(" ").slice(0, -1).join(" "))).toEqual(["got bg", "child-end", "got next"]);
+      const at = (prefix: string) => Number(lines.find((line) => line.startsWith(prefix))!.split(" ").at(-1));
+      expect(at("got next")).toBeGreaterThanOrEqual(at("child-end"));
+      const work = events.find((event) => event.type === "background_work")?.data as { processes: unknown[] } | undefined;
+      expect(work?.processes.length).toBeGreaterThan(0);
+    } finally {
+      await office.close(); repo.cleanup();
+      if (previous === undefined) delete process.env.SHADOW_ARMY_SNAPSHOTS; else process.env.SHADOW_ARMY_SNAPSHOTS = previous;
+      await rm(snapshots, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
