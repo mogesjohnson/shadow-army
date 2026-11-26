@@ -123,3 +123,12 @@ describe("Windows tree listing (PO-11: the job's processes, with identity)", () 
     await closing;
   }, 30_000);
 });
+
+describe("the control pipe's line limit (#139 C2)", () => {
+  it("holds a full job listing once authenticated, and stays small before", async () => {
+    const { controlLineLimit } = await import("./windows.js");
+    const processes = Array.from({ length: 4096 }, () => ({ pid: 4294967295, ppid: 4294967295, startTime: 9999999999999 }));
+    expect(JSON.stringify({ kind: "list", processes }).length).toBeLessThanOrEqual(controlLineLimit(true));
+    expect(controlLineLimit(false)).toBe(16_384);
+  });
+});

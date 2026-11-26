@@ -14,6 +14,8 @@ export interface ProcessExit { code: number | null; signal: NodeJS.Signals | nul
 export interface ListedProcess { pid: number; startTime: number; ppid?: number; cli?: boolean }
 /** PO-11: how long a tree listing may take before it counts as failed (incomplete, never empty). */
 export const LIST_LIMIT_MS = 5_000;
+/** The control pipe's line limit: small until the supervisor proves its token, then room for a 4096-process listing (under 128 bytes each). */
+export const controlLineLimit = (authenticated: boolean): number => authenticated ? 4096 * 128 : 16_384;
 export interface ManagedProcess {
   readonly pid: number;
   readonly stdin: Writable;
@@ -108,7 +110,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     socket.on("close", () => { if (socket === control) failListings("the supervisor's control pipe closed"); });
     socket.on("data", (data: string) => {
       buffer += data;
-      if (buffer.length > 16_384) { socket.destroy(); return; }
+      if (buffer.length > controlLineLimit(authenticated)) { socket.destroy(); return; }
       for (let end; (end = buffer.indexOf("\n")) >= 0;) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         let event: { token?: string; kind?: string; pid?: number; code?: number; message?: string; processes?: { pid: number; ppid: number; startTime: number }[]; error?: string };
@@ -241,27 +243,35 @@ public static class ShadowJobSupervisor {
   [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process,int kind,ref BASIC_INFO info,int length,out int returned);
   static void Check(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
   // PO-11: the job's processes with parent and start time (Unix ms, as the sweep reads it). Any doubt is an error, never a short list.
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool IsProcessInJob(IntPtr process,IntPtr job,out bool member);
   static string ListJob(IntPtr job) {
     IntPtr buffer=IntPtr.Zero; var serializer=new JavaScriptSerializer();
     try {
       if(job==IntPtr.Zero) throw new Exception("the job does not exist yet");
       int capacity=4096; buffer=Marshal.AllocHGlobal(8+IntPtr.Size*capacity);
-      Check(QueryInformationJobObject(job,3,buffer,(uint)(8+IntPtr.Size*capacity),IntPtr.Zero));
-      int assigned=Marshal.ReadInt32(buffer), count=Marshal.ReadInt32(buffer,4);
-      if(count<assigned) throw new Exception("the job holds more processes than were listed");
-      var processes=new List<object>();
-      for(int index=0;index<count;index++) {
-        uint pid=(uint)Marshal.ReadIntPtr(buffer,8+IntPtr.Size*index).ToInt64();
-        IntPtr handle=OpenProcess(0x1000,false,pid);
-        if(handle==IntPtr.Zero) { int error=Marshal.GetLastWin32Error(); if(error==87) continue; throw new Win32Exception(error); } // 87: already gone.
-        try {
-          uint code; Check(GetExitCodeProcess(handle,out code)); if(code!=259) continue; // Ended since the job listed it.
-          long creation,exit,kernel,user; Check(GetProcessTimes(handle,out creation,out exit,out kernel,out user));
-          var info=new BASIC_INFO(); int returned; int status=NtQueryInformationProcess(handle,0,ref info,Marshal.SizeOf(typeof(BASIC_INFO)),out returned);
-          if(status!=0) throw new Exception("process "+pid+" parent unreadable (status "+status+")");
-          processes.Add(new { pid=pid, ppid=(ulong)info.parent, startTime=(creation-116444736000000000L)/10000 });
-        } finally { CloseHandle(handle); }
+      var processes=new List<object>(); bool whole=false;
+      // A listed process that ends, or whose pid is reused, before it is read may have left a child behind: ask the job again.
+      for(int attempt=0;attempt<10 && !whole;attempt++) {
+        if(attempt>0) Thread.Sleep(20);
+        Check(QueryInformationJobObject(job,3,buffer,(uint)(8+IntPtr.Size*capacity),IntPtr.Zero));
+        int assigned=Marshal.ReadInt32(buffer), count=Marshal.ReadInt32(buffer,4);
+        if(count<assigned) throw new Exception("the job holds more processes than were listed");
+        processes.Clear(); whole=true;
+        for(int index=0;index<count;index++) {
+          uint pid=(uint)Marshal.ReadIntPtr(buffer,8+IntPtr.Size*index).ToInt64();
+          IntPtr handle=OpenProcess(0x1000,false,pid);
+          if(handle==IntPtr.Zero) { int error=Marshal.GetLastWin32Error(); if(error==87) { whole=false; continue; } throw new Win32Exception(error); } // 87: already gone.
+          try {
+            bool member; Check(IsProcessInJob(handle,job,out member));
+            uint code; Check(GetExitCodeProcess(handle,out code)); if(!member || code!=259) { whole=false; continue; }
+            long creation,exit,kernel,user; Check(GetProcessTimes(handle,out creation,out exit,out kernel,out user));
+            var info=new BASIC_INFO(); int returned; int status=NtQueryInformationProcess(handle,0,ref info,Marshal.SizeOf(typeof(BASIC_INFO)),out returned);
+            if(status!=0) throw new Exception("process "+pid+" parent unreadable (status "+status+")");
+            processes.Add(new { pid=pid, ppid=(ulong)info.parent, startTime=(creation-116444736000000000L)/10000 });
+          } finally { CloseHandle(handle); }
+        }
       }
+      if(!whole) throw new Exception("the job's processes kept changing while they were read");
       return serializer.Serialize(new { kind="list", processes=processes });
     } catch(Exception error) { return serializer.Serialize(new { kind="list", error=error.Message }); }
     finally { if(buffer!=IntPtr.Zero) Marshal.FreeHGlobal(buffer); }
