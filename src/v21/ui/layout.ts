@@ -7,10 +7,10 @@ export type Row = Seg[];
 
 const seg = (text: string, tone?: Tone, bold?: boolean): Seg => ({ text, tone, bold });
 /** Terminal cells, the same measure Ink uses (wide CJK and emoji are two, combining marks none). */
-const cells = (s: string): number => stringWidth(s);
+export const cells = (s: string): number => stringWidth(s);
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 /** The longest grapheme prefix of s that is at most max cells wide. */
-function takeCells(s: string, max: number): string {
+export function takeCells(s: string, max: number): string {
   let out = "", used = 0;
   for (const { segment } of segmenter.segment(s)) {
     const c = cells(segment);
