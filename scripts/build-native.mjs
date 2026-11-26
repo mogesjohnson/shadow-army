@@ -5,11 +5,12 @@
 // other system is skipped with a message. The release package never runs this (PO-13).
 //
 // On Linux x64 and arm64 the build fails without a compiler, and the helper is published under
-// its PO-12 name only after a compile that succeeded and whose ELF header names this processor.
+// its PO-12 name only after a compile that succeeded and left a complete, statically linked ELF
+// executable for this processor.
 // The previous helper is removed first, so a failed build never leaves an old one in place.
 // `npm run build:ts` builds the TypeScript alone.
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readSync, renameSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,11 +34,46 @@ export function findCompiler(run = (cmd) => spawnSync(cmd, ["--version"], { stdi
   return undefined;
 }
 
-/** True when `header` (a file's first 20 bytes) is a 64-bit little-endian ELF for `arch`. */
-export function elfMatches(header, arch) {
-  if (header.length < 20) return false;
-  const magic = header[0] === 0x7f && header[1] === 0x45 && header[2] === 0x4c && header[3] === 0x46;
-  return magic && header[4] === 2 && header[5] === 1 && header.readUInt16LE(18) === ELF_MACHINES[arch];
+/**
+ * Why `file` (a whole file's bytes) isn't a complete, statically linked 64-bit little-endian ELF
+ * executable for `arch`, or undefined when it is one (PO-12). A static-pie executable has the
+ * same type as a shared library, so the entry point must also lie in loaded, executable bytes.
+ */
+export function elfProblem(file, arch) {
+  const u16 = (at) => file.readUInt16LE(at);
+  const u64 = (at) => file.readBigUInt64LE(at);
+  const inFile = (offset, length) => offset + length <= BigInt(file.length);
+  if (file.length < 64 || file.readUInt32BE(0) !== 0x7f454c46 || file[4] !== 2 || file[5] !== 1 || file[6] !== 1) {
+    return "not a whole 64-bit little-endian ELF header";
+  }
+  if (u16(18) !== ELF_MACHINES[arch] || file.readUInt32LE(20) !== 1) return `not built for linux-${arch}`;
+  if (u16(16) !== 2 && u16(16) !== 3) return "not an executable (ET_EXEC or ET_DYN)";
+  const entry = u64(24);
+  const [phoff, shoff] = [u64(32), u64(40)];
+  const count = u16(56);
+  if (u16(54) !== 56 || count === 0 || count === 0xffff || phoff < 64n || !inFile(phoff, BigInt(count * 56))) {
+    return "its program headers are missing or outside the file";
+  }
+  if (shoff !== 0n && (u16(58) !== 64 || u16(60) === 0 || !inFile(shoff, BigInt(u16(60) * 64)))) {
+    return "truncated: its section headers are outside the file";
+  }
+  let entryLoaded = false;
+  for (let at = Number(phoff), end = at + count * 56; at < end; at += 56) {
+    const [type, flags] = [file.readUInt32LE(at), file.readUInt32LE(at + 4)];
+    const [offset, vaddr, size, memory] = [u64(at + 8), u64(at + 16), u64(at + 32), u64(at + 40)];
+    if (!inFile(offset, size)) return "truncated: a segment ends outside the file";
+    if (type === 3) return "not statically linked: it names a program interpreter";
+    if (type === 2) {
+      // PT_DYNAMIC: static-pie has one too, but never a DT_NEEDED (1) before its DT_NULL (0).
+      for (let d = Number(offset); d + 16 <= Number(offset + size) && u64(d) !== 0n; d += 16) {
+        if (u64(d) === 1n) return "not statically linked: it needs a shared library";
+      }
+    }
+    if (type !== 1) continue;
+    if (size > memory) return "a loaded segment is larger in the file than in memory";
+    if (flags & 1 && entry >= vaddr && entry < vaddr + size) entryLoaded = true;
+  }
+  return entryLoaded && entry !== 0n ? undefined : "its entry point isn't in loaded, executable bytes";
 }
 
 /**
@@ -70,14 +106,13 @@ export function plan({ platform, arch, compiler }) {
   return { action: "compile", cc: compiler, args: [...FLAGS, "-o", `${out}.tmp`, SOURCE], out };
 }
 
-function readHeader(path) {
-  const header = Buffer.alloc(20);
-  const fd = openSync(path, "r");
-  try {
-    return header.subarray(0, readSync(fd, header, 0, 20, 0));
-  } finally {
-    closeSync(fd);
-  }
+/** Why the compiler's output can't be published, or undefined when it can. */
+function artifactProblem(path, arch) {
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat?.isFile()) return "no regular file was written";
+  // Windows has no execute bit; there only a test's stand-in compiler reaches this.
+  if (process.platform !== "win32" && !(stat.mode & 0o100)) return "it has no execute permission";
+  return elfProblem(readFileSync(path), arch);
 }
 
 export function main({
@@ -109,9 +144,10 @@ export function main({
     error(`build-native: ${step.cc} failed to build ${step.out}.`);
     return 1;
   }
-  if (!elfMatches(readHeader(tmp), arch)) {
-    rmSync(tmp, { force: true });
-    error(`build-native: ${step.cc} did not build a 64-bit ELF for linux-${arch}; ${step.out} not published (PO-12).`);
+  const problem = artifactProblem(tmp, arch);
+  if (problem) {
+    rmSync(tmp, { recursive: true, force: true });
+    error(`build-native: ${step.out} not published (PO-12): ${step.cc}'s output is refused, ${problem}.`);
     return 1;
   }
   renameSync(tmp, out);

@@ -4,15 +4,32 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { ELF_MACHINES, FLAGS, LINUX_DIRS, SOURCE, elfMatches, findCompiler, main, plan } from "./build-native.mjs";
+import { ELF_MACHINES, FLAGS, LINUX_DIRS, SOURCE, elfProblem, findCompiler, main, plan } from "./build-native.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The first 20 bytes of an ELF file: 64-bit, little-endian, with this e_machine. */
-const elfHeader = (machine, { cls = 2, data = 1 } = {}) => {
-  const buf = Buffer.alloc(20);
-  buf.set([0x7f, 0x45, 0x4c, 0x46, cls, data]);
+/** A small, complete static ELF: header, program headers, 16 bytes of code, one section header. */
+const elf = (machine, { cls = 2, data = 1, type = 2, entry, load = {}, extra = [] } = {}) => {
+  const segments = [{ type: 1, flags: 5, offset: 0, vaddr: 0x400000, ...load }, ...extra];
+  const code = 64 + segments.length * 56;
+  const sections = code + 16;
+  const buf = Buffer.alloc(sections + 64);
+  buf.set([0x7f, 0x45, 0x4c, 0x46, cls, data, 1]);
+  buf.writeUInt16LE(type, 16);
   buf.writeUInt16LE(machine, 18);
+  buf.writeUInt32LE(1, 20);
+  buf.writeBigUInt64LE(BigInt(entry ?? 0x400000 + code), 24);
+  buf.writeBigUInt64LE(64n, 32);
+  buf.writeBigUInt64LE(BigInt(sections), 40);
+  [64, 56, segments.length, 64, 1].forEach((v, i) => buf.writeUInt16LE(v, 52 + i * 2));
+  segments.forEach((seg, i) => {
+    const at = 64 + i * 56;
+    buf.writeUInt32LE(seg.type, at);
+    buf.writeUInt32LE(seg.flags ?? 4, at + 4);
+    const size = seg.filesz ?? sections;
+    [seg.offset ?? 0, seg.vaddr ?? 0, 0, size, seg.memsz ?? size].forEach((v, j) =>
+      buf.writeBigUInt64LE(BigInt(v), at + 8 + j * 8));
+  });
   return buf;
 };
 
@@ -50,16 +67,44 @@ describe("build-native plan", () => {
   });
 });
 
-describe("elfMatches", () => {
-  it("takes a 64-bit little-endian ELF only for its own processor", () => {
-    expect(elfMatches(elfHeader(ELF_MACHINES.x64), "x64")).toBe(true);
-    expect(elfMatches(elfHeader(ELF_MACHINES.arm64), "arm64")).toBe(true);
-    expect(elfMatches(elfHeader(ELF_MACHINES.arm64), "x64")).toBe(false);
-    expect(elfMatches(elfHeader(ELF_MACHINES.x64), "arm64")).toBe(false);
-    expect(elfMatches(elfHeader(3), "x64")).toBe(false); // i386
-    expect(elfMatches(elfHeader(ELF_MACHINES.x64, { cls: 1 }), "x64")).toBe(false);
-    expect(elfMatches(elfHeader(ELF_MACHINES.x64, { data: 2 }), "x64")).toBe(false);
-    expect(elfMatches(Buffer.from("#!/bin/sh\n"), "x64")).toBe(false);
+describe("elfProblem", () => {
+  const { x64, arm64 } = ELF_MACHINES;
+  /** A PT_DYNAMIC segment over the code bytes, whose first entry has this tag. */
+  const dynamic = (tag) => {
+    const at = 64 + 2 * 56;
+    const buf = elf(x64, { type: 3, extra: [{ type: 2, offset: at, filesz: 16 }] });
+    buf.writeBigUInt64LE(BigInt(tag), at);
+    return buf;
+  };
+
+  it("takes a complete static executable only for its own processor", () => {
+    expect(elfProblem(elf(x64), "x64")).toBeUndefined();
+    expect(elfProblem(elf(arm64), "arm64")).toBeUndefined();
+    expect(elfProblem(elf(x64, { type: 3 }), "x64")).toBeUndefined(); // static-pie
+    expect(elfProblem(dynamic(30), "x64")).toBeUndefined(); // static-pie's own dynamic table
+    expect(elfProblem(elf(arm64), "x64")).toMatch(/linux-x64/);
+    expect(elfProblem(elf(x64), "arm64")).toMatch(/linux-arm64/);
+    expect(elfProblem(elf(3), "x64")).toMatch(/linux-x64/); // i386
+    expect(elfProblem(elf(x64, { cls: 1 }), "x64")).toMatch(/64-bit/);
+    expect(elfProblem(elf(x64, { data: 2 }), "x64")).toMatch(/64-bit/);
+    expect(elfProblem(Buffer.from("#!/bin/sh\n"), "x64")).toMatch(/64-bit/);
+  });
+
+  it.each([
+    ["only the first 20 bytes", elf(x64).subarray(0, 20), /64-bit/],
+    ["cut inside the program headers", elf(x64).subarray(0, 100), /program headers/],
+    ["cut before the section headers end", elf(x64).subarray(0, -1), /section headers/],
+    ["a segment that ends past the file", elf(x64, { load: { filesz: 4096 } }), /truncated/],
+    ["a relocatable object", elf(x64, { type: 1 }), /not an executable/],
+    ["a core dump", elf(x64, { type: 4 }), /not an executable/],
+    ["a program interpreter", elf(x64, { extra: [{ type: 3, filesz: 8 }] }), /interpreter/],
+    ["a needed shared library", dynamic(1), /shared library/],
+    ["no entry point, as a shared object has", elf(x64, { type: 3, entry: 0 }), /entry point/],
+    ["an entry outside the loaded bytes", elf(x64, { entry: 0x900000 }), /entry point/],
+    ["an entry in a segment that can't execute", elf(x64, { load: { flags: 4 } }), /entry point/],
+    ["a segment larger in the file than in memory", elf(x64, { load: { memsz: 1 } }), /memory/],
+  ])("refuses %s", (name, bytes, reason) => {
+    expect(elfProblem(bytes, "x64")).toMatch(reason);
   });
 });
 
@@ -74,8 +119,8 @@ describe("build-native main, with a stand-in compiler", () => {
     writeFileSync(out, "the previous build");
     return out;
   };
-  const compilerWriting = (bytes, status = 0) => (cc, args, opts) => {
-    if (bytes) writeFileSync(join(opts.cwd, args[args.indexOf("-o") + 1]), bytes);
+  const compilerWriting = (bytes, status = 0, mode = 0o755) => (cc, args, opts) => {
+    if (bytes) writeFileSync(join(opts.cwd, args[args.indexOf("-o") + 1]), bytes, { mode });
     return { status };
   };
   const quiet = { log: () => {}, error: () => {} };
@@ -88,7 +133,7 @@ describe("build-native main, with a stand-in compiler", () => {
 
   it("fails when the compile fails and leaves no helper", () => {
     const out = setup();
-    const run = compilerWriting(elfHeader(ELF_MACHINES.x64), 1);
+    const run = compilerWriting(elf(ELF_MACHINES.x64), 1);
     expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(1);
     expect(existsSync(out)).toBe(false);
     expect(existsSync(`${out}.tmp`)).toBe(false);
@@ -96,15 +141,34 @@ describe("build-native main, with a stand-in compiler", () => {
 
   it("refuses a binary built for another processor", () => {
     const out = setup();
-    const run = compilerWriting(elfHeader(ELF_MACHINES.arm64));
+    const run = compilerWriting(elf(ELF_MACHINES.arm64));
     expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(1);
     expect(existsSync(out)).toBe(false);
     expect(existsSync(`${out}.tmp`)).toBe(false);
   });
 
+  it.each([
+    ["a truncated file", elf(ELF_MACHINES.x64).subarray(0, 20)],
+    ["a relocatable object", elf(ELF_MACHINES.x64, { type: 1 })],
+    ["no file at all", undefined],
+  ])("publishes nothing when the compiler leaves %s", (name, bytes) => {
+    const out = setup();
+    const run = compilerWriting(bytes);
+    expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(1);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  // Windows has no execute bit, so only a POSIX run can tell.
+  it.skipIf(process.platform === "win32")("refuses an output with no execute permission", () => {
+    const out = setup();
+    const run = compilerWriting(elf(ELF_MACHINES.x64), 0, 0o644);
+    expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(1);
+    expect(existsSync(out)).toBe(false);
+  });
+
   it("publishes a binary for this processor under PO-12's name", () => {
     const out = setup();
-    const run = compilerWriting(elfHeader(ELF_MACHINES.x64));
+    const run = compilerWriting(elf(ELF_MACHINES.x64));
     expect(main({ platform: "linux", arch: "x64", cwd: dir, compiler: "cc", run, ...quiet })).toBe(0);
     expect(existsSync(out)).toBe(true);
     expect(existsSync(`${out}.tmp`)).toBe(false);
