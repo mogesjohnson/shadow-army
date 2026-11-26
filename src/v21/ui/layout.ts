@@ -126,20 +126,27 @@ export function stripRow(view: ArmyView, right: Row = []): Row {
 }
 
 /**
- * HOST-4: from 50 columns one line, name · host · model with the state on the right;
- * below 50, two lines: name and state, then host and model, the model cut by an ellipsis.
+ * HOST-4: from 50 columns one line, name · id · model · queue count with the state on the right;
+ * below 50, two lines: name and state, then id and model with the queue count, the model cut by an ellipsis.
  */
 export function headerRows(s: Soldier, w: number, ascii = false): Row[] {
   const look = STATES[s.state];
-  const name = safeText(s.name), host = safeText(s.host), model = safeText(s.model);
+  const name = safeText(s.name), id = safeText(s.id), model = safeText(s.model);
+  const queue = s.queued > 0 ? ` · ${s.queued} queued` : "";
   // The chosen profile is measured before padding: ASCII turns wide characters into one cell each.
   const prof = (t: string): string => (ascii ? toAscii(t) : t);
   const state: Row = [seg(look.glyph, look.tone, look.bold), seg(" "), seg(`${look.word} `, look.tone, look.bold)];
   const lead: Row = [seg(" "), seg(prof(name), s.colour, true)];
   const done = (r: Row): Row => asciiRow(r, ascii);
-  if (w >= 50) return [done(lr([...lead, seg(` · ${prof(host)} · ${prof(model)}`, "dm")], asciiRow(state, ascii), w))];
-  const room = Math.max(4, w - cells(prof(host)) - 5);
   const m = prof(model);
-  const cut = cells(m) > room ? takeCells(m, room - 1) + "…" : m;
-  return [lr(lead, asciiRow(state, ascii), w), fit([seg(" "), seg(`${prof(host)} · ${cut}`, "dm")], w)].map(done);
+  const clipModel = (room: number): string => (cells(m) > room ? takeCells(m, Math.max(1, room) - 1) + "…" : m);
+  if (w >= 50) {
+    // The model gives way first, so the id, the queue count and the state stay whole.
+    const fixed = rowWidth(lead) + cells(` · ${prof(id)} · ${queue}`) + rowWidth(state) + 1;
+    const left: Row = [...lead, seg(` · ${prof(id)} · ${clipModel(Math.max(4, w - fixed))}${queue}`, "dm")];
+    return [done(lr(left, asciiRow(state, ascii), w))];
+  }
+  const room = Math.max(4, w - cells(prof(id)) - cells(queue) - 5);
+  const cut = clipModel(room);
+  return [lr(lead, asciiRow(state, ascii), w), fit([seg(" "), seg(`${prof(id)} · ${cut}${queue}`, "dm")], w)].map(done);
 }

@@ -66,27 +66,31 @@ describe("v2.1 strip (HOST-6)", () => {
 });
 
 describe("v2.1 pane header (HOST-4)", () => {
-  it("is one line from 50 columns: name · host · model, state on the right", () => {
-    for (const w of [144, 110, 80, 50]) {
+  it("is one line from 50 columns: name · id · model · queue, state on the right", () => {
+    for (const w of [144, 110, 80]) {
       const rows = header("igris", w);
       expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatch(/^ Igris · codex-sol · gpt-6\.1-sol +⚠ near handoff$/);
+      expect(rows[0]).toMatch(/^ Igris · igris · gpt-6\.1-sol · 2 queued +⚠ near handoff$/);
     }
+    expect(header("igris", 50)).toEqual([" Igris · igris · gpt-6… · 2 queued ⚠ near handoff"]);
+    expect(header("tusk", 80)[0]).toMatch(/^ Tusk · tusk · gemini-3\.1-pro-high +○ idle$/);
   });
 
-  it("keeps name, host and model across two lines at 44 columns", () => {
-    expect(header("tusk", 44)).toEqual([" Tusk                                ○ idle", " agy · gemini-3.1-pro-high"]);
-    expect(header("igris", 44, true)).toEqual([" Igris                       ! near handoff", " codex-sol . gpt-6.1-sol"]);
+  it("keeps id, model and queue count across two lines at 44 columns", () => {
+    expect(header("tusk", 44)).toEqual([" Tusk                                ○ idle", " tusk · gemini-3.1-pro-high"]);
+    expect(header("igris", 44, true)).toEqual([" Igris                       ! near handoff", " igris . gpt-6.1-sol . 2 queued"]);
   });
 
-  it("cuts a long model with an ellipsis below 50 columns, never the name", () => {
-    expect(header("tusk", 24)[1]).toBe(" agy · gemini-3.1-pro-…");
+  it("cuts a long model with an ellipsis below 50 columns, never the name or the queue count", () => {
+    expect(header("tusk", 24)[1]).toBe(" tusk · gemini-3.1-pro…");
+    expect(header("beru", 30)[1]).toMatch(/^ beru · grok-4\.7 · 1 queued$/);
+    expect(header("igris", 28)[1]).toMatch(/… · 2 queued$/);
   });
 });
 
 describe("v2.1 terminal cells", () => {
   it("measures a 50-column header with CJK name and model by cells and keeps the state visible", () => {
-    const wide = { ...ROSTER[1], name: "イグリス", host: "codex-sol-ホスト-name-x", model: "モデル" };
+    const wide = { ...ROSTER[1], name: "イグリス", id: "igris-ホスト-name-xxxxx", model: "モデル" };
     for (const ascii of [false, true]) {
       const [row] = headerRows(wide, 50, ascii);
       expect(rowWidth(row)).toBe(50);
