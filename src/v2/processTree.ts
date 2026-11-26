@@ -93,6 +93,18 @@ async function resolveWindowsCommand(file: string, cwd: string, env: NodeJS.Proc
   throw Object.assign(new Error(`could not find executable ${file}`), { code: "ENOENT" });
 }
 
+/**
+ * CH-1: the selected file itself, links followed, must lie outside the checkout and its worktrees.
+ * The check needs the real path: one that can't be read refuses the launch, never falls back to the lexical path (C17).
+ */
+export async function verifyExecutable(executable: string, roots: string[], real: (path: string) => Promise<string> = realpath): Promise<void> {
+  let resolved: string;
+  try { resolved = comparable(await real(executable)); } catch (error) {
+    throw Object.assign(new Error(`could not verify the real path of executable ${executable}: ${(error as Error).message}`), { code: "EACCES" });
+  }
+  if (roots.some((root) => inside(resolved, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+}
+
 /** Windows argv quoting for native executables, including embedded quotes and trailing backslashes. */
 function windowsArgument(value: string): string {
   return `"${value.replace(/(\\*)"/g, "$1$1\\\"").replace(/(\\+)$/g, "$1$1")}"`;
@@ -120,9 +132,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
     [pathKey]: path.kept.join(delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
   const executable = await resolveWindowsCommand(options.file, options.cwd, env, path.kept);
-  // CH-1: the selected file itself, links followed, must also lie outside the checkout and its worktrees.
-  const realExecutable = comparable(await realpath(executable).catch(() => resolve(executable)));
-  if (path.roots.some((root) => inside(realExecutable, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+  await verifyExecutable(executable, path.roots);
   const command = windowsCommand(executable, options.args ?? [], env);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
