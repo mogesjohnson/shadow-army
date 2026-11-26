@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyToCheckout, renderApply } from "./apply.js";
@@ -6,15 +6,19 @@ import { makeRepo } from "./testRepo.testutil.js";
 
 vi.setConfig({ testTimeout: 60_000 });
 
+// The patch folders the mocked removal refused; teardown removes them with the real rmSync (#94 C18).
+const patchDirs = vi.hoisted(() => [] as string[]);
+
 // #94 C14: removing the temporary patch fails, as when antivirus or another process holds it open on Windows.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...real, rm: async () => { throw new Error("EBUSY: resource busy or locked"); } };
+  return { ...real, rm: async (path: string) => { patchDirs.push(path); throw new Error("EBUSY: resource busy or locked"); } };
 });
 
 const repos: ReturnType<typeof makeRepo>[] = [];
 afterEach(() => {
   while (repos.length) repos.pop()!.cleanup();
+  while (patchDirs.length) rmSync(patchDirs.pop()!, { recursive: true, force: true });
 });
 
 describe("#94 C14: when the temporary patch cannot be removed", () => {
