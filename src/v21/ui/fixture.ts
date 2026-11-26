@@ -1,5 +1,5 @@
 // Fixtures for the War Table until the post office feeds the view (the design's lib.mjs ARMY and kit.mjs models).
-import type { ArmyView, Soldier } from "./model.js";
+import type { ArmyView, Briefs, Message, Soldier } from "./model.js";
 
 /** The design's whole roster, in roster order; the strip tests compare all six with the canvas frames. */
 export const ROSTER: Soldier[] = [
@@ -23,3 +23,16 @@ export function warTable(width: number, ascii = false, soldiers: Soldier[] = ROS
     ascii,
   };
 }
+
+/** The "work 144" frame's Monarch numbers and messages. */
+export const BRIEFS: Briefs = {
+  sent: 4, answered: 1, queued: 1, sinceFirst: "2:41", costUsd: 0.41,
+  talkNote: "(one line in Claude's transcript, MSG-6)",
+};
+export const MESSAGES: Message[] = [
+  { time: "14:31:02", from: "monarch", to: "iron", kind: "brief", text: 'brief "dark-mode toggle…"', status: "delivered" },
+  { time: "14:31:40", from: "igris", to: "iron", kind: "peer", text: '"tokens ready: bg.dark, text.dark"', status: "delivered" },
+  { time: "14:32:11", from: "tusk", to: "monarch", kind: "summary", text: "summary · lint scan · 0 findings", status: "answered" },
+  { time: "14:32:30", from: "beru", to: "you", kind: "ask", text: "asks: Run this command?", status: "waiting" },
+  { time: "14:32:40", from: "monarch", to: "kaisel", kind: "brief", text: 'brief "review the toggle" · queued, cold', status: "queued" },
+];
