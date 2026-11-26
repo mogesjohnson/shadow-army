@@ -470,6 +470,68 @@ for await (const line of createInterface({ input: process.stdin })) {
     await office.close();
     expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
   }, 30_000);
+
+  it("logs a tool call's input whole and marked unfinished when the stream ends before the call arrives, and not twice when it does (C10, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const [a, b] = [credential.slice(0, 30), credential.slice(30)];
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const raw = (frame: Record<string, unknown>): void => emit({ type: "raw", data: { session_id: "c10", parent_tool_use_id: null, ...frame } });
+    const call = (id: string, parts: string[]): void => {
+      raw({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name: "Write", input: {} } } });
+      for (const part of parts) raw({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: part } } });
+    };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        call("toolu_done", ['{"content":"', "fine", '"}']);
+        raw({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_done", name: "Write", input: { content: "fine" } }] } });
+        call("toolu_cut", ['{"content":"key ', a, b, " end"]);
+        return { status: "interrupted", text: "", refusal: false };
+      }); } });
+    offices.push(office);
+    const opened = await office.open("scout");
+    await office.send("scout", "write it");
+    await office.close();
+    const file = await readFile(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`), "utf8");
+    for (const part of [a, b]) expect(file).not.toContain(part);
+    const inputs = (await records(repo.dir, opened.session)).filter((record) => record.type === "tool_input");
+    expect(inputs).toEqual([expect.objectContaining({ soldier: "scout", unfinished: true, id: "toolu_cut", name: "Write", input: '{"content":"key [redacted] end' })]);
+  }, 30_000);
+
+  it("writes one log_failed line per failure: one when the session and office logs fail together, two for two failures (M1-AC4, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const logs = join(repo.dir, ".shadow", "v2", "logs");
+    const notices = (): OfficeEvent[] => events.filter((event) => event.type === "log_failed");
+    const swap = async (path: string, broken: boolean): Promise<void> => {
+      await rm(path, { recursive: true, force: true });
+      if (broken) await mkdir(path, { recursive: true });
+    };
+    let session = "";
+    let both = true;
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        const seen = notices().length;
+        await swap(join(logs, `${session}.jsonl`), true);
+        if (both) await swap(join(logs, "post-office.jsonl"), true);
+        emit({ type: "tool_result", data: { n: 1 } });
+        await until(async () => notices().length > seen);
+        // Long enough for the office log's own failure, had it sent a second notice.
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        await swap(join(logs, `${session}.jsonl`), false);
+        if (both) await swap(join(logs, "post-office.jsonl"), false);
+        return { status: "completed", text: "done", refusal: false };
+      }); } });
+    offices.push(office);
+    session = (await office.open("scout")).session;
+    await office.send("scout", "one failure, both logs");
+    expect(notices()).toHaveLength(1);
+    both = false;
+    await office.send("scout", "second failure");
+    expect(notices()).toHaveLength(2);
+    await office.close();
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
+  }, 30_000);
 });
 
 describe("shadow names and the size refusal through the office (ARM-3, SI-3; Codex review 8 C1, C3)", () => {
