@@ -52,15 +52,37 @@ const asOfficeOps = (ops: SweepOps | OfficeOps): OfficeOps => "probe" in ops && 
 };
 const run = promisify(execFile);
 /** Windows' own PowerShell and taskkill by absolute path, never a PATH lookup. */
-const system32 = (...parts: string[]) => join(process.env.SystemRoot ?? "C:\\Windows", "System32", ...parts);
+const system32 = (...parts: string[]) => join(process.env.SystemRoot ?? "C:\Windows", "System32", ...parts);
+/** The script goes as `-EncodedCommand` (UTF-16LE base64), so its quotes reach PowerShell unchanged. */
 async function powershell(script: string): Promise<string> {
-  return (await run(system32("WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true })).stdout.trim();
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  return (await run(system32("WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { windowsHide: true })).stdout.trim();
 }
-/** The machine's operations for the office: Linux through `/proc`, Windows through a process handle held across check and end. */
-function machineOps(): OfficeOps | undefined {
+/** FILETIME of 2020-01-01 UTC: Windows identities are 100 ns ticks after it, exact and below 2^53 until about 2048. */
+const FILETIME_2020 = "132223104000000000";
+/**
+ * PowerShell that opens `pid` (a held handle), reads its exact creation FILETIME by `GetProcessTimes` on that handle and
+ * leaves the ticks since 2020 in `$t`; `gone` when no such process runs; a throw when it can't tell.
+ */
+const windowsIdentity = (pid: number) => [
+  "$ErrorActionPreference = 'Stop'",
+  `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class SaProcessTimes { [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetProcessTimes(IntPtr h, out long c, out long e, out long k, out long u); }'`,
+  `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
+  "if ($null -eq $p) { 'gone'; exit 0 }",
+  "$h = $p.Handle; $c = 0L; $e = 0L; $k = 0L; $u = 0L",
+  "if (-not [SaProcessTimes]::GetProcessTimes($h, [ref]$c, [ref]$e, [ref]$k, [ref]$u)) { throw 'GetProcessTimes failed' }",
+  `$t = $c - ${FILETIME_2020}`,
+  "if ($t -lt 0) { throw 'creation time before 2020' }",
+].join("\n");
+/**
+ * The machine's operations for the office, or `undefined` where none is safe. Windows: start times in exact FILETIME ticks
+ * since 2020, read and compared on one held handle. Linux: Node has no pidfd, so an identity check and a signal are two
+ * steps and a reused pid could take the signal; `endIdentity` sends none and the leftover stays "running" (fail closed).
+ */
+export function machineOps(platform: NodeJS.Platform = process.platform): OfficeOps | undefined {
   let base: SweepOps;
-  try { base = systemOps(); } catch { return undefined; }
-  if (process.platform === "linux") {
+  try { base = systemOps(platform); } catch { return undefined; }
+  if (platform === "linux") {
     const probe = async (pid: number): Promise<number | "gone"> => {
       let text: string;
       try { text = await readFile(`/proc/${pid}/stat`, "latin1"); } catch (error) {
@@ -72,25 +94,22 @@ function machineOps(): OfficeOps | undefined {
       if (startTime === undefined) throw new Error(`process ${pid}'s start time can't be read`);
       return startTime;
     };
-    // Node has no pidfd: the identity is checked immediately before the signal, with nothing awaited between.
+    // Build note (C1): a pidfd, opened and checked and signalled in one place, belongs in native/linux/sa-contain.c.
     return { ...base, probe, startTimeOf: async (pid) => { const time = await probe(pid); return time === "gone" ? undefined : time; },
-      endIdentity: async ({ pid, startTime }, tree = false) => {
-        if ((await probe(pid)) !== startTime) return;
-        try { process.kill(tree ? -pid : pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-      } };
+      endIdentity: async () => {} };
   }
-  if (process.platform === "win32") {
-    const time = "([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds()";
+  if (platform === "win32") {
     const probe = async (pid: number): Promise<number | "gone"> => {
-      const out = await powershell(`$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -eq $p) { 'gone' } else { ${time} }`);
+      const out = await powershell(`${windowsIdentity(pid)}\n[string]$t`);
       if (out === "gone") return "gone";
-      if (!/^\d+$/.test(out)) throw new Error(`process ${pid}'s start time can't be read`);
+      if (!/^\d+$/.test(out) || !Number.isSafeInteger(Number(out))) throw new Error(`process ${pid}'s start time can't be read`);
       return Number(out);
     };
     // The handle opened before the check stays open through the end, so the pid can't pass to another process between.
     return { ...base, probe, startTimeOf: async (pid) => { const found = await probe(pid); return found === "gone" ? undefined : found; },
       endIdentity: async ({ pid, startTime }, tree = false) => {
-        await powershell(`$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($null -ne $p) { $null = $p.Handle; if (${time} -eq ${startTime}) { ${tree ? `& '${system32("taskkill.exe")}' /t /f /pid ${pid} | Out-Null` : "$p.Kill()"} } }`);
+        const end = tree ? `& '${system32("taskkill.exe")}' /t /f /pid ${pid} | Out-Null` : "$p.Kill()";
+        await powershell(`${windowsIdentity(pid)}\nif ($t -eq ${startTime}) { ${end} }`);
       } };
   }
   return undefined;

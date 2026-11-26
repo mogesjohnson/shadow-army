@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { existsSync, linkSync, mkdtempSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -11,7 +12,7 @@ import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
 import type { SweepOps } from "./contain/sweep.js";
-import { PostOffice, type OfficeEvent, type OfficeOps } from "./postOffice.js";
+import { machineOps, PostOffice, type OfficeEvent, type OfficeOps } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
 // WSP-11: snapshots go outside the folder; these tests keep theirs in a folder of their own in the home.
@@ -992,4 +993,39 @@ describe("M1b-26 review 11 C1, C4: termination and starts gated on verified reco
     const log = await readFile(join(repo.dir, ".shadow", "v2", "logs", "post-office.jsonl"), "utf8");
     expect(log).toMatch(/"type":"containment_failed".*"down":true/);
   });
+});
+
+describe("#137 C1: the machine's process identity", () => {
+  /** A Node child that idles a minute, and a promise for its exit. */
+  const idler = () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore", windowsHide: true });
+    return { pid: child.pid!, exited: new Promise<void>((done) => child.once("exit", () => done())), kill: () => child.kill() };
+  };
+
+  windowsOnly("reads a start time as exact FILETIME ticks since 2020 and ends only that identity, on its held handle", async () => {
+    const ops = machineOps()!, child = idler();
+    try {
+      const ticks = await ops.probe(child.pid);
+      if (ticks === "gone") throw new Error("the idler is gone");
+      // 100 ns ticks after 2020-01-01 UTC: about now, and the same on a second read (lossless).
+      expect(Math.abs(ticks / 1e4 + Date.UTC(2020, 0, 1) - Date.now())).toBeLessThan(120_000);
+      expect(await ops.probe(child.pid)).toBe(ticks);
+      await ops.endIdentity({ pid: child.pid, startTime: ticks + 1 });
+      expect(await ops.probe(child.pid)).toBe(ticks);
+      await ops.endIdentity({ pid: child.pid, startTime: ticks });
+      await child.exited;
+      expect(await ops.probe(child.pid)).toBe("gone");
+    } finally { child.kill(); }
+  }, 60_000);
+
+  it.runIf(process.platform === "linux")("sends no signal on Linux, where Node has no pidfd (fails closed)", async () => {
+    const ops = machineOps()!, child = idler();
+    try {
+      const start = await ops.probe(child.pid);
+      if (start === "gone") throw new Error("the idler is gone");
+      await ops.endIdentity({ pid: child.pid, startTime: start });
+      await ops.endIdentity({ pid: child.pid, startTime: start }, true);
+      expect(await ops.probe(child.pid)).toBe(start);
+    } finally { child.kill(); }
+  }, 30_000);
 });
