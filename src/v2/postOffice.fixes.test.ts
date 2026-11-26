@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import type { ChannelOptions, NativeChannel, TurnResult } from "./channel.js";
-import { PostOffice, type OfficeEvent } from "./postOffice.js";
+import { PostOffice, type OfficeEvent, type OfficeOptions } from "./postOffice.js";
 import { credential, until } from "./fixture-main.testutil.js";
 import { Locks } from "../workspace/locks.js";
 
@@ -109,12 +109,12 @@ describe("post office fixes from the M1a pre-review", () => {
 });
 
 describe("W11-3: crash restarts (PO-1)", () => {
-  async function crashing(delays: number[]) {
+  async function crashing(delays?: number[], restartTimer?: OfficeOptions["restartTimer"]) {
     const repo = makeRepo(); repos.push(repo);
     const channels: ChannelOptions[] = [];
-    const events: (OfficeEvent & { at: number })[] = [];
+    const events: OfficeEvent[] = [];
     const o = await PostOffice.create({ cwd: repo.dir, credential, roster: makeRoster({ scout: { cli: "claude", model: "synthetic", roles: ["review"], write: false } }),
-      restartDelaysMs: delays, onEvent: (event) => events.push({ ...event, at: performance.now() }), channelFactory: (options): NativeChannel => {
+      restartDelaysMs: delays, restartTimer, onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
         channels.push(options);
         return { async send(text) { return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
       } }); offices.push(o);
@@ -122,21 +122,48 @@ describe("W11-3: crash restarts (PO-1)", () => {
     return { o, channels, events };
   }
 
-  it("waits the given delay before each restart", async () => {
-    const { channels, events } = await crashing([150, 300, 450]);
-    for (let i = 0; i < 2; i++) {
-      const at = performance.now();
-      channels[i]!.onEvent({ type: "closed", data: {} });
-      await until(() => channels.length === i + 2);
-      expect(performance.now() - at).toBeGreaterThanOrEqual([150, 300][i]! - 5);
-    }
-    expect(events.filter((event) => event.type === "restarted")).toHaveLength(2);
-  }, 30_000);
-
+  /** The injected clock: each restart wait is held until the test fires it, so no real delay passes. */
+  const held = () => {
+    const waits: { ms: number; fire: () => void; cancelled: boolean }[] = [];
+    const timer = (fire: () => void, ms: number) => { const wait = { ms, fire, cancelled: false }; waits.push(wait); return () => { wait.cancelled = true; }; };
+    return { waits, timer };
+  };
   /** Each restart makes a fresh snapshot (WSP-11): several seconds of harness git on Windows, past `until`'s bound. */
   const made = async (channels: unknown[], count: number) => {
     for (const end = performance.now() + 60_000; channels.length < count; await new Promise((done) => setTimeout(done, 20))) if (performance.now() > end) throw new Error(`restart ${count - 1} did not come`);
   };
+  it("schedules 1, 5 and 30 seconds, and starts no channel before its wait ends", async () => {
+    const { waits, timer } = held();
+    const { channels, events } = await crashing(undefined, timer);
+    for (let i = 0; i < 3; i++) {
+      channels[i]!.onEvent({ type: "closed", data: {} });
+      await until(() => waits.length === i + 1);
+      expect(channels).toHaveLength(i + 1);
+      expect(events.filter((event) => event.type === "restarting")).toHaveLength(i);
+      waits[i]!.fire();
+      await made(channels, i + 2);
+    }
+    expect(waits.map((wait) => wait.ms)).toEqual([1_000, 5_000, 30_000]);
+  }, 120_000);
+
+  it("a close ends a restart's wait: its timer is cancelled and no channel starts", async () => {
+    const { waits, timer } = held();
+    const { o, channels } = await crashing(undefined, timer);
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await until(() => waits.length === 1);
+    await o.close();
+    expect(waits[0]!.cancelled).toBe(true);
+    expect(channels).toHaveLength(1);
+  }, 60_000);
+
+  it("reports the fresh snapshot's preparation time apart from the wait", async () => {
+    const { channels, events } = await crashing([0]);
+    channels[0]!.onEvent({ type: "closed", data: {} });
+    await made(channels, 2);
+    await until(() => events.some((event) => event.type === "restarted"));
+    expect(events.find((event) => event.type === "restarted")!.data).toMatchObject({ snapshotMs: expect.any(Number) });
+  }, 90_000);
+
   it("resets the count after 10 minutes without a crash", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const { o, channels, events } = await crashing([0, 0, 0]);

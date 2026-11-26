@@ -85,6 +85,8 @@ export interface OfficeOptions {
   onEvent?: (event: OfficeEvent) => void;
   /** Waits before the first, second and third automatic restart (PO-1: 1, 5 and 30 seconds). */
   restartDelaysMs?: readonly number[];
+  /** The clock for that wait: calls `fire` after `ms` and returns its cancel. Tests pass their own. */
+  restartTimer?: (fire: () => void, ms: number) => () => void;
   /** Harness git for a repository (WSP-10); tests pass their own. */
   gitFactory?: GitFactory;
   /** The machine's processes (PO-15, PO-16); tests pass fakes. `null` where the platform has none yet (macOS: M1b-18). */
@@ -106,6 +108,7 @@ export function findRepo(cwd: string): GitRepo {
 /** v1's heartbeat stops at the first audit, so the office renews the claims lease for the session's whole life and at every turn (WSP-2). */
 const WRITE_LEASE_MS = 60 * 60_000;
 const RESTART_DELAYS_MS = [1_000, 5_000, 30_000];
+const restartTimer = (fire: () => void, ms: number) => { const timer = setTimeout(fire, ms); return () => clearTimeout(timer); };
 /** PO-1: a fourth crash within 10 minutes of the first leaves a channel down; 10 minutes without a crash resets the count. */
 const CRASH_WINDOW_MS = 10 * 60_000;
 /** How often a turn's guard checks whether a process that joined the tree during the turn has exited. */
@@ -493,14 +496,17 @@ export class PostOffice {
       }
       // PO-1: wait 1, 5, then 30 seconds before each restart; closing the session ends the wait.
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delays[session.crashes.length - 1] ?? 0);
-        session.wake = () => { clearTimeout(timer); resolve(); };
+        const cancel = (this.options.restartTimer ?? restartTimer)(resolve, delays[session.crashes.length - 1] ?? 0);
+        session.wake = () => { cancel(); resolve(); };
       });
       session.wake = undefined;
       if (this.closed || session.down) return;
       session.restarts = session.crashes.length;
       // WSP-11: a restart opens a fresh session, so it gets a new snapshot; the old one's writes are reported before it goes.
+      // Its preparation is timed apart from the wait: it takes seconds of harness git on Windows.
+      let snapshotMs: number | undefined;
       if (session.snapshot && this.snapshots.ok) {
+        const began = performance.now();
         // C4: the swap is logged before anything goes (reportWrites waits for the log), so an interrupted one can be finished from it.
         this.record({ soldier: session.spec.key, type: "restarting", data: { attempt: session.restarts, session: session.id, snapshot: session.snapshot.path, entry: session.snapshot.gitDir } }, session);
         await this.reportWrites(session, "before its restart");
@@ -508,10 +514,11 @@ export class PostOffice {
         session.snapshot = await openSnapshot({ root: this.snapshots.root, folder: this.root, sessionId: session.id, repo: this.repo, git: this.git });
         session.snapshotStart = freshStart(session.snapshot);
         session.cwd = session.snapshot.path;
+        snapshotMs = Math.round(performance.now() - began);
         if (this.closed || session.down) return;
       }
       this.start(session);
-      this.record({ soldier: session.spec.key, type: "restarted", data: { attempt: session.restarts, replayed: false, cwd: session.cwd,
+      this.record({ soldier: session.spec.key, type: "restarted", data: { attempt: session.restarts, replayed: false, cwd: session.cwd, ...(snapshotMs === undefined ? {} : { snapshotMs }),
         line: `${shadowName(session.spec.key)} restarted (attempt ${session.restarts}): this is a new session, and its earlier context is gone` } }, session);
     })().catch((error: unknown) => {
       session.down = true;
