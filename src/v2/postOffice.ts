@@ -581,7 +581,9 @@ export class PostOffice {
         }),
         snapshotBefore ? captureState(session.cwd) : undefined]);
       const [checkout, snapshotAfter] = settled.map((item) => { if (item.status === "rejected") throw item.reason; return item.value; }) as [string[], RepoState | undefined];
-      changes = [...checkout, ...(snapshotBefore && snapshotAfter ? diffState(snapshotBefore, snapshotAfter).map((message) => `read-only snapshot: ${message}`) : [])];
+      // Refs are shared with the checkout, whose guard above already judges them; the snapshot compares its own tree only.
+      const ownTree = (state: RepoState): RepoState => ({ ...state, refs: new Map() });
+      changes = [...checkout, ...(snapshotBefore && snapshotAfter ? diffState(ownTree(snapshotBefore), ownTree(snapshotAfter)).map((message) => `read-only snapshot: ${message}`) : [])];
     } catch (error) {
       session.guardBase = undefined;
       changes = [`checkout guard could not complete: ${String(error)}`];
