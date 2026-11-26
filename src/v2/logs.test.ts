@@ -1,8 +1,11 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeRepo } from "../workspace/testRepo.testutil.js";
+import { credential, roster } from "./fixture-main.testutil.js";
 import { redact, REDACTED, SessionLogs } from "./logs.js";
+import { PostOffice } from "./postOffice.js";
 
 const dirs: string[] = [];
 async function directory(): Promise<string> {
@@ -329,4 +332,77 @@ describe("a failed log write (PO-5, M1-AC4)", () => {
     expect((await next).written).toBe(true);
     expect(parsed(file.text())).toEqual([{ type: "log-gap", lost: 1, time: expect.any(String) }, { n: 2 }]);
   });
+});
+
+/** PO-5: the line that opens a turn is written and flushed before its message goes in (Codex C9). */
+describe("the flushed opening row (PO-5)", () => {
+  /** The real FileHandle.sync, so the default append is the code under test. */
+  async function spyOnSync() {
+    const probe = await open(join(await directory(), "probe"), "w");
+    const prototype = Object.getPrototypeOf(probe) as { sync: () => Promise<void> };
+    await probe.close();
+    return vi.spyOn(prototype, "sync");
+  }
+  afterEach(() => { vi.restoreAllMocks(); });
+  /** The file, and on Linux and macOS the folder that holds its entry too. */
+  const syncsPerRow = process.platform === "win32" ? 1 : 2;
+
+  it("syncs the line that opens a turn to disk, and no other line", async () => {
+    const sync = await spyOnSync();
+    const dir = await directory();
+    const logs = new SessionLogs(dir, []);
+    await logs.write("soldier-1", { type: "opened" });
+    expect(sync).not.toHaveBeenCalled();
+    expect((await logs.write("soldier-1", { type: "turn_started", n: 1 })).written).toBe(true);
+    expect(sync).toHaveBeenCalledTimes(syncsPerRow);
+    await logs.write("soldier-1", { type: "text" });
+    expect(sync).toHaveBeenCalledTimes(syncsPerRow);
+    expect((await readFile(join(dir, "soldier-1.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line)))
+      .toEqual([{ type: "opened" }, { type: "turn_started", n: 1 }, { type: "text" }]);
+  });
+
+  it("reports the opening row as not written when the flush fails twice", async () => {
+    const sync = await spyOnSync();
+    sync.mockRejectedValue(new Error("EIO: flush failed"));
+    const onFailure = vi.fn();
+    const logs = new SessionLogs(await directory(), [], { onFailure, retryDelayMs: 1 });
+    const result = await logs.write("soldier-1", { type: "turn_started" });
+    expect(result).toMatchObject({ written: false, error: { message: "EIO: flush failed" } });
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes and flushes the row again when only the first flush fails", async () => {
+    const sync = await spyOnSync();
+    sync.mockRejectedValueOnce(new Error("EIO: flush failed"));
+    const dir = await directory();
+    const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
+    expect(await logs.write("soldier-1", { type: "turn_started" })).toEqual({ written: true });
+    expect(sync).toHaveBeenCalledTimes(1 + syncsPerRow);
+    // The retry ends the unflushed try's line before writing the row again.
+    expect((await readFile(join(dir, "soldier-1.jsonl"), "utf8")).trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)))
+      .toContainEqual({ type: "turn_started" });
+  });
+
+  it("does not deliver a message whose opening row cannot be flushed, and delivers the next one once it can", async () => {
+    const repo = makeRepo();
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, channelFactory: () => ({
+      async send(text) { delivered.push(text); return { status: "completed", text: "done", refusal: false }; },
+      async interrupt() {}, async respondApproval() {}, async close() {},
+    }) });
+    try {
+      await office.open("scout");
+      const sync = await spyOnSync();
+      sync.mockRejectedValue(new Error("EIO: flush failed"));
+      await expect(office.send("scout", "first")).rejects.toThrow(/message not sent: .*EIO: flush failed/);
+      expect(delivered).toEqual([]);
+      sync.mockRestore();
+      await office.send("scout", "second");
+      expect(delivered).toEqual(["second"]);
+    } finally {
+      await office.close();
+      repo.cleanup();
+    }
+  }, 30_000);
 });

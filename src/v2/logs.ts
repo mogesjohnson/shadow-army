@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, open, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 /** WSP-8's marker, in logs and in forwarded events alike. */
@@ -133,14 +133,31 @@ export interface SessionLogsOptions {
   onFailure?: (failure: { name: string; error: Error }) => void;
   /** Delay before the one retry; PO-5 says 100 ms. */
   retryDelayMs?: number;
-  /** Appends text to a log file. Tests replace it to inject faults. */
-  append?: (path: string, text: string) => Promise<void>;
+  /** Appends text to a log file; with `flush`, returns only once it is on disk. Tests replace it to inject faults. */
+  append?: (path: string, text: string, flush: boolean) => Promise<void>;
 }
 
-const defaultAppend = async (path: string, text: string): Promise<void> => {
+/** Opens a file or folder, runs `use` on it, syncs it to disk and closes it. */
+async function synced(path: string, flags: string, use?: (handle: FileHandle) => Promise<void>): Promise<void> {
+  const handle = await open(path, flags, 0o600);
+  try {
+    await use?.(handle);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+const defaultAppend = async (path: string, text: string, flush: boolean): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
-  await appendFile(path, text, { encoding: "utf8", mode: 0o600 });
+  if (!flush) return appendFile(path, text, { encoding: "utf8", mode: 0o600 });
+  await synced(path, "a", (handle) => handle.appendFile(text, "utf8"));
+  // A new file's entry is durable only once its folder is synced too. Windows can't open a folder for that.
+  if (process.platform !== "win32") await synced(dirname(path), "r");
 };
+
+/** PO-5: the line that opens a turn is written and flushed before its message goes in. */
+const opensTurn = (data: unknown): boolean => (data as { type?: unknown } | null)?.type === "turn_started";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -156,7 +173,7 @@ export class SessionLogs {
   private readonly lost = new Map<string, number>();
   private readonly cut = new Set<string>();
   private readonly fragments = new Map<string, Map<string, string[]>>();
-  private readonly append: (path: string, text: string) => Promise<void>;
+  private readonly append: (path: string, text: string, flush: boolean) => Promise<void>;
   private readonly retryDelayMs: number;
 
   constructor(private readonly directory: string, secrets: string[], private readonly options: SessionLogsOptions = {}) {
@@ -169,7 +186,8 @@ export class SessionLogs {
     this.assertName(name);
     const line = JSON.stringify(redact(data, this.secrets));
     if (line === undefined) throw new Error("session log record is not JSON data");
-    return this.enqueue(name, () => this.tryWrite(name, line));
+    const flush = opensTurn(data);
+    return this.enqueue(name, () => this.tryWrite(name, line, flush));
   }
 
   /** Holds one streamed fragment of a message. Nothing is written until the message ends. */
@@ -207,7 +225,7 @@ export class SessionLogs {
     return next;
   }
 
-  private async tryWrite(name: string, line: string): Promise<LogWriteResult> {
+  private async tryWrite(name: string, line: string, flush: boolean): Promise<LogWriteResult> {
     const lost = this.lost.get(name) ?? 0;
     const gap = lost > 0 ? `${JSON.stringify({ type: "log-gap", lost, time: new Date().toISOString() })}\n` : "";
     const path = join(this.directory, `${name}.jsonl`);
@@ -216,7 +234,7 @@ export class SessionLogs {
       if (attempt > 0) await sleep(this.retryDelayMs);
       try {
         // Built for each try: a line cut short by a failed try (or write) is ended before this one.
-        await this.append(path, `${this.cut.has(name) ? "\n" : ""}${gap}${line}\n`);
+        await this.append(path, `${this.cut.has(name) ? "\n" : ""}${gap}${line}\n`, flush);
         this.lost.delete(name);
         this.cut.delete(name);
         return { written: true };
