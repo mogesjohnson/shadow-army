@@ -13,7 +13,11 @@ export async function runModRelay(options: { cwd?: string; command?: { file: str
   let outputLost = false;
   let errorLost = false;
   const stop = () => closing ??= (async () => {
-    try { await client?.close(); } catch (error) {
+    try {
+      await client?.close();
+      // The mod's only proof that the post office closed (C5): its exit, as observed here.
+      if (client?.exit) output({ type: "post_office_exit", data: client.exit });
+    } catch (error) {
       process.exitCode = 1;
       if (!errorLost) process.stderr.write(`${String(redact(String(error), [credential]))}\n`);
     } finally { input.close(); process.stdin.destroy(); credential = ""; }
@@ -41,9 +45,12 @@ export async function runModRelay(options: { cwd?: string; command?: { file: str
     const cwd = options.cwd ?? (index >= 0 ? process.argv[index + 1] ?? "" : process.cwd());
     client = new OfficeClient({ cwd, credential, lease: { session: bootstrap.session }, command: options.command,
       onEvent: (event) => {
+        if (event.type === "post_office_exit") return; // only the relay reports that exit
         output(event);
         if (!event.soldier && event.type === "closed") void stop();
       },
+      // C11: an exit with no `closed` still ends the relay; stop() reports it once.
+      onExit: () => { void stop(); },
     });
     const url = await client.endpoint();
     output({ type: "ready", data: { url } });
