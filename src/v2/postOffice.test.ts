@@ -671,6 +671,38 @@ describe("M1b-26 PO-1 startup and the tree callers (fake processes, no real wait
     await office.close().catch(() => {});
   });
 
+  it("keeps the tree record while a turn's baseline is pending, so a start after a clean close checks it (C6, PO-1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const index = join(repo.dir, ".git", "index");
+    let saved: Buffer | undefined;
+    const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: (options) => ({
+      ...idle()(options), async send(text) {
+        saved = await readFile(index);
+        await writeFile(index, "not an index");
+        return { status: "completed", text, refusal: false };
+      } }) });
+    await first.send("scout", "break");
+    await first.close();
+    expect(treeFiles(repo.dir)).toHaveLength(1);
+    await writeFile(index, saved!);
+    const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), channelFactory: idle() }); offices.push(second);
+    await second.open("scout");
+    expect(readdirSync(v2(repo.dir, "turns"))).toEqual([]);
+    expect(await completions(repo.dir)).toMatchObject([{ late: true }]);
+  });
+
+  it.runIf(process.platform !== "win32")("creates a trees folder its own next start trusts under umask 002 (C1)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const before = process.umask(0o002);
+    try {
+      const first = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 1]])), channelFactory: idle() });
+      await first.open("scout");
+      await first.close();
+      const second = await PostOffice.create({ cwd: repo.dir, credential, roster, processOps: fakeOps(new Map([[process.pid, 2]])), channelFactory: idle() }); offices.push(second);
+      await second.open("scout");
+    } finally { process.umask(before); }
+  });
+
   it("at startup removes a baseline whose completion is on disk without reporting it again, and keeps one whose completion can't be written (PO-1)", async () => {
     const repo = makeRepo(); repos.push(repo);
     await mkdir(v2(repo.dir, "turns"), { recursive: true }); await mkdir(v2(repo.dir, "trees"), { recursive: true });

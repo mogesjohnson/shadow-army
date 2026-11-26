@@ -578,7 +578,7 @@ export class PostOffice {
         if (left === "unknown" || !this.ops || !(await this.downSoldiers.mayStart(key, this.processOps(this.ops, left)))) {
           throw new Error("native descendants were not confirmed stopped; end this caller and inspect them before starting another session");
         }
-        await existing.tree?.remove().catch(() => {});
+        await this.removeTree(existing)?.catch(() => {});
       }
       if (existing.active) throw new Error("cannot reconnect while the previous turn is finalizing");
       await existing.channel?.close();
@@ -683,6 +683,8 @@ export class PostOffice {
     const self = await this.ownIdentity(ops).catch((error: unknown) => fail(`the post office's own identity can't be verified: ${String(error)}`));
     let record: TreeRecord;
     try {
+      // C1: made for this user alone, so a loose umask can't leave a folder the next start's check refuses.
+      await mkdir(treesDir(this.root), { recursive: true, mode: 0o700 });
       record = await TreeRecord.create(this.root, id, self, undefined, (error) => this.record({ soldier: key, type: "tree_record", data: { listed: false, reason: String(error) } }));
     } catch (error) { return fail(`tree record not written: ${String(error)}`); }
     const back = await readFile(join(treesDir(this.root), `${id}.jsonl`), "utf8").then((text) => text.split(/\r?\n/).filter(Boolean).map(parseTreeLine), () => []);
@@ -692,6 +694,11 @@ export class PostOffice {
       return fail("tree record not verified: it doesn't read back as written");
     }
     return record;
+  }
+
+  /** PO-1: a turn's pending baseline needs its post office's identity at a later start, so the tree record stays with it. */
+  private removeTree(session: Session): Promise<void> | undefined {
+    return existsSync(join(turnsDir(this.root), `${session.id}.json`)) ? undefined : session.tree?.remove();
   }
 
   /** The helper's check (C1): the post office's own start time, read twice and the same, before it is trusted. */
@@ -1134,7 +1141,7 @@ export class PostOffice {
       throw new Error(`native descendants for ${key} were not confirmed stopped`);
     }
     // PO-16: the tree has ended, so its entry goes. A failed removal is logged; the next sweep finds an empty tree.
-    await session.tree?.remove().catch((error: unknown) => this.record({ soldier: key, type: "tree_record", data: { removed: false, reason: String(error) } }, session));
+    await this.removeTree(session)?.catch((error: unknown) => this.record({ soldier: key, type: "tree_record", data: { removed: false, reason: String(error) } }, session));
     await this.releaseWrite(session);
     // WSP-11: the snapshot goes with its session. A tainted one keeps the partial work its guard line names.
     const retained = !session.snapshot || session.tainted || !await this.dropSnapshot(session.snapshot, session);
