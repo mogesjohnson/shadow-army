@@ -199,7 +199,9 @@ export class ClaudeChannel implements NativeChannel {
     if (frame.type === "result") { this.result(frame); return; }
     if (!turn) return;
     // The turn's own progress extends the quiet window; other valid frames leave its deadline as it was.
-    if (this.badLineTimer && ["stream_event", "assistant", "user", "rate_limit_event", "model_refusal_no_fallback"].includes(frame.type as string)) this.armBadLineTimer(turn);
+    // A subagent's output (a parent tool use) is auxiliary: it cannot show the main turn still has a result coming (#94 C11).
+    const auxiliary = typeof frame.parent_tool_use_id === "string";
+    if (this.badLineTimer && !auxiliary && ["stream_event", "assistant", "user", "rate_limit_event", "model_refusal_no_fallback"].includes(frame.type as string)) this.armBadLineTimer(turn);
     if (frame.type === "rate_limit_event") {
       const info = object(frame.rate_limit_info);
       if (info?.status === "rejected") {

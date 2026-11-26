@@ -420,6 +420,17 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("completed");
   }, 8_000);
 
+  windowsOnly("keeps recovery armed through a subagent's output after the turn lost its result (#94 C11)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
+    const started = Date.now();
+    const stopped = await channel.send("malformed-auxiliary");
+    // The fake's subagent writes for about 3 s; recovery must not wait for it to fall silent.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(stopped.status).toBe("failed");
+    expect(events.some((event) => event.type === "error" && (event.data as NativeError).message.includes("no progress on the turn within 100 ms"))).toBe(true);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 8_000);
+
   windowsOnly("restarts the quiet window at each frame of the turn's own progress (#96 C6)", async () => {
     const { channel } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
     const done = await channel.send("malformed-then-progress");

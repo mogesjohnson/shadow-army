@@ -10,6 +10,7 @@ const history = [];
 let current;
 let cost = 0;
 let approval;
+let auxiliary;
 const emit = (frame) => process.stdout.write(`${JSON.stringify({ session_id: session, ...frame })}\n`);
 const assistant = (text, usage = { input_tokens: 10, output_tokens: 2, cache_creation_input_tokens: 5, cache_read_input_tokens: 7 }, extra = {}) => emit({
   type: "assistant", parent_tool_use_id: null,
@@ -32,6 +33,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       emit({ type: "system", subtype: "init", model: "fake-claude", version: "synthetic-2.1.295" });
     } else if (frame.request.subtype === "interrupt") {
       if (current?.message.content === "ignore-interrupt" || current?.message.content === "malformed-ignore-interrupt") continue;
+      clearInterval(auxiliary);
       emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } });
       if (approval) emit({ type: "control_cancel_request", request_id: approval });
       approval = undefined;
@@ -60,6 +62,18 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (text === "malformed-unrelated") {
     process.stdout.write("{broken JSON}\n");
     for (let i = 0; i < 20; i++) { emit({ type: "system", subtype: "status", status: null }); await new Promise((resolve) => setTimeout(resolve, 20)); }
+    continue;
+  }
+  // A bad line, then only a subagent's output until the interrupt: auxiliary output is not the turn's progress.
+  if (text === "malformed-auxiliary") {
+    process.stdout.write("{broken JSON}\n");
+    let ticks = 0;
+    auxiliary = setInterval(() => {
+      if (++ticks > 150) { clearInterval(auxiliary); return; }
+      emit({ type: "stream_event", parent_tool_use_id: "agent-tool", event: { type: "content_block_delta", delta: { type: "text_delta", text: "sub " } } });
+      assistant("subagent working", undefined, { parent_tool_use_id: "agent-tool" });
+      emit({ type: "user", parent_tool_use_id: "agent-tool", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "sub-tool", content: "ok" }] } });
+    }, 20);
     continue;
   }
   // A bad line, then the turn's own progress, then its result: the quiet window restarts at each step.
