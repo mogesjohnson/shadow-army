@@ -25,9 +25,8 @@ const WRITE_LEASE_MS = 60 * 60_000;
 export interface TurnOptions { claims?: string[]; }
 interface Session {
   spec: SoldierSpec;
-  /** `applied` is the branch tip last put into the owner's folder, so a later turn applies only what is new. `tip` is the branch
-   * tip after the last turn; `lease` is v1's claims lease, renewed here; `leaseLost` sticks once a renewal fails. */
-  write?: { ws: WriteSession; claims: string[]; applied?: string; tip?: string; lease?: { locks: Locks; id: string }; leaseLost?: boolean; heartbeat?: ReturnType<typeof setInterval> };
+  /** `tip` is the full commit ID of the branch tip the last audit resolved; `lease` is v1's claims lease, renewed here; `leaseLost` sticks once a renewal fails. */
+  write?: { ws: WriteSession; claims: string[]; tip?: string; lease?: { locks: Locks; id: string }; leaseLost?: boolean; heartbeat?: ReturnType<typeof setInterval> };
   id: string;
   cwd: string;
   instructions: string;
@@ -286,42 +285,46 @@ export class PostOffice {
       result = { ...result, status: "failed", error: { kind: "other", message: `${guard}; partial work is retained at ${session.cwd}: ${changes.join("; ")}` } };
       if (write) write = { ...write, applicable: false, reason: changes.join("; ") };
     }
-    // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder.
-    if (write?.applicable) {
-      const apply = await applyAudited(this.root, write, session.write!.applied);
-      if (apply.applied && write.commit) session.write!.applied = write.commit;
-      write = { ...write, apply };
-    }
     // A turn that is not applicable but moved the branch leaves work the owner never accepted. A later turn would carry it
     // into its own audit, so the session goes down, as after a guard failure; reconnecting starts a fresh worktree.
-    if (write && !write.applicable && write.commit && write.commit !== session.write!.tip && !session.down) {
+    if (write && !write.applicable && write.tip && write.tip !== session.write!.tip && !session.down) {
       session.down = true;
       await session.channel!.close();
       write = { ...write, reason: `${write.reason}; the session is down so a later turn cannot carry this work in; reconnect to start fresh` };
       this.record({ soldier: session.spec.key, type: "down", data: { reason: write.reason } }, session);
     }
-    if (session.write && write) session.write.tip = write.commit;
+    // M1-AC28: only a completed turn that passed the guard and the audit reaches the owner's folder, and only its own
+    // audited delta, `start..tip`, as resolved at the audit.
+    if (write?.applicable) write = { ...write, apply: await applyAudited(this.root, write) };
+    if (session.write && write) session.write.tip = write.tip;
     if (write) result = { ...result, write };
     this.record({ soldier: session.spec.key, type: "guard", data: { changes, cwd: session.cwd } }, session);
     if (write) this.record({ soldier: session.spec.key, type: "audit", data: { ...write, diff: undefined } }, session);
     result = { ...result, summary: result.text.split(/\r?\n/).slice(0, 5).join("\n") };
     this.record({ soldier: session.spec.key, type: "delivery", data: { state: result.status === "completed" ? "answered" : "interrupted", result } }, session);
     await this.logPending;
-    if (this.logFailure) throw this.logFailure;
+    if (this.logFailure) {
+      // Once files reached the owner's folder, say which, so a log failure never looks like nothing happened.
+      if (!write?.apply?.applied || !write.apply.files.length) throw this.logFailure;
+      result = { ...result, logFailure: `post office log failed: ${this.logFailure.message}` };
+    }
     return redact(result, this.secrets) as TurnResult;
   }
 
   /** v1's claim audit: revert edits outside the claims, commit the rest on the soldier's branch, and hand B4 the audited diff. */
   private async audit(session: Session, result: TurnResult, guardChanges: string[]): Promise<WriteOutcome> {
     const info = await session.write!.ws.finish(`${session.spec.key}: turn`);
-    const diff = info.commit ? await git(info.path, ["diff", info.base, "HEAD"]) : "";
+    // Immutable IDs at the audit boundary: the apply and its record use these, never the branch name.
+    const start = session.write!.tip ?? info.base;
+    const tip = info.commit ? (await git(info.path, ["rev-parse", "--verify", `${info.commit}^{commit}`])).trim() : undefined;
+    const diff = tip ? await git(info.path, ["diff", start, tip]) : "";
     let reason: string | undefined;
     if (guardChanges.length) reason = guardChanges.join("; ");
     else if (result.status !== "completed") reason = `the turn ${result.status}; its claimed work stays on ${info.branch}`;
     else if (info.leaseLost || session.write!.leaseLost) reason = "the claims lease was lost, so the files may have changed hands";
     // The branch holds earlier turns' commits too: only a tip this turn moved is this turn's change.
-    else if (!info.commit || info.commit === session.write!.tip) reason = "the soldier changed nothing";
-    return { worktree: info.path, branch: info.branch, base: info.base, commit: info.commit, claims: info.claims, inScope: info.inScope, outOfScope: info.outOfScope,
+    else if (!tip || tip === start) reason = "the soldier changed nothing";
+    return { worktree: info.path, branch: info.branch, base: info.base, commit: info.commit, ...(tip ? { tip } : {}), start, claims: info.claims, inScope: info.inScope, outOfScope: info.outOfScope,
       reverted: info.reverted, leaseLost: info.leaseLost || !!session.write!.leaseLost, uncommittedIgnored: info.uncommittedIgnored, diff, applicable: !reason, ...(reason ? { reason } : {}) };
   }
 
