@@ -316,6 +316,46 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(clearedUsage?.models).toEqual({ main: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 } });
   });
 
+  it.each([
+    ["no map", undefined],
+    ["an empty map", {}],
+    ["an entry with no counters", { main: { contextWindow: 200000 } }],
+    ["a malformed entry beside a good one", { main: { inputTokens: 200, costUSD: 0.2 }, sub: null }],
+  ])("gives no per-model figures across a result with a cost and %s, then resumes (#111 C6)", async (_name, gap) => {
+    const { emit, send } = await s6Protocol();
+    let turns = 0;
+    const turnUsage = async (total: number, modelUsage: unknown, text = `turn ${turns++}`) => {
+      const sent = await send(text);
+      emit({ type: "result", subtype: "success", user_message_uuid: sent.id, result: "ok", usage: { input_tokens: 5, output_tokens: 1 }, total_cost_usd: total, modelUsage });
+      return (await sent.pending).usage!;
+    };
+    await turnUsage(0.1, { main: { inputTokens: 100, costUSD: 0.1 }, sub: { inputTokens: 40, costUSD: 0 } });
+    await turnUsage(0.2, gap);
+    const across = await turnUsage(0.3, { main: { inputTokens: 300, costUSD: 0.25 }, sub: { inputTokens: 90, costUSD: 0.05 } });
+    expect(across.costUsd).toBeCloseTo(0.1);
+    expect(across.models).toBeUndefined();
+    expect(across.raw.models).toBeUndefined();
+    const next = await turnUsage(0.35, { main: { inputTokens: 330, costUSD: 0.3 }, sub: { inputTokens: 90, costUSD: 0.05 } });
+    expect(next.models).toEqual({ main: { inputTokens: 30, costUsd: expect.closeTo(0.05) }, sub: { inputTokens: 0, costUsd: 0 } });
+    // A known reset makes the totals local, so they need no boundary.
+    await turnUsage(0.4, gap);
+    const cleared = await turnUsage(0.01, { main: { inputTokens: 7, costUSD: 0.01 } }, "/clear");
+    expect(cleared.models).toEqual({ main: { inputTokens: 7, costUsd: 0.01 } });
+    await turnUsage(0.2, gap);
+    const lower = await turnUsage(0.05, { main: { inputTokens: 9, costUSD: 0.05 } });
+    expect(lower.models).toEqual({ main: { inputTokens: 9, costUsd: 0.05 } });
+  });
+
+  it("leaves out a counter the previous result's model entry did not carry (#111 C6)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("first");
+    emit({ type: "result", subtype: "success", user_message_uuid: first.id, result: "ok", total_cost_usd: 0.1, modelUsage: { main: { costUSD: 0.1 } } });
+    await first.pending;
+    const second = await send("second");
+    emit({ type: "result", subtype: "success", user_message_uuid: second.id, result: "ok", total_cost_usd: 0.15, modelUsage: { main: { inputTokens: 500, costUSD: 0.15 } } });
+    expect((await second.pending).usage?.models).toEqual({ main: { costUsd: expect.closeTo(0.05) } });
+  });
+
   // M1-AC14 (unit part): the live run is the owner's.
   it("starts every claude process with auto memory off, in its environment and in --settings, over an inherited 0", async () => {
     const before = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;

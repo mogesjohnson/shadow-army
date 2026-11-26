@@ -185,14 +185,23 @@ function modelCounters(modelUsage: Frame | undefined): Record<string, Record<str
   }
   return models;
 }
+/** #111 C6: only a map with entries, each one carrying counters, can be the next result's per-model baseline. */
+function usableBaseline(modelUsage: Frame | undefined, counters: Record<string, Record<string, number>> | undefined): boolean {
+  const names = Object.keys(modelUsage ?? {});
+  return names.length > 0 && names.every((model) => Object.keys(counters?.[model] ?? {}).length > 0);
+}
 /** #124 C1: the CLI's per-model counters under TurnUsage's own names. */
 const MODEL_FIELDS: Record<(typeof MODEL_COUNTERS)[number], keyof ModelUsage> = { inputTokens: "inputTokens", outputTokens: "outputTokens", cacheReadInputTokens: "cachedInputTokens", cacheCreationInputTokens: "cacheCreationInputTokens", webSearchRequests: "webSearchRequests", costUSD: "costUsd" };
 function turnModels(models: Record<string, Record<string, number>>): Record<string, ModelUsage> {
   return Object.fromEntries(Object.entries(models).map(([model, counters]) => [model, Object.fromEntries(Object.entries(counters).map(([key, value]) => [MODEL_FIELDS[key as keyof typeof MODEL_FIELDS], value]))]));
 }
-/** A turn's own per-model figures: these totals less the baseline's, a model absent from the baseline counting from zero. */
+/** A turn's own per-model figures: these totals less the baseline's, a model absent from the baseline counting from zero.
+ * A counter the baseline's entry for a model did not carry is unknown, so it is left out (#111 C6). */
 function modelDeltas(current: Record<string, Record<string, number>>, baseline: Record<string, Record<string, number>> | undefined): Record<string, Record<string, number>> {
-  return Object.fromEntries(Object.entries(current).map(([model, counters]) => [model, Object.fromEntries(Object.entries(counters).map(([key, value]) => [key, value - (baseline?.[model]?.[key] ?? 0)]))]));
+  return Object.fromEntries(Object.entries(current).map(([model, counters]) => {
+    const before = baseline?.[model];
+    return [model, Object.fromEntries(Object.entries(counters).flatMap(([key, value]) => before && before[key] === undefined ? [] : [[key, value - (before?.[key] ?? 0)]]))];
+  }));
 }
 
 export class ClaudeChannel implements NativeChannel {
@@ -208,6 +217,8 @@ export class ClaudeChannel implements NativeChannel {
   private missingCostBoundary = false;
   /** The last usable result's `modelUsage` counters: the per-model baseline (CH-2). */
   private modelBaseline?: Record<string, Record<string, number>>;
+  /** #111 C6: that result's map was no baseline, apart from whether its cost was one. */
+  private missingModelBoundary = false;
   private closePromise?: Promise<void>;
   private closed = false;
   private acceptFrames = true;
@@ -507,8 +518,9 @@ export class ClaudeChannel implements NativeChannel {
     if (cumulative === undefined || cumulative === 0) this.missingCostBoundary = true;
     else {
       costUsd = stoppedTurn ? undefined : startedOver ? cumulative : noBaseline ? undefined : cumulative - (previous ?? 0);
-      if (counters && !stoppedTurn && (startedOver || !noBaseline)) models = modelDeltas(counters, startedOver ? undefined : this.modelBaseline);
+      if (counters && !stoppedTurn && (startedOver || !noBaseline && !this.missingModelBoundary)) models = modelDeltas(counters, startedOver ? undefined : this.modelBaseline);
       this.modelBaseline = counters;
+      this.missingModelBoundary = !usableBaseline(modelUsage, counters);
       this.cumulativeCost = cumulative;
       this.missingCostBoundary = false;
     }
