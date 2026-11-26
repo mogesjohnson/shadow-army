@@ -72,6 +72,10 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
           const command = await body(request);
           lease?.assertActive();
           const key = typeof command.soldier === "string" ? command.soldier : "";
+          // C15: this build has no claim audit or apply (#94 brings them), so a claimed call is refused before any dispatch.
+          if ((command.action === "open" || command.action === "send") && command.claims !== undefined && !(Array.isArray(command.claims) && command.claims.length === 0)) {
+            throw new Error("claims are not available in this build: the post office has no claim audit, so a claimed brief is refused before dispatch");
+          }
           let value: unknown;
           switch (command.action) {
             case "renew":

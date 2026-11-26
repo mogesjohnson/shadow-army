@@ -60,6 +60,19 @@ describe("M1 authenticated loopback command server", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   }, 20_000);
 
+  it("refuses a send or open that carries claims before any soldier starts (C15, M1-AC24/26/28)", async () => {
+    const { server, events } = await setup();
+    for (const claims of [["src/a.ts"], "src/a.ts", [""], null]) {
+      for (const action of ["open", "send"]) {
+        const response = await command(server, { action, soldier: "scout", text: "go", claims });
+        expect(response.status, `${action} ${JSON.stringify(claims)}`).toBe(400);
+        expect(await response.json()).toEqual({ error: "claims are not available in this build: the post office has no claim audit, so a claimed brief is refused before dispatch" });
+      }
+    }
+    // Nothing was opened or run for any refused call.
+    expect(events.filter((event) => event.soldier || event.type === "tool_call")).toEqual([]);
+  }, 20_000);
+
   it("enforces a folder singleton and releases its non-secret lock on shutdown", async () => {
     const { repo, server } = await setup();
     const options = { cwd: repo.dir, credential, roster, channelFactory: factory };
