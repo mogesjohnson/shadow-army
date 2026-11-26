@@ -1,57 +1,44 @@
-# Handoff: orchestrator 47 (`2a234912`) to orchestrator 48 (2026-11-26 ~02:25 UTC)
+# Handoff: orchestrator 48 (`3889c94f`) to orchestrator 49 (2026-11-26 ~03:05 UTC)
 
-Self-contained: do not read older handoffs. Range `85c498b` (orch-46's handoff) to this commit. No spec or code change this session: the 5-hour figure was 85% to 91% the whole time, so no worker started.
+Self-contained: do not read older handoffs. Range `7356098` (orch-47's handoff) to this commit. The 5-hour limit reset at 02:30 UTC; it was 24% at 02:57.
 
 ## Owner's instructions in force
 
-- **Two lanes side by side: one Ink (v2.1) worker and one main (fix or spec) worker** (the owner, 2026-11-25). No second worker below 1.5 GB free. At most three workers; **none new at 5h 80%+** (91% at 02:20 UTC, resets 23:20 local).
-- Timers: hi 50 min, watch 5 min. **On 2026-11-26 Claude Code killed both timers for low system memory**; its note says not to restart them unasked. If that happens again, report it and wait for the owner.
-- A Codex file for every pushed fix or new PR in `C:/Users/johns/codex-reviews/shadow-army/` (copy the latest file's layout). Next free number: **44**. Last tick `2026-11-26T02:20:31Z` (nothing new since 01:07).
+- **Two lanes side by side: one Ink (v2.1) worker and one main (fix) worker** (the owner, 2026-11-25). No second worker below 1.5 GB free. At most three workers; none new at 5h 80%+.
+- Timers: hi 50 min, watch 5 min. If Claude Code kills them for low memory, report it and wait for the owner.
+- A Codex file for every pushed fix or new PR in `C:/Users/johns/codex-reviews/shadow-army/` (copy the newest file's layout). Files 48 to 50 are assigned below; **next free: 51**. Last tick `2026-11-26T02:56:53Z`.
 - Merges only when the owner asks in the session: `gh pr list --base <branch>` (V14), `gh pr ready <n>`, `gh pr merge <n> --merge --match-head-commit <40-char sha>`.
-- Brief at most two findings per worker.
+- At most two findings per worker brief. Ink briefs point at the local artifacts in `.shadow/artifacts/` (the owner, 2026-11-26).
 
-## New this session
+## Running workers (report to orch-48; tell them your name)
 
-- **Artifacts downloaded** to `C:/Users/johns/projects/AIConnections/.shadow/artifacts/` (git-ignored; `README.md` there maps each folder): v2.1 Variations (the six D1 to D6 boards), v2 Terminal UI (v2 pages + v1 reference), v2 Progress (CSV), Orders Desk, Decisions D-26 to D-29. Ink-lane briefs can point workers there instead of at claude.ai.
+| Worker | Session | Task | Files | Codex file |
+|---|---|---|---|---|
+| w144-fix149-c1c2 (Sonnet) | `9d588ce0` | #149 C1, C2, C3 (review 41); merges `claude/63-v21-table` in first | `src/v21/ui/summaryRows.ts`, `ledgerRows.ts`, `screens.test.tsx`, `fixture.ts` | 48 |
+| w145-fix128-c9c5-r2 (Opus) | `c12a3a91` | #128 C9 (P0), C5, second round (reviews 45, 46) | `plugins/shadow-army/hooks/register.ts`, `register.test.ts` | 49 |
 
-## Open PRs (no change since orch-46)
+## Codex now reviews within about 5 minutes of a push
 
-| PR | Head | What | Codex file |
-|---|---|---|---|
-| #128 | `2fb0f78` | C5 relay `post_office_exit` | 35 |
-| #120 | `9ae8f9d` | C9 to C11 (682 lines, fix-round exception) | 37 |
-| #134 | `0c4aea1` | C5 sweep barrier | 40 |
-| #131 | `a892da4` | C3, C9 | 42 |
-| #148 | `38dc6ab` | v2.1 slice 4, War Table; base `claude/63-v21-monarch` | 39 |
-| #149 | `e38e33e` | slice 5a: summary + ledger; base `claude/63-v21-table` | 41 |
-| #150 | `2bd55ab` | slice 5a part 2: replay; base `claude/63-v21-screens` | 43 |
+Reviews 32 to 47 all landed 02:24 to 02:57 UTC, every one "changes requested". A worker that has reported and is under about 110k can take the next round of the **same** findings by SendMessage (cheaper than a fresh worker, which starts at 75k to 95k).
 
-**Stacked PRs get no CI** (`ci.yml` runs only on PRs into `main`); workers say so in `Validation:`.
+## Queues (one worker per file)
+
+- **Ink lane, next:** `tasks/w146-fix148-r3.md` is written: #148 at `cab2238`, review 47 C1 (answers dropped by a long question) and C2 (use `string-width`, Ink's own width library, 8.3.0 already in `node_modules`; add it as a direct dependency). Codex file 50. Launch after w144 reports (both touch the War Table code paths). Then, bottom of the stack first: #145 (review 34: C1 to C4), #146 (36: C1, C2), #147 (38: C1 to C4), #150 (43: C1 to C3). Slice 5b (`shadow` command and keys, stacked on #150) after those.
+- **Main lane, after w145:** #120 C12 (review 37, `src/v2/snapshot.ts:244-246`) → #134 C7 (review 40) → #131 C10 (review 42; C5 still open) → #138 C9, C10 (review 33, `contain/sweep.ts`, `windows.ts`) → #136 C1, C2, C9 (review 32, P0, design-sized: per-command Git hold, Windows snapshot root ACL, adopt the repaired snapshot audit; Opus) → #144 C1 (P0), C6 → #132 C1 (P0), C5, C10 to C12.
+- Fix briefs: copy `tasks/w145-fix128-c9c5-r2.md` (points at `codex-fix-common.md`).
+
+## Open PR heads (latest Codex verdict: changes requested on all)
+
+#128 `7d0caf4` (46) · #148 `cab2238` (47) · #149 `e38e33e` (41) · #150 `2bd55ab` (43) · #145 `183b8e6` (34) · #146 `d5a70e4` (36) · #147 `bce5141` (38) · #120 `9ae8f9d` (37) · #134 `0c4aea1` (40) · #131 `a892da4` (42) · #136 `4f8737c` (32) · #138 `d11dbd9` (33) · #144 `f251dc1` (29) · #132 `3aa0c22` (30).
 
 ## Waiting on the owner
 
-1. Point Codex at files 33 to 43 (33 is #138).
-2. #138's C6 check vs the profile ACL granting Modify to `CodexSandboxUsers`: change the ACL or the check?
-3. Spec Q11 (viewer credential and port): before M7. No rush.
-4. Remove stray worktree `AIConnections-worktrees/ui-v21-monarch` (unused). Worktree deletes need the owner's yes.
-
-## Queues (one worker per file; start once 5h < 80%)
-
-- **Ink lane:** slice 5b: the `shadow` command (`package.json` bin), keys (focus, `esc`, switching War Table / summary / ledger / replay), in `src/v21/shadow.tsx` and a new keys module; stacked on #150 (branch `claude/63-v21-replay`). Copy the layout of `tasks/w140-ui-v21-replay.md`; point at `.shadow/artifacts/v21-variations/project/D1-WarTable.dc.html`. Sonnet medium.
-- **Main lane:**
-  1. `contain/sweep.ts`, `windows.ts`: after review 33 lands, #138 rest of C9 (Windows `leftOf`, `## Left` in `tasks/w126-fix138-review25.md`) + body → #144 C1 (P0), C6 → #132 C1 (P0), C5, C10 to C12 (align identity units with #138's FILETIME) → #129, #125, #135.
-  2. `postOffice.ts`: after review 32 lands, #136 C1, C2.
-  3. Others: #117 review 20, #123, #140.
-  4. Whatever Codex reopens on files 35, 37, 40, 42.
-- Fix briefs: copy `tasks/w139-fix131-c3c9.md` (points at `codex-fix-common.md`).
-
-## Codex results still open (all "changes requested")
-
-#138 `d11dbd9` (33 pending, C9) · #144 `f251dc1` (29: C1 P0, C6) · #132 `3aa0c22` (30: C1 P0, C5, C10-C12) · #136 `4f8737c` (32 pending: C1, C2, C9) · #145 `183b8e6`, #146 `d5a70e4`, #147 `bce5141` (34, 36, 38 pending, first review).
+1. #138 C6 (P0): change the profile ACL that grants Modify to `CodexSandboxUsers`, or change the check?
+2. Spec Q11 (viewer credential and port): before M7.
+3. Remove the unused worktree `AIConnections-worktrees/ui-v21-monarch`?
 
 ## Lessons
 
-- Name the worktree in a brief after the worker (`AIConnections-worktrees/<worker name>`); the cockpit makes it.
-- Ink slices: a Sonnet worker runs out near 150k on one screen plus tests; give one or two screens per worker and let it open the PR before 400 lines / 6 files.
-- Briefs to workers that may outlive you: "report to the newest orch-<n> in ListAgents".
-- An idle orchestrator at 5h 80%+ still spends ~1k per quiet tick; with no worker possible, longer watch gaps are fine.
+- Workers could not find "orch-48" in ListAgents because orch-48 was started without `-n`; it is listed as `aiconnections-f3`. Start each orchestrator with `claude -n orch-<n>` so workers can address it.
+- Repository Actions is disabled, so no PR gets checks: `Validation:` says CI `blocked` with that evidence, macOS `not_run`.
+- Ink layout fixes keep reopening on width: measure with `string-width` (what Ink uses), never code points or a local table.
