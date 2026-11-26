@@ -16,6 +16,8 @@ export interface ClientOptions {
   /** The native mod passes its ephemeral credential on relay stdin, never argv/env/disk. */
   credential?: string;
   lease?: LeaseOptions;
+  /** Called once when the post office's process ends, whether or not it emitted `closed` (C11). */
+  onExit?: (exit: { code: number | null; signal: NodeJS.Signals | null }) => void;
 }
 
 /** One caller owns the process and the secret, retained only in memory and its stdin pipe. */
@@ -66,7 +68,7 @@ export class OfficeClient {
     });
     this.exited = new Promise<void>((resolve) => {
       this.child.once("error", (error) => { this.ended = true; clearTimeout(timer); failed(error); resolve(); });
-      this.child.once("close", (code, signal) => { this.exit = { code, signal }; this.ended = true; clearTimeout(timer); failed(new Error(`post office ended${diagnostic ? `: ${diagnostic}` : ""}`)); resolve(); });
+      this.child.once("close", (code, signal) => { this.exit = { code, signal }; this.ended = true; clearTimeout(timer); failed(new Error(`post office ended${diagnostic ? `: ${diagnostic}` : ""}`)); resolve(); options.onExit?.(this.exit); });
     });
     this.child.stdin.end(`${JSON.stringify({ credential: this.#credential, ...(options.lease ? { lease: options.lease } : {}) })}\n`);
   }

@@ -49,6 +49,8 @@ export async function runModRelay(options: { cwd?: string; command?: { file: str
         output(event);
         if (!event.soldier && event.type === "closed") void stop();
       },
+      // C11: an exit with no `closed` still ends the relay; stop() reports it once.
+      onExit: () => { void stop(); },
     });
     const url = await client.endpoint();
     output({ type: "ready", data: { url } });

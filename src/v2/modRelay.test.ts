@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
@@ -44,3 +44,26 @@ windowsOnly("the actual mod relay exposes only a loopback endpoint and releases 
     repo.cleanup();
   }
 }, 40_000);
+
+it("reports a post office exit after readiness even without a closed event (C11)", async () => {
+  const repo = makeRepo();
+  const office = join(repo.dir, "office.mjs"), driver = join(repo.dir, "driver.mjs");
+  // A post office that becomes ready, then exits on its own without emitting `closed`.
+  await writeFile(office, `process.stdin.once("data", () => { process.stdout.write(JSON.stringify({ type: "ready", data: { url: "http://127.0.0.1:1" } }) + "\\n"); setTimeout(() => process.exit(3), 50); });\n`);
+  const relayUrl = pathToFileURL(fileURLToPath(new URL("../../dist/v2/modRelay.js", import.meta.url))).href;
+  await writeFile(driver, `import { runModRelay } from ${JSON.stringify(relayUrl)};\nawait runModRelay({ command: { file: process.execPath, args: [${JSON.stringify(office)}] } });\n`);
+  const relay = spawn(process.execPath, [driver, "--cwd", repo.dir], { cwd: repo.dir, windowsHide: true, stdio: "pipe" });
+  const closed = new Promise<number | null>((done) => relay.once("close", done));
+  let output = "";
+  relay.stdout.on("data", (chunk) => { output += chunk; });
+  try {
+    relay.stdin.write(`${JSON.stringify({ credential: "d3".repeat(32), session: "native-mod-session" })}\n`); // stdin stays open, as the mod's does
+    await closed;
+    const events = output.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    expect(events.map((event) => event.type)).toEqual(["ready", "post_office_exit"]);
+    expect(events[1].data).toEqual({ code: 3, signal: null });
+  } finally {
+    if (relay.exitCode === null && relay.signalCode === null) { relay.kill("SIGTERM"); await closed; }
+    repo.cleanup();
+  }
+}, 20_000);
