@@ -434,6 +434,9 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(launch.env.PATH).toBe(outside);
     if (process.platform === "win32") expect(launch.env.NoDefaultCurrentDirectoryInExePath).toBe("1");
     expect(await resolveClaudeLaunch(undefined, cwd, withPath("bin", local))).toMatch(/not found on PATH/);
+    const dotted = join(cwd, "..tools"); // inside the folder, though its name starts with ".."
+    await fakeClaudeIn(dotted, "exit 0");
+    expect(await resolveClaudeLaunch(undefined, cwd, withPath(dotted))).toMatch(/not found on PATH/);
     expect(await resolveClaudeLaunch({ file: "claude" }, cwd, withPath(outside))).toMatch(/not an absolute path/);
   });
 

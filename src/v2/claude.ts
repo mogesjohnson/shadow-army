@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { access, constants, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, isAbsolute, join, relative } from "node:path";
+import { delimiter, isAbsolute, join, relative, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, RetryNotice, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
@@ -35,7 +35,7 @@ export interface ClaudeLaunch { file: string; args: string[]; env: NodeJS.Proces
 const foldCase = process.platform === "win32" || process.platform === "darwin";
 const inside = (child: string, parent: string): boolean => {
   const rel = relative(foldCase ? parent.toLowerCase() : parent, foldCase ? child.toLowerCase() : child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
 const isFile = async (path: string): Promise<boolean> => {
   try { if (!(await stat(path)).isFile()) return false; if (process.platform !== "win32") await access(path, constants.X_OK); return true; }
