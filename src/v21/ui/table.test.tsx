@@ -109,6 +109,39 @@ describe("War Table screen", () => {
     const seven = { ...work(144), soldiers: [...ROSTER, { ...ROSTER[0], id: "extra" }] };
     expect(screen(seven, WORK_SCENE, 31).filter((l) => /^ [├└]─ /.test(l))).toHaveLength(7);
   });
+  it("keeps the whole pinned decision when the screen is short or narrow (VIS-3)", () => {
+    const p = NEEDS_SCENE.pinned!;
+    for (const [w, h] of [[110, 28], [110, 27], [80, 24], [44, 24], [50, 20]]) {
+      const text = screen(needs(w), NEEDS_SCENE, h).join(" ").replace(/┃/g, " ").replace(/\s+/g, " ");
+      for (const part of [p.question, ...p.command.split(" "), ...p.options.map((o, i) => `${i + 1} ${o}`)]) {
+        expect(text, `${w}x${h} ${part}`).toContain(part);
+      }
+    }
+  });
+  it("caps a decision taller than the screen: the answers and the board header stay, the command gives way", () => {
+    const paths = Array.from({ length: 20 }, (_, i) => `src/module${i}/index.ts`).join(" ");
+    const scene = { ...NEEDS_SCENE, pinned: { ...NEEDS_SCENE.pinned!, command: `npm run lint -- --fix ${paths}` } };
+    for (const [w, h] of [[44, 24], [44, 16], [60, 16]]) {
+      const lines = screen(needs(w), scene, h);
+      const text = lines.join(" ").replace(/┃/g, " ").replace(/\s+/g, " ");
+      expect(lines[0], `${w}x${h}`).toContain("SHADOW ARMY");
+      for (const o of scene.pinned.options.map((o, i) => `${i + 1} ${o}`)) expect(text, `${w}x${h} ${o}`).toContain(o);
+      expect(text).toContain("more command lines");
+      expect(lines).toHaveLength(h);
+    }
+  });
+  it("wraps by terminal columns, so wide characters are not clipped by Ink at 44 columns", () => {
+    const question = "このコマンドを実行してもよろしいですか？本当にこのまま実行しても大丈夫ですか";
+    const scene = { ...NEEDS_SCENE, pinned: { ...NEEDS_SCENE.pinned!, question } };
+    const out = stripVTControlCharacters(renderToString(<WarTable view={needs(44)} scene={scene} height={24} />, { columns: 44 }));
+    const lines = out.split(String.fromCharCode(10)).map((l) => l.trimEnd());
+    const box = lines.filter((l) => l.startsWith("┃"));
+    expect(box.length).toBeGreaterThan(3);
+    expect(box.every((l) => l.endsWith("┃"))).toBe(true);
+    const text = box.join("").replace(/[┃\s]/g, "");
+    expect(text).toContain(question);
+    expect(text).toContain("npmrunlint----fix");
+  });
   it("is exactly the asked size at every width and height, and pure ASCII on request", () => {
     const bad: string[] = [];
     for (let w = 44; w <= 160; w++) for (let h = 16; h <= 50; h++) for (const ascii of [false, true]) {
