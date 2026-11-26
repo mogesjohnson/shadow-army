@@ -505,11 +505,23 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 `;
 
 describe("the real channel's tree listing (#139 C2, PO-11, M1-AC11)", () => {
-  it("rejects a listing once closed, so the post office records it incomplete, not empty", async () => {
+  it("lists an empty tree once containment confirmed it stopped, so a closed channel fails no guard", async () => {
     const { channel } = await setup();
     expect((await channel.list()).some((one) => one.cli)).toBe(process.platform === "win32" || process.platform === "linux");
-    await channel.close();
-    await expect(channel.list()).rejects.toThrow(/closed/);
+    const closing = channel.close();
+    await expect(channel.list()).resolves.toEqual([]);
+    await closing;
+  }, 30_000);
+
+  it("rejects a listing when containment could not confirm the tree stopped, never reading it as empty", async () => {
+    const { channel } = await setup();
+    const child = await (channel as unknown as { process: Promise<{ close(): Promise<void> }> }).process;
+    const close = child.close.bind(child);
+    child.close = async () => { throw new Error("teardown unconfirmed"); };
+    try {
+      await channel.close();
+      await expect(channel.list()).rejects.toThrow(/not confirmed stopped/);
+    } finally { await close(); }
   }, 30_000);
 
   it.runIf(contained)("lists the CLI's child, and a second message waits for the guard until that child ends (refused while it runs)", async () => {
