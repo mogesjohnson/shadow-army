@@ -97,7 +97,8 @@ export class ClaudeChannel implements NativeChannel {
   private instructionDirectory?: string;
   // Set once the CLI's initialize handshake is answered: pausing earlier would starve that very reply.
   private stdout?: Readable;
-  // Raw stderr enters the same event queue, so PO-7's budget holds it too, from the start.
+  // Raw stderr enters the same event queue, so PO-7's budget holds it too, from the handshake on: a CLI
+  // blocked on a full stderr pipe could not answer the handshake.
   private stderr?: Readable;
   private paused = false;
   // Set once containment has ended the tree: the pipes then hold only their OS buffers, read to the end.
@@ -140,14 +141,13 @@ export class ClaudeChannel implements NativeChannel {
     child.stdout.on("error", (error: Error) => { void this.failTransport(error.message); });
     child.stdin.on("error", (error: Error) => { void this.failTransport(error.message); });
     child.stderr.on("data", (chunk: Buffer) => this.emit("raw", { type: "stderr", text: chunk.toString("utf8") }));
-    this.stderr = child.stderr;
-    if (this.paused) child.stderr.pause();
     void child.exited.then((exit) => {
       if (!this.closed) void this.failTransport(`Claude process ended (${exit.code ?? exit.signal ?? "unknown"})`, true);
     }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
     await this.control({ subtype: "initialize", hooks: null });
     this.stdout = child.stdout;
-    if (this.paused && !this.contained) child.stdout.pause();
+    this.stderr = child.stderr;
+    if (this.paused && !this.contained) { child.stdout.pause(); child.stderr.pause(); }
   }
 
   /**

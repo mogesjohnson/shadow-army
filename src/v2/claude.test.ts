@@ -440,11 +440,13 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
       expect(stderrTexts(events)).toEqual(["one", "two"]);
     });
 
-    it("holds stderr from startup when paused before the handshake", async () => {
+    it("holds stderr once the handshake is answered when paused before it, never starving the handshake", async () => {
       const { channel, events, send, stderr } = await s6Protocol();
       channel.pause();
-      stderr.write("early");
+      expect((channel as unknown as { stderr?: unknown }).stderr).toBeUndefined(); // not held before the reply
       void (await send()).pending.catch(() => {});
+      await until(() => stderr.isPaused());
+      stderr.write("held");
       await settle();
       expect(stderrTexts(events)).toEqual([]);
       channel.resume();
