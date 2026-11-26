@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { windowsOnly } from "../windowsOnly.testutil.js";
+import { systemOps } from "./sweep.js";
 import { DEFAULT_EXIT_GRACE_MS, exitGraceFor, spawnManagedProcess, type ManagedProcess } from "./windows.js";
 
 const sessions: ManagedProcess[] = [];
@@ -90,4 +91,35 @@ describe("Windows exit grace (PO-10: ten seconds after the CLI was asked to exit
       expect(await gone(pid, 15_000)).toBe(true);
     } finally { child.kill(); }
   }, 60_000);
+});
+
+describe("Windows tree listing (PO-11: the job's processes, with identity)", () => {
+  windowsOnly("lists the CLI and a child it starts later, each with its parent and the sweep's start time", async () => {
+    const cwd = await directory();
+    const marker = join(cwd, "child.pid");
+    const session = await launch(
+      `process.stdin.resume();setTimeout(()=>{const c=require('child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('fs').writeFileSync(${JSON.stringify(marker)},String(c.pid));},300);setInterval(()=>{},1000);`,
+      2_000,
+    );
+    const before = await session.list!();
+    expect(before.find((one) => one.pid === session.pid)).toMatchObject({ cli: true });
+    let childPid = 0;
+    for (const started = Date.now(); !childPid && Date.now() - started < 10_000;) {
+      try { childPid = Number(await readFile(marker, "utf8")); } catch { await new Promise((done) => setTimeout(done, 50)); }
+    }
+    const after = await session.list!();
+    const child = after.find((one) => one.pid === childPid);
+    expect(child).toMatchObject({ ppid: session.pid });
+    expect(child!.cli).toBeUndefined();
+    // The identity is the one the sweep and the leftover check read, so a reused pid can't match.
+    expect(await systemOps("win32").startTimeOf(childPid)).toBe(child!.startTime);
+  }, 30_000);
+
+  windowsOnly("fails as incomplete once the session is closing, never as an empty tree", async () => {
+    const session = await launch("process.stdin.resume();setInterval(()=>{},1000);", 0);
+    expect((await session.list!()).length).toBeGreaterThan(0);
+    const closing = session.close();
+    await expect(session.list!()).rejects.toThrow(/listing incomplete/);
+    await closing;
+  }, 30_000);
 });
