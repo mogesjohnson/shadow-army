@@ -131,20 +131,21 @@ describe("the command's own repository (C2)", () => {
 });
 
 describe("registration trusts only the new repository's own state (C13)", () => {
-  const worktree = (base: string, repo: HostileRepo): GitRepo => {
-    const tree = join(base, "snap");
+  const worktree = (base: string, repo: HostileRepo, name = "snap"): GitRepo => {
+    const tree = join(base, name);
     plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "worktree", "add", "-q", "--detach", tree);
-    return { gitDir: join(repo.gitDir, "worktrees", "snap"), workTree: tree, commonDir: repo.gitDir };
+    return { gitDir: join(repo.gitDir, "worktrees", name), workTree: tree, commonDir: repo.gitDir };
   };
 
   for (const [change, file] of [["config", ".git/config"], ["hook", ".git/hooks/pre-rebase"]] as const) {
     it(`stays held when the shared ${change} changes before a worktree's registration finishes`, async () => {
       const { base, repo, open } = setup(), hold = open();
+      await expect(open().register(worktree(base, repo, "early"))).rejects.toThrow("only once"); // before start, nothing is trusted
       await hold.start();
       const snap = worktree(base, repo), undo = plantChange(repo, change);
-      await hold.register(snap);
+      await expect(hold.register(snap)).rejects.toBeInstanceOf(HarnessGitHeld);
+      expect(await open().start()).toMatchObject({ held: true, files: [file] }); // a restart straight after keeps it
       expect(await hold.check()).toMatchObject({ held: true, files: [file] });
-      expect(await open().start()).toMatchObject({ held: true, files: [file] }); // and across a restart
       undo();
       expect(await hold.check()).toEqual({ held: false });
     }, 60_000);

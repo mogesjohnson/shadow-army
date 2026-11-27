@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { HarnessGitHeld, type GitResult, type HarnessKind } from "./harness.js";
 
 /**
@@ -332,9 +332,10 @@ export class HarnessHold {
   async register(repo: GitRepo): Promise<void> {
     const key = keyOf(repo), known = this.repos.find((other) => keyOf(other) === key);
     if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
-    if (!known) this.repos.push(repo);
+    if (!this.trusted) throw new Error("harness git: a repository registers only once the folder's own state is trusted");
     const { state, problems } = await readState(this.options.repo, known ?? repo, this.options.gitFor, this.options.limits);
     if (problems.length) throw new Uninspectable(problems.join(", "), "the repository can't be trusted");
+    if (!known && !this.repos.some((other) => keyOf(other) === key)) this.repos.push(repo);
     const baseline = this.trusted?.[key];
     if (known && baseline) {
       const files = changedFiles(baseline, state);
@@ -344,7 +345,8 @@ export class HarnessHold {
     // Its own: inside its git folder, or its working tree (its `.git` file, its submodules) but not the common folder.
     const inside = (path: string, folder: string) => (path + "/").startsWith(canon(folder).replace(/\/?$/, "/"));
     const isOwn = (label: string) => {
-      const name = label.replace(/^(config|submodule) /, ""), path = canon(isAbsolute(name) ? name : resolve(this.options.repo.workTree, name));
+      const name = label.replace(/^(config|submodule) /, ""), full = isAbsolute(name) ? name : resolve(this.options.repo.workTree, name);
+      const leaf = basename(full), path = `${canon(dirname(full))}/${process.platform === "linux" ? leaf : leaf.toLowerCase()}`; // where it sits, not where a link points
       return inside(path, repo.gitDir) || (inside(path, repo.workTree) && !inside(path, repo.commonDir));
     };
     const others = Object.entries(this.trusted ?? {}).filter(([other]) => other !== key).map(([, hashes]) => hashes);
@@ -356,6 +358,9 @@ export class HarnessHold {
     this.trusted = { ...this.trusted, [key]: own };
     this.save();
     this.options.log?.({ event: "trusted", hashes: own });
+    // Shared state that already differs is held now, and recorded, so a restart before the next check keeps it.
+    const files = changedFiles(own, state);
+    if (files.length) throw new HarnessGitHeld(this.hold(files, "changed before it was registered").line);
   }
 
   /** Shadow Army's own command removed it. */
