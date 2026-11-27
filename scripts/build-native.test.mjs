@@ -51,6 +51,8 @@ describe("build-native plan", () => {
       expect(compileArgs("scratch")).toEqual([...FLAGS, "-o", "scratch", SOURCE]);
     }
     expect(FLAGS).toEqual(expect.arrayContaining(["-Wall", "-Wextra", "-Werror", "-static"]));
+    // The test-only variants (SA_CONTAIN_TEST_*, such as C15's NOPIDFD) are never shipped.
+    expect(FLAGS.some((flag) => flag.startsWith("-D"))).toBe(false);
   });
 
   it("skips a Linux processor PO-12 doesn't list", () => {

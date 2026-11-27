@@ -53,6 +53,7 @@ describe.skipIf(!canBuild)("sa-contain", () => {
       [helper, []],
       [`${helper}-stale`, ["-DSA_CONTAIN_TEST_STALE"]],
       [`${helper}-unpolled`, ["-DSA_CONTAIN_TEST_UNPOLLED"]],
+      [`${helper}-nopidfd`, ["-DSA_CONTAIN_TEST_NOPIDFD"]],
     ] as const;
     for (const [out, extra] of builds) {
       const cc = spawnSync("cc", ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", ...extra, "-o", out, source]);
@@ -129,6 +130,43 @@ describe.skipIf(!canBuild)("sa-contain", () => {
       expect(events).toContainEqual({ op: "guard", ok: false, step: "exec", errno: 2 });
       expect(events.some((e) => e.event === "started")).toBe(false);
       expect(failed.code).toBe(1);
+    } finally {
+      helper = shipped;
+    }
+  });
+
+  it("reports a kill right after start as unconfirmed, then ends the tree (C16)", async () => {
+    // Large arguments slow the exec down, so `kill` lands before it.
+    const junk = Array.from({ length: 32 }, () => "x".repeat(16 * 1024));
+    const r = await run(["guard", "/bin/sh", "-c", "sleep 5", ...junk], "pipe", "start\nkill\n");
+    const events = parsed(r);
+    // Usually the kill beats the exec (unconfirmed, exit 1); on a loaded machine the exec may
+    // win (started, exit 0). Either way the start's result is its own line, before the
+    // teardown's `ended`, and the exit status follows the start's result, not the teardown.
+    const unconfirmed = events.findIndex((e) => e.step === "exec-unconfirmed");
+    const started = events.findIndex((e) => e.event === "started");
+    expect(unconfirmed < 0 ? started : unconfirmed).toBeGreaterThan(0);
+    expect(unconfirmed >= 0 && started >= 0).toBe(false);
+    expect(events.find((e) => e.event === "exit")).toMatchObject({ signal: 9 });
+    expect(events.at(-1)).toMatchObject({ event: "ended", dropped: 0 });
+    expect(events.filter((e) => e.event === "ended")).toHaveLength(1);
+    expect(events.length - 1).toBeGreaterThan(Math.max(unconfirmed, started));
+    expect(r.code).toBe(unconfirmed >= 0 ? 1 : 0);
+  });
+
+  it("refuses every session before launch on a kernel without pidfd_send_signal (C15)", async () => {
+    // The nopidfd build's probe fails with ENOSYS, as on Linux before 5.1.
+    const shipped = helper;
+    helper = `${shipped}-nopidfd`;
+    try {
+      // `start` only answers `ready`, as the post office sends it, so none is sent here.
+      const r = await run(["guard", "/bin/sh", "-c", "exit 3"], "pipe", "", (line) =>
+        line.includes('"ready"') ? "start\n" : undefined,
+      );
+      expect(parsed(r)).toEqual([
+        { op: "guard", event: "refused", reason: "Linux 5.1 or later is required (pidfd_send_signal)" },
+      ]);
+      expect(r.code).toBe(2);
     } finally {
       helper = shipped;
     }

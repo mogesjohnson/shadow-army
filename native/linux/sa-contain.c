@@ -47,7 +47,10 @@
  * the signal reaches the process that was read, never a pid number. Before
  * `ready` the guardian opens /proc, checks that it is procfs and that its
  * `self` is the guardian's own pid (the guardian's pid namespace), and keeps
- * that verified view; if it can't, it fails and starts nothing.
+ * that verified view; if it can't, it fails and starts nothing. It needs
+ * Linux 5.1 or later (PO-12, D-42): if the kernel has no pidfd_send_signal
+ * (ENOSYS), the guardian reports `refused` naming that minimum, instead of
+ * `ready`, and exits 2. There is no fallback to signalling pid numbers.
  *
  * Reports never block: lines queue in a fixed buffer and are sent without
  * waiting, so a stalled post office can't stop the kill. Lines that don't
@@ -62,6 +65,8 @@
  *   {"op":"guard","event":"reaped","pid":P}         (a process other than the CLI, while killing)
  *   {"op":"guard","event":"ended","reaped":N,"dropped":D}  (the tree is empty: ECHILD)
  *   {"op":"guard","event":"refused","reason":"unknown command"}
+ *   {"op":"guard","event":"refused","reason":"Linux 5.1 or later is required (pidfd_send_signal)"}
+ *                                                   (instead of `ready`; exit 2)
  *   {"op":"<op>","ok":false,"step":"<step>","errno":E}   (an error)
  *   {"ok":false,"reason":"unknown operation"}
  *
@@ -267,10 +272,21 @@ static char own_comm[32]; /* the guardian's name; a child keeps it until exec */
 
 static int read_stat(int dir, char comm[32], pid_t *ppid, unsigned *flags);
 
+/* C15's test builds with -DSA_CONTAIN_TEST_NOPIDFD: pidfd_send_signal fails
+ * with ENOSYS, as on Linux before 5.1. Never shipped. */
 static int signal_dir(int dir, int sig) {
+#ifdef SA_CONTAIN_TEST_NOPIDFD
+  (void)dir;
+  (void)sig;
+  errno = ENOSYS;
+  return -1;
+#else
   return (int)syscall(SYS_pidfd_send_signal, dir, sig, NULL, 0);
+#endif
 }
 
+/* Returns 0 with the view open, -1 on an error, -2 when the kernel is too
+ * old to signal through a /proc directory (PO-12: Linux 5.1 or later; D-42). */
 static int open_proc_view(void) {
   char self[32], link[32];
   struct statfs fs;
@@ -301,8 +317,14 @@ static int open_proc_view(void) {
   /* Signal 0 to our own directory: the kernel can signal through one. */
   int dir = openat(proc_fd, self, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
   if (dir < 0 || signal_dir(dir, 0) != 0) {
-    fail("guard", "proc-signal", errno);
+    int err = errno;
     if (dir >= 0) close(dir);
+    if (dir >= 0 && err == ENOSYS) {
+      /* No PID-safe signalling and no fallback (D-42): refuse the session. */
+      report("{\"op\":\"guard\",\"event\":\"refused\",\"reason\":\"Linux 5.1 or later is required (pidfd_send_signal)\"}\n");
+      return -2;
+    }
+    fail("guard", "proc-signal", err);
     return -1;
   }
   pid_t ppid;
@@ -551,7 +573,9 @@ static int op_guard(int argc, char **argv) {
     return 1;
   }
 
-  if (open_proc_view() != 0) return 1;
+  int view = open_proc_view();
+  if (view == -2) return 2; /* refused before `ready`: nothing was started */
+  if (view != 0) return 1;
 
   reportf("{\"op\":\"guard\",\"event\":\"ready\",\"pid\":%d}", (int)getpid());
 
