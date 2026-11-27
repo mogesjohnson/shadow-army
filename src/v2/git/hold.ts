@@ -60,6 +60,14 @@ const flat = (byRepo: Record<string, TrustedState>): TrustedState => Object.assi
 const uncounted = /^(branch|remote)\./i;
 const LIMITS = { entries: 10_000, bytes: 16 * 1024 * 1024, repos: 1_000 };
 
+/** A pointer file that doesn't match the tuple its repository registered with (WSP-10). */
+class PointerError extends Error {
+  constructor(readonly path: string, message: string) { super(message); }
+}
+
+/** A pointer slot the scan hashes nothing for: the file is missing, or `.git` is a folder. */
+const ABSENT = "absent";
+
 /** Something the scan can't inspect: a special file, an unreadable one, too many entries, a failed listing. */
 export class Uninspectable extends Error {
   /** `fatal`: a bound was passed, so the rest of the scan can't be relied on either. */
@@ -342,13 +350,15 @@ export class HarnessHold {
     const key = keyOf(repo), find = () => this.repos.find((other) => keyOf(other) === key);
     if (find() && !same(find()!, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
     if (!this.trusted) throw new Error("harness git: a repository registers only once the folder's own state is trusted");
-    const pointers = find() && this.trusted[key] ? undefined : this.pointers(repo); // no baseline yet: checked first
+    // Every slot, present or absent, checked before the scan. A known repository's pointer that no longer matches
+    // isn't refused but held, by the comparison with its baseline below, as a check would hold it.
+    let pointers: TrustedState = {};
+    try { pointers = this.pointers(repo); } catch (error) { if (!(error instanceof PointerError) || !(find() && this.trusted[key])) throw error; }
     const { state, problems } = await readState(this.options.repo, find() ?? repo, this.options.gitFor, this.options.limits);
     if (problems.length) throw new Uninspectable(problems.join(", "), "the repository can't be trusted");
-    // The pointers the scan hashed are the ones checked against the tuple, not ones swapped in meanwhile (C15).
-    for (const [label, hash] of Object.entries(pointers ?? {})) {
-      if (state[label] !== hash) throw new Error(`harness git: ${label.replace(/^submodule /, "")} changed while ${repo.gitDir} registered`);
-    }
+    // The pointers the scan read are the ones checked against the tuple, not ones swapped in or added meanwhile (C15, C19).
+    const moved = find() && this.trusted?.[key] ? [] : this.drift(pointers, state); // a known one: its baseline holds
+    if (moved.length) throw new Error(`harness git: ${moved.join(", ")} changed while ${repo.gitDir} registered`);
     // Looked up again after the scan: a registration that finished meanwhile set the baseline this one is checked against (C16).
     const known = find(), baseline = this.trusted?.[key];
     if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
@@ -388,32 +398,37 @@ export class HarnessHold {
   /**
    * A new repository's pointers, checked against the tuple it registers with (WSP-10): its `.git` (a file naming
    * `gitDir`, or `gitDir` itself), its `commondir` (required unless `gitDir` is the common folder) and any `gitdir`
-   * (naming its `.git`). Gives each pointer file's hash under the scan's label, so the scan's own read is checked too.
+   * (naming its `.git`). Gives every slot under the scan's label: the file's hash, or ABSENT where the scan hashes
+   * nothing, so a slot that appears, goes or changes before the scan reads it differs (C19). Run before every scan.
    */
   private pointers(repo: GitRepo): TrustedState {
-    const label = (path: string) => `submodule ${this.label(path)}`, out: TrustedState = {};
+    const label = (path: string) => `submodule ${this.label(path)}`;
+    const dotGit = join(repo.workTree, ".git"), commondir = join(repo.gitDir, "commondir"), gitdir = join(repo.gitDir, "gitdir");
+    const out: TrustedState = { [label(dotGit)]: ABSENT, [label(commondir)]: ABSENT, [label(gitdir)]: ABSENT };
     const read = (path: string, what: string) => {
       const type = typeOf(path);
-      if (type !== "file") throw new Error(`harness git: ${path} ${type === undefined ? "is missing" : "isn't a regular file"}, so ${what} can't be checked`);
+      if (type !== "file") throw new PointerError(path, `harness git: ${path} ${type === undefined ? "is missing" : "isn't a regular file"}, so ${what} can't be checked`);
       const text = readRegular(path, this.options.limits?.bytes ?? LIMITS.bytes);
       out[label(path)] = sha(text);
       return text.toString("utf8").trim();
     };
     const expect = (path: string, named: string, want: string) => {
-      if (canon(named) !== canon(want)) throw new Error(`harness git: ${path} names ${named}, not the registered ${want}`);
+      if (canon(named) !== canon(want)) throw new PointerError(path, `harness git: ${path} names ${named}, not the registered ${want}`);
     };
-    const dotGit = join(repo.workTree, ".git");
     if (typeOf(dotGit) === "folder") expect(dotGit, dotGit, repo.gitDir);
     else {
       const named = /^gitdir:\s*(.+)$/.exec(read(dotGit, "the working tree's git folder"))?.[1];
-      if (!named) throw new Error(`harness git: ${dotGit} names no git folder`);
+      if (!named) throw new PointerError(dotGit, `harness git: ${dotGit} names no git folder`);
       expect(dotGit, resolve(repo.workTree, named), repo.gitDir);
     }
-    const commondir = join(repo.gitDir, "commondir");
     if (typeOf(commondir) !== undefined || canon(repo.gitDir) !== canon(repo.commonDir)) expect(commondir, resolve(repo.gitDir, read(commondir, "the common folder")), repo.commonDir);
-    const gitdir = join(repo.gitDir, "gitdir");
     if (typeOf(gitdir) !== undefined) expect(gitdir, resolve(repo.gitDir, read(gitdir, "the working tree")), dotGit);
     return out;
+  }
+
+  /** The pointer slots the scan read differently from `pointers`: present for an absent slot, absent, or another hash. */
+  private drift(pointers: TrustedState, state: TrustedState) {
+    return Object.entries(pointers).filter(([label, hash]) => (state[label] ?? ABSENT) !== hash).map(([label]) => label.replace(/^submodule /, ""));
   }
 
   /** Shadow Army's own command removed it. */
@@ -443,6 +458,8 @@ export class HarnessHold {
     const covered = this.repos.find((other) => same(other, repo));
     if (!covered) throw new Error(`harness git: ${repo.gitDir} isn't a repository this hold covers`);
     if (this.timeout) throw new HarnessGitHeld(this.timeout);
+    // Its folder is gone: a removal in progress, which no scan covers, so nothing runs there (C20).
+    if (keyOf(covered) !== keyOf(this.options.repo) && typeOf(covered.workTree) === undefined) throw new Error(`harness git: ${covered.workTree} is being removed`);
     const before = await this.check();
     if (before.held) throw new HarnessGitHeld(before.line);
     // A guard command sees into every submodule: no `ignore`, in a config or a `.gitmodules`, at any depth (WSP-10).
@@ -469,7 +486,20 @@ export class HarnessHold {
     const state: Record<string, TrustedState> = {}, names = new Set<string>(), problems = new Set<string>();
     let fatal = false;
     for (const repo of this.repos) {
+      // Every tuple's pointers, at startup, each check and an accept too, before any baseline is set from the scan (C20).
+      // A worktree whose folder is gone is a removal in progress, which WSP-10 finishes and unregisters: no git runs
+      // there, so it isn't scanned, and its trusted state stands until then, compared again if the folder comes back.
+      let pointers: TrustedState | undefined, gone = false;
+      try {
+        gone = keyOf(repo) !== keyOf(this.options.repo) && typeOf(repo.workTree) === undefined;
+        if (!gone && typeOf(repo.gitDir) !== undefined) pointers = this.pointers(repo);
+      } catch (error) {
+        if (!(error instanceof PointerError || error instanceof Uninspectable)) throw error;
+        problems.add(this.label(error.path));
+      }
+      if (gone) { state[keyOf(repo)] = this.trusted?.[keyOf(repo)] ?? {}; continue; }
       const read = await readState(this.options.repo, repo, this.options.gitFor, this.options.limits);
+      for (const label of pointers ? this.drift(pointers, read.state) : []) problems.add(label);
       state[keyOf(repo)] = read.state;
       for (const name of read.names) names.add(name);
       for (const problem of read.problems) problems.add(problem);
