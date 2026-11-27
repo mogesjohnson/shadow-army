@@ -89,6 +89,27 @@ describe("spec traceability", () => {
     expect(checkSpecTrace(spec("GIT-9007199254740000 to 9007199254741000", "2.0 GIT-1")).problems).toContain("invalid legacy range GIT-9007199254740000 to 9007199254741000");
     expect(checkSpecTrace(spec("WS-7 to 2.0 semantics", "2.0 WS-7")).problems).toEqual([]);
   });
+  it("compares a range in every marker, across Markdown wrapping and a sentence period (review 116 C12)", () => {
+    const spec = (text, row) => valid.replace("Second requirement.", `Second requirement ${text}`).replace("|---|---|", `|---|---|\n| CH-1 | ${row} |`);
+    const cites = (id) => `CH-1: cites ${id}, which Appendix A's row doesn't`;
+    expect(checkSpecTrace(spec("as in 2.0's GIT-1 to GIT-4.", "2.0 GIT-1")).problems).toEqual([cites("GIT-2"), cites("GIT-3"), cites("GIT-4")]);
+    expect(checkSpecTrace(spec("as in 2.0's GIT-1 to GIT-4.", "2.0 GIT-1 to GIT-4")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("as\nin 2.0's GIT-1\nto GIT-4.", "2.0 GIT-1, GIT-4")).problems).toEqual([cites("GIT-2"), cites("GIT-3")]);
+    expect(checkSpecTrace(spec("(from 2.0 GIT-1 to\nGIT-4).", "2.0 GIT-1, GIT-4")).problems).toEqual([cites("GIT-2"), cites("GIT-3")]);
+    expect(checkSpecTrace(spec("(from 2.0 GIT-1 to\n  GIT-4).", "2.0 GIT-1 to GIT-4")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("(from 2.0 GIT-1 to GIT-4).", "2.0 GIT-1 to GIT-4.")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("(from 2.0 GIT-1 to GIT-4.)", "2.0 GIT-1 to 4. See v1 notes.")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("as in 2.0's GIT-1, GIT-3 and WS-2 to 3.", "2.0 GIT-1, GIT-3, WS-2, WS-3")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("as in 2.0's GIT-1 and GIT-3.", "2.0 GIT-1")).problems).toEqual([cites("GIT-3")]);
+    expect(checkSpecTrace(spec("(from 2.0 WS-7 to 2.0 semantics).", "2.0 WS-7")).problems).toEqual([]);
+    // An inline marker takes a "#N" source too, and "v1's ... carries over" stays within one line of the text.
+    expect(checkSpecTrace(spec("as in 2.0's WS-5 and #32.", "2.0 WS-5; v1 #32")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("as in 2.0's WS-5 and #32.", "2.0 WS-5")).problems).toEqual([cites("#32")]);
+    expect(checkSpecTrace(valid.replace("Second requirement.", "Keeps v1's guard rules:\n  - audit runs after failure\n  - This carries over the rest.")).problems).toEqual([]);
+    expect(checkSpecTrace(valid.replace("Second requirement.", "Keeps v1's guard, which carries over.")).problems).toEqual(["CH-1: carried over but not in Appendix A"]);
+    expect(expandReferences("WSP-1 to\n  WSP-3, CH-1 to 2.")).toEqual(["WSP-1", "WSP-2", "WSP-3", "CH-1", "CH-2"]);
+    expect(expandReferences("PO-1 to 2.0 semantics")).toEqual(["PO-1"]);
+  });
   it("accepts an appendix-only source whether or not the requirement's text also names it", () => {
     const po8 = (text) => valid.replace("- **CH-1** (M1; C, I) Second requirement.", `- **PO-8** (M1; I) ${text}\n- **CH-1** (M1; C, I) Second requirement.`).replace("|---|---|", "|---|---|\n| PO-8 | v1 #22, #16 |").replace("- PO-1;", "- PO-1;\n- PO-8;").replace("(PO-1, CH-1)", "(PO-1, PO-8, CH-1)");
     expect(checkSpecTrace(po8("Ends once.")).problems).toEqual([]);
@@ -156,6 +177,22 @@ describe("Appendix B rule 9: tests name the requirements", () => {
   it("excludes a member call whatever whitespace or comments surround the dot", () => {
     const text = 'matcher . test("PO-7");\nmatcher\n  .test("PO-8"); matcher /* x */ . /* y */ test("PO-9"); a?.test("PO-10"); it("PO-1 real", () => {});';
     expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1"]);
+  });
+  it("reads titles as tokens, whatever whitespace or comments separate them (review 116 C11)", () => {
+    const pad = " ".repeat(66);
+    const ids = (text) => testReferenceText(text).match(/\b[A-Z]+-\d+\b/g) ?? [];
+    // A member call after a dot and a long indent is no test call; a spaced modifier and a distant argument are.
+    expect(ids(`x.\n${pad}test("PO-1");`)).toEqual([]);
+    expect(ids(`it . skip("CH-1", () => {});`)).toEqual(["CH-1"]);
+    expect(ids(`test${pad}(\n${pad}"PO-2 bare", () => {});`)).toEqual(["PO-2"]);
+    expect(ids(`it /* a */ . /* b */ skip /* c */ ( /* d */ "CH-2 spaced", () => {});`)).toEqual(["CH-2"]);
+    expect(ids(`a. // note\n  test("PO-3"); a?.\n  test("PO-4"); a\n  ?. test("PO-5");`)).toEqual([]);
+    expect(ids('it(`PO-6 ${ {a: "}"}.a } tail`, () => {}); it(`CH-3 ${`PO-9 ${x}`} end`, () => {});')).toEqual(["PO-6", "CH-3"]);
+    expect(ids(`it.each(t)\n${pad}(\n"PO-7 %s", f); describe . skipIf ( c ) ( "CH-4 suite", f); it.each\`a\`  ( "PO-8", f);`)).toEqual(["PO-7", "CH-4", "PO-8"]);
+    expect(ids(`foo.it("PO-9"); foo . describe . skip ("PO-10"); it\n.skip\n("PO-11 split", f);`)).toEqual(["PO-11"]);
+    // Type arguments do not hide a title; a substitution does not join the text around it into one ID.
+    expect(ids('it.each<[string, number]>(rows)("PO-17 %s", f); it<Ctx>("CH-5 typed", f); it(`PO-1${n}0 joined`, f);')).toEqual(["PO-17", "CH-5", "PO-1"]);
+    expect(ids(`it\n("PO-12 no dot", f); test.each(["PO-13"]); it(x, "PO-14"); it(/PO-15/, "PO-16");`)).toEqual(["PO-12"]);
   });
   // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
   it("takes the repository tests as they are, and catches a planted break in them", () => {

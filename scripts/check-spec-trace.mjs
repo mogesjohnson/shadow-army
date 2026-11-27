@@ -6,18 +6,25 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const PREFIXES = "HOST|PO|CH|SI|MSG|SES|ARM|WSP|SEC|VIS|SET|OBS|VER|LEG";
 // Evidence a test can give; R and L evidence is recorded on the PR (VER-8).
 const TESTED_EVIDENCE = new Set(["U", "C", "I", "X", "F", "S"]);
-const RANGE = new RegExp(`\\b(${PREFIXES})-(\\d+)(?:[ \\t]+to[ \\t]+(?:(${PREFIXES})-)?(\\d+))?`, "g");
+// A range's end is a number not followed by a decimal digit ("to 2.0 semantics"); a sentence's period after it is fine.
+const RANGE = new RegExp(`\\b(${PREFIXES})-(\\d+)(?:\\s+to\\s+(?:(${PREFIXES})-)?(\\d+)(?!\\.\\d)\\b)?`, "g");
 const DEFINITION = new RegExp(`^- \\*\\*((?:${PREFIXES})-\\d+)\\*\\*(.*)$`);
 const TEST_ID = new RegExp(`\\b(?:(?:${PREFIXES})-\\d+|M\\d+-AC\\d+)\\b`, "g");
 const EVIDENCE = new Set(["U", "C", "I", "X", "F", "S", "L", "R"]);
 // A source marker in a requirement's own text: "(from 2.0 WS-1)", "as in 2.0's CFG-4", or "carries over v1's rule".
-const SOURCE_MARKER = /\(from\s+([^)]*)\)|as in 2\.0's\s+([A-Z]+-\d+)|carr(?:y|ies) over v1's|v1's [^.\n]*? carr(?:y|ies) over/gi;
+// The inline form names one source, a range or a list of them: "as in 2.0's GIT-1 to GIT-4, WS-2 and WS-3". Matched on
+// text whose whitespace is collapsed (collapse), so that Markdown wrapping never splits a marker.
+const LEGACY_SOURCE = "(?:[A-Z]+-\\d+(?:\\s+to\\s+(?:[A-Z]+-)?\\d+(?!\\.\\d)\\b)?|#\\d+)";
+const SOURCE_MARKER = new RegExp(`\\(from\\s+([^)]*)\\)|as in 2\\.0's\\s+(${LEGACY_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+)${LEGACY_SOURCE})*)|carr(?:y|ies) over v1's`, "gi");
+// "v1's rule ... carries over" within one line of the original text, so that wrapping into a sub-bullet cannot join them.
+const V1_CARRY = /v1's [^.\n]*? carr(?:y|ies) over/i;
+const collapse = (text) => text.replace(/\s+/g, " ").trim();
 // Sources Appendix A's row may name although the requirement's own text doesn't (the older shipped spec). A spec
 // whose text cites them too passes as well (the review spec's PO-8), so the entry is a compatibility allowance. ARM-1, ARM-2 and ARM-5 carry v1's design rules with no
 // marker or reference; PO-8 and ARM-6 take further v1 and 2.0 guard rules named only in the table.
 const APPENDIX_ONLY_SOURCE = new Map([["ARM-1", []], ["ARM-2", []], ["ARM-5", []], ["PO-8", ["#22", "#16"]], ["ARM-6", ["GUARD-3"]]]);
 // A legacy source: "GIT-1", "#16", or a range "GIT-1 to GIT-4" / "GIT-1 to 4".
-const LEGACY_REF = /\b([A-Z]+)-(\d+)(?:[ \t]+to[ \t]+(?:([A-Z]+)-)?(\d+)(?![.\d]))?\b|#\d+/g;
+const LEGACY_REF = /\b([A-Z]+)-(\d+)(?:\s+to\s+(?:([A-Z]+)-)?(\d+)(?!\.\d)\b)?|#\d+/g;
 
 /** Every legacy source in `text`, with each range expanded so that none is compared by its endpoints alone. */
 function legacyRefs(text, problems) {
@@ -144,17 +151,17 @@ export function checkSpecTrace(source) {
     if (cells.length > 2) {
       for (const id of new Set(expandReferences(cells[1], problems))) {
         if (rows.has(id)) problems.push(`Appendix A lists ${id} twice`);
-        else rows.set(id, cells[2]);
+        else rows.set(id, collapse(cells[2]));
       }
     }
   }
   for (const [id, { body, withdrawn }] of requirements) {
     if (withdrawn) continue;
-    const marked = [...body.matchAll(SOURCE_MARKER)];
+    const marked = [...collapse(body).matchAll(SOURCE_MARKER)];
     // A marker may also name this spec's own requirements (WSP-10's config); only legacy sources must be in the row.
     const cited = new Set(marked.flatMap((marker) => legacyRefs(marker[1] ?? marker[2] ?? "", problems)).filter((ref) => !requirements.has(ref)));
     const row = rows.get(id);
-    const expected = marked.length > 0 || APPENDIX_ONLY_SOURCE.has(id);
+    const expected = marked.length > 0 || V1_CARRY.test(body) || APPENDIX_ONLY_SOURCE.has(id);
     if (expected && row === undefined) problems.push(`${id}: carried over but not in Appendix A`);
     else if (!expected && row !== undefined) problems.push(`${id}: in Appendix A but its text names no source`);
     else if (row !== undefined) {
@@ -191,77 +198,134 @@ export function parseImplemented(source) {
   return { milestone, ids, problems };
 }
 
+// After these a "/" starts a regular expression, not a division.
+const REGEX_AFTER = new Set(["(", ",", "=", ":", "[", "!", "&", "|", "?", "?.", "{", "}", ";", ">", "<", "+", "-", "*", "%", "^", "~"]);
+const REGEX_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "of", "in", "delete", "instanceof", "new", "throw"]);
+const TEST_CALLEES = new Set(["it", "test", "describe"]);
+// it.each(table)(title) and describe.skipIf(flag)(title): the title comes after a second call or a tagged template.
+const TEST_FACTORIES = new Set(["each", "for", "skipIf", "runIf", "extend"]);
+
+/**
+ * Splits `source` into code tokens: identifiers, strings, template literals, regular expressions, numbers and
+ * punctuation. Whitespace and comments separate tokens without being one; each comment goes to `comments` with its position.
+ */
+function lexCode(source, comments) {
+  const identifier = /#?[\p{L}_$][\p{L}\p{N}_$]*/uy;
+  const number = /\d[\w.]*/y;
+  let i = 0;
+  // From `i`; with `nested`, up to the "}" that closes a template's substitution.
+  const scan = (nested) => {
+    const found = [];
+    let depth = 0;
+    while (i < source.length) {
+      const at = i;
+      const c = source[i];
+      const prev = found[found.length - 1];
+      if (/\s/.test(c)) i++;
+      else if (c === "/" && (source[i + 1] === "/" || source[i + 1] === "*")) {
+        const line = source[i + 1] === "/";
+        const end = source.indexOf(line ? "\n" : "*/", i + 2);
+        comments.push({ at, text: source.slice(i, end < 0 ? source.length : end) });
+        i = end < 0 ? source.length : line ? end : end + 2;
+      } else if (c === '"' || c === "'") {
+        let text = "";
+        for (i++; i < source.length && source[i] !== c && source[i] !== "\n"; i++) {
+          if (source[i] === "\\") i++;
+          else text += source[i];
+        }
+        i++;
+        found.push({ kind: "string", value: text, at });
+      } else if (c === "`") {
+        let text = "";
+        for (i++; i < source.length && source[i] !== "`"; ) {
+          if (source[i] === "\\") i += 2;
+          else if (source[i] === "$" && source[i + 1] === "{") {
+            i += 2;
+            scan(true);
+            // A substitution separates the text on either side: "PO-1${n}0" does not name PO-10.
+            text += " ";
+          } else text += source[i++];
+        }
+        i++;
+        found.push({ kind: "template", value: text, at });
+      } else if (c === "/" && (!prev || (prev.kind === "punct" && REGEX_AFTER.has(prev.value)) || (prev.kind === "name" && REGEX_KEYWORDS.has(prev.value)))) {
+        // A regular expression literal: skip it, since it may hold a quote.
+        for (i++; i < source.length && source[i] !== "/" && source[i] !== "\n"; i++) {
+          if (source[i] === "\\") i++;
+          else if (source[i] === "[") while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
+        }
+        i++;
+        while (/[A-Za-z]/.test(source[i] ?? "")) i++;
+        found.push({ kind: "regex", value: "", at });
+      } else {
+        identifier.lastIndex = i;
+        number.lastIndex = i;
+        const name = identifier.exec(source)?.[0];
+        const digits = name ? undefined : number.exec(source)?.[0];
+        if (name || digits) {
+          found.push({ kind: name ? "name" : "number", value: name ?? digits, at });
+          i += (name ?? digits).length;
+          continue;
+        }
+        const value = source.startsWith("...", i) ? "..." : c === "?" && source[i + 1] === "." && !/\d/.test(source[i + 2] ?? "") ? "?." : c;
+        i += value.length;
+        if (c === "}" && nested && depth === 0) return found;
+        if (c === "{") depth++;
+        else if (c === "}") depth--;
+        found.push({ kind: "punct", value, at });
+      }
+    }
+    return found;
+  };
+  return scan(false);
+}
+
+const isPunct = (token, value) => token?.kind === "punct" && token.value === value;
+
 /**
  * The text of a test file that can name a requirement: its comments and the titles of its it, test and
  * describe calls. Other strings are fixtures, so an ID inside one counts for nothing.
  */
 export function testReferenceText(source) {
   const out = [];
-  // A call's callee: it, test or describe with members (it.skip), not a method of another object (re.test).
-  const calleePattern = /(?<![\w$#])(?:it|test|describe)((?:\.[A-Za-z]+)*)\s*$/;
-  // A member call, whatever sits between the dot and the name, is no test call. Comments never reach `code`.
-  const callee = { exec: (code) => { const m = calleePattern.exec(code); return m && !/(?<!\.\.)\.\s*$/.test(code.slice(0, m.index)) ? m : null; } };
-  const factory = /\.(?:each|for|skipIf|runIf|extend)$/;
-  // One flag per open parenthesis: whether its first argument is a test title.
-  const open = [];
-  // Set once a factory call's ")" (or a factory's tagged template) closes: a "(" right after it opens a curried title.
-  let closed = false;
-  let code = "";
-  for (let i = 0; i < source.length; ) {
-    const c = source[i];
-    if (c === "/" && source[i + 1] === "/") {
-      const end = source.indexOf("\n", i);
-      out.push(source.slice(i, end < 0 ? source.length : end));
-      i = end < 0 ? source.length : end;
-    } else if (c === "/" && source[i + 1] === "*") {
-      const end = source.indexOf("*/", i + 2);
-      out.push(source.slice(i, end < 0 ? source.length : end));
-      i = end < 0 ? source.length : end + 2;
-    } else if (c === '"' || c === "'" || c === "`") {
-      const isTitle = open[open.length - 1] === true && /\(\s*$/.test(code);
-      const tagged = c === "`" && factory.test(callee.exec(code)?.[1] ?? "");
-      let text = "";
-      for (i++; i < source.length && source[i] !== c; i++) {
-        if (source[i] === "\\") i++;
-        else if (c === "`" && source[i] === "$" && source[i + 1] === "{") {
-          // Skip a template's substitution as code, up to its closing brace.
-          for (let depth = 0; i < source.length; i++) {
-            if (source[i] === "{") depth++;
-            else if (source[i] === "}" && --depth === 0) break;
-          }
-        } else text += source[i];
-      }
-      i++;
-      if (isTitle) out.push(text);
-      code = (code + '""').slice(-60);
-      closed = tagged;
-    } else if (c === "/" && /(?:^|[(,=:[!&|?{};>]|\b(?:return|typeof|case|void|yield|await|of|in))\s*$/.test(code)) {
-      // A regular expression literal: skip it, since it may hold a quote.
-      for (i++; i < source.length && source[i] !== "/" && source[i] !== "\n"; i++) {
-        if (source[i] === "\\") i++;
-        else if (source[i] === "[") while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
-      }
-      i++;
-      code = (code + "/r/").slice(-60);
-      closed = false;
-    } else {
-      if (c === "(") {
-        const direct = callee.exec(code);
-        const isFactory = !closed && direct !== null && factory.test(direct[1]);
-        // A title position: the call itself, or the call right after a factory such as it.each(...).
-        open.push(closed || (direct !== null && !isFactory));
-        closed = false;
-        if (isFactory) open[open.length - 1] = "factory";
-      } else if (c === ")") {
-        closed = open.pop() === "factory";
-      } else if (!/\s/.test(c)) closed = false;
-      code = (code + c).slice(-60);
-      i++;
+  const tokens = lexCode(source, out);
+  // The index after the ")" that closes the "(" at `open`.
+  const afterCall = (open) => {
+    for (let depth = 0, k = open; k < tokens.length; k++) {
+      if (isPunct(tokens[k], "(")) depth++;
+      else if (isPunct(tokens[k], ")") && --depth === 0) return k + 1;
     }
+    return tokens.length;
+  };
+  for (let k = 0; k < tokens.length; k++) {
+    // A call of it, test or describe itself, with modifiers (it.skip), not a method of another object (re.test).
+    if (tokens[k].kind !== "name" || !TEST_CALLEES.has(tokens[k].value) || isPunct(tokens[k - 1], ".") || isPunct(tokens[k - 1], "?.")) continue;
+    let next = k + 1;
+    let last = "";
+    while (isPunct(tokens[next], ".") && tokens[next + 1]?.kind === "name") {
+      last = tokens[next + 1].value;
+      next += 2;
+    }
+    // Type arguments, as in it.each<[string]>(rows)(title): skip the balanced <...> run.
+    if (isPunct(tokens[next], "<")) {
+      for (let depth = 0; next < tokens.length; next++) {
+        if (isPunct(tokens[next], "<")) depth++;
+        else if (isPunct(tokens[next], ">") && --depth === 0) {
+          next++;
+          break;
+        }
+      }
+    }
+    if (TEST_FACTORIES.has(last)) {
+      if (tokens[next]?.kind === "template") next++;
+      else if (isPunct(tokens[next], "(")) next = afterCall(next);
+      else continue;
+    }
+    const title = tokens[next + 1];
+    if (isPunct(tokens[next], "(") && (title?.kind === "string" || title?.kind === "template")) out.push({ at: title.at, text: title.value });
   }
-  return out.join("\n");
+  return out.sort((a, b) => a.at - b.at).map((part) => part.text).join("\n");
 }
-
 /**
  * Appendix B rule 9 (VER-7). `trace` is checkSpecTrace's result, `implementedSource` the text of
  * implemented.txt and `tests` a list of { path, text }. Tests name IDs in a title or a comment; strings
