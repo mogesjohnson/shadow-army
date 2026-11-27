@@ -697,6 +697,9 @@ export class PostOffice {
     await session.restart;
     if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
     await this.releaseWrite(session);
+    // C19: a gap no send claimed is reported unmarked when its session ends.
+    const held = this.heldGaps.get(session.id);
+    if (held) { this.heldGaps.delete(session.id); this.reportGap(session.id, held, false); }
     if (this.sessions.get(key) === session) this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
   }
