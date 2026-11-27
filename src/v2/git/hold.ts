@@ -47,6 +47,8 @@ interface Persisted {
   running?: boolean;
   /** A guard or audit command timed out twice (WSP-10). */
   timeout?: string;
+  /** Repositories (`keyOf`) whose removal Shadow Army's own command began: a folder of one gone isn't held (C21). */
+  removing?: string[];
 }
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
@@ -272,7 +274,8 @@ function valid(value: unknown): value is Persisted {
     && isObject(value.trusted) && Object.values(value.trusted).every(isStrings)
     && (value.held === undefined || (isObject(value.held) && Array.isArray(value.held.files) && value.held.files.every((file) => typeof file === "string")))
     && ["turnOpen", "running"].every((key) => value[key] === undefined || typeof value[key] === "boolean")
-    && (value.timeout === undefined || typeof value.timeout === "string");
+    && (value.timeout === undefined || typeof value.timeout === "string")
+    && (value.removing === undefined || (Array.isArray(value.removing) && value.removing.every((key) => typeof key === "string")));
 }
 
 const UNREADABLE = ["can't be read, so what the last post office trusted is unknown", "accept the folder as it is to go on"] as const;
@@ -292,6 +295,8 @@ export class HarnessHold {
   private unverified = false;
   /** The registration or unregistration running now, if any: the next waits for it (C16). */
   private registering: Promise<void> = Promise.resolve();
+  /** Repositories (`keyOf`) whose removal began (C21). */
+  private removing: string[] = [];
 
   constructor(private readonly options: HarnessHoldOptions) { this.repos = [options.repo]; }
 
@@ -299,17 +304,22 @@ export class HarnessHold {
 
   /**
    * The post office's start. Where the last one ended held, with a turn or a command still open, or after a
-   * timeout, the state that log last trusted is kept; otherwise the state as it is now is the trusted one.
-   * A change since then can't be told from the owner's, and the line says so.
+   * timeout, the state that log last trusted is kept; otherwise the state as it is now is the trusted one, but
+   * only where the scan finds no problem: one that does is compared with the saved state, and held with it, so
+   * nothing but that saved state releases the hold (C22). A change since then can't be told from the owner's.
    */
   async start(): Promise<HoldCheck> {
     const saved = this.load();
     if (saved === "unreadable") { this.unverified = true; return this.check(); }
-    if (saved) this.repos = [this.options.repo, ...saved.repos.filter((repo) => keyOf(repo) !== keyOf(this.options.repo))];
-    if (!saved || !(saved.held || saved.turnOpen || saved.running || saved.timeout)) return this.check();
+    if (!saved) return this.check();
+    this.repos = [this.options.repo, ...saved.repos.filter((repo) => keyOf(repo) !== keyOf(this.options.repo))];
     this.trusted = saved.trusted;
     this.turnOpen = saved.turnOpen === true;
-    const { files, why } = this.compare(await this.read());
+    this.timeout = saved.timeout; // a timeout's hold outlives the restart, until g tries again
+    this.removing = saved.removing ?? [];
+    const current = await this.read();
+    if (!(saved.held || saved.turnOpen || saved.running || saved.timeout) && !current.problems.length) { this.trust(current.state); return { held: false }; }
+    const { files, why } = this.compare(current);
     if (!files.length) { this.files = undefined; this.save(); return { held: false }; }
     return this.hold(files, `${why === "changed" ? "differs from" : `${why}, or differs from`} what the last post office trusted · can't be told from your own edit`);
   }
@@ -431,6 +441,17 @@ export class HarnessHold {
     return Object.entries(pointers).filter(([label, hash]) => (state[label] ?? ABSENT) !== hash).map(([label]) => label.replace(/^submodule /, ""));
   }
 
+  /**
+   * Shadow Army's own command is about to remove it: recorded before anything goes, so a folder of it found gone,
+   * now or after a restart, is that removal's and not held (C21, WSP-10). `unregister` finishes it.
+   */
+  beginRemoval(repo: GitRepo) {
+    const key = keyOf(repo);
+    if (key === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo)) || this.removing.includes(key)) return;
+    this.removing = [...this.removing, key];
+    this.save();
+  }
+
   /** Shadow Army's own command removed it. */
   unregister(repo: GitRepo): Promise<void> {
     // In the registrations' queue, so no baseline goes away while a registration is checked against it.
@@ -442,6 +463,7 @@ export class HarnessHold {
   private async unregisterNow(repo: GitRepo): Promise<void> {
     if (keyOf(repo) === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo))) return;
     this.repos = this.repos.filter((other) => !same(other, repo));
+    this.removing = this.removing.filter((key) => key !== keyOf(repo));
     if (this.trusted) delete this.trusted[keyOf(repo)];
     this.save();
   }
@@ -458,8 +480,9 @@ export class HarnessHold {
     const covered = this.repos.find((other) => same(other, repo));
     if (!covered) throw new Error(`harness git: ${repo.gitDir} isn't a repository this hold covers`);
     if (this.timeout) throw new HarnessGitHeld(this.timeout);
-    // Its folder is gone: a removal in progress, which no scan covers, so nothing runs there (C20).
-    if (keyOf(covered) !== keyOf(this.options.repo) && typeOf(covered.workTree) === undefined) throw new Error(`harness git: ${covered.workTree} is being removed`);
+    // Its folder is gone in a removal recorded as begun, which no scan covers, so nothing runs there (C20, C21).
+    // Gone with none recorded, the check below holds and names it.
+    if (this.removing.includes(keyOf(covered)) && typeOf(covered.workTree) === undefined) throw new Error(`harness git: ${covered.workTree} is being removed`);
     const before = await this.check();
     if (before.held) throw new HarnessGitHeld(before.line);
     // A guard command sees into every submodule: no `ignore`, in a config or a `.gitmodules`, at any depth (WSP-10).
@@ -487,8 +510,9 @@ export class HarnessHold {
     let fatal = false;
     for (const repo of this.repos) {
       // Every tuple's pointers, at startup, each check and an accept too, before any baseline is set from the scan (C20).
-      // A worktree whose folder is gone is a removal in progress, which WSP-10 finishes and unregisters: no git runs
-      // there, so it isn't scanned, and its trusted state stands until then, compared again if the folder comes back.
+      // A worktree whose folder is gone isn't scanned, and its trusted state stands, compared again if the folder
+      // comes back. Only a removal the record says began, which WSP-10 finishes and unregisters, leaves it unheld;
+      // any other is held, naming the folder (C21).
       let pointers: TrustedState | undefined, gone = false;
       try {
         gone = keyOf(repo) !== keyOf(this.options.repo) && typeOf(repo.workTree) === undefined;
@@ -497,7 +521,11 @@ export class HarnessHold {
         if (!(error instanceof PointerError || error instanceof Uninspectable)) throw error;
         problems.add(this.label(error.path));
       }
-      if (gone) { state[keyOf(repo)] = this.trusted?.[keyOf(repo)] ?? {}; continue; }
+      if (gone) {
+        if (!this.removing.includes(keyOf(repo))) problems.add(this.label(repo.workTree));
+        state[keyOf(repo)] = this.trusted?.[keyOf(repo)] ?? {};
+        continue;
+      }
       const read = await readState(this.options.repo, repo, this.options.gitFor, this.options.limits);
       for (const label of pointers ? this.drift(pointers, read.state) : []) problems.add(label);
       state[keyOf(repo)] = read.state;
@@ -559,7 +587,8 @@ export class HarnessHold {
     if (this.unverified || !this.trusted) return;
     const record: Persisted = { version: 2, repos: this.repos, trusted: this.trusted,
       ...(this.files ? { held: { files: this.files } } : {}), ...(this.turnOpen ? { turnOpen: true } : {}),
-      ...(this.active > 0 ? { running: true } : {}), ...(this.timeout ? { timeout: this.timeout } : {}) };
+      ...(this.active > 0 ? { running: true } : {}), ...(this.timeout ? { timeout: this.timeout } : {}),
+      ...(this.removing.length ? { removing: this.removing } : {}) };
     const path = this.options.statePath, temp = `${path}.${process.pid}.tmp`;
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(temp, JSON.stringify(record));

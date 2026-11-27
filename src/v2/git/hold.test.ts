@@ -263,16 +263,50 @@ describe("a new registration's pointers, overlap and record (C15, C16, C17)", ()
     }
   }, 60_000);
 
-  it("leaves a worktree whose removal was in progress to WSP-10's removal at a clean start", async () => {
+  it("leaves a worktree to WSP-10's removal at a clean start only where the record says its removal began (C21)", async () => {
     const { base, repo, open } = setup(), hold = open();
     await hold.start();
     const snap = worktree(base, repo);
     await hold.register(snap);
+    hold.beginRemoval(snap); // recorded before the folder goes
     rmSync(snap.workTree, { recursive: true, force: true }); // the folder went; its `worktrees/<id>` entry is still there
+    expect(await hold.check()).toEqual({ held: false });
     const again = open();
     expect(await again.start()).toEqual({ held: false });
     await expect(again.run(snap, ["status"])).rejects.toThrow("is being removed");
     await again.unregister(snap);
+    expect(await again.check()).toEqual({ held: false });
+  }, 60_000);
+
+  it("holds, naming the folder, when a registered worktree goes with no removal recorded (C21)", async () => {
+    const { base, repo, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo);
+    await hold.register(snap);
+    rmSync(snap.workTree, { recursive: true, force: true });
+    expect(await hold.check()).toMatchObject({ held: true, files: [expect.stringMatching(/snap$/)] });
+    const again = open();
+    expect(await again.start()).toMatchObject({ held: true, files: [expect.stringMatching(/snap$/)] });
+    await expect(again.run(snap, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+    await expect(again.accept()).rejects.toThrow("can't be accepted");
+    await again.unregister(snap); // Shadow Army's own removal finishing is what releases it
+    expect(await again.check()).toEqual({ held: false });
+  }, 60_000);
+
+  it("keeps the saved baseline when a clean start finds a bad pointer, so restoring it alone releases nothing (C22)", async () => {
+    const { base, repo, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo), commondir = join(snap.gitDir, "commondir");
+    await hold.register(snap);
+    const text = readFileSync(commondir);
+    rmSync(commondir);
+    const undo = plantChange(repo, "config");
+    const again = open(); // the record is clean: no hold, turn or command was open
+    expect(await again.start()).toMatchObject({ held: true, files: expect.arrayContaining([".git/config", expect.stringMatching(/commondir$/)]) });
+    writeFileSync(commondir, text); // the pointer alone is put back
+    expect(await again.check()).toMatchObject({ held: true, files: [".git/config"] });
+    expect(await open().start()).toMatchObject({ held: true, files: [".git/config"] }); // and after another restart
+    undo();
     expect(await again.check()).toEqual({ held: false });
   }, 60_000);
 });
@@ -337,6 +371,21 @@ describe("the hold's own record (C3, C4)", () => {
     await failing.start();
     await expect(failing.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitTimeout);
     expect(await failing.check()).toMatchObject({ held: true, files: [".git/config"] });
+  }, 60_000);
+
+  it("keeps a timeout's hold across a restart until g tries again (WSP-10)", async () => {
+    const { main, open } = setup();
+    const timing = open((_, runner) => ({ run: async (args, kind) => {
+      if (args[0] === "log") throw new HarnessGitHeld("git log timed out twice");
+      return runner.run(args, kind);
+    } }));
+    await timing.start();
+    await expect(timing.run(main, ["log"])).rejects.toThrow("timed out twice");
+    const again = open();
+    await again.start();
+    await expect(again.run(main, ["status"])).rejects.toThrow("timed out twice");
+    again.retry();
+    expect((await again.run(main, ["status"])).code).toBe(0);
   }, 60_000);
 
   it("keeps the last trusted state for a post office that starts while a command was running", async () => {
