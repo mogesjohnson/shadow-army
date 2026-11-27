@@ -209,9 +209,9 @@ const firstLine = (text) => text.split(/\r\n?|\n/).map((line) => line.trim()).fi
 
 /** Runs the repository's own vitest from `root` with the repository's config, and parses its JSON list. */
 function vitestList(root, flags, vitest) {
-  const run = spawnSync(process.execPath, [vitest, ...flags], { cwd: root, encoding: "utf8", maxBuffer: 256 << 20, windowsHide: true });
+  const run = spawnSync(process.execPath, [vitest, ...flags], { cwd: root, encoding: "utf8", maxBuffer: 256 << 20, timeout: 600_000, windowsHide: true });
   if (run.error) throw new Error(run.error.message);
-  if (run.status !== 0) throw new Error(`exit ${run.status}: ${firstLine(run.stderr || run.stdout)}`);
+  if (run.status !== 0) throw new Error(run.signal ? `stopped by ${run.signal} (a hang or the 10-minute limit)` : `exit ${run.status}: ${firstLine(run.stderr || run.stdout)}`);
   const listed = JSON.parse(run.stdout);
   if (!Array.isArray(listed) || !listed.every((entry) => typeof entry?.file === "string")) throw new Error("its output is not a list of tests");
   return listed;
