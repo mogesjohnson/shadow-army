@@ -26,6 +26,8 @@ export interface ManagedProcessOptions {
   args?: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  /** CH-1 (#111 C10): the real path an earlier `resolveLaunch` validated; the launch is refused if the file now resolves elsewhere. */
+  identity?: string;
 }
 
 
@@ -107,7 +109,7 @@ async function resolveCommand(file: string, env: NodeJS.ProcessEnv, path: string
 }
 
 /** CH-1: the one validated launch: the trusted PATH, the environment the CLI gets, and the executable itself, checked by real path. */
-export interface LaunchTarget { file: string; env: NodeJS.ProcessEnv; dropped: string[] }
+export interface LaunchTarget { file: string; real: string; env: NodeJS.ProcessEnv; dropped: string[] }
 
 /**
  * CH-1: every check that decides what a soldier's CLI is and what it inherits. The post office calls this once per
@@ -120,20 +122,35 @@ export async function resolveLaunch(file: string, cwd: string, inherited: NodeJS
   const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
     [pathKey]: path.kept.join(delimiter), ...(process.platform === "win32" ? { NoDefaultCurrentDirectoryInExePath: "1" } : {}) };
   const executable = await resolveCommand(file, env, path.kept);
-  await verifyExecutable(executable, path.roots);
-  return { file: executable, env, dropped: path.dropped };
+  return { file: executable, real: await verifyExecutable(executable, path.roots), env, dropped: path.dropped };
 }
 
 /**
  * CH-1: the selected file itself, links followed, must lie outside the checkout and its worktrees.
  * The check needs the real path: one that can't be read refuses the launch, never falls back to the lexical path (C17).
+ * Returns that real path: the identity that is launched (#111 C10).
  */
-export async function verifyExecutable(executable: string, roots: string[], real: (path: string) => Promise<string> = realpath): Promise<void> {
+export async function verifyExecutable(executable: string, roots: string[], real: (path: string) => Promise<string> = realpath): Promise<string> {
   let resolved: string;
-  try { resolved = comparable(await real(executable)); } catch (error) {
+  try { resolved = await real(executable); } catch (error) {
     throw Object.assign(new Error(`could not verify the real path of executable ${executable}: ${(error as Error).message}`), { code: "EACCES" });
   }
-  if (roots.some((root) => inside(resolved, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+  if (roots.some((root) => inside(comparable(resolved), root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+  return resolved;
+}
+
+/**
+ * PO-1 (#111 C11): the launch checks failed before any process started, so the caller can report a refused start.
+ * Failures after the supervisor starts are containment failures and carry no such flag.
+ */
+const refuse = (error: unknown) => Object.assign(error instanceof Error ? error : new Error(String(error)), { launchRefused: true });
+async function checkedLaunch(options: ManagedProcessOptions): Promise<LaunchTarget> {
+  let launch: LaunchTarget;
+  try { launch = await resolveLaunch(options.file, options.cwd, options.env ?? process.env); } catch (error) { throw refuse(error); }
+  if (options.identity !== undefined && comparable(options.identity) !== comparable(launch.real)) {
+    throw refuse(Object.assign(new Error(`executable ${options.file} changed since it was checked: it was ${options.identity}, now ${launch.real}`), { code: "EACCES" }));
+  }
+  return launch;
 }
 
 /** Windows argv quoting for native executables, including embedded quotes and trailing backslashes. */
@@ -156,13 +173,17 @@ function windowsCommand(file: string, args: string[], env: NodeJS.ProcessEnv): {
 }
 
 async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  const { file: executable, env, dropped } = await resolveLaunch(options.file, options.cwd, options.env ?? process.env);
-  const command = windowsCommand(executable, options.args ?? [], env);
+  // C10: start the real path just validated, not the lexical name an alias could move to another target.
+  // This closes the gap between the probe and the session; the file can still change before CreateProcess.
+  const { real: executable, env, dropped } = await checkedLaunch(options);
+  // C11: everything up to the supervisor's spawn runs before any process exists, so its failures are refusals too.
+  let command: ReturnType<typeof windowsCommand>;
+  try { command = windowsCommand(executable, options.args ?? [], env); } catch (error) { throw refuse(error); }
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
-  const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
+  const directory = await mkdtemp(join(tmpdir(), "shadow-job-")).catch((error: unknown) => { throw refuse(error); });
   const script = join(directory, "supervisor.ps1");
-  await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
+  await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 }).catch(async (error: unknown) => { await rm(directory, { recursive: true, force: true }); throw refuse(error); });
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
@@ -239,7 +260,8 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, 2_000).unref(); });
     }
     await rm(directory, { recursive: true, force: true });
-    throw error;
+    // No supervisor yet (the pipe could not listen): nothing started, so a refused start (C11).
+    throw child ? error : refuse(error);
   }
 }
 

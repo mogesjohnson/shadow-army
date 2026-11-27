@@ -31,8 +31,8 @@ export interface ClaudeChannelOptions extends ChannelOptions {
   badLineQuietMs?: number;
 }
 
-/** CH-1: the one validated target both the `--version` probe and the session start. */
-export interface ClaudeLaunch { file: string; args: string[]; env: NodeJS.ProcessEnv; dropped: string[] }
+/** CH-1: the one validated target both the `--version` probe and the session start, by its real path (#111 C10). */
+export interface ClaudeLaunch { file: string; identity: string; args: string[]; env: NodeJS.ProcessEnv; dropped: string[] }
 
 /**
  * CH-1: resolve claude once, through the containment's own checks (`resolveLaunch`): the post office's `PATH`
@@ -46,7 +46,8 @@ export async function resolveClaudeLaunch(command: { file: string; args?: string
   if (command && !isAbsolute(command.file)) return `claude command ${command.file} is not an absolute path`;
   try {
     const launch = await resolveLaunch(command?.file ?? "claude", cwd, env);
-    return { file: launch.file, args: command?.args ?? [], env: launch.env, dropped: launch.dropped };
+    // The name keeps its PATHEXT lookup on revalidation; the driver launches the identity (an extensionless real target too).
+    return { file: launch.file, identity: launch.real, args: command?.args ?? [], env: launch.env, dropped: launch.dropped };
   } catch (error) {
     if (!command && (error as NodeJS.ErrnoException).code === "ENOENT") return "claude was not found on PATH outside the soldier's folder; install claude";
     return `claude cannot be started: ${error instanceof Error ? error.message : String(error)}`;
@@ -72,9 +73,9 @@ const isOlder = (found: number[], oldest: number[]): boolean => {
  * start is not a crash (PO-1), so the caller reports it with kind "other". Rejects, with
  * `containmentFailed`, when the probe's processes cannot be confirmed stopped.
  */
-export async function claudeVersionProblem(command: { file: string; args?: string[]; env?: NodeJS.ProcessEnv }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
+export async function claudeVersionProblem(command: { file: string; identity?: string; args?: string[]; env?: NodeJS.ProcessEnv }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
   let child: ManagedProcess;
-  try { child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), "--settings", AUTO_MEMORY_SETTINGS, "--version"], cwd, env: claudeEnvironment(command.env) }); }
+  try { child = await spawnManagedProcess({ file: command.file, identity: command.identity, args: [...(command.args ?? []), "--settings", AUTO_MEMORY_SETTINGS, "--version"], cwd, env: claudeEnvironment(command.env) }); }
   catch (error) { return `claude --version could not run: ${error instanceof Error ? error.message : String(error)}`; }
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
@@ -252,8 +253,17 @@ export class ClaudeChannel implements NativeChannel {
       instructionPath = join(this.instructionDirectory, "instructions.txt");
       await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
     }
-    // The PATH was cleaned once above; the "path" event already names what was dropped, so the child's own list is empty.
-    return spawnManagedProcess({ file: command.file, args: [...command.args, ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: claudeEnvironment(command.env) });
+    // C10: the session starts the identity the probe checked; the driver refuses it if the file now resolves elsewhere.
+    let child: ManagedProcess;
+    try { child = await spawnManagedProcess({ file: command.file, identity: command.identity, args: [...command.args, ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: claudeEnvironment(command.env) }); }
+    catch (error) {
+      // PO-1 (C11): a launch refused before any CLI started is a refused start; a containment failure stays a transport close.
+      if ((error as { launchRefused?: boolean } | undefined)?.launchRefused) throw Object.assign(error as Error, { refusedStart: true });
+      throw error;
+    }
+    // The PATH was cleaned once above; an entry this late check dropped (a root changed meanwhile) is reported too.
+    if (child.droppedPath.length) this.emit("raw", { type: "path", dropped: child.droppedPath });
+    return child;
   }
 
   private emit(type: ChannelEvent["type"], data: unknown): void {

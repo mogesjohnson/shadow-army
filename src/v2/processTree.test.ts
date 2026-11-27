@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
@@ -45,7 +45,17 @@ describe("CH-1 executable check", () => {
     const failing = async (path: string) => { throw Object.assign(new Error(`EPERM: realpath ${path}`), { code: "EPERM" }); };
     await expect(verifyExecutable(outside, [root.toLowerCase()], failing)).rejects.toMatchObject({ code: "EACCES", message: expect.stringMatching(/could not verify the real path/) });
     await expect(verifyExecutable(outside, [root.toLowerCase()], async () => join(root, "bin", "claude.exe"))).rejects.toThrow(/inside the soldier's repository/);
-    await expect(verifyExecutable(outside, [root.toLowerCase()], async (path) => path)).resolves.toBeUndefined();
+    await expect(verifyExecutable(outside, [root.toLowerCase()], async (path) => path)).resolves.toBe(outside);
+  });
+
+  it.skipIf(!windows)("refuses a launch whose executable no longer resolves to the identity checked earlier, before any process starts (#111 C10, C11)", async () => {
+    const cwd = await directory();
+    const elsewhere = join(cwd, "..", "sa-c10-other", "claude.exe");
+    await expect(spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd, identity: elsewhere }))
+      .rejects.toMatchObject({ code: "EACCES", launchRefused: true, message: expect.stringMatching(/changed since it was checked/) });
+    await expect(spawnManagedProcess({ file: "shadow-definitely-missing-executable", cwd })).rejects.toMatchObject({ code: "ENOENT", launchRefused: true });
+    const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd, identity: await realpath(process.execPath) }); sessions.push(session);
+    await session.exited;
   });
 
   it("refuses a repository folder whose real path cannot be read, and keeps a missing one by its lexical path (C17)", async () => {

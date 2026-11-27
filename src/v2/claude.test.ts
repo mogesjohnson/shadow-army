@@ -951,6 +951,33 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ containmentStopped: false, refusedStart: false });
   });
 
+  it("treats a session launch the driver refuses after the probe as a refused start, and a containment failure as transport (#111 C10, C11, PO-1)", async () => {
+    const run = async (failure: Error) => {
+      const versionOutput = new PassThrough();
+      versionOutput.end("2.1.295 (Claude Code)\n");
+      const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+        pid: 3, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {}, droppedPath: [],
+      }).mockRejectedValueOnce(failure);
+      const events: ChannelEvent[] = [];
+      const channel = new ClaudeChannel({ cwd: tmpdir(), model: "probe", instructions: "probe", onEvent: (event) => events.push(event), command: { file: process.execPath } });
+      channels.push(channel);
+      const result = await channel.send("hello");
+      await until(() => events.some((event) => event.type === "closed"));
+      const [probe, session] = spawn.mock.calls.map(([options]) => options);
+      spawn.mockRestore();
+      return { result, closed: events.find((event) => event.type === "closed")?.data, probe, session };
+    };
+    const refused = await run(Object.assign(new Error("executable changed since it was checked"), { code: "EACCES", launchRefused: true }));
+    expect(refused.result.error).toMatchObject({ kind: "other", message: expect.stringContaining("changed since it was checked") });
+    expect(refused.closed).toMatchObject({ refusedStart: true });
+    // C10: the probe and the session name the one identity the post office validated.
+    expect(refused.probe?.identity).toBeTruthy();
+    expect(refused.session?.identity).toBe(refused.probe?.identity);
+    const contained = await run(new Error("Windows supervisor exited before launch"));
+    expect(contained.result.error?.kind).toBe("transport");
+    expect(contained.closed).toMatchObject({ refusedStart: false });
+  });
+
   windowsOnly("a login needed keeps its kind whether the fake keeps running or exits after it (CH-2, M1-AC4)", async () => {
     const running = await setup();
     expect((await running.channel.send("login")).error?.kind).toBe("login_needed");
