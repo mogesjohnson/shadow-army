@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
-import { checkSpecTrace, checkTestReferences, expandReferences, findTests, parseImplemented, testReferenceText } from "./check-spec-trace.mjs";
+import { afterAll, describe, expect, it } from "vitest";
+import { checkSpecTrace, checkTestReferences, expandReferences, listTests, parseImplemented } from "./check-spec-trace.mjs";
 
 const valid = `## 4. Requirements
 - **PO-1** (M1; U) First requirement, referring forward to CH-1.
@@ -129,159 +131,93 @@ describe("spec traceability", () => {
 
 describe("Appendix B rule 9: tests name the requirements", () => {
   const trace = checkSpecTrace(valid);
-  const files = (text) => [{ path: "src/v2/x.test.ts", text }];
+  const listed = (...names) => ({ tests: names.map((name) => ({ path: "src/v2/x.test.ts", name })), files: 1, problems: [] });
   const unnamedCh1 = ["CH-1: implemented, but no test names it"];
-  it("accepts a test that names each tested requirement in a title or a comment", () => {
-    const tests = files(`it("PO-1 and M1-AC1", () => {});\n// CH-1\n`);
-    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", tests).problems).toEqual([]);
+  it("accepts tests whose full names name each tested requirement", () => {
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listed("PO-1 and M1-AC1", "office > CH-1")).problems).toEqual([]);
   });
   it("fails when an implemented requirement with U, C, I, X, F or S evidence is named by no test", () => {
-    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", files("// PO-1")).problems).toEqual(unnamedCh1);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listed("PO-1")).problems).toEqual(unnamedCh1);
   });
   it("counts a requirement of an earlier milestone as implemented, but not one still being built", () => {
-    expect(checkTestReferences(trace, "M2\n", files("// PO-1")).problems).toEqual(unnamedCh1);
-    expect(checkTestReferences(trace, "M1\n", files("")).problems).toEqual([]);
+    expect(checkTestReferences(trace, "M2\n", listed("PO-1")).problems).toEqual(unnamedCh1);
+    expect(checkTestReferences(trace, "M1\n", listed()).problems).toEqual([]);
   });
   it("does not ask a test for R or L evidence", () => {
     const recorded = checkSpecTrace(valid.replace("(M1; U)", "(M1; R, L)"));
-    expect(checkTestReferences(recorded, "M1\nPO-1\n", files("// CH-1")).problems).toEqual([]);
+    expect(checkTestReferences(recorded, "M1\nPO-1\n", listed("CH-1")).problems).toEqual([]);
   });
   it("fails when a test names an ID the spec doesn't have, and ignores text that is no ID", () => {
-    const problems = checkTestReferences(trace, "M1\n", files(`it("PO-9 UTF-8 SHA-256 TLS-1 M1-AC9", () => {})`)).problems;
+    const problems = checkTestReferences(trace, "M1\n", listed("PO-9 UTF-8 SHA-256 TLS-1 M1-AC9", "PO-9 again")).problems;
     expect(problems).toEqual(["src/v2/x.test.ts: names PO-9, which this spec doesn't have", "src/v2/x.test.ts: names M1-AC9, which this spec doesn't have"]);
   });
   it("names a requirement only by its own ID, not by a range or an AC", () => {
-    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", files("// M1-AC1, PO-1 to 3")).problems).toEqual(unnamedCh1);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listed("M1-AC1, PO-1 to 3", "PO-1")).problems).toEqual(unnamedCh1);
   });
   it("rejects a malformed or unknown implemented list", () => {
     expect(parseImplemented("PO-1\n").problems).toHaveLength(1);
     expect(parseImplemented("M1\nnonsense\n").problems).toHaveLength(1);
-    expect(checkTestReferences(trace, "M1\nPO-9\n", []).problems).toEqual(["implemented list: PO-9 is not in this spec"]);
+    expect(checkTestReferences(trace, "M1\nPO-9\n", listed()).problems).toEqual(["implemented list: PO-9 is not in this spec"]);
   });
-  it("credits an ID only from a title or a comment, never from a fixture string", () => {
-    const text = 'it("PO-1 title", () => { run("PO-77 CH-1 // CH-2", `x ${"CH-3"} M1-AC4`, /["'+"'"+'`]/); });\n/* block CH-1 */\n';
-    expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1", "CH-1"]);
-    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", files('it("x", () => { run("PO-1 CH-1"); });')).problems).toEqual(["PO-1: implemented, but no test names it", ...unnamedCh1]);
-    expect(checkTestReferences(trace, "M1\n", files('it("x", () => { run("PO-9"); });')).problems).toEqual([]);
-  });
-  it("credits the title of a curried it.each or describe.skipIf call, and not a method named test", () => {
-    const text = [
-      'it.each([["PO-4"]])("PO-1 curried %s", () => {});',
-      'describe.skipIf(CH_2)("CH-1 suite", () => { it.skip.each`a`("PO-2 tagged", () => {}); });',
-      'it.concurrent("PO-3 plain", () => {});',
-      'const q = (s) => /"/.test(s); this.#test("PO-10");',
-      '/PO-5/.test("PO-6"); matcher.test("PO-7"); it.each(["PO-8"]); foo(it("x", () => {}), "PO-9");',
-    ].join("\n");
-    expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1", "CH-1", "PO-2", "PO-3"]);
-  });
-  it("excludes a member call whatever whitespace or comments surround the dot", () => {
-    const text = 'matcher . test("PO-7");\nmatcher\n  .test("PO-8"); matcher /* x */ . /* y */ test("PO-9"); a?.test("PO-10"); it("PO-1 real", () => {});';
-    expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1"]);
-  });
-  it("reads titles as tokens, whatever whitespace or comments separate them (review 116 C11)", () => {
-    const pad = " ".repeat(66);
-    const ids = (text) => testReferenceText(text).match(/\b[A-Z]+-\d+\b/g) ?? [];
-    // A member call after a dot and a long indent is no test call; a spaced modifier and a distant argument are.
-    expect(ids(`x.\n${pad}test("PO-1");`)).toEqual([]);
-    expect(ids(`it . skip("CH-1", () => {});`)).toEqual(["CH-1"]);
-    expect(ids(`test${pad}(\n${pad}"PO-2 bare", () => {});`)).toEqual(["PO-2"]);
-    expect(ids(`it /* a */ . /* b */ skip /* c */ ( /* d */ "CH-2 spaced", () => {});`)).toEqual(["CH-2"]);
-    expect(ids(`a. // note\n  test("PO-3"); a?.\n  test("PO-4"); a\n  ?. test("PO-5");`)).toEqual([]);
-    expect(ids('it(`PO-6 ${ {a: "}"}.a } tail`, () => {}); it(`CH-3 ${`PO-9 ${x}`} end`, () => {});')).toEqual(["PO-6", "CH-3"]);
-    expect(ids(`it.each(t)\n${pad}(\n"PO-7 %s", f); describe . skipIf ( c ) ( "CH-4 suite", f); it.each\`a\`  ( "PO-8", f);`)).toEqual(["PO-7", "CH-4", "PO-8"]);
-    expect(ids(`foo.it("PO-9"); foo . describe . skip ("PO-10"); it\n.skip\n("PO-11 split", f);`)).toEqual(["PO-11"]);
-    // Type arguments do not hide a title; a substitution does not join the text around it into one ID.
-    expect(ids('it.each<[string, number]>(rows)("PO-17 %s", f); it<Ctx>("CH-5 typed", f); it(`PO-1${n}0 joined`, f);')).toEqual(["PO-17", "CH-5", "PO-1"]);
-    expect(ids(`it\n("PO-12 no dot", f); test.each(["PO-13"]); it(x, "PO-14"); it(/PO-15/, "PO-16");`)).toEqual(["PO-12"]);
-  });
-  it("tells division from a regular expression literal (review 120 C14)", () => {
-    const ids = (text) => testReferenceText(text).match(/\b[A-Z]+-\d+\b/g) ?? [];
-    // Division after an expression: a postfix ++ or --, a member named of, a name, a number, an index, a parenthesis.
-    expect(ids('let n = 0; const ratio = n++ / 2;\nit("PO-1 after ++", () => {});')).toEqual(["PO-1"]);
-    expect(ids('const r = n-- / 2;\nit("PO-2 after --", () => {});')).toEqual(["PO-2"]);
-    expect(ids('const r = obj.of / 2;\nit("PO-3 member of", () => {});')).toEqual(["PO-3"]);
-    expect(ids('const r = a / b / c;\nit("PO-4 chain", () => {});')).toEqual(["PO-4"]);
-    expect(ids('const r = x[0] / 2 + (a) / 2 + 4 / 2;\nit("PO-5 index", () => {});')).toEqual(["PO-5"]);
-    expect(ids('const r = `t` / 2 + "s" / 2;\nit("PO-6 literals", () => {});')).toEqual(["PO-6"]);
-    // A regex literal after an if, while, for or with condition, a keyword, an operator or a closing brace is no title.
-    expect(ids('if (x) /it\\("PO-7"/.test(s);\nit("PO-8 real", () => {});')).toEqual(["PO-8"]);
-    expect(ids('while (x) /it\\("PO-9"/.test(s); for (;;) /it\\("PO-10"/.test(s);\nit("PO-11 real", () => {});')).toEqual(["PO-11"]);
-    expect(ids('x = /it\\("PO-12"/;\nit("PO-13 real", () => {});')).toEqual(["PO-13"]);
-    expect(ids('function f() { return /it\\("PO-14"/; }\nit("PO-15 real", () => {});')).toEqual(["PO-15"]);
-    expect(ids('const re = /[/]it\\("PO-16"/;\nit("PO-17 real", () => {});')).toEqual(["PO-17"]);
-    expect(ids('if (a) {}\n/it\\("PO-18"/.test(s);\nit("PO-19 real", () => {});')).toEqual(["PO-19"]);
-    expect(ids('else /it\\("PO-20"/.test(s);\nfor (const m of /it\\("PO-21"/g) {}\nit("PO-22 real", () => {});')).toEqual(["PO-22"]);
-    // A condition's parenthesis does not leak into the next: (a) after an if body, or f(a) after a nested condition, is a division.
-    expect(ids('if (x) { y(); } const r = (a) / 2;\nit("PO-23", () => {});')).toEqual(["PO-23"]);
-    expect(ids('if ((a)) /it\\("PO-24"/.test(s); const r = f(a) / 2;\nit("PO-25", () => {});')).toEqual(["PO-25"]);
-    // A TypeScript non-null assertion ends an expression; a "/" the lexer cannot close on its line never eats the next line.
-    expect(ids('const r = total! / 2 + a.b![0]! / 2 + f()! / 2;\nit("PO-26 non-null", () => {});')).toEqual(["PO-26"]);
-    expect(ids('const r = [.../it\\("PO-27"/.exec(s)]; export default /it\\("PO-28"/;\nit("PO-29 real", () => {});')).toEqual(["PO-29"]);
-    // A JSX closing tag's "/" is ambiguous (review 131 C16): the file names nothing.
-    expect(ids('const r = x ? y : <p>hi</p>;\nit("PO-30 after a stray slash", () => {});')).toEqual([]);
-  });
-  it("classifies a slash by the kind of brace and token before it (review 127 C15)", () => {
-    const ids = (text) => testReferenceText(text).match(/\b[A-Z]+-\d+\b/g) ?? [];
-    // The "}" of an object literal ends an expression, so the slash is a division and the comment after it stays.
-    expect(ids("const ratio = { valueOf: () => 8 } / 2; // PO-78 important note")).toEqual(["PO-78"]);
-    expect(ids("const x = {} / 2; // PO-79 note")).toEqual(["PO-79"]);
-    expect(ids("const x = f({ a: 1 }, [{ b: 2 }]) / 2 + ({ c: 3 }) / 2; // PO-80 note")).toEqual(["PO-80"]);
-    expect(ids("const x = c ? {} : { a: {} } / 2; // PO-81 note")).toEqual(["PO-81"]);
-    expect(ids("const x = `${ { a: 1 }.a / 2 } and ${ {} / 2 }` / 2; // PO-82 note")).toEqual(["PO-82"]);
-    // A "{" first in a substitution is an object literal; a ":" in a parameter list is no ternary's colon.
-    expect(ids("const s = `${ { valueOf: () => 8 } / 2 }`; // PO-94 note")).toEqual(["PO-94"]);
-    expect(ids("const r = c ? (x: number) => x : { valueOf: () => 8 } / 2; // PO-95 note")).toEqual(["PO-95"]);
-    expect(ids("const r = f(a ? b : c) ? {} / 2 : 1; // PO-96 note")).toEqual(["PO-96"]);
-    // The slash after a division is a regex operand, whose text is no title.
-    expect(ids('const ratio = n / /it("PO-72 fake")/.test(s); it("PO-73 true", () => {});')).toEqual(["PO-73"]);
-    expect(ids('const r = a / /it\\("PO-74"/.source.length; it("PO-75 true", () => {});')).toEqual(["PO-75"]);
-    expect(ids('x = {} / /it\\("PO-76"/.source; it("PO-77 true", () => {});')).toEqual(["PO-77"]);
-    // The "}" of a block or an arrow's body ends a statement, so the slash starts a regex.
-    expect(ids('if (a) {} /it\\("PO-83"/.test(s); it("PO-84 true", () => {});')).toEqual(["PO-84"]);
-    expect(ids('const f = () => {}\n/it\\("PO-85"/.test(s); it("PO-86 true", () => {});')).toEqual(["PO-86"]);
-    expect(ids('try {} finally {} /it\\("PO-88"/.test(s); it("PO-89 true", () => {});')).toEqual(["PO-89"]);
-    expect(ids('switch (a) { case 1: {} }\n/it\\("PO-90"/.test(s); lbl: {} /it\\("PO-91"/.test(s); it("PO-92 true", () => {});')).toEqual(["PO-92"]);
-    // A "/" after "<" may close a JSX tag: the file names nothing (review 131 C16).
-    expect(ids('const r = c ? <p>hi</p> : 1; it("PO-93 same line", () => {});')).toEqual([]);
-  });
-  it("credits nothing from a slash it cannot classify, and says where (review 131 C16)", () => {
-    const read = (text) => {
-      const problems = [];
-      return { ids: testReferenceText(text, problems).match(/\b[A-Z]+-\d+\b/g) ?? [], problems };
-    };
-    // A line break after a restricted keyword ends the statement (ASI): the braces are a block, the slash a regex.
-    for (const keyword of ["return", "yield", "break", "continue"]) {
-      expect(read(`function* f(s) { ${keyword}\n{ marker: 1 } /x|it("PO-1")/.test(s); }\nit("CH-1 real", f);`)).toEqual({ ids: ["CH-1"], problems: [] });
+
+  // Fixture suites in a temporary root with their own config, run by this repository's vitest (review 133).
+  const vitest = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));
+  const suite = (files) => {
+    const root = mkdtempSync(join(tmpdir(), "trace-rule9-"));
+    writeFileSync(join(root, "vitest.config.mjs"), 'export default { test: { globals: true, exclude: ["**/node_modules/**", "src/out/**"] } };\n');
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), text);
     }
-    expect(read("function f() { return { a: 1 } / 2; } // PO-2 same line")).toEqual({ ids: ["PO-2"], problems: [] });
-    // An arrow's body, a label's block and the head of an if or a while end before a regex.
-    const sure = 'const f = () => {}\n/it("PO-3")/.test(s); lbl: {} /it("PO-4")/.test(s); if (a) /it("PO-5")/.test(s); while (b) /it("PO-6")/.test(s); it("CH-2 real", f);';
-    expect(read(sure)).toEqual({ ids: ["CH-2"], problems: [] });
-    // A function's or a class's body, a brace after ">", a line break after a possible type, and "<" or ">" before a slash.
-    const unsure = ["const r = function () {} / 2; // PO-7", "const r = class {} / 2; // PO-7", "const b = n > { valueOf: () => 8 } / 2; // PO-7",
-      'function f() {}\n/it("PO-7")/.test(s);', 'let x: Foo\n/it("PO-7")/.test(s);', 'type T = { a: 1 }\n/it("PO-7")/.test(s);',
-      "const r = c ? <p>hi</p> : 1; // PO-7", 'const n = a as Array<T> / it("PO-7") / 1;', 'const r = /it("PO-7") unclosed', "for (; {} / 2; ) {} // PO-7"];
-    for (const text of unsure) {
-      expect(read(`it("CH-3 before", f);\n${text}`)).toEqual({ ids: [], problems: [expect.stringMatching(/^line [23]: cannot tell whether "\/" divides/)] });
-    }
-    expect(checkTestReferences(trace, "M1\n", files('it("PO-1", f);\nconst r = function () {} / 2;')).problems).toEqual([expect.stringMatching(/^src\/v2\/x\.test\.ts: line 2: cannot tell/)]);
-  });
-  // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
-  it("takes the repository tests as they are, and catches a planted break in them", () => {
+    return root;
+  };
+  const roots = [];
+  afterAll(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
+  const run = 'it("runs", () => {});\n';
+  it("credits only the titles vitest collects, never a regular expression, a comment or a title's operand (review 133 C17-C21)", () => {
+    const root = suite({
+      "src/c17-not.test.mjs": `if (true)!/it("PO-1")/.test("x");\n${run}`,
+      "src/c17-increment.test.mjs": `const r = /x/;\n++/it("PO-1")/.lastIndex;\n${run}`,
+      "src/c18-cr.test.mjs": `function f() {\n  return\r/it("PO-1")/.test("x");\n}\n${run}`,
+      "src/c18-ls.test.mjs": `function f() {\n  return /it("PO-1")/.test("x");\n}\n${run}`,
+      "src/c18-ps.test.mjs": `function f() {\n  return /* */ /it("PO-1")/.test("x");\n}\n${run}`,
+      "src/c19.test.mjs": `for (let of = 8; of / 2; of--) {} // PO-1\nit("CH-1 after a classic for", () => {});\n`,
+      "src/c20.test.mjs": `function f(s) { label: {} /nope/.test(s); }\nit("CH-1 after a labeled block", () => {});\n`,
+      "src/c21-conditional.test.mjs": `it("PO-1" === process.env.NO_SUCH_TRACE_FIXTURE ? "matches" : "differs", () => {});\n`,
+      "src/c21-grouped.test.mjs": `describe("grouped", () => { it(("CH-1"), () => {}); });\n`,
+      "src/out/excluded.test.mjs": 'it("PO-1 outside the config", () => {});\n',
+    });
+    roots.push(root);
+    const listing = listTests(root, { vitest });
+    expect(listing.tests.map(({ name }) => name).sort()).toEqual(["CH-1 after a classic for", "CH-1 after a labeled block", "differs", "grouped > CH-1", ...Array(5).fill("runs")]);
+    expect(listing.problems).toEqual(["src/out/excluded.test.mjs: the vitest config does not run this file, so it names nothing"]);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual([...listing.problems, "PO-1: implemented, but no test names it"]);
+  }, 120_000);
+  it("fails closed when a test file does not load: no test names anything", () => {
+    const root = suite({ "src/named.test.mjs": 'it("PO-1 CH-1", () => {});\n', "src/broken.test.mjs": 'throw new Error("fixture does not load");\n' });
+    roots.push(root);
+    const listing = listTests(root, { vitest });
+    expect(listing.tests).toEqual([]);
+    expect(listing.problems).toEqual([expect.stringMatching(/^vitest list failed, so no test names anything: exit 1: /)]);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual([...listing.problems, "PO-1: implemented, but no test names it", ...unnamedCh1]);
+    expect(listTests(root, { vitest: join(root, "missing.mjs") }).problems).toEqual([expect.stringMatching(/^vitest list failed/)]);
+  }, 120_000);
+  it("VER-7, M1-AC7: takes the repository tests as vitest collects them, and catches a planted break in them", () => {
     // docs/spec/v2.md here may trail the review branch, so compare against the baseline, not against zero.
     const spec = checkSpecTrace(readFileSync(new URL("../docs/spec/v2.md", import.meta.url), "utf8"));
-    const tests = findTests(fileURLToPath(new URL("..", import.meta.url)));
-    const paths = tests.map((file) => file.path);
+    const listing = listTests(fileURLToPath(new URL("..", import.meta.url)));
+    expect(listing.problems).toEqual([]);
+    const paths = listing.tests.map(({ path }) => path);
     expect(paths).toContain("scripts/check-spec-trace.test.mjs");
     expect(paths).toContain("plugins/shadow-army/hooks/register.test.ts");
-    // This list requires VER-7 (U evidence): only this file's annotation above names it.
+    // This list requires VER-7 (U evidence): only this test's title names it.
     const implemented = "M1\nVER-7\n";
-    const baseline = checkTestReferences(spec, implemented, tests);
+    const baseline = checkTestReferences(spec, implemented, listing);
     expect(baseline.required).toBeGreaterThanOrEqual(1);
     expect(baseline.problems.filter((problem) => !/names \S+, which this spec doesn't have$/.test(problem))).toEqual([]);
-    const without = tests.filter((file) => file.path !== "scripts/check-spec-trace.test.mjs");
+    const without = { ...listing, tests: listing.tests.filter(({ path }) => path !== "scripts/check-spec-trace.test.mjs") };
     expect(checkTestReferences(spec, implemented, without).problems).toEqual([...baseline.problems, "VER-7: implemented, but no test names it"]);
-    const broken = [...tests, { path: "src/v2/planted.test.ts", text: "// PO-99999" }];
+    const broken = { ...listing, tests: [...listing.tests, { path: "src/v2/planted.test.ts", name: "PO-99999" }] };
     expect(checkTestReferences(spec, implemented, broken).problems).toEqual([...baseline.problems, "src/v2/planted.test.ts: names PO-99999, which this spec doesn't have"]);
-  });
+  }, 300_000);
 });

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -383,77 +384,68 @@ function lexCode(source, comments) {
   return scan(false);
 }
 
-const isPunct = (token, value) => token?.kind === "punct" && token.value === value;
+
+// Rule 9 reads test titles from vitest itself (review 133): no JavaScript is lexed here. `vitest list` runs each test
+// file's top level to collect its tests (--staticParse=false; vitest 5's default static parse leaves a title's
+// expression unevaluated), so a title is the string the test run would show, and a regular expression, a fixture
+// string or a comment names nothing. A skipped test is not collected, so it names nothing either.
+const TEST_DIRECTORIES = ["src", "scripts", "plugins"];
+const LIST_FLAGS = ["list", "--json", "--staticParse=false"];
+const firstLine = (text) => text.split(/\r\n?|\n/).map((line) => line.trim()).find(Boolean) ?? "no output";
+
+/** Runs the repository's own vitest from `root` with the repository's config, and parses its JSON list. */
+function vitestList(root, flags, vitest) {
+  const run = spawnSync(process.execPath, [vitest, ...flags], { cwd: root, encoding: "utf8", maxBuffer: 256 << 20, windowsHide: true });
+  if (run.error) throw new Error(run.error.message);
+  if (run.status !== 0) throw new Error(`exit ${run.status}: ${firstLine(run.stderr || run.stdout)}`);
+  const listed = JSON.parse(run.stdout);
+  if (!Array.isArray(listed) || !listed.every((entry) => typeof entry?.file === "string")) throw new Error("its output is not a list of tests");
+  return listed;
+}
 
 /**
- * The text of a test file that can name a requirement: its comments and the titles of its it, test and
- * describe calls. Other strings are fixtures, so an ID inside one counts for nothing. A file whose lexing hits an
- * ambiguous "/" gives no text at all, and the reason goes to `problems` with its line.
+ * The tests that can name a requirement: each test vitest collects under `directories`, as { path, name } with its
+ * full name (the describe chain and its title, joined by " > "). It fails closed: when `vitest list` fails (a file
+ * does not load, the command errors), the result names no test and says why in `problems`. A test file under
+ * `directories` that the vitest config does not take in is reported too, since rule 9 cannot read it.
  */
-export function testReferenceText(source, problems = []) {
-  const out = [];
-  let tokens;
-  try {
-    tokens = lexCode(source, out);
-  } catch (error) {
-    if (!(error instanceof AmbiguousSlash)) throw error;
-    const line = source.slice(0, error.at).split("\n").length;
-    problems.push(`line ${line}: cannot tell whether "/" divides or starts a regular expression (${error.message}), so the file names nothing; add a semicolon or parentheses`);
-    return "";
-  }
-  // The index after the ")" that closes the "(" at `open`.
-  const afterCall = (open) => {
-    for (let depth = 0, k = open; k < tokens.length; k++) {
-      if (isPunct(tokens[k], "(")) depth++;
-      else if (isPunct(tokens[k], ")") && --depth === 0) return k + 1;
-    }
-    return tokens.length;
+export function listTests(root, { directories = TEST_DIRECTORIES, vitest = join(root, "node_modules/vitest/vitest.mjs") } = {}) {
+  const inside = (file) => {
+    const path = relative(root, file).replaceAll("\\", "/");
+    return directories.some((directory) => path.startsWith(`${directory}/`)) ? path : undefined;
   };
-  for (let k = 0; k < tokens.length; k++) {
-    // A call of it, test or describe itself, with modifiers (it.skip), not a method of another object (re.test).
-    if (tokens[k].kind !== "name" || !TEST_CALLEES.has(tokens[k].value) || isPunct(tokens[k - 1], ".") || isPunct(tokens[k - 1], "?.")) continue;
-    let next = k + 1;
-    let last = "";
-    while (isPunct(tokens[next], ".") && tokens[next + 1]?.kind === "name") {
-      last = tokens[next + 1].value;
-      next += 2;
+  try {
+    const tests = [];
+    for (const { file, name } of vitestList(root, LIST_FLAGS, vitest)) {
+      if (typeof name !== "string") throw new Error(`${file}: a test without a name`);
+      const path = inside(file);
+      if (path) tests.push({ path, name });
     }
-    // Type arguments, as in it.each<[string]>(rows)(title): skip the balanced <...> run.
-    if (isPunct(tokens[next], "<")) {
-      for (let depth = 0; next < tokens.length; next++) {
-        if (isPunct(tokens[next], "<")) depth++;
-        else if (isPunct(tokens[next], ">") && --depth === 0) {
-          next++;
-          break;
-        }
-      }
-    }
-    if (TEST_FACTORIES.has(last)) {
-      if (tokens[next]?.kind === "template") next++;
-      else if (isPunct(tokens[next], "(")) next = afterCall(next);
-      else continue;
-    }
-    const title = tokens[next + 1];
-    if (isPunct(tokens[next], "(") && (title?.kind === "string" || title?.kind === "template")) out.push({ at: title.at, text: title.value });
+    const configured = new Set(vitestList(root, [...LIST_FLAGS, "--filesOnly"], vitest).map(({ file }) => inside(file)));
+    const problems = findTests(root, directories).filter((path) => !configured.has(path)).map((path) => `${path}: the vitest config does not run this file, so it names nothing`);
+    return { tests, files: new Set(tests.map(({ path }) => path)).size, problems };
+  } catch (error) {
+    return { tests: [], files: 0, problems: [`vitest list failed, so no test names anything: ${error.message}`] };
   }
-  return out.sort((a, b) => a.at - b.at).map((part) => part.text).join("\n");
 }
+
 /**
- * Appendix B rule 9 (VER-7). `trace` is checkSpecTrace's result, `implementedSource` the text of
- * implemented.txt and `tests` a list of { path, text }. Tests name IDs in a title or a comment; strings
- * that are fixtures are ignored (testReferenceText). A requirement is named only by its own ID: ranges do not count.
+ * Appendix B rule 9 (VER-7). `trace` is checkSpecTrace's result, `implementedSource` the text of implemented.txt and
+ * `listing` listTests's result. A test names the IDs in its full name; a requirement is named only by its own ID:
+ * ranges do not count. A listing with problems has failed closed, and its problems are reported.
  */
-export function checkTestReferences(trace, implementedSource, tests) {
+export function checkTestReferences(trace, implementedSource, listing) {
   const implemented = parseImplemented(implementedSource);
-  const problems = [...implemented.problems];
+  const problems = [...implemented.problems, ...listing.problems];
   const named = new Map();
-  for (const { path, text } of tests) {
-    const unclear = [];
-    const ids = new Set(testReferenceText(text, unclear).match(TEST_ID) ?? []);
-    problems.push(...unclear.map((problem) => `${path}: ${problem}`));
-    for (const id of ids) {
-      if (!trace.requirementIds.has(id) && !trace.acceptanceIds.has(id)) problems.push(`${path}: names ${id}, which this spec doesn't have`);
-      else if (!named.has(id)) named.set(id, path);
+  const unknown = new Set();
+  for (const { path, name } of listing.tests) {
+    for (const id of name.match(TEST_ID) ?? []) {
+      if (!trace.requirementIds.has(id) && !trace.acceptanceIds.has(id)) {
+        const problem = `${path}: names ${id}, which this spec doesn't have`;
+        if (!unknown.has(problem)) problems.push(problem);
+        unknown.add(problem);
+      } else if (!named.has(id)) named.set(id, path);
     }
   }
   const current = Number(implemented.milestone.slice(1));
@@ -473,8 +465,8 @@ export function checkTestReferences(trace, implementedSource, tests) {
   return { required: required.size, named: named.size, problems };
 }
 
-/** Finds *.test.* files under the given directories: the repository's test suites, the mod's and this check's own. */
-export function findTests(root, directories = ["src", "scripts", "plugins"]) {
+/** The paths of the *.test.* files under the given directories: the repository's test suites, the mod's and this check's own. */
+export function findTests(root, directories = TEST_DIRECTORIES) {
   const found = [];
   const walk = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -482,7 +474,7 @@ export function findTests(root, directories = ["src", "scripts", "plugins"]) {
       if (entry.isDirectory()) {
         if (entry.name !== "node_modules" && !entry.name.startsWith(".")) walk(path);
       } else if (/\.test\.(?:[cm]?[jt]sx?)$/.test(entry.name)) {
-        found.push({ path: relative(root, path).replaceAll("\\", "/"), text: readFileSync(path, "utf8") });
+        found.push(relative(root, path).replaceAll("\\", "/"));
       }
     }
   };
@@ -498,8 +490,8 @@ export function findTests(root, directories = ["src", "scripts", "plugins"]) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
-    // Usage: check-spec-trace.mjs [spec.md] [--tests]. --tests adds rule 9 (CI): it reads
-    // docs/spec/implemented.txt, or the path in --implemented=<file>, and the tests under src/, scripts/ and plugins/.
+    // Usage: check-spec-trace.mjs [spec.md] [--tests]. --tests adds rule 9 (CI): it reads docs/spec/implemented.txt,
+    // or the path in --implemented=<file>, and the tests vitest collects under src/, scripts/ and plugins/.
     const args = process.argv.slice(2);
     const root = fileURLToPath(new URL("..", import.meta.url));
     const path = args.find((arg) => !arg.startsWith("--")) ?? join(root, "docs/spec/v2.md");
@@ -508,10 +500,10 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     const problems = [...result.problems];
     let summary = `${result.requirements} requirements; ${result.acceptanceCriteria} acceptance criteria`;
     if (args.includes("--tests")) {
-      const tests = findTests(root);
-      const rule9 = checkTestReferences(result, readFileSync(implementedPath, "utf8"), tests);
+      const listing = listTests(root);
+      const rule9 = checkTestReferences(result, readFileSync(implementedPath, "utf8"), listing);
       problems.push(...rule9.problems);
-      summary += `; ${rule9.required} requirements need a test, ${rule9.named} IDs named by ${tests.length} test files`;
+      summary += `; ${rule9.required} requirements need a test, ${rule9.named} IDs named by ${listing.tests.length} tests in ${listing.files} files`;
     }
     console.log(`${summary}; ${problems.length} problems`);
     for (const problem of problems) console.error(problem);
