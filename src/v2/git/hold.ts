@@ -323,16 +323,39 @@ export class HarnessHold {
     this.trust(current.state);
   }
 
-  /** A snapshot or worktree this army made: its state as it is now is trusted, and harness git may run in it. */
+  /**
+   * A snapshot or worktree this army made: its own metadata and submodules as they are now are trusted, and
+   * harness git may run in it. What another covered repository also reads (the shared config, hooks, info, the
+   * user's config) keeps the hash already trusted, so a change to it is still held (C13). A repository already
+   * trusted is checked against that baseline, never trusted again: a change holds.
+   */
   async register(repo: GitRepo): Promise<void> {
-    const known = this.repos.find((other) => keyOf(other) === keyOf(repo));
+    const key = keyOf(repo), known = this.repos.find((other) => keyOf(other) === key);
     if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
     if (!known) this.repos.push(repo);
     const { state, problems } = await readState(this.options.repo, known ?? repo, this.options.gitFor, this.options.limits);
     if (problems.length) throw new Uninspectable(problems.join(", "), "the repository can't be trusted");
-    this.trusted = { ...this.trusted, [keyOf(repo)]: state };
+    const baseline = this.trusted?.[key];
+    if (known && baseline) {
+      const files = changedFiles(baseline, state);
+      if (files.length) throw new HarnessGitHeld(this.hold(files, "changed since it was trusted").line);
+      return;
+    }
+    // Its own: inside its git folder, or its working tree (its `.git` file, its submodules) but not the common folder.
+    const inside = (path: string, folder: string) => (path + "/").startsWith(canon(folder).replace(/\/?$/, "/"));
+    const isOwn = (label: string) => {
+      const name = label.replace(/^(config|submodule) /, ""), path = canon(isAbsolute(name) ? name : resolve(this.options.repo.workTree, name));
+      return inside(path, repo.gitDir) || (inside(path, repo.workTree) && !inside(path, repo.commonDir));
+    };
+    const others = Object.entries(this.trusted ?? {}).filter(([other]) => other !== key).map(([, hashes]) => hashes);
+    const own: TrustedState = {};
+    for (const [label, hash] of Object.entries(state)) {
+      const before = isOwn(label) ? hash : others.find((hashes) => label in hashes)?.[label];
+      if (before !== undefined) own[label] = before; // shared state no other repository trusted is left out, so it holds
+    }
+    this.trusted = { ...this.trusted, [key]: own };
     this.save();
-    this.options.log?.({ event: "trusted", hashes: state });
+    this.options.log?.({ event: "trusted", hashes: own });
   }
 
   /** Shadow Army's own command removed it. */
@@ -393,22 +416,25 @@ export class HarnessHold {
 
   /**
    * What differs from the trusted state, with what couldn't be inspected. Where something couldn't be, a label
-   * the scan didn't reach isn't counted as removed; after a fatal problem only the problem is named.
+   * the scan didn't reach isn't counted as removed; after a fatal problem only the problem is named. Each
+   * repository is compared with its own trusted state, and only the labels are merged, for the line (C13).
    */
   private compare(current: { state: Record<string, TrustedState>; problems: string[]; fatal: boolean }) {
     if (current.fatal || !this.trusted) return { files: current.problems, why: "can't be inspected" };
-    const trusted = flat(this.trusted ?? {}), now = flat(current.state);
-    // With a problem, a label missing now may only be unreached: it counts as unchanged.
-    const reached = current.problems.length ? { ...trusted, ...now } : now;
-    const changed = changedFiles(trusted, reached);
+    const changed = new Set<string>();
+    for (const key of new Set([...Object.keys(this.trusted), ...Object.keys(current.state)])) {
+      const trusted = this.trusted[key] ?? {}, now = current.state[key] ?? {};
+      // With a problem, a label missing now may only be unreached: it counts as unchanged.
+      for (const file of changedFiles(trusted, current.problems.length ? { ...trusted, ...now } : now)) changed.add(file);
+    }
     const files = [...new Set([...changed, ...current.problems])].sort();
-    const why = !current.problems.length ? "changed" : changed.length ? "changed or can't be inspected" : "can't be inspected";
+    const why = !current.problems.length ? "changed" : changed.size ? "changed or can't be inspected" : "can't be inspected";
     return { files, why };
   }
 
   private label(path: string) { return new Scan(this.options.repo, this.options.gitFor).where(path); }
 
-  private hold(files: string[], why: string, how = "undo it to go on"): HoldCheck {
+  private hold(files: string[], why: string, how = "undo it to go on"): HoldCheck & { held: true } {
     const line = `Shadow Army: harness git held · ${files.join(", ")} ${why} · ${how}`;
     const fresh = !this.files || this.files.join("\0") !== files.join("\0");
     this.files = files;

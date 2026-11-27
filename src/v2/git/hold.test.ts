@@ -130,6 +130,41 @@ describe("the command's own repository (C2)", () => {
   }, 60_000);
 });
 
+describe("registration trusts only the new repository's own state (C13)", () => {
+  const worktree = (base: string, repo: HostileRepo): GitRepo => {
+    const tree = join(base, "snap");
+    plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "worktree", "add", "-q", "--detach", tree);
+    return { gitDir: join(repo.gitDir, "worktrees", "snap"), workTree: tree, commonDir: repo.gitDir };
+  };
+
+  for (const [change, file] of [["config", ".git/config"], ["hook", ".git/hooks/pre-rebase"]] as const) {
+    it(`stays held when the shared ${change} changes before a worktree's registration finishes`, async () => {
+      const { base, repo, open } = setup(), hold = open();
+      await hold.start();
+      const snap = worktree(base, repo), undo = plantChange(repo, change);
+      await hold.register(snap);
+      expect(await hold.check()).toMatchObject({ held: true, files: [file] });
+      expect(await open().start()).toMatchObject({ held: true, files: [file] }); // and across a restart
+      undo();
+      expect(await hold.check()).toEqual({ held: false });
+    }, 60_000);
+  }
+
+  it("checks a known repository that registers again against its baseline, and holds on a change", async () => {
+    const { base, repo, main, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo);
+    await hold.register(snap);
+    await hold.register(snap); // unchanged: nothing to hold
+    expect(await hold.check()).toEqual({ held: false });
+    appendFileSync(join(snap.gitDir, "commondir"), "\n../../../elsewhere");
+    await expect(hold.register(snap)).rejects.toBeInstanceOf(HarnessGitHeld);
+    expect(await hold.check()).toMatchObject({ held: true, files: [expect.stringMatching(/worktrees\/snap\/commondir$/)] });
+    plantChange(repo, "config");
+    await expect(hold.register(main)).rejects.toBeInstanceOf(HarnessGitHeld); // the folder's own checkout too
+  }, 60_000);
+});
+
 describe("a repository's whole identity (C9)", () => {
   it("runs only in a registered repository's own working tree and common folder, with the paths it registered", async () => {
     const { base, repo, main, open } = setup(), given: GitRepo[] = [];
