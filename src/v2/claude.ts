@@ -94,7 +94,8 @@ export async function claudeVersionProblem(command: { file: string; identity?: s
   clearTimeout(timer);
   if (outcome === "exited") await new Promise((resolve) => setTimeout(resolve, 20)); // let stdout's last chunk land
   // Fail closed: no session opens until the probe's processes are confirmed stopped.
-  try { await child.close(); }
+  // #111 C17 (HOST-2): at the deadline the tree ends at once with PO-14's no-grace kill, and its cleanup proof is awaited.
+  try { await (outcome === timedOut && child.kill ? child.kill() : child.close()); }
   catch (error) { throw Object.assign(new Error(`claude --version probe containment failed: ${error instanceof Error ? error.message : String(error)}`), { containmentFailed: true }); }
   if (outcome === timedOut) return `claude --version gave no answer in ${timeoutMs / 1000} s`;
   const found = versionParts(output);

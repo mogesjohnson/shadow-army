@@ -821,6 +821,19 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(Date.now() - started).toBeGreaterThanOrEqual(3_900);
   }, 30_000);
 
+  // #111 C17 (HOST-2): at the deadline the probe's tree is killed with no grace, so the 2 s close grace never follows it.
+  windowsOnly("ends a hanging --version within its deadline plus a small margin, counted from the launch", async () => {
+    const real = managedProcesses.spawnManagedProcess;
+    let launched = 0;
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockImplementation(async (options) => {
+      const child = await real(options); launched = performance.now(); return child;
+    });
+    try {
+      expect(await claudeVersionProblem({ file: process.execPath, args: [resolve("test/fakes/claude.mjs"), "--fake-version-hang"] }, tmpdir(), 500)).toBe("claude --version gave no answer in 0.5 s");
+      expect(performance.now() - launched).toBeLessThan(500 + 1_000);
+    } finally { spawn.mockRestore(); }
+  }, 30_000);
+
   windowsOnly("ends a --version that never exits, and the soldier does not start (M1-AC4)", async () => {
     const started = Date.now();
     expect(await claudeVersionProblem({ file: process.execPath, args: [resolve("test/fakes/claude.mjs"), "--fake-version-hang"] }, tmpdir(), 300)).toBe("claude --version gave no answer in 0.3 s");
