@@ -18,6 +18,8 @@ export interface ManagedProcess {
   readonly exited: Promise<ProcessExit>;
   /** Session teardown, not turn teardown: persistent CLI services belong to the session. */
   close(): Promise<void>;
+  /** PO-14: kills the whole tree at once, with no shutdown grace. A driver without it leaves it out. */
+  kill?(): Promise<void>;
   /** CH-1: the PATH entries left out of the lookup and the child's PATH. */
   readonly droppedPath: string[];
 }
@@ -26,6 +28,8 @@ export interface ManagedProcessOptions {
   args?: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  /** Cancels a launch still in progress: it rejects, and anything it started is killed. */
+  signal?: AbortSignal;
 }
 
 
@@ -132,20 +136,24 @@ function windowsCommand(file: string, args: string[], env: NodeJS.ProcessEnv): {
 }
 
 async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProcess> {
+  // C10: every setup step can resume after the abort, so each one checks before the next and nothing is spawned.
+  const stopIfCancelled = () => { if (options.signal?.aborted) throw new Error("the launch was cancelled"); };
+  stopIfCancelled();
   const inherited = options.env ?? process.env;
   const path = await trustedPath(options.cwd, inherited);
+  stopIfCancelled();
   const pathKey = Object.keys(inherited).find((key) => key.toLowerCase() === "path") ?? "Path";
   // cmd.exe would otherwise search the current folder before PATH for every name a shim runs.
   const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
     [pathKey]: path.kept.join(delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
   const executable = await resolveWindowsCommand(options.file, options.cwd, env, path.kept);
   await verifyExecutable(executable, path.roots);
+  stopIfCancelled();
   const command = windowsCommand(executable, options.args ?? [], env);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
   const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
   const script = join(directory, "supervisor.ps1");
-  await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
@@ -154,6 +162,11 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   let started!: () => void;
   let failed!: (error: Error) => void;
   const ready = new Promise<void>((done, fail) => { started = done; failed = fail; });
+  ready.catch(() => {});
+  // A cancelled launch fails like any other: the catch below kills the supervisor, and its kill-on-close job the tree.
+  const cancel = () => failed(new Error("the launch was cancelled"));
+  options.signal?.addEventListener("abort", cancel, { once: true });
+  if (options.signal?.aborted) cancel();
   const server = createServer((socket) => {
     let buffer = "";
     let authenticated = false;
@@ -179,7 +192,10 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   });
   let child: ChildProcessWithoutNullStreams | undefined;
   try {
+    await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
+    stopIfCancelled();
     await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(`\\\\.\\pipe\\${pipeName}`, done); });
+    stopIfCancelled();
     const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     child = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
       cwd: options.cwd, env, windowsHide: true, stdio: "pipe",
@@ -197,25 +213,27 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     }));
     wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token })}\n`);
     const launchTimer = setTimeout(() => failed(new Error(`Windows supervisor did not launch within 15 seconds${diagnostic ? `: ${diagnostic}` : ""}`)), 15_000);
-    try { await ready; } finally { clearTimeout(launchTimer); }
+    try { await ready; } finally { clearTimeout(launchTimer); options.signal?.removeEventListener("abort", cancel); }
     wrapper.stderr.off("data", captureDiagnostic);
     let closing: Promise<void> | undefined;
+    const close = () => closing ??= (async () => {
+      const killed = setTimeout(() => wrapper.kill(), 15_000);
+      wrapper.stdin.end();
+      control?.write("close\n");
+      try { await wrapperClosed; } finally {
+        clearTimeout(killed); control?.destroy(); server.close();
+        await rm(directory, { recursive: true, force: true });
+      }
+      if (!treeClosed) throw new Error("Windows supervisor ended without confirming session process-tree cleanup");
+    })();
     return {
       pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, droppedPath: path.dropped,
-      close() {
-        return closing ??= (async () => {
-          const killed = setTimeout(() => wrapper.kill(), 15_000);
-          wrapper.stdin.end();
-          control?.write("close\n");
-          try { await wrapperClosed; } finally {
-            clearTimeout(killed); control?.destroy(); server.close();
-            await rm(directory, { recursive: true, force: true });
-          }
-          if (!treeClosed) throw new Error("Windows supervisor ended without confirming session process-tree cleanup");
-        })();
-      },
+      close,
+      // PO-14: "kill" makes the supervisor terminate the job with no grace, even during a close.
+      kill: () => { control?.write("kill\n"); return close(); },
     };
   } catch (error) {
+    options.signal?.removeEventListener("abort", cancel);
     control?.destroy(); server.close();
     if (child && child.exitCode === null) {
       child.kill();
@@ -279,7 +297,7 @@ public static class ShadowJobSupervisor {
       events=new StreamWriter(pipe,new UTF8Encoding(false),1024,true); events.AutoFlush=true;
       var stop=new ManualResetEvent(false); int shutdownReason=0;
       var control=new Thread(delegate() {
-        try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); while(reader.ReadLine()!=null) { Interlocked.CompareExchange(ref shutdownReason,1,0); stop.Set(); } } catch {}
+        try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); string line; while((line=reader.ReadLine())!=null) { if(line=="kill") Interlocked.Exchange(ref shutdownReason,2); else Interlocked.CompareExchange(ref shutdownReason,1,0); stop.Set(); } } catch {}
         // Control EOF means the owner disappeared; it must contain the job immediately.
         Interlocked.Exchange(ref shutdownReason,2); stop.Set();
       }); control.IsBackground=true; control.Start();
