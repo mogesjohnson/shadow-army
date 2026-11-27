@@ -136,21 +136,24 @@ function windowsCommand(file: string, args: string[], env: NodeJS.ProcessEnv): {
 }
 
 async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  if (options.signal?.aborted) throw new Error("the launch was cancelled");
+  // C10: every setup step can resume after the abort, so each one checks before the next and nothing is spawned.
+  const stopIfCancelled = () => { if (options.signal?.aborted) throw new Error("the launch was cancelled"); };
+  stopIfCancelled();
   const inherited = options.env ?? process.env;
   const path = await trustedPath(options.cwd, inherited);
+  stopIfCancelled();
   const pathKey = Object.keys(inherited).find((key) => key.toLowerCase() === "path") ?? "Path";
   // cmd.exe would otherwise search the current folder before PATH for every name a shim runs.
   const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
     [pathKey]: path.kept.join(delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
   const executable = await resolveWindowsCommand(options.file, options.cwd, env, path.kept);
   await verifyExecutable(executable, path.roots);
+  stopIfCancelled();
   const command = windowsCommand(executable, options.args ?? [], env);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
   const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
   const script = join(directory, "supervisor.ps1");
-  await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
@@ -189,7 +192,10 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   });
   let child: ChildProcessWithoutNullStreams | undefined;
   try {
+    await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
+    stopIfCancelled();
     await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(`\\\\.\\pipe\\${pipeName}`, done); });
+    stopIfCancelled();
     const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     child = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
       cwd: options.cwd, env, windowsHide: true, stdio: "pipe",
@@ -227,6 +233,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       kill: () => { control?.write("kill\n"); return close(); },
     };
   } catch (error) {
+    options.signal?.removeEventListener("abort", cancel);
     control?.destroy(); server.close();
     if (child && child.exitCode === null) {
       child.kill();

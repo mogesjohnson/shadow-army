@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import * as childProcess from "node:child_process";
+import { existsSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -16,6 +19,15 @@ import { failureMessage, type Failure, type Where } from "./messages.js";
  * steps (M1b-15, M1b-16, M1b-19), the drivers' no-grace tree kill, wiring the gate into the post office's start,
  * the packaged probe, and native evidence on Linux, macOS and real Windows policy cases.
  */
+// Pass-through wrappers, so the Windows driver test can see whether setup went on to spawn the supervisor (C10).
+vi.mock("node:child_process", async (original) => {
+  const real = await original<typeof import("node:child_process")>();
+  return { ...real, spawn: vi.fn(real.spawn) };
+});
+vi.mock("node:fs/promises", async (original) => {
+  const real = await original<typeof import("node:fs/promises")>();
+  return { ...real, mkdtemp: vi.fn(real.mkdtemp) };
+});
 const ok: StepOutcome = { ok: true };
 const flush = () => new Promise<void>((done) => setImmediate(done));
 const digest = { file: "guardian", sha256: "ab".repeat(32) };
@@ -391,6 +403,28 @@ describe.skipIf(process.platform !== "win32")("Windows driver: cancel and no-gra
     controller.abort();
     await expect(launch).rejects.toThrow("the launch was cancelled");
     await expect(contain.spawnManagedProcess({ ...stubborn, signal: AbortSignal.abort() })).rejects.toThrow("the launch was cancelled");
+  }, 30_000);
+
+  it("never spawns the supervisor when the abort lands during setup, and removes the temp folder (C10)", async () => {
+    const spawned = vi.mocked(childProcess.spawn);
+    const supervisors = () => spawned.mock.calls.filter(([file]) => /powershell\.exe$/i.test(String(file))).length;
+    const before = supervisors();
+    const early = new AbortController();
+    const duringPath = contain.spawnManagedProcess({ ...stubborn, signal: early.signal });
+    early.abort();
+    await expect(duringPath).rejects.toThrow("the launch was cancelled");
+    const late = new AbortController();
+    let folder = "";
+    const realMkdtemp = vi.mocked(fsPromises.mkdtemp).getMockImplementation()!;
+    vi.mocked(fsPromises.mkdtemp).mockImplementationOnce((async (prefix: string) => {
+      folder = await (realMkdtemp as (prefix: string) => Promise<string>)(prefix);
+      late.abort();
+      return folder;
+    }) as typeof fsPromises.mkdtemp);
+    await expect(contain.spawnManagedProcess({ ...stubborn, signal: late.signal })).rejects.toThrow("the launch was cancelled");
+    expect(folder).not.toBe("");
+    expect(existsSync(folder)).toBe(false);
+    expect(supervisors()).toBe(before);
   }, 30_000);
 
   it("kills the tree without the shutdown grace that close() gives", async () => {
