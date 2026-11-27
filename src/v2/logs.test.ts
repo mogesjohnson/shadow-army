@@ -1,10 +1,10 @@
-import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { mkdtemp, open, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { credential, roster } from "./fixture-main.testutil.js";
-import { redact, REDACTED, SessionLogs, UnflushedAppend } from "./logs.js";
+import { confirmedOpenings, redact, REDACTED, SessionLogs, type OpeningFile } from "./logs.js";
 import { PostOffice } from "./postOffice.js";
 
 const dirs: string[] = [];
@@ -285,7 +285,7 @@ describe("a failed log write (PO-5, M1-AC4)", () => {
 
     expect((await logs.write("post-office", { n: 4 })).written).toBe(true);
     await logs.write("post-office", { n: 5 });
-    expect(parsed(file.text())).toEqual([{ type: "log-gap", lost: 3, time: expect.any(String) }, { n: 4 }, { n: 5 }]);
+    expect(parsed(file.text())).toEqual([{ type: "log-gap", gap: expect.any(String), lost: 3, time: expect.any(String) }, { n: 4 }, { n: 5 }]);
   });
 
   it("says once when a line closes a gap, and never for a log without one (C22)", async () => {
@@ -319,7 +319,7 @@ describe("a failed log write (PO-5, M1-AC4)", () => {
     await logs.write("soldier-1", { n: 3 });
     const lines = file.text().split("\n");
     expect(lines.some((line) => line.startsWith('{"n":2') && !line.endsWith("}"))).toBe(true);
-    expect(parsed(file.text())).toEqual([{ n: 1 }, { type: "log-gap", lost: 1, time: expect.any(String) }, { n: 3 }]);
+    expect(parsed(file.text())).toEqual([{ n: 1 }, { type: "log-gap", gap: expect.any(String), lost: 1, time: expect.any(String) }, { n: 3 }]);
     expect(file.text().endsWith("\n")).toBe(true);
   });
 
@@ -347,7 +347,7 @@ describe("a failed log write (PO-5, M1-AC4)", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect((await lost).written).toBe(false);
     expect((await next).written).toBe(true);
-    expect(parsed(file.text())).toEqual([{ type: "log-gap", lost: 1, time: expect.any(String) }, { n: 2 }]);
+    expect(parsed(file.text())).toEqual([{ type: "log-gap", gap: expect.any(String), lost: 1, time: expect.any(String) }, { n: 2 }]);
   });
 });
 
@@ -361,24 +361,29 @@ describe("the flushed opening row (PO-5)", () => {
     return vi.spyOn(prototype, "sync");
   }
   afterEach(() => { vi.restoreAllMocks(); });
-  /** The file, and on Linux and macOS the folder that holds its entry too. */
-  const syncsPerRow = process.platform === "win32" ? 1 : 2;
+  /** The row and its confirmation, and on Linux and macOS the folder that holds the file's entry once. */
+  const syncsPerOpening = process.platform === "win32" ? 2 : 3;
+  const rows = async (dir: string, file = "soldier-1.jsonl"): Promise<Record<string, unknown>[]> =>
+    (await readFile(join(dir, file), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  const types = (list: Record<string, unknown>[]): unknown[] => list.map((row) => row.type);
 
-  it("syncs the line that opens a turn to disk, and no other line", async () => {
+  it("syncs the line that opens a turn and its confirmation to disk, and no other line", async () => {
     const sync = await spyOnSync();
     const dir = await directory();
     const logs = new SessionLogs(dir, []);
     await logs.write("soldier-1", { type: "opened" });
     expect(sync).not.toHaveBeenCalled();
     expect((await logs.write("soldier-1", { type: "turn_started", n: 1 })).written).toBe(true);
-    expect(sync).toHaveBeenCalledTimes(syncsPerRow);
+    expect(sync).toHaveBeenCalledTimes(syncsPerOpening);
     await logs.write("soldier-1", { type: "text" });
-    expect(sync).toHaveBeenCalledTimes(syncsPerRow);
-    expect((await readFile(join(dir, "soldier-1.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line)))
-      .toEqual([{ type: "opened" }, { type: "turn_started", n: 1 }, { type: "text" }]);
+    expect(sync).toHaveBeenCalledTimes(syncsPerOpening);
+    const list = await rows(dir);
+    expect(list).toEqual([{ type: "opened" }, { type: "turn_started", n: 1, opening: expect.any(String) },
+      { type: "turn_confirmed", opening: list[1]!.opening, time: expect.any(String) }, { type: "text" }]);
+    expect(confirmedOpenings(await readFile(join(dir, "soldier-1.jsonl"), "utf8"))).toEqual(new Set([list[1]!.opening]));
   });
 
-  it("reports the opening row as not written when the flush fails twice", async () => {
+  it("reports the opening row as not written when the sync fails twice", async () => {
     const sync = await spyOnSync();
     sync.mockRejectedValue(new Error("EIO: flush failed"));
     const onFailure = vi.fn();
@@ -389,50 +394,87 @@ describe("the flushed opening row (PO-5)", () => {
     expect(onFailure).toHaveBeenCalledTimes(1);
   });
 
-  const rows = async (dir: string): Promise<unknown[]> =>
-    (await readFile(join(dir, "soldier-1.jsonl"), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-
-  it("flushes the row again, without appending it twice, when only the first flush fails (C21)", async () => {
+  it("never trusts a failed sync: the retry writes a new opening, names the failed one refused, and confirms only the new one (C21, C24)", async () => {
     const sync = await spyOnSync();
     sync.mockRejectedValueOnce(new Error("EIO: flush failed"));
     const dir = await directory();
     const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
     expect(await logs.write("soldier-1", { type: "turn_started" })).toEqual({ written: true });
-    expect(sync).toHaveBeenCalledTimes(1 + syncsPerRow);
-    expect(await rows(dir)).toEqual([{ type: "turn_started" }]);
+    expect(sync).toHaveBeenCalledTimes(1 + syncsPerOpening);
+    const list = await rows(dir);
+    expect(types(list)).toEqual(["turn_started", "turn_refused", "turn_started", "turn_confirmed"]);
+    expect(list[1]!.openings).toEqual([list[0]!.opening]);
+    expect(confirmedOpenings(await readFile(join(dir, "soldier-1.jsonl"), "utf8"))).toEqual(new Set([list[2]!.opening]));
   });
 
-  it("keeps one opening row when both flushes fail, and marks it refused right after it (C21)", async () => {
+  it("writes the retry to the file the path names when the first sync fails and the file is moved (C24)", async () => {
+    const dir = await directory();
+    const sync = await spyOnSync();
+    sync.mockImplementationOnce(async () => {
+      await rename(join(dir, "soldier-1.jsonl"), join(dir, "moved.jsonl"));
+      throw new Error("EIO: flush failed");
+    });
+    const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
+    expect(await logs.write("soldier-1", { type: "turn_started" })).toEqual({ written: true });
+    expect(confirmedOpenings(await readFile(join(dir, "soldier-1.jsonl"), "utf8")).size).toBe(1);
+    expect(types(await rows(dir, "moved.jsonl"))).toEqual(["turn_started"]);
+    expect(confirmedOpenings(await readFile(join(dir, "moved.jsonl"), "utf8")).size).toBe(0);
+  });
+
+  /** An in-memory log whose opening handles fail as `faults` say, one entry per try. */
+  function memoryLog(faults: ("sync" | "moved" | undefined)[]) {
+    let text = "";
+    const openFile = async (): Promise<OpeningFile> => {
+      const fault = faults.shift();
+      return {
+        write: async (chunk) => { text += chunk; },
+        sync: async () => { if (fault === "sync") throw new Error("EIO: flush failed"); },
+        isAt: async () => fault !== "moved",
+        close: async () => {},
+      };
+    };
+    const append = async (_path: string, chunk: string): Promise<void> => { text += chunk; };
+    return { openFile, append, rows: () => text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>), text: () => text };
+  }
+
+  it("refuses an opening whose synced file the path no longer names (C24)", async () => {
+    const log = memoryLog(["moved", "moved"]);
+    const logs = new SessionLogs("logs", [], { openFile: log.openFile, append: log.append, retryDelayMs: 1 });
+    expect(await logs.write("soldier-1", { type: "turn_started" })).toMatchObject({ written: false, error: { message: expect.stringContaining("moved or replaced") } });
+  });
+
+  it("leaves no confirmed opening when both syncs fail, so a restarted reader sees a refused send (C25)", async () => {
     const sync = await spyOnSync();
     sync.mockRejectedValueOnce(new Error("EIO: flush failed")).mockRejectedValueOnce(new Error("EIO: flush failed"));
     const dir = await directory();
-    const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
-    expect((await logs.write("soldier-1", { type: "turn_started" })).written).toBe(false);
-    expect(await rows(dir)).toEqual([{ type: "turn_started" }]);
-    expect((await logs.write("soldier-1", { type: "text" })).written).toBe(true);
-    expect(await rows(dir)).toEqual([{ type: "turn_started" }, { type: "log-gap", lost: 1, refused: true, time: expect.any(String) }, { type: "text" }]);
+    expect((await new SessionLogs(dir, [], { retryDelayMs: 1 }).write("soldier-1", { type: "turn_started" })).written).toBe(false);
+    // The restart: a fresh writer, and recovery reading the file before and after its next record.
+    const read = async (): Promise<Set<string>> => confirmedOpenings(await readFile(join(dir, "soldier-1.jsonl"), "utf8"));
+    expect(types(await rows(dir))).toEqual(["turn_started", "turn_refused", "turn_started"]);
+    expect(await read()).toEqual(new Set());
+    expect((await new SessionLogs(dir, []).write("soldier-1", { type: "text" })).written).toBe(true);
+    expect(await read()).toEqual(new Set());
   });
 
-  it("ends an earlier gap when an unflushed opening row carries its line in, and reports the refusal as a new gap (C22)", async () => {
-    let text = "";
-    const faults = ["disk full", "disk full", "unflushed"];
-    const append = async (_path: string, chunk: string): Promise<void> => {
-      const fault = faults.shift();
-      if (fault === "disk full") throw new Error(fault);
-      text += chunk;
-      if (fault) throw new UnflushedAppend(new Error("EIO: flush failed"));
-    };
-    const flush = vi.fn(async () => { throw new Error("EIO: flush failed"); });
+  it("keeps an earlier gap open when an opening's sync fails, then names the refused tries and counts both lines (C22, C25)", async () => {
+    const log = memoryLog(["sync", "sync"]);
+    let appends = 0;
+    const append = async (path: string, chunk: string): Promise<void> => { if (appends++ < 2) throw new Error("disk full"); await log.append(path, chunk); };
     const onFailure = vi.fn();
     const onRecovered = vi.fn();
-    const logs = new SessionLogs("logs", [], { append, flush, onFailure, onRecovered, retryDelayMs: 1 });
+    const logs = new SessionLogs("logs", [], { openFile: log.openFile, append, onFailure, onRecovered, retryDelayMs: 1 });
     expect((await logs.write("soldier-1", { type: "opened" })).written).toBe(false);
     expect((await logs.write("soldier-1", { type: "turn_started" })).written).toBe(false);
-    expect(flush).toHaveBeenCalledTimes(1);
+    expect(onRecovered).not.toHaveBeenCalled();
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect((await logs.write("soldier-1", { type: "text" })).written).toBe(true);
     expect(onRecovered).toHaveBeenCalledTimes(1);
-    expect(onFailure).toHaveBeenCalledTimes(2);
-    expect(text.split("\n").filter(Boolean).map((line) => JSON.parse(line)))
-      .toEqual([{ type: "log-gap", lost: 1, time: expect.any(String) }, { type: "turn_started" }]);
+    const list = log.rows();
+    const tried = list.filter((row) => row.type === "turn_started").map((row) => row.opening);
+    expect(list.at(-3)).toEqual({ type: "turn_refused", openings: tried, time: expect.any(String) });
+    expect(list.at(-2)).toEqual({ type: "log-gap", gap: list[0]!.gap, lost: 2, time: expect.any(String) });
+    expect(list.at(-1)).toEqual({ type: "text" });
+    expect(confirmedOpenings(log.text())).toEqual(new Set());
   });
 
   it("does not deliver a message whose opening row cannot be flushed, and delivers the next one once it can", async () => {

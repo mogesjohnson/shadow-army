@@ -1,4 +1,5 @@
-import { appendFile, mkdir, open, type FileHandle } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, mkdir, open, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 /** WSP-8's marker, in logs and in forwarded events alike. */
@@ -128,6 +129,16 @@ export interface LogWriteResult {
   error?: Error;
 }
 
+/** One handle on a log file: a turn's opening is written and synced through it, never through a reopened path (C24). */
+export interface OpeningFile {
+  write(text: string): Promise<void>;
+  /** Returns only once everything written through this handle is on disk. */
+  sync(): Promise<void>;
+  /** Whether `path` still names the file this handle holds: a moved or replaced file is not the session's log. */
+  isAt(path: string): Promise<boolean>;
+  close(): Promise<void>;
+}
+
 export interface SessionLogsOptions {
   /** Called once when a gap opens in a log: its first line lost after a failed retry. The post office reports it. */
   onFailure?: (failure: { name: string; error: Error }) => void;
@@ -135,85 +146,108 @@ export interface SessionLogsOptions {
   onRecovered?: (name: string) => void;
   /** Delay before the one retry; PO-5 says 100 ms. */
   retryDelayMs?: number;
-  /**
-   * Appends text to a log file; with `flush`, returns only once it is on disk. Tests replace it to inject faults.
-   * It throws {@link UnflushedAppend} when the whole text is in the file but the flush failed: the retry then flushes only.
-   */
-  append?: (path: string, text: string, flush: boolean) => Promise<void>;
-  /** Flushes a log file already holding its text (the retry after {@link UnflushedAppend}). */
-  flush?: (path: string) => Promise<void>;
+  /** Appends an ordinary line to a log file. Tests replace it to inject faults. */
+  append?: (path: string, text: string) => Promise<void>;
+  /** Opens a log file for a turn's opening. Tests replace it to inject faults. */
+  openFile?: (path: string) => Promise<OpeningFile>;
 }
 
-/** The text is in the file whole; only its flush to disk failed. A retry must not append it again (C21). */
-export class UnflushedAppend extends Error {
-  constructor(readonly cause: Error) { super(cause.message); this.name = "UnflushedAppend"; }
+async function syncFolder(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try { await handle.sync(); } finally { await handle.close(); }
 }
 
-/** Opens a file or folder, runs `use` on it, syncs it to disk and closes it. */
-async function synced(path: string, flags: string, use?: (handle: FileHandle) => Promise<void>): Promise<void> {
-  const handle = await open(path, flags, 0o600);
-  try {
-    await use?.(handle);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-const defaultFlush = async (path: string): Promise<void> => {
-  await synced(path, "a");
-  // A new file's entry is durable only once its folder is synced too. Windows can't open a folder for that.
-  if (process.platform !== "win32") await synced(dirname(path), "r");
-};
-
-const defaultAppend = async (path: string, text: string, flush: boolean): Promise<void> => {
+const defaultOpenFile = async (path: string): Promise<OpeningFile> => {
   await mkdir(dirname(path), { recursive: true });
-  if (!flush) return appendFile(path, text, { encoding: "utf8", mode: 0o600 });
-  await appendFile(path, text, { encoding: "utf8", mode: 0o600 });
-  try { await defaultFlush(path); } catch (error) {
-    throw new UnflushedAppend(error instanceof Error ? error : new Error(String(error)));
-  }
+  const handle = await open(path, "a", 0o600);
+  // A new file's entry is durable only once its folder is synced too. Windows can't open a folder for that.
+  let entrySynced = process.platform === "win32";
+  return {
+    write: (text) => handle.appendFile(text, { encoding: "utf8" }),
+    sync: async () => {
+      await handle.sync();
+      if (!entrySynced) { await syncFolder(dirname(path)); entrySynced = true; }
+    },
+    isAt: async (at) => {
+      const [held, named] = await Promise.all([handle.stat({ bigint: true }), stat(at, { bigint: true }).catch(() => undefined)]);
+      return !!named && held.ino === named.ino && held.dev === named.dev;
+    },
+    close: () => handle.close(),
+  };
 };
 
-/** PO-5: the line that opens a turn is written and flushed before its message goes in. */
+const defaultAppend = async (path: string, text: string): Promise<void> => {
+  await mkdir(dirname(path), { recursive: true });
+  await appendFile(path, text, { encoding: "utf8", mode: 0o600 });
+};
+
+/** PO-5: the line that opens a turn is on disk, and confirmed there, before its message goes in. */
 const opensTurn = (data: unknown): boolean => (data as { type?: unknown } | null)?.type === "turn_started";
+const CONFIRMED = "turn_confirmed";
+const REFUSED = "turn_refused";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const asError = (caught: unknown): Error => caught instanceof Error ? caught : new Error(String(caught));
+
+/**
+ * Recovery's reading of one log (PO-1, PO-5), from the file alone: the `opening` ids of `turn_started` rows that a
+ * `turn_confirmed` row follows and no later `turn_refused` row names. Any other `turn_started` row is a send that
+ * was refused, so its message never went in (C25).
+ */
+export function confirmedOpenings(text: string): Set<string> {
+  const rows = new Set<string>();
+  const confirmed = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    let row: { type?: unknown; opening?: unknown; openings?: unknown } | null;
+    try { row = JSON.parse(line) as typeof row; } catch { continue; }
+    if (typeof row?.opening === "string" && row.type === "turn_started") rows.add(row.opening);
+    if (typeof row?.opening === "string" && row.type === CONFIRMED && rows.has(row.opening)) confirmed.add(row.opening);
+    if (row?.type === REFUSED && Array.isArray(row.openings)) for (const id of row.openings) confirmed.delete(id);
+  }
+  return confirmed;
+}
 
 /**
  * Append-only JSONL files in the supplied .shadow/v2/logs directory (PO-5).
  * A log never stops a soldier: a failed write is retried once, 100 ms later; if that fails too,
  * `write` resolves with `written: false`, later writes try again, and the first line written
- * after the gap is preceded by a `log-gap` line that counts the lines lost. When the lost line is a turn's
- * opening row that reached the file but could not be flushed (its send was refused), the next `log-gap`
- * line says `refused: true` and counts that row among the lost, so recovery never takes it for a turn in
- * flight (C21). The retry after such a flush only flushes again; it never appends the row twice.
+ * after the gap is preceded by a `log-gap` line that counts the lines lost. A gap line not yet followed by a
+ * written line is written again with the same `gap` id; a reader keeps the last line of each gap.
+ * Only what is on disk counts: a turn's opening row carries an `opening` id, and the message may go in only once
+ * that row and then a `turn_confirmed` row naming it were each synced through the one handle on the file the log's
+ * path still names (C24). A try whose sync fails is never synced again: the retry writes a new row with a new id,
+ * and the next line written is preceded by a `turn_refused` row naming the failed tries' ids. So recovery tells a
+ * refused opening from a turn in flight by the file alone ({@link confirmedOpenings}, C25). The one case the file
+ * cannot settle: a refused try whose confirmation is on disk (its sync or the last path check failed after it) when no
+ * later line of that log is ever written.
  */
 export class SessionLogs {
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly secrets: string[];
-  private readonly lost = new Map<string, number>();
+  /** Logs with a gap: its id and the lines lost in it. */
+  private readonly gaps = new Map<string, { id: string; lost: number }>();
+  /** Opening ids whose rows may be in a log although their send was refused; the next line written names them. */
+  private readonly refused = new Map<string, string[]>();
   private readonly cut = new Set<string>();
-  /** Logs whose last line is a turn's opening row that is in the file but was reported not written. */
-  private readonly refusedOpening = new Set<string>();
   private readonly fragments = new Map<string, Map<string, string[]>>();
-  private readonly append: (path: string, text: string, flush: boolean) => Promise<void>;
-  private readonly flush: (path: string) => Promise<void>;
+  private readonly append: (path: string, text: string) => Promise<void>;
+  private readonly openFile: (path: string) => Promise<OpeningFile>;
   private readonly retryDelayMs: number;
 
   constructor(private readonly directory: string, secrets: string[], private readonly options: SessionLogsOptions = {}) {
     this.secrets = [...secrets];
     this.append = options.append ?? defaultAppend;
-    this.flush = options.flush ?? defaultFlush;
+    this.openFile = options.openFile ?? defaultOpenFile;
     this.retryDelayMs = options.retryDelayMs ?? 100;
   }
 
   async write(name: string, data: unknown): Promise<LogWriteResult> {
     this.assertName(name);
-    const line = JSON.stringify(redact(data, this.secrets));
+    const safe = redact(data, this.secrets);
+    const line = JSON.stringify(safe);
     if (line === undefined) throw new Error("session log record is not JSON data");
-    const flush = opensTurn(data);
-    return this.enqueue(name, () => this.tryWrite(name, line, flush));
+    if (opensTurn(data)) return this.enqueue(name, () => this.tryOpening(name, safe as Record<string, unknown>));
+    return this.enqueue(name, () => this.tryWrite(name, line));
   }
 
   /** Holds one streamed fragment of a message. Nothing is written until the message ends. */
@@ -251,48 +285,84 @@ export class SessionLogs {
     return next;
   }
 
-  private async tryWrite(name: string, line: string, flush: boolean): Promise<LogWriteResult> {
-    const lost = this.lost.get(name) ?? 0;
-    const refused = this.refusedOpening.has(name);
-    const gap = lost > 0 ? `${JSON.stringify({ type: "log-gap", lost, ...(refused ? { refused: true } : {}), time: new Date().toISOString() })}\n` : "";
+  /** What goes before the next line: the end of a line cut short, refused openings, and the open gap. */
+  private prefix(name: string, refused: readonly string[] = []): string {
+    const time = new Date().toISOString();
+    const openings = [...(this.refused.get(name) ?? []), ...refused];
+    const gap = this.gaps.get(name);
+    return `${this.cut.has(name) ? "\n" : ""}${openings.length ? `${JSON.stringify({ type: REFUSED, openings, time })}\n` : ""}${
+      gap ? `${JSON.stringify({ type: "log-gap", gap: gap.id, lost: gap.lost, time })}\n` : ""}`;
+  }
+
+  /** The line and its prefix are on disk: the gap before it is over (C22), whatever later lines do. */
+  private written(name: string): LogWriteResult {
+    const had = this.gaps.delete(name);
+    this.cut.delete(name);
+    this.refused.delete(name);
+    if (had) try { this.options.onRecovered?.(name); } catch { /* the caller's own failure */ }
+    return { written: true };
+  }
+
+  /** The line is lost after its retry: it is counted, and a new gap is reported once, right now (PO-5, C26). */
+  private lost(name: string, error: Error): LogWriteResult {
+    const gap = this.gaps.get(name);
+    if (gap) gap.lost++;
+    else {
+      this.gaps.set(name, { id: randomUUID(), lost: 1 });
+      // The notice belongs to the caller; a notice that throws must not stop this log's queue.
+      try { this.options.onFailure?.({ name, error }); } catch { /* the caller's own failure */ }
+    }
+    return { written: false, error };
+  }
+
+  private async tryWrite(name: string, line: string): Promise<LogWriteResult> {
     const path = join(this.directory, `${name}.jsonl`);
     let error: Error | undefined;
-    let appended = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt > 0) await sleep(this.retryDelayMs);
       try {
-        // C21: text already in the file whole is flushed again, never appended twice.
-        if (appended) await this.flush(path);
         // Built for each try: a line cut short by a failed try (or write) is ended before this one.
-        else await this.append(path, `${this.cut.has(name) ? "\n" : ""}${gap}${line}\n`, flush);
-        this.lost.delete(name);
-        this.cut.delete(name);
-        this.refusedOpening.delete(name);
-        // C22: the gap this line closes is over, whatever later lines do.
-        if (lost > 0) try { this.options.onRecovered?.(name); } catch { /* the caller's own failure */ }
-        return { written: true };
+        await this.append(path, `${this.prefix(name)}${line}\n`);
+        return this.written(name);
       } catch (caught) {
-        if (caught instanceof UnflushedAppend) {
-          appended = true;
-          error = caught.cause;
-        } else {
-          error = caught instanceof Error ? caught : new Error(String(caught));
-          if (!appended) this.cut.add(name);
-        }
+        error = asError(caught);
+        this.cut.add(name);
       }
     }
-    if (appended) {
-      // The text, any gap line included, is in the file whole: the next gap line follows it and counts only it.
-      this.cut.delete(name);
-      this.refusedOpening.add(name);
-      this.lost.set(name, 1);
-      // An earlier gap's line went in with it, so that gap is over and this one is new (C22).
-      if (lost > 0) try { this.options.onRecovered?.(name); } catch { /* the caller's own failure */ }
-    } else this.lost.set(name, lost + 1);
-    if (lost === 0 || appended) {
-      // The notice belongs to the caller; a notice that throws must not stop this log's queue.
-      try { this.options.onFailure?.({ name, error: error! }); } catch { /* the caller's own failure */ }
+    return this.lost(name, error!);
+  }
+
+  /** PO-5 (C24, C25): see the class comment. Each try has its own handle, its own `opening` id, and two syncs. */
+  private async tryOpening(name: string, record: Record<string, unknown>): Promise<LogWriteResult> {
+    const path = join(this.directory, `${name}.jsonl`);
+    const refused: string[] = [];
+    let error: Error | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await sleep(this.retryDelayMs);
+      const opening = randomUUID();
+      let file: OpeningFile | undefined;
+      let wrote = false;
+      try {
+        file = await this.openFile(path);
+        const prefix = this.prefix(name, refused);
+        wrote = true;
+        await file.write(`${prefix}${JSON.stringify({ ...record, opening })}\n`);
+        await file.sync();
+        // Checked before the confirmation too, so a moved file seldom gets one; after it, a move leaves the residual case.
+        if (!(await file.isAt(path))) throw new Error(`the log ${name} was moved or replaced while a turn's opening was written`);
+        await file.write(`${JSON.stringify({ type: CONFIRMED, opening, time: new Date().toISOString() })}\n`);
+        await file.sync();
+        if (!(await file.isAt(path))) throw new Error(`the log ${name} was moved or replaced while a turn's opening was written`);
+        return this.written(name);
+      } catch (caught) {
+        error = asError(caught);
+        // Anything this try wrote may be in the file, confirmation included: it is named refused before the next line.
+        if (wrote) { refused.push(opening); this.cut.add(name); }
+      } finally {
+        await file?.close().catch(() => {});
+      }
     }
-    return { written: false, error };
+    if (refused.length) this.refused.set(name, [...(this.refused.get(name) ?? []), ...refused]);
+    return this.lost(name, error!);
   }
 }
