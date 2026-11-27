@@ -517,3 +517,57 @@ describe("the metadata scan (C6)", () => {
     expect(await hold.check()).toMatchObject({ held: true, files: [".git/info/pipe"], line: expect.stringContaining("can't be inspected") });
   }, 60_000);
 });
+
+describe("persist first: a failed write changes nothing, so a retry writes again (C23, C24)", () => {
+  /** The next record write fails: a folder sits where its temporary file goes. Returns the undo. */
+  const blockWrite = (statePath: string) => { const at = `${statePath}.${process.pid}.tmp`; mkdirSync(at); return () => rmSync(at, { recursive: true }); };
+  const record = (statePath: string) => JSON.parse(readFileSync(statePath, "utf8"));
+  const worktree = (base: string, repo: HostileRepo, name: string): GitRepo => {
+    plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "worktree", "add", "-q", "--detach", join(base, name));
+    return { gitDir: join(repo.gitDir, "worktrees", name), workTree: join(base, name), commonDir: repo.gitDir };
+  };
+
+  it("retries a removal's end, and an unregistration, after their write fails, and a restart holds the gone folder (C23)", async () => {
+    const { base, repo, statePath, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo, "snap"), other = worktree(base, repo, "other");
+    await hold.register(snap); await hold.register(other);
+    hold.beginRemoval(snap);
+    let unblock = blockWrite(statePath);
+    expect(() => hold.endRemoval(snap)).toThrow();
+    await expect(hold.unregister(other)).rejects.toThrow();
+    unblock();
+    hold.endRemoval(snap); await hold.unregister(other); // the retries write
+    expect(record(statePath).removing).toBeUndefined();
+    expect(record(statePath).repos).toHaveLength(2);
+    rmSync(snap.workTree, { recursive: true, force: true });
+    expect(await open().start()).toMatchObject({ held: true, files: [expect.stringMatching(/snap$/)] });
+    unblock = blockWrite(statePath); // the same for the turn marker: a failed write leaves it closed
+    expect(() => hold.setTurnOpen(true)).toThrow();
+    unblock(); hold.retry();
+    expect(record(statePath).turnOpen).toBeUndefined();
+  }, 60_000);
+
+  it("records a timeout as it's caught, so a restart during the after-check is held until g tries again (C24)", async () => {
+    const { main, statePath, open } = setup();
+    let release!: () => void, checking!: () => void, timedOut = false;
+    const gate = new Promise<void>((done) => { release = done; }), pending = new Promise<void>((done) => { checking = done; });
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      if (args[0] === "log") { timedOut = true; throw new HarnessGitHeld("git log timed out twice"); }
+      if (timedOut) { checking(); await gate; } // the after-check's scan waits here
+      return runner.run(args, kind);
+    } }));
+    await hold.start();
+    const running = hold.run(main, ["log"]);
+    await pending;
+    expect(record(statePath)).toMatchObject({ running: true, timeout: "git log timed out twice" });
+    const again = open(); // the post office stopped during the after-check
+    await again.start();
+    await expect(again.run(main, ["status"])).rejects.toThrow("timed out twice");
+    release(); await expect(running).rejects.toThrow("timed out twice");
+    const unblock = blockWrite(statePath);
+    expect(() => again.retry()).toThrow();
+    unblock();
+    await expect(again.run(main, ["status"])).rejects.toThrow("timed out twice"); // still held: retry() wrote nothing
+  }, 60_000);
+});
