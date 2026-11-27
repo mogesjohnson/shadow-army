@@ -960,6 +960,18 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ containmentStopped: false, refusedStart: false });
   });
 
+  it("keeps containment unconfirmed when the probe's supervisor fails to start (#111 C12)", async () => {
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockRejectedValueOnce(Object.assign(new Error("Windows supervisor exited before launch"), { containmentFailed: true }));
+    const events: ChannelEvent[] = [];
+    const channel = new ClaudeChannel({ cwd: tmpdir(), model: "probe", instructions: "probe", onEvent: (event) => events.push(event), command: { file: process.execPath } });
+    channels.push(channel);
+    expect((await channel.send("hello")).error).toMatchObject({ kind: "transport", message: expect.stringContaining("probe containment failed: Windows supervisor exited before launch") });
+    await until(() => events.some((event) => event.type === "closed"));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    spawn.mockRestore();
+    expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ containmentStopped: false, refusedStart: false });
+  });
+
   it("treats a session launch the driver refuses after the probe as a refused start, and a containment failure as transport (#111 C10, C11, PO-1)", async () => {
     const run = async (failure: Error) => {
       const versionOutput = new PassThrough();
@@ -982,9 +994,10 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     // C10: the probe and the session name the one identity the post office validated.
     expect(refused.probe?.identity).toBeTruthy();
     expect(refused.session?.identity).toBe(refused.probe?.identity);
-    const contained = await run(new Error("Windows supervisor exited before launch"));
-    expect(contained.result.error?.kind).toBe("transport");
-    expect(contained.closed).toMatchObject({ refusedStart: false });
+    // #111 C12: a supervisor that started and failed leaves its cleanup unconfirmed, so the soldier stays down.
+    const contained = await run(Object.assign(new Error("Windows supervisor exited before launch"), { containmentFailed: true }));
+    expect(contained.result.error).toMatchObject({ kind: "transport", message: expect.stringContaining("containment failed to start: Windows supervisor exited before launch") });
+    expect(contained.closed).toMatchObject({ refusedStart: false, containmentStopped: false });
   });
 
   // #111 C14: no session process starts when the multiline instruction file cannot be prepared, so it is a refused start.

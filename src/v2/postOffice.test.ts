@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { git } from "../workspace/git.js";
 import { Locks } from "../workspace/locks.js";
@@ -221,6 +222,27 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(events.find((event) => event.type === "down")?.data).toMatchObject({ reason: expect.stringContaining("refused to start") });
     expect(office.army()).toEqual([expect.objectContaining({ state: "down", restarts: 0 })]);
     await expect(office.send("scout", "not retried")).rejects.toThrow("reconnect explicitly");
+  }, 30_000);
+
+  it("keeps a soldier down, never restarted, when its containment fails to start (#111 C12, PO-1, PO-15)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const versionOutput = new PassThrough();
+    versionOutput.end("2.1.295 (Claude Code)" + String.fromCharCode(10));
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+      pid: 3, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {}, droppedPath: [],
+    }).mockRejectedValueOnce(Object.assign(new Error("Windows supervisor did not launch within 15 seconds"), { containmentFailed: true }));
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
+      channelFactory: (options) => new ClaudeChannel({ ...options, command: { file: process.execPath } }) });
+    try {
+      expect((await office.send("scout", "hello")).error?.kind).toBe("transport");
+      await until(() => events.some((event) => event.type === "down"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(events.filter((event) => event.type === "restarted")).toHaveLength(0);
+      expect(events.find((event) => event.type === "down")?.data).toMatchObject({ reason: expect.stringContaining("could not be confirmed stopped") });
+      expect(office.army()).toEqual([expect.objectContaining({ state: "down", restarts: 0 })]);
+    } finally { spawn.mockRestore(); await office.close().catch(() => {}); }
   }, 30_000);
 
   it("gives the owner a notice, not an error, when the CLI retries (#111 C5)", async () => {

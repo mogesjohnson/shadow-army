@@ -76,7 +76,11 @@ const isOlder = (found: number[], oldest: number[]): boolean => {
 export async function claudeVersionProblem(command: { file: string; identity?: string; args?: string[]; env?: NodeJS.ProcessEnv }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
   let child: ManagedProcess;
   try { child = await spawnManagedProcess({ file: command.file, identity: command.identity, args: [...(command.args ?? []), "--settings", AUTO_MEMORY_SETTINGS, "--version"], cwd, env: claudeEnvironment(command.env) }); }
-  catch (error) { return `claude --version could not run: ${error instanceof Error ? error.message : String(error)}`; }
+  catch (error) {
+    // #111 C12: a probe supervisor that started and failed leaves cleanup unconfirmed; that is not a refusal.
+    if ((error as { containmentFailed?: boolean } | undefined)?.containmentFailed) throw Object.assign(new Error(`claude --version probe containment failed: ${(error as Error).message}`), { containmentFailed: true });
+    return `claude --version could not run: ${error instanceof Error ? error.message : String(error)}`;
+  }
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   child.stdin.on("error", () => {});
@@ -223,7 +227,7 @@ export class ClaudeChannel implements NativeChannel {
   private loginNeeded?: NativeError;
   /** PO-1: an old, silent or managed-refused claude. The closed event says so, and it is never restarted. */
   private refusedStart = false;
-  private probeContainmentFailed = false;
+  private containmentFailed = false;
 
   constructor(private readonly options: ClaudeChannelOptions) {
     this.process = this.spawn();
@@ -232,7 +236,7 @@ export class ClaudeChannel implements NativeChannel {
     void this.ready.catch((error: unknown) => {
       const flags = error as { refusedStart?: boolean; containmentFailed?: boolean } | undefined;
       if (flags?.refusedStart) this.refusedStart = true;
-      if (flags?.containmentFailed) this.probeContainmentFailed = true;
+      if (flags?.containmentFailed) this.containmentFailed = true;
       return this.failTransport(error instanceof Error ? error.message : String(error), false, flags?.refusedStart ? "other" : "transport");
     });
   }
@@ -263,7 +267,10 @@ export class ClaudeChannel implements NativeChannel {
     try { child = await spawnManagedProcess({ file: command.file, identity: command.identity, args: [...command.args, ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: claudeEnvironment(command.env) }); }
     catch (error) {
       // PO-1 (C11): a launch refused before any CLI started is a refused start; a containment failure stays a transport close.
-      if ((error as { launchRefused?: boolean } | undefined)?.launchRefused) throw Object.assign(error as Error, { refusedStart: true });
+      const flags = error as { launchRefused?: boolean; containmentFailed?: boolean } | undefined;
+      if (flags?.launchRefused) throw Object.assign(error as Error, { refusedStart: true });
+      // #111 C12: the supervisor started and failed; its cleanup is unconfirmed, so the soldier stays down.
+      if (flags?.containmentFailed) throw Object.assign(new Error(`Claude process containment failed to start: ${(error as Error).message}`), { containmentFailed: true });
       throw error;
     }
     // The PATH was cleaned once above; an entry this late check dropped (a root changed meanwhile) is reported too.
@@ -706,7 +713,7 @@ export class ClaudeChannel implements NativeChannel {
     this.controls.clear();
     this.closePromise = (async () => {
       const child = await this.process.catch(() => undefined);
-      let containmentStopped = !this.probeContainmentFailed;
+      let containmentStopped = !this.containmentFailed;
       try {
         if (child) { child.stdin.end(); await child.close(); }
       } catch (error) {
