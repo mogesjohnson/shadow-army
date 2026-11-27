@@ -199,8 +199,12 @@ export function parseImplemented(source) {
 }
 
 // A "/" is a division only after a token that can end an expression: a name, number, string, template or regex, a
-// closing ")" or "]", or a postfix ++ or --. After any other token it starts a regular expression.
-const REGEX_AFTER = new Set(["...", "(", ",", "=", ":", "[", "!", "&", "|", "?", "?.", "{", "}", ";", ">", "<", "+", "-", "*", "%", "^", "~"]);
+// closing ")" or "]", the "}" of an object literal, or a postfix ++ or --. After any other token, including a
+// division's own "/" and the "}" of a block, it starts a regular expression.
+const REGEX_AFTER = new Set(["...", "(", ",", "=", ":", "[", "!", "&", "|", "?", "?.", "??", "{", ";", ">", "<", "+", "-", "*", "/", "%", "^", "~"]);
+// A "{" after one of these opens an object literal (an expression); after anything else it opens a block.
+const BRACE_EXPRESSION_AFTER = new Set(["...", "(", ",", "=", "[", "!", "&", "|", "?", "?.", "??", "<", "+", "-", "*", "/", "%", "^", "~"]);
+const EXPRESSION_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "of", "in", "delete", "instanceof", "new", "throw"]);
 const REGEX_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "of", "in", "delete", "instanceof", "new", "throw", "else", "do", "default"]);
 // The ")" closing the condition of one of these is followed by a statement, so a "/" after it starts a regex.
 const CONDITION_KEYWORDS = new Set(["if", "while", "for", "with"]);
@@ -222,7 +226,9 @@ function lexCode(source, comments) {
     const found = [];
     // One entry per open "(": whether it opens the condition of an if, while, for or with.
     const parens = [];
-    let depth = 0;
+    // One entry per open "{": whether it opens an object literal, and how many "?" still wait for their ":" inside it.
+    const braces = [];
+    const top = { expression: false, ternary: 0 };
     // Whether found[index] is a keyword of `words`, not a property of that name (obj.of).
     const keywordAt = (index, words) => found[index]?.kind === "name" && words.has(found[index].value) && !(found[index - 1]?.kind === "punct" && (found[index - 1].value === "." || found[index - 1].value === "?."));
     while (i < source.length) {
@@ -256,18 +262,21 @@ function lexCode(source, comments) {
         }
         i++;
         found.push({ kind: "template", value: text, at });
-      } else if (c === "/" && (!prev || (prev.kind === "punct" && ((REGEX_AFTER.has(prev.value) && !prev.postfix) || (prev.value === ")" && prev.condition))) || keywordAt(found.length - 1, REGEX_KEYWORDS))) {
+      } else if (c === "/" && (!prev || (prev.kind === "punct" && ((REGEX_AFTER.has(prev.value) && !prev.postfix) || (prev.value === ")" && prev.condition) || (prev.value === "}" && !prev.expression))) || keywordAt(found.length - 1, REGEX_KEYWORDS))) {
         // A regular expression literal: skip it, since it may hold a quote.
         for (i++; i < source.length && source[i] !== "/" && source[i] !== "\n"; i++) {
           if (source[i] === "\\") i++;
           else if (source[i] === "[") while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
         }
-        // A "/" that nothing closes on its line was no regex (JSX, say): leave the newline and the next line alone.
         if (source[i] === "/") {
           i++;
           while (/[A-Za-z]/.test(source[i] ?? "")) i++;
+          found.push({ kind: "regex", value: "", at });
+        } else {
+          // A "/" that nothing closes on its line was no regex (JSX, say): go back to it and lex what follows as code.
+          i = at + 1;
+          found.push({ kind: "punct", value: "/", at });
         }
-        found.push({ kind: "regex", value: "", at });
       } else {
         identifier.lastIndex = i;
         number.lastIndex = i;
@@ -278,12 +287,28 @@ function lexCode(source, comments) {
           i += (name ?? digits).length;
           continue;
         }
-        const value = source.startsWith("...", i) ? "..." : (c === "+" || c === "-") && source[i + 1] === c ? c + c : c === "?" && source[i + 1] === "." && !/\d/.test(source[i + 2] ?? "") ? "?." : c;
+        const value = source.startsWith("...", i) ? "..." : (c === "+" || c === "-") && source[i + 1] === c ? c + c : c === "?" && source[i + 1] === "." && !/\d/.test(source[i + 2] ?? "") ? "?." : c === "?" && source[i + 1] === "?" ? "??" : c;
         i += value.length;
-        if (c === "}" && nested && depth === 0) return found;
-        if (c === "{") depth++;
-        else if (c === "}") depth--;
+        if (c === "}" && nested && !braces.some((scope) => scope.brace)) return found;
+        const frame = braces[braces.length - 1] ?? top;
         const token = { kind: "punct", value, at };
+        if (c === "(" || c === "[") braces.push({ expression: false, ternary: 0, brace: false });
+        else if ((c === ")" || c === "]") && braces.length > 0 && !frame.brace) braces.pop();
+        else if (value === "?") frame.ternary++;
+        // "=>" is an arrow: its "{" opens a body. A ":" inside an object literal or closing a "?" leaves an expression after it.
+        else if (c === ">" && prev?.kind === "punct" && prev.value === "=" && prev.at === at - 1) token.arrow = true;
+        else if (c === ":") {
+          token.expression = frame.expression || frame.ternary > 0;
+          if (frame.ternary > 0) frame.ternary--;
+        } else if (c === "{") {
+          // The first token of a template substitution is an expression, so a "{" there is an object literal.
+          const expression = !prev ? nested : prev.kind === "name" ? keywordAt(found.length - 1, EXPRESSION_KEYWORDS) : prev.kind === "punct" && (prev.value === ":" ? prev.expression === true : !prev.arrow && BRACE_EXPRESSION_AFTER.has(prev.value));
+          braces.push({ expression, ternary: 0, brace: true });
+        } else if (c === "}") {
+          // Drop any "(" or "[" left open inside the block, then the "{" itself.
+          while (braces.length > 0 && !braces[braces.length - 1].brace) braces.pop();
+          token.expression = braces.pop()?.expression === true;
+        }
         // x! (a non-null assertion, glued to the name, call or index it follows) ends an expression: x! / 2 is a division.
         if (c === "!" && prev && !/\s/.test(source[at - 1] ?? " ") && (prev.kind === "number" || (prev.kind === "name" && !keywordAt(found.length - 1, REGEX_KEYWORDS)) || (prev.kind === "punct" && (prev.value === ")" || prev.value === "]" || prev.postfix)))) token.postfix = true;
         if (c === "(") parens.push(keywordAt(found.length - 1, CONDITION_KEYWORDS) || (keywordAt(found.length - 1, AWAIT) && keywordAt(found.length - 2, CONDITION_KEYWORDS)));

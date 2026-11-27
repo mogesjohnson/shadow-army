@@ -219,6 +219,30 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     expect(ids('const r = [.../it\\("PO-27"/.exec(s)]; export default /it\\("PO-28"/;\nit("PO-29 real", () => {});')).toEqual(["PO-29"]);
     expect(ids('const r = x ? y : <p>hi</p>;\nit("PO-30 after a stray slash", () => {});')).toEqual(["PO-30"]);
   });
+  it("classifies a slash by the kind of brace and token before it (review 127 C15)", () => {
+    const ids = (text) => testReferenceText(text).match(/\b[A-Z]+-\d+\b/g) ?? [];
+    // The "}" of an object literal ends an expression, so the slash is a division and the comment after it stays.
+    expect(ids("const ratio = { valueOf: () => 8 } / 2; // PO-78 important note")).toEqual(["PO-78"]);
+    expect(ids("const x = {} / 2; // PO-79 note")).toEqual(["PO-79"]);
+    expect(ids("const x = f({ a: 1 }, [{ b: 2 }]) / 2 + ({ c: 3 }) / 2; // PO-80 note")).toEqual(["PO-80"]);
+    expect(ids("const x = c ? {} : { a: {} } / 2; // PO-81 note")).toEqual(["PO-81"]);
+    expect(ids("const x = `${ { a: 1 }.a / 2 } and ${ {} / 2 }` / 2; // PO-82 note")).toEqual(["PO-82"]);
+    // A "{" first in a substitution is an object literal; a ":" in a parameter list is no ternary's colon.
+    expect(ids("const s = `${ { valueOf: () => 8 } / 2 }`; // PO-94 note")).toEqual(["PO-94"]);
+    expect(ids("const r = c ? (x: number) => x : { valueOf: () => 8 } / 2; // PO-95 note")).toEqual(["PO-95"]);
+    expect(ids("const r = f(a ? b : c) ? {} / 2 : 1; // PO-96 note")).toEqual(["PO-96"]);
+    // The slash after a division is a regex operand, whose text is no title.
+    expect(ids('const ratio = n / /it("PO-72 fake")/.test(s); it("PO-73 true", () => {});')).toEqual(["PO-73"]);
+    expect(ids('const r = a / /it\\("PO-74"/.source.length; it("PO-75 true", () => {});')).toEqual(["PO-75"]);
+    expect(ids('x = {} / /it\\("PO-76"/.source; it("PO-77 true", () => {});')).toEqual(["PO-77"]);
+    // The "}" of a block, a function body or a class ends a statement, so the slash starts a regex.
+    expect(ids('if (a) {} /it\\("PO-83"/.test(s); it("PO-84 true", () => {});')).toEqual(["PO-84"]);
+    expect(ids('const f = () => {}\n/it\\("PO-85"/.test(s); it("PO-86 true", () => {});')).toEqual(["PO-86"]);
+    expect(ids('class A { m() {} }\n/it\\("PO-87"/.test(s); try {} finally {} /it\\("PO-88"/.test(s); it("PO-89 true", () => {});')).toEqual(["PO-89"]);
+    expect(ids('switch (a) { case 1: {} }\n/it\\("PO-90"/.test(s); lbl: {} /it\\("PO-91"/.test(s); it("PO-92 true", () => {});')).toEqual(["PO-92"]);
+    // A "/" with no closing slash on its line is no regex: the lexer goes back to it and keeps what follows.
+    expect(ids('const r = c ? <p>hi</p> : 1; it("PO-93 same line", () => {});')).toEqual(["PO-93"]);
+  });
   // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
   it("takes the repository tests as they are, and catches a planted break in them", () => {
     // docs/spec/v2.md here may trail the review branch, so compare against the baseline, not against zero.
