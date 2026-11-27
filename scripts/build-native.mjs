@@ -23,6 +23,9 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const LINUX_DIRS = { x64: "linux-x64", arm64: "linux-arm64" };
 // The ELF e_machine of each (EM_X86_64, EM_AARCH64).
 export const ELF_MACHINES = { x64: 62, arm64: 183 };
+// ELF_MIN_ALIGN on x64, and the smallest arm64 page: the Linux loader reads at most this many
+// bytes of program headers, and maps each load segment in pages (fs/binfmt_elf.c).
+const LOADER_PAGE = 4096n;
 
 export const SOURCE = join("native", "linux", "sa-contain.c");
 // -static: PO-12 and M1-AC17 need each Linux binary statically linked.
@@ -55,9 +58,10 @@ export function elfProblem(file, arch) {
   const entry = u64(24);
   const [phoff, shoff] = [u64(32), u64(40)];
   const count = u16(56);
-  if (u16(54) !== 56 || count === 0 || count === 0xffff || phoff < 64n || !inFile(phoff, BigInt(count * 56))) {
+  if (u16(54) !== 56 || count === 0 || phoff < 64n || !inFile(phoff, BigInt(count * 56))) {
     return "its program headers are missing or outside the file";
   }
+  if (BigInt(count * 56) > LOADER_PAGE) return "its program-header table is larger than the Linux loader reads";
   if (shoff !== 0n && (u16(58) !== 64 || u16(60) === 0 || !inFile(shoff, BigInt(u16(60) * 64)))) {
     return "truncated: its section headers are outside the file";
   }
@@ -75,6 +79,10 @@ export function elfProblem(file, arch) {
     }
     if (type !== 1) continue;
     if (size > memory) return "a loaded segment is larger in the file than in memory";
+    const align = u64(at + 48);
+    if (offset % LOADER_PAGE !== vaddr % LOADER_PAGE || (align > 1n && offset % align !== vaddr % align)) {
+      return "a loaded segment's file offset and address differ within a page or its p_align";
+    }
     if (flags & 1 && entry >= vaddr && entry < vaddr + size) entryLoaded = true;
   }
   return entryLoaded && entry !== 0n ? undefined : "its entry point isn't in loaded, executable bytes";

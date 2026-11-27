@@ -27,7 +27,7 @@ const elf = (machine, { cls = 2, data = 1, type = 2, entry, load = {}, extra = [
     buf.writeUInt32LE(seg.type, at);
     buf.writeUInt32LE(seg.flags ?? 4, at + 4);
     const size = seg.filesz ?? sections;
-    [seg.offset ?? 0, seg.vaddr ?? 0, 0, size, seg.memsz ?? size].forEach((v, j) =>
+    [seg.offset ?? 0, seg.vaddr ?? 0, 0, size, seg.memsz ?? size, seg.align ?? 0].forEach((v, j) =>
       buf.writeBigUInt64LE(BigInt(v), at + 8 + j * 8));
   });
   return buf;
@@ -90,6 +90,12 @@ describe("elfProblem", () => {
     expect(elfProblem(Buffer.from("#!/bin/sh\n"), "x64")).toMatch(/64-bit/);
   });
 
+  it("takes the largest program-header table the Linux loader reads, and aligned load segments", () => {
+    expect(elfProblem(elf(x64, { extra: Array(72).fill({ type: 4 }) }), "x64")).toBeUndefined(); // 73 * 56 <= 4096
+    const aligned = { load: { vaddr: 0x410000, align: 0x10000 }, entry: 0x410000 + 64 + 56 };
+    expect(elfProblem(elf(x64, aligned), "x64")).toBeUndefined();
+  });
+
   it.each([
     ["only the first 20 bytes", elf(x64).subarray(0, 20), /64-bit/],
     ["cut inside the program headers", elf(x64).subarray(0, 100), /program headers/],
@@ -103,6 +109,12 @@ describe("elfProblem", () => {
     ["an entry outside the loaded bytes", elf(x64, { entry: 0x900000 }), /entry point/],
     ["an entry in a segment that can't execute", elf(x64, { load: { flags: 4 } }), /entry point/],
     ["a segment larger in the file than in memory", elf(x64, { load: { memsz: 1 } }), /memory/],
+    // C11: the kernel's load_elf_phdrs reads at most ELF_MIN_ALIGN (4096) bytes of program headers,
+    ["a program-header table over 4096 bytes", elf(x64, { extra: Array(73).fill({ type: 4 }) }), /loader reads/],
+    ["an unrecognized program-header count", elf(x64, { extra: Array(0xfffe).fill({ type: 4 }) }), /loader reads/],
+    // and mmap needs each load segment's offset and address to agree within a page (and its p_align).
+    ["a load segment off its page", elf(x64, { load: { vaddr: 0x400010 }, entry: 0x400100 }), /page/],
+    ["a load segment off its p_align", elf(x64, { load: { vaddr: 0x401000, align: 0x10000 }, entry: 0x401100 }), /page/],
   ])("refuses %s", (name, bytes, reason) => {
     expect(elfProblem(bytes, "x64")).toMatch(reason);
   });
