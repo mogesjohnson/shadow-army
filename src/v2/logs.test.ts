@@ -456,20 +456,6 @@ describe("the flushed opening row (PO-5)", () => {
     expect(confirmedOpenings(log.text())).toEqual(new Set());
   });
 
-  it("holds a confirmed opening's file until the turn settles, and reports a log replaced before delivery (C28)", async () => {
-    const log = memoryLog([undefined, undefined, "later"]);
-    const logs = new SessionLogs("logs", [], { openFile: log.openFile, append: log.append, retryDelayMs: 1 });
-    const delivered = await logs.write("soldier-1", { type: "turn_started" });
-    expect(await delivered.settle!(true)).toBeUndefined();
-    expect(log.rows().at(-1)).toEqual({ type: "turn_delivered", opening: log.rows()[0]!.opening, time: expect.any(String) });
-    const refused = await logs.write("soldier-1", { type: "turn_started" });
-    expect(await refused.settle!(false)).toBeUndefined();
-    expect(confirmedOpenings(log.text())).toEqual(new Set([log.rows()[0]!.opening]));
-    const replaced = await logs.write("soldier-1", { type: "turn_started" });
-    expect(replaced.written).toBe(true);
-    expect(await replaced.settle!(true)).toMatchObject({ message: expect.stringContaining("moved or replaced") });
-  });
-
   it("refuses an opening whose synced file the path no longer names (C24)", async () => {
     const log = memoryLog(["moved", "moved"]);
     const logs = new SessionLogs("logs", [], { openFile: log.openFile, append: log.append, retryDelayMs: 1 });

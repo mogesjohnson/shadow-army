@@ -127,12 +127,6 @@ export interface LogWriteResult {
   /** False when the line (and any gap line before it) could not be written, even after the retry. */
   written: boolean;
   error?: Error;
-  /**
-   * A confirmed opening keeps its file open until the caller settles it (C28): `true` once the message went in, which
-   * writes a `turn_delivered` row, or `false` when it never did, which writes a `turn_refused` row. Resolves with an
-   * error when that row could not be synced to the file the log's path still names.
-   */
-  settle?: (delivered: boolean) => Promise<Error | undefined>;
 }
 
 /** One handle on a log file: a turn's opening is written and synced through it, never through a reopened path (C24). */
@@ -191,7 +185,6 @@ const defaultAppend = async (path: string, text: string): Promise<void> => {
 const opensTurn = (data: unknown): boolean => (data as { type?: unknown } | null)?.type === "turn_started";
 const CONFIRMED = "turn_confirmed";
 const REFUSED = "turn_refused";
-const DELIVERED = "turn_delivered";
 const moved = (name: string): Error => new Error(`the log ${name} was moved or replaced while a turn's opening was written`);
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -226,8 +219,7 @@ export function confirmedOpenings(text: string): Set<string> {
  * path still names (C24). A try whose sync fails is never synced again: the retry writes a new row with a new id.
  * A `turn_refused` row naming the failed try follows on the same handle (C27); when that row cannot be synced either,
  * the next line written is preceded by one. So recovery tells a refused opening from a turn in flight by the file
- * alone ({@link confirmedOpenings}, C25). The held handle then writes `turn_delivered` or `turn_refused` once the
- * caller settles the turn, and checks the path again (C28). The one case the file cannot settle: the disk refuses
+ * alone ({@link confirmedOpenings}, C25). The one case the file cannot settle: the disk refuses
  * every write after a confirmation lands and the process ends before another line of that log is written.
  */
 export class SessionLogs {
@@ -367,9 +359,7 @@ export class SessionLogs {
         ended = true;
         await file.sync();
         if (!(await file.isAt(path))) throw moved(name);
-        const held = file;
-        file = undefined;
-        return { ...this.written(name), settle: this.settler(name, path, held, opening) };
+        return this.written(name);
       } catch (caught) {
         error = asError(caught);
         // C27: anything this try wrote may be in the file, confirmation included, so a refusal follows on the same
@@ -394,18 +384,4 @@ export class SessionLogs {
     }
   }
 
-  /** C28: the held handle's last row, in the log's queue; the path is checked once more after the message went in. */
-  private settler(name: string, path: string, file: OpeningFile, opening: string): (delivered: boolean) => Promise<Error | undefined> {
-    let settled: Promise<Error | undefined> | undefined;
-    return (delivered) => settled ??= this.enqueue(name, async () => {
-      try {
-        if (await this.rowOn(file, path, delivered ? { type: DELIVERED, opening } : { type: REFUSED, openings: [opening] })) return undefined;
-        this.cut.add(name);
-        if (!delivered) { this.refused.set(name, [...(this.refused.get(name) ?? []), opening]); return moved(name); }
-        return new Error(`the log ${name} could not record the turn's delivery: it was moved or replaced, or its sync failed`);
-      } finally {
-        await file.close().catch(() => {});
-      }
-    });
-  }
 }

@@ -195,9 +195,9 @@ export class PostOffice {
   private logFailed(name: string, error: Error): void {
     // M1-AC4: the office log failing while it records a notice is the same failure (a full disk), already reported once.
     if (name === "post-office" && this.noticesWriting > 0) return;
-    // C19/C26: a gap the `opened` record opened waits only when a send has reserved the session: if that send is refused
-    // for the same gap, the one event is marked refused. A standalone open is reported now, after its retry.
-    const paired = [...this.sessions.values()].some((session) => session.id === name && session.used);
+    // C19/C26/C29: a gap the `opened` record opened waits only while a send holds the session: if that send is refused
+    // for the same gap, the one event is marked refused; a send that ends first releases it. A standalone open is reported now.
+    const paired = [...this.sessions.values()].some((session) => session.id === name && session.active);
     if (this.openedWrites.has(name) && paired) { this.heldGaps.set(name, error); return; }
     if (this.openingWrites.has(name)) this.refusalsReported.add(name);
     this.reportGap(name, error, this.openingWrites.has(name));
@@ -550,6 +550,8 @@ export class PostOffice {
     session.active = next;
     try { return await next; } finally {
       session.active = undefined;
+      // C29: a send that ended before its opening could account for a held gap (a lost lease) reports it unmarked now.
+      this.releaseHeldGap(session.id);
       if (session.restartPending) this.restart(session);
     }
   }
@@ -557,6 +559,14 @@ export class PostOffice {
   private async run(session: Session, text: string): Promise<TurnResult> {
     // C2 (PO-5, M1-AC4): the turn's opening record is written, after everything before it, before the soldier gets the message.
     await this.logPending;
+    // C28: the turn's own preparation is done before its opening, so only the delivery follows its last path check.
+    // Both checks run even after transport failure/cancellation. M2 extends this native result
+    // boundary to actual background jobs; persistent session services must survive ordinary turns.
+    // A write session has no read-only snapshot to guard: the claim audit takes its place.
+    const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
+    session.guardBase = await this.exclusive(() => captureState(this.root));
+    // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
+    await this.renewLease(session);
     this.openingWrites.add(session.id);
     const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() }).finally(() => this.openingWrites.delete(session.id));
     const held = this.heldGaps.get(session.id);
@@ -566,15 +576,9 @@ export class PostOffice {
     // A refusal inside a gap already reported (a standalone open's, C26) still gets its one refused line.
     else if (!opened.written && !reported) this.reportGap(session.id, opened.error ?? new Error("unknown error"), true);
     if (!opened.written) {
+      session.guardBase = undefined;
       throw new Error(`message not sent: the session log could not record the turn's start (${String(redact(opened.error?.message ?? "unknown error", this.secrets))})`);
     }
-    // Both checks run even after transport failure/cancellation. M2 extends this native result
-    // boundary to actual background jobs; persistent session services must survive ordinary turns.
-    // A write session has no read-only snapshot to guard: the claim audit takes its place.
-    const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
-    session.guardBase = await this.exclusive(() => captureState(this.root));
-    // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
-    await this.renewLease(session);
     let result: TurnResult;
     try {
       this.check();
@@ -583,7 +587,8 @@ export class PostOffice {
         session.down = true;
         await session.channel!.close();
         result = { status: "failed", text: "", refusal: false, error: { kind: "other", message: "the claims lease was lost before this turn, so nothing was sent; reconnect to claim the files again" } };
-      } else result = session.stopRequested ? { status: "interrupted", text: "", refusal: false } : await session.channel!.send(text);
+      } else if (session.stopRequested) result = { status: "interrupted", text: "", refusal: false };
+      else result = await session.channel!.send(text);
     } catch (error) {
       result = { status: "failed", text: "", refusal: false, error: { kind: "transport", message: String(error) } };
     }
