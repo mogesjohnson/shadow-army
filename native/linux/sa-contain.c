@@ -218,26 +218,39 @@ static void report_status(pid_t pid, int status) {
     reportf("{\"op\":\"guard\",\"event\":\"exit\",\"pid\":%d,\"signal\":%d}", (int)pid, WTERMSIG(status));
 }
 
+static int exec_unsure;      /* defined with the start, below */
+static int start_failed = 0; /* the start settled as not run while reaping */
+static int settle_start(void);
+
 /* Reaps every child that has ended, without waiting. Returns 1 once wait()
  * reports ECHILD, 0 otherwise. While killing, each reaped process other
- * than the CLI is reported. */
+ * than the CLI is reported. Each child is peeked at before it is reaped, so
+ * a start still unresolved settles from the CLI's zombie before its status
+ * is consumed, whenever the CLI became waitable (C10). */
 static int reap_ready(int killing, int *reaped) {
   for (;;) {
-    int status;
-    pid_t pid = waitpid(-1, &status, WNOHANG);
-    if (pid > 0) {
-      if (pid == cli_pid) {
-        cli_reaped = 1;
-        report_status(pid, status);
-      } else if (killing) {
-        reportf("{\"op\":\"guard\",\"event\":\"reaped\",\"pid\":%d}", (int)pid);
-      }
-      if (killing && reaped) (*reaped)++;
-      continue;
+    siginfo_t si;
+    memset(&si, 0, sizeof si);
+    if (waitid(P_ALL, 0, &si, WEXITED | WNOHANG | WNOWAIT) != 0) {
+      if (errno == EINTR) continue;
+      return errno == ECHILD ? 1 : 0;
     }
+    pid_t pid = si.si_pid;
     if (pid == 0) return 0;
-    if (errno == EINTR) continue;
-    return errno == ECHILD ? 1 : 0;
+    if (pid == cli_pid && exec_unsure && settle_start() != 0) start_failed = 1;
+    int status;
+    pid_t got;
+    do {
+      got = waitpid(pid, &status, WNOHANG);
+    } while (got < 0 && errno == EINTR);
+    if (got != pid) return 0;
+    if (pid == cli_pid) {
+      cli_reaped = 1;
+      report_status(pid, status);
+    } else if (killing) {
+      reportf("{\"op\":\"guard\",\"event\":\"reaped\",\"pid\":%d}", (int)pid);
+    }
+    if (killing && reaped) (*reaped)++;
   }
 }
 
@@ -374,7 +387,7 @@ static int kill_tree(int sigfd) {
     if (timeout < 200) timeout *= 2;
   }
   report_lastf("{\"op\":\"guard\",\"event\":\"ended\",\"reaped\":%d,\"dropped\":%u}", reaped, dropped);
-  return 0;
+  return start_failed;
 }
 
 static int exec_fd = -1; /* the exec-status pipe while the start is pending */
@@ -415,6 +428,16 @@ static int exec_unsure = 0; /* the pipe ended; whether exec ran is not known yet
 
 #define PF_EXITING_FLAG 0x4 /* the kernel's PF_EXITING: do_exit has begun */
 
+/* C10's test builds with -DSA_CONTAIN_TEST_STALE: every look at the CLI
+ * before it is waitable then reads as dying, and the loop's own look before
+ * reaping is skipped, as when each is taken just before the CLI exits. The
+ * shipped helper is never built with it. */
+#ifdef SA_CONTAIN_TEST_STALE
+#define STALE_LOOKS 1
+#else
+#define STALE_LOOKS 0
+#endif
+
 /* The status pipe also reaches its end when the child dies before exec
  * (C8), so the end alone confirms nothing. The child ran the program if it
  * now has another name than the guardian's (exec renames it), exited with a
@@ -427,6 +450,7 @@ static int exec_outcome(void) {
   memset(&si, 0, sizeof si);
   int dead = waitid(P_PID, (id_t)cli_pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0 && si.si_pid == cli_pid;
   if (dead && si.si_code == CLD_EXITED) return 1;
+  if (STALE_LOOKS && !dead) return -1;
   char name[16], comm[32];
   pid_t ppid;
   unsigned flags = 0;
@@ -544,8 +568,9 @@ static int op_guard(int argc, char **argv) {
         if (info.ssi_signo != SIGCHLD) end = 1;
       }
       /* Before reaping: a dying child is settled while it is still a zombie. */
-      if (exec_unsure && settle_start() != 0) { kill_tree(sigfd); return 1; }
+      if (!STALE_LOOKS && exec_unsure && settle_start() != 0) { kill_tree(sigfd); return 1; }
       reap_ready(0, NULL);
+      if (start_failed) { kill_tree(sigfd); return 1; }
       if (end) return kill_tree(sigfd);
     }
     if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {

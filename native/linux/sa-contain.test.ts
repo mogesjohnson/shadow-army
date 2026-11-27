@@ -49,9 +49,11 @@ describe.skipIf(!canBuild)("sa-contain", () => {
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "sa-contain-"));
     helper = join(dir, "sa-contain");
-    const cc = spawnSync("cc", ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", "-o", helper, source]);
-    expect(cc.stderr.toString()).toBe("");
-    expect(cc.status).toBe(0);
+    for (const [out, extra] of [[helper, []], [`${helper}-stale`, ["-DSA_CONTAIN_TEST_STALE"]]] as const) {
+      const cc = spawnSync("cc", ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", ...extra, "-o", out, source]);
+      expect(cc.stderr.toString()).toBe("");
+      expect(cc.status).toBe(0);
+    }
   }, 60_000);
   afterAll(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -82,6 +84,29 @@ describe.skipIf(!canBuild)("sa-contain", () => {
     expect(events).toContainEqual({ op: "guard", ok: false, step: "exec-unconfirmed", errno: 0 });
     expect(events.find((e) => e.event === "exit")).toMatchObject({ signal: 15 });
     expect(r.code).toBe(1);
+  });
+
+  it("settles a start still unresolved when the CLI becomes waitable (C10)", async () => {
+    // The stale build reads every look before the CLI is waitable as dying,
+    // so only the reaping can settle the start.
+    const shipped = helper;
+    helper = `${shipped}-stale`;
+    try {
+      const ran = await run(["guard", "/bin/sh", "-c", "exit 3"], "pipe", "start\n", killOnExit);
+      expect(parsed(ran).map((e) => e.event)).toEqual(["ready", "started", "exit", "ended"]);
+      expect(parsed(ran)[2]).toMatchObject({ code: 3 });
+      expect(ran.code).toBe(0);
+      const junk = Array.from({ length: 32 }, () => "x".repeat(16 * 1024));
+      const r = await run(["guard", "/bin/sh", "-c", "sleep 5", ...junk], "pipe", "start\nterm\n", killOnExit);
+      const events = parsed(r);
+      const unconfirmed = events.findIndex((e) => e.step === "exec-unconfirmed");
+      expect(unconfirmed).toBeGreaterThan(0);
+      expect(events.findIndex((e) => e.event === "exit")).toBeGreaterThan(unconfirmed);
+      expect(events.some((e) => e.event === "started")).toBe(false);
+      expect(r.code).toBe(1);
+    } finally {
+      helper = shipped;
+    }
   });
 
   it("passes a check on a connected socket", async () => {
