@@ -300,16 +300,18 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
 export function createContainmentGate(options: CheckOptions) {
   let last: CheckResult | undefined;
   let generation = 0;
-  let running: { generation: number; result: Promise<CheckResult> } | undefined;
+  let running: { generation: number; check: Promise<CheckResult>; result: Promise<CheckResult> } | undefined;
   const run = (): Promise<CheckResult> => {
     if (running?.generation === generation) return running.result;
     const started = generation;
-    const before = running?.result;
-    const result = (before ?? Promise.resolve()).then(() => checkContainment(options)).then((outcome) => {
-      if (started === generation) last = outcome;
-      return outcome;
+    // One check at a time: the next waits on the check itself, never on a result that may wait on it (C8).
+    const check = (running?.check ?? Promise.resolve()).then(() => checkContainment(options));
+    const result: Promise<CheckResult> = check.then((outcome) => {
+      if (started === generation) { last = outcome; return outcome; }
+      // A failure was reported while this ran: its pass is stale, so its waiters get a check of the latest state.
+      return outcome.ok ? run() : outcome;
     }).finally(() => { if (running?.result === result) running = undefined; });
-    running = { generation: started, result };
+    running = { generation: started, check, result };
     return result;
   };
   return {

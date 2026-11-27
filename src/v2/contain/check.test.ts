@@ -264,6 +264,26 @@ describe("rerun at reconnect (PO-14, PO-15)", () => {
     await gate.ready();
     expect(runs).toBe(2);
   });
+
+  it("gives a waiter on a check that a failure made stale the newer result, not the stale pass (C8)", async () => {
+    let runs = 0;
+    let release!: () => void;
+    const gate = createContainmentGate(base({}, steps({
+      helper: async () => {
+        runs++;
+        if (runs === 1) { await new Promise<void>((done) => { release = done; }); return ok; }
+        return { ok: false, failure: { cause: "cannot-run" } };
+      },
+    })));
+    const first = gate.start();
+    await flush();
+    gate.containmentFailed();
+    release();
+    expect((await first).ok).toBe(false);
+    expect(runs).toBe(2);
+    expect((await gate.ready()).ok).toBe(false);
+    expect(runs).toBe(3);
+  });
 });
 
 describe("PO-14 messages per cause (AC18)", () => {
