@@ -3,7 +3,20 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { startOfficeServer, type OfficeServer, type ServerOptions } from "./server.js";
 import { redact } from "./logs.js";
-import type { LeaseOptions } from "./lease.js";
+import { assertSessionId, type LeaseOptions } from "./lease.js";
+
+/** PO-7: the bootstrap names its launcher. `mod` must carry Claude's session id, or nothing starts; only `live` (`sa live`) runs with no lease. */
+export function bootstrapLease(parsed: unknown): { lease?: LeaseOptions; live?: true } {
+  const value = parsed && typeof parsed === "object" ? parsed as { mode?: unknown; lease?: { session?: unknown } } : {};
+  if (value.mode === "live") {
+    if (value.lease !== undefined) throw new Error("post office refuses to start: `sa live` has no lease");
+    return { live: true };
+  }
+  if (value.mode !== "mod") throw new Error("post office refuses to start: the bootstrap names no launcher");
+  const session = value.lease?.session;
+  try { assertSessionId(session); } catch { throw new Error("post office refuses to start: the mod gave no valid session id"); }
+  return { lease: { session } };
+}
 
 /** Bootstrap is written once then closed, as the mod contract specifies. Shutdown is authenticated. */
 export async function runPostOffice(settings: Partial<Omit<ServerOptions, "credential">> = {}): Promise<void> {
@@ -51,9 +64,9 @@ export async function runPostOffice(settings: Partial<Omit<ServerOptions, "crede
     });
     const parsed: unknown = JSON.parse(bootstrap);
     credential = parsed && typeof parsed === "object" && "credential" in parsed && typeof parsed.credential === "string" ? parsed.credential : "";
-    const lease = parsed && typeof parsed === "object" && "lease" in parsed ? parsed.lease as LeaseOptions : undefined;
+    const launcher = settings.lease || settings.live ? {} : bootstrapLease(parsed);
     const cwdIndex = process.argv.indexOf("--cwd");
-    office = await startOfficeServer({ ...settings, lease: settings.lease ?? lease, cwd: settings.cwd ?? (cwdIndex >= 0 ? process.argv[cwdIndex + 1] ?? "" : process.cwd()), credential,
+    office = await startOfficeServer({ ...settings, ...launcher, cwd: settings.cwd ?? (cwdIndex >= 0 ? process.argv[cwdIndex + 1] ?? "" : process.cwd()), credential,
       onEvent: (event) => { if (!outputLost) process.stdout.write(`${JSON.stringify(event)}\n`); },
       onShutdown: () => { void stop(); },
     });
