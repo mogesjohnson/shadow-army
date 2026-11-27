@@ -9,13 +9,13 @@ The offline version of this run passes already: `src/v2/slice.test.ts` drives th
 ## Before you start
 
 - Windows, Node on the PATH, `claude` installed and logged in.
-- A git repository of yours with a committed `HEAD`. Commit or stash your own edits to the files the soldier will touch (a clash is refused, see below).
-- This branch checked out: `C:\Users\johns\projects\AIConnections-worktrees\m1a-slice` (`claude/63-m1a-slice`).
+- A disposable git repository with a committed `HEAD` and a clean working copy (`git status --short --ignored` prints nothing), for example a new one made with `git init`, a `README.md` and one commit. Do not use a repository whose files you care about: a soldier can still write ignored files there (see "Known not to work").
+- This branch (`claude/63-m1a-slice`) checked out in a folder of yours, written `<shadow-army>` below (for example `C:\src\shadow-army`).
 
 ## 1. Build the mod
 
 ```powershell
-cd C:\Users\johns\projects\AIConnections-worktrees\m1a-slice
+cd <shadow-army>
 npm install
 npm run build
 ```
@@ -28,7 +28,7 @@ Go to your own repository and start Claude Code with the plugin by its full path
 
 ```powershell
 cd C:\path\to\your\repo
-claude --plugin-dir C:\Users\johns\projects\AIConnections-worktrees\m1a-slice\plugins\shadow-army
+claude --plugin-dir <shadow-army>\plugins\shadow-army
 ```
 
 No settings file changes are needed. `/send` should now show in the slash-command list. The soldiers come from the roster bundled with this checkout (`shadow.config.json`, `orchestratorDelegate.md`) unless your repository has its own copies. The soldier to use is `claude-sonnet` (claude, build role).
@@ -83,23 +83,28 @@ Exit Claude Code with `/exit` (or close the window). The mod releases the lease 
 
 Check: `.shadow\v2\post-office.lock` is gone, and there is no leftover `node` process running `modRelay.js` or the post office (Task Manager, Details tab). If the lock stays after 30 seconds, end that node process, then delete the lock file. That clean-up is not tested live.
 
-## 6. What to paste on the build PR
+## 6. What to paste on the build PR (VER-8)
+
+The repository is public. Before you paste, read every line and replace anything private with `[redacted]`: a path with your user name, a repository or file name you keep private, text the soldier quoted from your files.
 
 Paste these, in this order:
 
-1. Date, Windows version, `node --version`, `claude --version`, and the branch commit (`git rev-parse --short HEAD` in `m1a-slice`).
+1. Date, Windows version, `node --version`, `claude --version`, and the branch commit (`git rev-parse --short HEAD` in `<shadow-army>`).
 2. The two cards, copied as text.
 3. The output of `git status --short` and `git log -1 --oneline` in your folder after each brief.
-4. The `git diff` of `notes/live-run-1.md` and `notes/live-run-2.md`, and `git diff README.md` (it should be empty).
+4. The applied files' contents. They are added with intent to add (` A`), so `git diff -- notes` shows them in full; `Get-Content notes\live-run-1.md, notes\live-run-2.md` works too. Then `git diff README.md`, which should be empty.
 5. Whether the post office stopped on `/exit` (lock file gone, no node process).
-6. Anything odd: a long wait, a wrong card, a prompt from claude you had to answer. If a step failed, paste the card or error text as it is and the last 20 lines of the session log.
+6. Tokens and cost for each brief. In the session log (the card's `Log:` path), `Select-String '"type":"usage"' <log>` finds the usage records: input, cached input and output tokens, and `costUsd` where claude reports one. Paste the figures, not the whole lines.
+7. The spend: these briefs' tokens and cost added to the release's spend so far, against the budget in spec section 5.1, and any go you gave to pass it, with your words and the date.
+8. The result: **pass** if both cards and both folder checks match the steps above and the post office stopped, otherwise **fail**, naming the step that did not match.
+9. Anything odd: a long wait, a wrong card, a prompt from claude you had to answer. If a step failed, paste the card or error text as it is and the last 20 lines of the session log, redacted as above.
 
 ## Known not to work
 
 - **Changing claims needs a new session.** A soldier's claims are fixed when its session opens. A later `/send` with different claims is refused with the post office's reason, shown on the card, for example `claude-sonnet holds claims notes/**; close its session before sending other claims`. The mod has no close command yet. To change claims, exit Claude Code and start it again, then send. The earlier work stays on the soldier's branch.
 - **A second turn that edits a file an earlier turn already applied is refused.** The card says `Not applied:` with the clash reason and the file. Your folder is unchanged and the work stays on the soldier's branch (`shadow/...`). Ask for a new file instead, as brief two does.
 - **Your own edits.** If you changed a file in your folder that the soldier also changed, it is not applied and the card says so.
-- **Ignored files in your folder are not guarded (W12-4).** If a soldier writes a git-ignored file there by absolute path, such as `.env` or something under `node_modules/` or `dist/`, neither the claim audit nor the checkout guard sees it, because the guard's `git status` runs without `--ignored`. Keep nothing you care about in ignored files during the live run; M1b's guard should cover them.
+- **Ignored files in your folder are not guarded (W12-4).** If a soldier writes a git-ignored file there by absolute path, such as `.env` or something under `node_modules/` or `dist/`, neither the claim audit nor the checkout guard sees it, because the guard's `git status` runs without `--ignored`. Run in the disposable repository from "Before you start", which has no ignored files, so anything ignored that appears there came from the soldier; `git status --short --ignored` after each brief shows it (`.shadow/` itself is expected there). Guarding ignored files is a follow-up for M1b's guard (W12-4).
 - **One command, one soldier.** `/send` takes one claude soldier with the build role. There is no pane, no cancel command and no merge or commit of the result.
 
 ## Not tested
