@@ -102,6 +102,20 @@ describe("the shipped roster (ARM-1, M1-AC6)", () => {
   });
 });
 
+describe("a shadow name against keys that differ only by case (ARM-3, review 100 C1)", () => {
+  it("refuses a name that is the folded key of another soldier, whatever the key order", () => {
+    const delegate = "---\nsoldiers:\n  Scout:\n    roles: [research]\n  scout:\n    roles: [research]\n  Other:\n    roles: [research]\n---\n";
+    const dir = projectWith({ soldiers: {
+      Scout: { cli: "grok", model: "m", shadowName: "Ember" },
+      scout: { cli: "grok", model: "m", shadowName: "Scout" },
+      Other: { cli: "agy", model: "m" },
+    } });
+    writeFileSync(join(dir, "orchestratorDelegate.md"), delegate);
+    writeFileSync(join(dir, "agent.md"), "");
+    expect(() => loadV2Roster(dir)).toThrow(/shadow name "Scout" of "scout" is the key of soldier "Scout"/);
+  });
+});
+
 describe("the v2 loader ignores the legacy Monarch settings (C2)", () => {
   const shippedDelegate = readFileSync(new URL("../../orchestratorDelegate.md", import.meta.url), "utf8").replaceAll("\r\n", "\n");
   const shippedConfig = readFileSync(new URL("../../shadow.config.json", import.meta.url), "utf8");
