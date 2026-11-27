@@ -182,7 +182,11 @@ export class PostOffice {
     this.names = loaded.names;
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
-    this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets, { onFailure: ({ name, error }) => this.logFailed(name, error) });
+    this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets, {
+      onFailure: ({ name, error }) => this.logFailed(name, error),
+      // C22: a later line closed the opening gap, so no send can be refused for it: it is reported unmarked now.
+      onRecovered: (name) => this.releaseHeldGap(name),
+    });
   }
 
   /** C3 (PO-5, M1-AC4): one notice per gap, outside the failing log; the turn carries on. */
@@ -192,6 +196,17 @@ export class PostOffice {
     // C19: a gap the `opened` record opened waits for the first send; if that send is refused for the same gap, the one event is marked refused.
     if (this.openedWrites.has(name)) { this.heldGaps.set(name, error); return; }
     this.reportGap(name, error, this.openingWrites.has(name));
+  }
+
+  private releaseHeldGap(name: string): void {
+    const held = this.heldGaps.get(name);
+    if (held) { this.heldGaps.delete(name); this.reportGap(name, held, false); }
+  }
+
+  /** C20: the session's queued records (its `opened` one too) settle first, so their gap is reported while the session is known. */
+  private async settleLogs(session: Session): Promise<void> {
+    await this.logPending;
+    this.releaseHeldGap(session.id);
   }
 
   private reportGap(name: string, error: Error, refused: boolean): void {
@@ -334,6 +349,7 @@ export class PostOffice {
       if (existing.active) throw new Error("cannot reconnect while the previous turn is finalizing");
       await existing.channel?.close();
       await this.releaseWrite(existing);
+      await this.settleLogs(existing);
       // A fresh snapshot keeps partial work in the previous one, never silently repeats it.
       this.sessions.delete(key);
       existing = undefined;
@@ -697,11 +713,10 @@ export class PostOffice {
     await session.restart;
     if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
     await this.releaseWrite(session);
-    // C19: a gap no send claimed is reported unmarked when its session ends.
-    const held = this.heldGaps.get(session.id);
-    if (held) { this.heldGaps.delete(session.id); this.reportGap(session.id, held, false); }
-    if (this.sessions.get(key) === session) this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
+    // C19/C20: a gap no send claimed, or the close record's own, is reported with its soldier before the session goes.
+    await this.settleLogs(session);
+    if (this.sessions.get(key) === session) this.sessions.delete(key);
   }
 
   /** Runs `fn` alone among applies and checkout-guard captures. */

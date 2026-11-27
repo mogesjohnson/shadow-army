@@ -678,6 +678,53 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect(failed[0]!.data).not.toHaveProperty("refused");
   }, 30_000);
 
+  it("reports an opened-record gap with its soldier when its session closes during the retry, the office still up (C20, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    // No await between: the close starts while the `opened` record's first try or its 100 ms retry is pending.
+    await office.closeSession("scout");
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ soldier: "scout" });
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+  }, 30_000);
+
+  it("reports a recovered opened-record gap unmarked and the send's own refused gap apart (C22, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    const logsDir = join(repo.dir, ".shadow", "v2", "logs");
+    await rm(logsDir, { recursive: true, force: true });
+    await writeFile(logsDir, "not a folder");
+    const { session } = await office.open("scout");
+    await until(() => (office as unknown as { heldGaps: Map<string, Error> }).heldGaps.size > 0);
+    // The folder comes back and one session line goes in: the opening gap is over.
+    await rm(logsDir, { force: true });
+    await mkdir(logsDir);
+    expect((await (office as unknown as { logs: { write: (name: string, data: unknown) => Promise<{ written: boolean }> } }).logs.write(session, { type: "note" })).written).toBe(true);
+    // Then the send's own opening row cannot be flushed: a new gap, which refuses the send.
+    const probe = await fsPromises.open(join(logsDir, "probe"), "w");
+    const sync = vi.spyOn(Object.getPrototypeOf(probe) as { sync: () => Promise<void> }, "sync").mockRejectedValue(new Error("EIO: flush failed"));
+    await probe.close();
+    try {
+      await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    } finally { sync.mockRestore(); }
+    expect(delivered).toEqual([]);
+    const failed = events.filter((event) => event.type === "log_failed").map((event) => event.data as Record<string, unknown>);
+    expect(failed).toHaveLength(2);
+    expect(failed[0]).not.toHaveProperty("refused");
+    expect(failed[1]).toMatchObject({ refused: true });
+  }, 30_000);
+
   it("flushes each streamed block at its own stop, so interleaved streams are not mixed (C14, PO-5)", async () => {
     const repo = makeRepo(); repos.push(repo);
     let emit: ChannelOptions["onEvent"] = () => {};
