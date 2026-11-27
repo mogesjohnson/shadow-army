@@ -87,7 +87,7 @@ describe.skipIf(!canBuild)("sa-contain", () => {
   });
 
   it("settles a start still unresolved when the CLI becomes waitable (C10)", async () => {
-    // The stale build reads every look before the CLI is waitable as dying,
+    // The stale build skips the looks at the pipe's end and before reaping,
     // so only the reaping can settle the start.
     const shipped = helper;
     helper = `${shipped}-stale`;

@@ -428,10 +428,10 @@ static int exec_unsure = 0; /* the pipe ended; whether exec ran is not known yet
 
 #define PF_EXITING_FLAG 0x4 /* the kernel's PF_EXITING: do_exit has begun */
 
-/* C10's test builds with -DSA_CONTAIN_TEST_STALE: every look at the CLI
- * before it is waitable then reads as dying, and the loop's own look before
- * reaping is skipped, as when each is taken just before the CLI exits. The
- * shipped helper is never built with it. */
+/* C10's test builds with -DSA_CONTAIN_TEST_STALE: the looks at the pipe's
+ * end and before reaping are then skipped, as when each is taken just before
+ * the CLI exits, so only the reaping settles the start. The shipped helper
+ * is never built with it. */
 #ifdef SA_CONTAIN_TEST_STALE
 #define STALE_LOOKS 1
 #else
@@ -450,7 +450,7 @@ static int exec_outcome(void) {
   memset(&si, 0, sizeof si);
   int dead = waitid(P_PID, (id_t)cli_pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0 && si.si_pid == cli_pid;
   if (dead && si.si_code == CLD_EXITED) return 1;
-  if (STALE_LOOKS && !dead) return -1;
+  if (cli_reaped) return 0; /* nothing is left to look at: never wait forever */
   char name[16], comm[32];
   pid_t ppid;
   unsigned flags = 0;
@@ -491,7 +491,7 @@ static int finish_start(void) {
     return -1;
   }
   exec_unsure = 1;
-  return settle_start();
+  return STALE_LOOKS ? 0 : settle_start();
 }
 
 enum command { CMD_NONE, CMD_START, CMD_TERM, CMD_KILL, CMD_UNKNOWN };
