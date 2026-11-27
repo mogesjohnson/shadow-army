@@ -475,7 +475,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_stop" } });
   for (const part of ["key ${a}", "${b}", "${c} end"]) delta({ type: "text_delta", text: part });
   emit({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "key ${credential} end" }], usage: { input_tokens: 1 } } });
-  emit({ type: "result", subtype: "success", is_error: false, result: "key ${credential} end", terminal_reason: "completed", stop_reason: "end_turn" });
+  emit({ type: "result", subtype: "success", is_error: false, user_message_uuid: frame.uuid, result: "key ${credential} end", terminal_reason: "completed", stop_reason: "end_turn" });
 }
 `);
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
