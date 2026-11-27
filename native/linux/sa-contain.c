@@ -219,14 +219,18 @@ static void report_status(pid_t pid, int status) {
 }
 
 static int exec_unsure;      /* defined with the start, below */
+static int exec_fd;          /* likewise */
 static int start_failed = 0; /* the start settled as not run while reaping */
 static int settle_start(void);
+static int finish_start(void);
 
 /* Reaps every child that has ended, without waiting. Returns 1 once wait()
  * reports ECHILD, 0 otherwise. While killing, each reaped process other
  * than the CLI is reported. Each child is peeked at before it is reaped, so
  * a start still unresolved settles from the CLI's zombie before its status
- * is consumed, whenever the CLI became waitable (C10). */
+ * is consumed, whenever the CLI became waitable (C10). A status pipe still
+ * open is read first: a wake by a stop or continue SIGCHLD leaves it out of
+ * the poll snapshot while the CLI may exec and exit (C12). */
 static int reap_ready(int killing, int *reaped) {
   for (;;) {
     siginfo_t si;
@@ -237,6 +241,7 @@ static int reap_ready(int killing, int *reaped) {
     }
     pid_t pid = si.si_pid;
     if (pid == 0) return 0;
+    if (pid == cli_pid && exec_fd >= 0 && finish_start() != 0) start_failed = 1;
     if (pid == cli_pid && exec_unsure && settle_start() != 0) start_failed = 1;
     int status;
     pid_t got;
@@ -438,6 +443,15 @@ static int exec_unsure = 0; /* the pipe ended; whether exec ran is not known yet
 #define STALE_LOOKS 0
 #endif
 
+/* C12's test builds with -DSA_CONTAIN_TEST_UNPOLLED: the status pipe is left
+ * out of every poll, as when each wake is a stop or continue SIGCHLD taken
+ * before the pipe ends, so only the reaping reads it. Never shipped. */
+#ifdef SA_CONTAIN_TEST_UNPOLLED
+#define POLLED_EXEC_FD (-1)
+#else
+#define POLLED_EXEC_FD exec_fd
+#endif
+
 /* The status pipe also reaches its end when the child dies before exec
  * (C8), so the end alone confirms nothing. The child ran the program if it
  * now has another name than the guardian's (exec renames it), exited with a
@@ -549,7 +563,7 @@ static int op_guard(int argc, char **argv) {
     struct pollfd fds[3] = {
         {.fd = sigfd, .events = POLLIN},
         {.fd = report_fd, .events = POLLIN | (out_used ? POLLOUT : 0)},
-        {.fd = exec_fd, .events = POLLIN}, /* ignored while -1 */
+        {.fd = POLLED_EXEC_FD, .events = POLLIN}, /* ignored while -1 */
     };
     if (poll(fds, 3, -1) < 0) {
       if (errno == EINTR) continue;

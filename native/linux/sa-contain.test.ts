@@ -49,7 +49,12 @@ describe.skipIf(!canBuild)("sa-contain", () => {
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), "sa-contain-"));
     helper = join(dir, "sa-contain");
-    for (const [out, extra] of [[helper, []], [`${helper}-stale`, ["-DSA_CONTAIN_TEST_STALE"]]] as const) {
+    const builds = [
+      [helper, []],
+      [`${helper}-stale`, ["-DSA_CONTAIN_TEST_STALE"]],
+      [`${helper}-unpolled`, ["-DSA_CONTAIN_TEST_UNPOLLED"]],
+    ] as const;
+    for (const [out, extra] of builds) {
       const cc = spawnSync("cc", ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", ...extra, "-o", out, source]);
       expect(cc.stderr.toString()).toBe("");
       expect(cc.status).toBe(0);
@@ -104,6 +109,26 @@ describe.skipIf(!canBuild)("sa-contain", () => {
       expect(events.findIndex((e) => e.event === "exit")).toBeGreaterThan(unconfirmed);
       expect(events.some((e) => e.event === "started")).toBe(false);
       expect(r.code).toBe(1);
+    } finally {
+      helper = shipped;
+    }
+  });
+
+  it("reads a status pipe still open when the CLI becomes waitable (C12)", async () => {
+    // The unpolled build never polls the pipe, as when every wake is a stop
+    // or continue SIGCHLD, so only the reaping can read it.
+    const shipped = helper;
+    helper = `${shipped}-unpolled`;
+    try {
+      const ran = await run(["guard", "/bin/sh", "-c", "exit 3"], "pipe", "start\n", killOnExit);
+      expect(parsed(ran).map((e) => e.event)).toEqual(["ready", "started", "exit", "ended"]);
+      expect(parsed(ran)[2]).toMatchObject({ code: 3 });
+      expect(ran.code).toBe(0);
+      const failed = await run(["guard", join(dir, "missing")], "pipe", "start\n", killOnExit);
+      const events = parsed(failed);
+      expect(events).toContainEqual({ op: "guard", ok: false, step: "exec", errno: 2 });
+      expect(events.some((e) => e.event === "started")).toBe(false);
+      expect(failed.code).toBe(1);
     } finally {
       helper = shipped;
     }
