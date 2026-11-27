@@ -14,7 +14,7 @@ describe("build", () => {
     const r = go({ role: "build" });
     expect(names(r)).toEqual(["claude-sonnet", "grok", "codex-sol"]);
     expect(why(r, "claude-opus")).toMatch(/builds only hard tasks/);
-    expect(why(r, "codex-astra")).toMatch(/not configured for the "build" role/);
+    expect(why(r, "codex-astra")).toMatch(/builds only hard tasks/);
     expect(why(r, "agy")).toMatch(/not configured for the "build" role/);
     expect(r.candidates[0]!.reasons.join()).toMatch(/cheapest soldier that qualifies/);
     expect(r.candidates[0]!.effort).toBe("medium");
@@ -22,7 +22,7 @@ describe("build", () => {
 
   it("hard: the hard specialist first, then most capable, with high effort", () => {
     const r = go({ role: "build", difficulty: "hard" });
-    expect(names(r)).toEqual(["claude-opus", "codex-sol", "claude-sonnet", "grok"]);
+    expect(names(r)).toEqual(["claude-opus", "codex-astra", "codex-sol", "claude-sonnet", "grok"]);
     expect(r.candidates[0]!.reasons.join()).toMatch(/specialist for hard builds/);
     expect(r.candidates.every((c) => c.effort === "high")).toBe(true);
   });
@@ -31,13 +31,13 @@ describe("build", () => {
 describe("review", () => {
   it("never offers grok, whatever else is true", () => {
     const r = go({ role: "review" });
-    expect(names(r)).toEqual(["claude-opus"]);
+    expect(names(r)).toEqual(["claude-opus", "codex-astra"]);
     expect(why(r, "grok")).toMatch(/never takes review/);
     expect(r.candidates[0]!.effort).toBe("high");
   });
 
   it("nobody reviews their own work", () => {
-    const r = go({ role: "review", author: "claude-opus" });
+    const r = go({ role: "review", authors: ["claude-opus", "codex-astra"] });
     expect(r.candidates).toEqual([]);
     expect(why(r, "claude-opus")).toMatch(/never reviews its own work/);
   });
@@ -120,7 +120,7 @@ describe("renderRoute", () => {
   });
 
   it("says plainly when nobody is eligible", () => {
-    const profile = { role: "review" as const, author: "claude-opus" };
+    const profile = { role: "review" as const, authors: ["claude-opus", "codex-astra"] };
     expect(renderRoute(profile, go(profile))).toContain("Nobody is eligible for this task.");
   });
 });

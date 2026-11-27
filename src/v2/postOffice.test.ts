@@ -2,12 +2,14 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { git } from "../workspace/git.js";
+import { Locks } from "../workspace/locks.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import * as managedProcesses from "./processTree.js";
+import { buildStandingInstructions, estimateInstructionTokens, MAX_INSTRUCTION_TOKENS } from "./instructions.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
@@ -26,6 +28,7 @@ async function setup() {
   return { repo, office, events, deliveries };
 }
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(offices.splice(0).map((office) => office.close()));
   repos.splice(0).forEach((repo) => repo.cleanup());
 });
@@ -375,6 +378,9 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     const second = await office.send("tank", "edit again");
     expect(first.write?.applicable).toBe(true);
     expect(second.write?.branch).toBe(opened.branch);
+    // The second turn wrote the same bytes: the earlier turn's commit is not this turn's change.
+    expect(second.write?.applicable).toBe(false);
+    expect(second.write?.reason).toBe("the soldier changed nothing");
     expect(started).toHaveLength(1);
     // The first turn's audited change reaches the owner's folder uncommitted (B4, M1-AC28).
     expect(first.write?.apply?.applied).toBe(true);
@@ -410,7 +416,8 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
   }, 30_000);
 
   it("raises nothing for an edit made between turns, and a shadow branch is no change", async () => {
-    const { repo, office } = await writer({ "src/a.ts": "claimed edit\n" });
+    let turn = 0;
+    const { repo, office } = await writer({}, async (cwd) => { await writeFile(join(cwd, "src/a.ts"), `claimed edit ${++turn}\n`); });
     expect((await office.send("tank", "edit", { claims: ["src/a.ts"] })).write?.applicable).toBe(true);
     repo.write("README.md", "owner edit between turns\n");
     const second = await office.send("tank", "edit again");
@@ -443,4 +450,147 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(result.write?.worktree).toBe(opened.cwd);
     expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
   }, 30_000);
+
+  it("C1: a no-op turn after an interrupted one never makes the retained edit applicable; reconnecting starts fresh", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event), channelFactory: factory }); offices.push(office);
+    const opened = await office.open("tank", { claims: ["partial.txt"] });
+    const pending = office.send("tank", "partial");
+    await until(() => events.some((event) => event.type === "tool_call"));
+    await office.interrupt("tank");
+    const first = await pending;
+    expect(first.write?.applicable).toBe(false);
+    expect(first.write?.reason).toContain("reconnect");
+    await expect(office.send("tank", "inspect")).rejects.toThrow("reconnect explicitly");
+    const reopened = await office.open("tank", { claims: ["partial.txt"] });
+    expect(reopened.cwd).not.toBe(opened.cwd);
+    const noop = await office.send("tank", "inspect");
+    expect(noop.status).toBe("completed");
+    expect(noop.write?.applicable).toBe(false);
+    expect(noop.write?.diff).not.toContain("partial edit");
+    expect(await readFile(join(opened.cwd, "partial.txt"), "utf8")).toBe("partial edit\n");
+  }, 30_000);
+
+  it("C2: a send that overlaps a pending open with different claims is refused before any brief is sent", async () => {
+    const { repo, office, started } = await writer({ "README.md": "edited under the wrong claims\n" });
+    const [opened, sent] = await Promise.allSettled([office.open("tank", { claims: ["src/a.ts"] }), office.send("tank", "edit", { claims: ["README.md"] })]);
+    expect(opened.status).toBe("fulfilled");
+    expect(sent.status).toBe("rejected");
+    expect(String((sent as PromiseRejectedResult).reason)).toContain("holds claims");
+    expect(started).toHaveLength(1);
+    const worktree = (opened as PromiseFulfilledResult<{ cwd: string }>).value.cwd;
+    expect(await readFile(join(worktree, "README.md"), "utf8")).toBe("hello\n");
+    expect(await readFile(join(repo.dir, "README.md"), "utf8")).toBe("hello\n");
+  }, 30_000);
+
+  it("C3: keeps the claims lease alive across turns, and fails closed once it expired and changed hands (fake clock)", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    let turn = 0;
+    const { repo, office, events } = await writer({}, async (cwd) => { await writeFile(join(cwd, "src/a.ts"), `edit ${++turn}\n`); });
+    const locks = new Locks(join(repo.dir, ".shadow"));
+    expect((await office.send("tank", "edit", { claims: ["src/a.ts"] })).write?.applicable).toBe(true);
+    // The owner keeps the first turn, so the second turn's apply meets no uncommitted change (#99 C1 takes a refused apply down).
+    await git(repo.dir, ["commit", "-qam", "keep the first turn"]);
+    // The first audit stopped v1's heartbeat; the office's own keeps the lease for 80 minutes past a 60-minute TTL.
+    for (let step = 0; step < 4; step++) {
+      const before = (await locks.list())[0]!.expiresAt;
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      await until(async () => ((await locks.list())[0]?.expiresAt ?? 0) > before);
+    }
+    await expect(locks.acquire({ owner: "medic", claims: ["src/a.ts"] })).rejects.toThrow(/tank/);
+    expect((await office.send("tank", "edit")).write?.applicable).toBe(true);
+    // A lease that expires without renewal (the process slept) is taken by another soldier.
+    vi.setSystemTime(Date.now() + 61 * 60_000);
+    await locks.acquire({ owner: "medic", claims: ["src/a.ts"], ttlMs: 60 * 60_000 });
+    await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
+    expect(turn).toBe(2);
+    expect(events.some((event) => event.type === "down")).toBe(true);
+  }, 30_000);
+});
+
+describe("shadow names and the size refusal through the office (ARM-3, SI-3; Codex review 8 C1, C3)", () => {
+  const started: ChannelOptions[] = [];
+  const stub = (options: ChannelOptions): NativeChannel => {
+    started.push(options);
+    return { async send() { return { status: "completed", text: "ok", refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+  };
+  afterEach(() => { started.length = 0; });
+  // A stale monarch block on purpose (C2): the office loads this folder through the v2 loader.
+  const delegate = "---\nmonarch:\n  default: ghost\nsoldiers:\n  scout:\n    roles: [review]\n    write: false\n  tank:\n    roles: [build]\n---\nguide\n";
+  function folder(shadowNames: Record<string, string> = {}) {
+    const soldier = (key: string, model: string) => ({ cli: "claude", model, ...(shadowNames[key] ? { shadowName: shadowNames[key] } : {}) });
+    const repo = makeRepo({ "README.md": "x\n", "src/a.ts": "a\n", "shadow.config.json": JSON.stringify({ soldiers: { scout: soldier("scout", "m1"), tank: soldier("tank", "m2") } }), "orchestratorDelegate.md": delegate, "agent.md": "" });
+    repos.push(repo);
+    return repo;
+  }
+  const create = async (options: Omit<Parameters<typeof PostOffice.create>[0], "credential">) => {
+    const office = await PostOffice.create({ credential, channelFactory: stub, ...options });
+    offices.push(office);
+    return office;
+  };
+
+  it("shows a configured shadow name in army and in the standing instructions of every soldier", async () => {
+    const repo = folder({ scout: "Ember" });
+    const office = await create({ cwd: repo.dir });
+    const army = office.army() as Array<{ key: string; name: string }>;
+    expect(army.map((s) => [s.key, s.name])).toEqual([["scout", "Ember"], ["tank", "tank"]]);
+    await office.open("tank");
+    expect(started[0]!.instructions).toContain("You are tank (tank), model m2");
+    expect(started[0]!.instructions).toContain("- Ember (scout): m1");
+    await office.open("scout");
+    expect(started[1]!.instructions).toContain("You are Ember (scout), model m1");
+    expect(started[1]!.instructions).not.toContain("You are scout");
+  });
+
+  it("refuses startup when two names clash in any case, or a name is another soldier's key", async () => {
+    await expect(PostOffice.create({ cwd: folder({ scout: "Same", tank: "SAME" }).dir, credential, channelFactory: stub })).rejects.toThrow(/taken by both "scout" and "tank"|taken by both "tank" and "scout"/);
+    await expect(PostOffice.create({ cwd: folder({ scout: "TANK" }).dir, credential, channelFactory: stub })).rejects.toThrow(/key of soldier "tank"/);
+  });
+
+  it("takes the names of a supplied roster from `names`, and refuses a clash there too", async () => {
+    const repo = folder();
+    const supplied = makeRoster({ a: { cli: "claude", model: "m", roles: ["review"] }, b: { cli: "claude", model: "m", roles: ["review"] } });
+    const office = await create({ cwd: repo.dir, roster: supplied, names: new Map([["a", "Ash"], ["b", "Bay"]]) });
+    expect((office.army() as Array<{ name: string }>).map((s) => s.name)).toEqual(["Ash", "Bay"]);
+    await expect(PostOffice.create({ cwd: repo.dir, credential, roster: supplied, names: new Map([["a", "Ash"], ["b", "ASH"]]) })).rejects.toThrow();
+  });
+
+  describe("SI-3 at the 1,500-token limit", () => {
+    const make = (n: number) => makeRoster({ tank: { cli: "claude", model: "m", roles: ["build"], write: true } }, undefined, { all: "x".repeat(n), perSoldier: new Map() });
+    // Each x is one byte and three bytes are one token. The write session has no read-only sentence, so size it that way.
+    const base = estimateInstructionTokens(buildStandingInstructions(make(0), make(0).soldiers.get("tank")!, { readOnly: false }));
+    const pad = (MAX_INSTRUCTION_TOKENS - 1 - base) * 3;
+
+    it("refuses before any workspace or lease exists, logs the count and section, and opens one token lower", async () => {
+      const repo = folder();
+      const events: OfficeEvent[] = [];
+      const office = await create({ cwd: repo.dir, roster: make(pad + 3), onEvent: (event) => events.push(event) });
+      await expect(office.open("tank", { claims: ["src/**"] })).rejects.toThrow(/estimate 1500 tokens.*"## tank" section of agent\.md/);
+      expect(started).toHaveLength(0);
+      expect(repo.git("worktree", "list").split(/\r?\n/)).toHaveLength(1);
+      expect(await new Locks(join(repo.dir, ".shadow")).list()).toEqual([]);
+      expect(events.filter((event) => event.type === "refused")).toHaveLength(1);
+      await office.close();
+      const logs = join(repo.dir, ".shadow", "v2", "logs");
+      const text = (await Promise.all((await readdir(logs)).map((name) => readFile(join(logs, name), "utf8")))).join("\n");
+      const refused = text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).find((record) => record.type === "refused");
+      expect(refused.soldier).toBe("tank");
+      expect(refused.data).toMatchObject({ estimate: 1500, limit: 1500, section: "## tank" });
+      expect(refused.data.message).toContain("estimate 1500 tokens");
+
+      const ok = await create({ cwd: repo.dir, roster: make(pad) });
+      const opened = await ok.open("tank", { claims: ["src/**"] });
+      expect(opened.branch).toMatch(/^shadow\//);
+      expect(started).toHaveLength(1);
+      expect(started[0]!.instructions).toBeDefined();
+    });
+
+    it("refuses a read-only open too, starting nothing", async () => {
+      const repo = folder();
+      const office = await create({ cwd: repo.dir, roster: make(pad + 6) });
+      await expect(office.open("tank")).rejects.toThrow(/must be below 1500/);
+      expect(started).toHaveLength(0);
+    });
+  });
 });

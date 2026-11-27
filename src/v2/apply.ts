@@ -8,8 +8,10 @@ import type { WriteOutcome } from "./channel.js";
  * applied and the soldier's branch keeps the work. A clash with the owner's own edits, or a checkout that
  * moved on, applies nothing and says why. Never throws for a git failure.
  */
-export async function applyAudited(root: string, write: WriteOutcome, since?: string): Promise<ApplyResult> {
+export async function applyAudited(root: string, write: WriteOutcome): Promise<ApplyResult> {
   if (!write.applicable) return { applied: false, reason: write.reason ?? "the turn is not applicable", clashes: [] };
-  // A later turn on the same session applies only what is new since the last tip that reached the folder.
-  return applyToCheckout(root, since ?? write.base, write.branch);
+  if (!write.tip) return { applied: false, reason: "the audit resolved no commit to apply", clashes: [] };
+  // Only this turn's audited delta, between immutable IDs: the branch may move after the audit, and an earlier
+  // turn's unapplied work (before `start`) stays on the branch for the owner to recover explicitly.
+  return applyToCheckout(root, write.start, write.tip);
 }

@@ -10,11 +10,11 @@ import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, 
 
 const channels: ClaudeChannel[] = [];
 const folders: string[] = [];
-async function setup(extra: { interruptTimeoutMs?: number; versionTimeoutMs?: number; autonomy?: "supervised" | "auto" | "full"; fakeArgs?: string[] } = {}) {
+async function setup(extra: { interruptTimeoutMs?: number; versionTimeoutMs?: number; badLineQuietMs?: number; autonomy?: "supervised" | "auto" | "full"; fakeArgs?: string[] } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "sa-native-claude-"));
   folders.push(cwd);
   const events: ChannelEvent[] = [];
-  const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions: "Standing instructions remain appended.", onEvent: (event) => events.push(event), command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs"), ...(extra.fakeArgs ?? [])] }, interruptTimeoutMs: extra.interruptTimeoutMs, versionTimeoutMs: extra.versionTimeoutMs, autonomy: extra.autonomy });
+  const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions: "Standing instructions remain appended.", onEvent: (event) => events.push(event), command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs"), ...(extra.fakeArgs ?? [])] }, interruptTimeoutMs: extra.interruptTimeoutMs, versionTimeoutMs: extra.versionTimeoutMs, badLineQuietMs: extra.badLineQuietMs, autonomy: extra.autonomy });
   channels.push(channel);
   return { cwd, channel, events };
 }
@@ -49,9 +49,9 @@ async function s6Protocol(autonomy?: "supervised" | "auto" | "full") {
   const versionOutput = new PassThrough();
   versionOutput.end("2.1.295 (Claude Code)\n");
   const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
-    pid: 2, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {},
+    pid: 2, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {}, droppedPath: [],
   }).mockResolvedValueOnce({
-    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {},
+    pid: 1, stdin, stdout, stderr, exited: new Promise(() => {}), close: async () => {}, droppedPath: [],
   });
   const events: ChannelEvent[] = [];
   const channel = new ClaudeChannel({ cwd: tmpdir(), model: "synthetic-s6", instructions: "S6 regression", autonomy, onEvent: (event) => events.push(event), command: { file: process.execPath } });
@@ -62,7 +62,7 @@ async function s6Protocol(autonomy?: "supervised" | "auto" | "full") {
     await until(() => sent.some((frame) => frame.type === "user" && (frame.message as { content: string }).content === text));
     return { pending, id: (sent.filter((frame) => frame.type === "user").at(-1)!).uuid };
   };
-  return { channel, events, emit, send, sent, spawned: () => injected.mock.calls.map(([options]) => options) };
+  return { channel, events, emit, send, sent, stdout, spawned: () => injected.mock.calls.map(([options]) => options) };
 }
 
 const zeroUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
@@ -418,10 +418,72 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(await pending).toMatchObject({ status: "completed", text: "Already completed", usage: { costUsd: 0.03 } });
   });
 
+  it("ends a turn only on a result whose uuid list names its message (CH-2, C2)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("earlier");
+    emit({ type: "result", subtype: "success", user_message_uuids: [first.id], result: "first reply", total_cost_usd: 0.03 });
+    expect(await first.pending).toMatchObject({ status: "completed", text: "first reply" });
+    const second = await send("later");
+    emit({ type: "result", subtype: "success", user_message_uuids: [first.id], result: "stale earlier reply", total_cost_usd: 0.05 });
+    emit({ type: "result", subtype: "success", user_message_uuids: ["unrelated", second.id], result: "true reply", total_cost_usd: 0.1 });
+    const result = await second.pending;
+    expect(result).toMatchObject({ status: "completed", text: "true reply" });
+    // The stale result moved no usage baseline: the delta runs from the first turn's total.
+    expect(result.usage?.costUsd).toBeCloseTo(0.07);
+  });
+
+  it("redacts the whole malformed line before logging it, then excerpts the redacted text (CH-1, C12)", async () => {
+    const { events, stdout, send } = await s6Protocol();
+    await send("bad line");
+    // The secret straddles the 200-character excerpt boundary; the diagnostic sits past it.
+    const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
+    stdout.write(`{broken ${"x".repeat(180)} ${secret} diagnostic-tail\n`);
+    await until(() => events.some((event) => event.type === "error"));
+    const raw = events.find((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")!.data as { text: string };
+    const error = events.find((event) => event.type === "error")!.data as NativeError;
+    expect(raw.text).toContain("diagnostic-tail");
+    for (const text of [raw.text, error.message]) expect(text).not.toMatch(/sk-ant-a/);
+    expect(error.message.length).toBeLessThan(400);
+  });
+
+  it("leaves a result naming no message as a log-only frame (CH-2, C10)", async () => {
+    const { emit, send } = await s6Protocol();
+    const first = await send("earlier");
+    emit({ type: "result", subtype: "success", user_message_uuid: first.id, result: "first reply", total_cost_usd: 0.03 });
+    await first.pending;
+    const second = await send("later");
+    let settled = false;
+    void second.pending.then(() => { settled = true; });
+    emit({ type: "result", subtype: "success", result: "unbound", total_cost_usd: 0.05 });
+    emit({ type: "result", subtype: "success", user_message_uuid: "", user_message_uuids: [], result: "empty", total_cost_usd: 0.06 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    emit({ type: "result", subtype: "success", user_message_uuid: second.id, result: "true reply", total_cost_usd: 0.1 });
+    const result = await second.pending;
+    expect(result).toMatchObject({ status: "completed", text: "true reply" });
+    // Neither unbound result moved the usage baseline.
+    expect(result.usage?.costUsd).toBeCloseTo(0.07);
+  });
+
+  it("marks a completed result without a cost total as a gap, not part of the next turn's estimate (C5)", async () => {
+    const { emit, send } = await s6Protocol();
+    const costs: (number | undefined)[] = [];
+    for (const total of [0.03, undefined, 0.1, 0.12]) {
+      const { pending, id } = await send(`turn ${costs.length}`);
+      emit({ type: "result", subtype: "success", user_message_uuid: id, result: "done", usage: { input_tokens: 1, output_tokens: 1 }, ...(total === undefined ? {} : { total_cost_usd: total }) });
+      costs.push((await pending).usage?.costUsd);
+    }
+    expect(costs[0]).toBeCloseTo(0.03);
+    expect(costs.slice(1, 3)).toEqual([undefined, undefined]);
+    expect(costs[3]).toBeCloseTo(0.02);
+  });
+
   it.runIf(process.platform === "win32")("preserves multiline standing text through a real Windows batch shim and removes its append file", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "sa-native-claude-batch-"));
-    folders.push(cwd);
-    const batch = join(cwd, "fake-claude.cmd");
+    // The shim sits outside the soldier's folder: an executable inside it is refused (C11).
+    const bin = await mkdtemp(join(tmpdir(), "sa-native-claude-bin-"));
+    folders.push(cwd, bin);
+    const batch = join(bin, "fake-claude.cmd");
     await writeFile(batch, `@echo off\r\n"${process.execPath}" "${resolve("test/fakes/claude.mjs")}" %*\r\n`);
     const instructions = "First line 🌙\r\nSecond line with \"quotes\" & literal %values%.\nThird line.";
     const channel = new ClaudeChannel({ cwd, model: "fake-model", instructions, onEvent: () => {}, command: { file: batch } });
@@ -430,6 +492,8 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(inspection.appendText).toBe(instructions);
     expect(inspection.args).not.toContain("--system-prompt-file");
     expect(inspection.args).not.toContain(instructions);
+    // The settings JSON survives both cmd.exe passes intact (CH-2, C3).
+    expect(JSON.parse(inspection.args[inspection.args.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
     const instructionPath = inspection.args[inspection.args.indexOf("--append-system-prompt-file") + 1];
     await channel.close();
     await expect(readFile(instructionPath)).rejects.toThrow();
@@ -470,6 +534,19 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(second.usage?.raw.total_cost_usd).toBe(0.06);
   }, 15_000);
 
+  it("turns auto memory off in the environment and in --settings over an inherited 0 (CH-2, C3)", async () => {
+    const previous = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "0";
+    try {
+      const { channel } = await setup();
+      const inspection = JSON.parse((await channel.send("inspect")).text);
+      expect(inspection.autoMemoryOff).toBe("1");
+      expect(JSON.parse(inspection.args[inspection.args.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY; else process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = previous;
+    }
+  }, 15_000);
+
   it("uses each native autonomy mode without disabling native tools", () => {
     const opts = { cwd: ".", model: "fake", instructions: "", onEvent: () => {} };
     expect(claudeChannelArgs(opts)).toContain("plan");
@@ -484,7 +561,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["split 🌙"]);
   }, 15_000);
 
-  windowsOnly("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
+  it("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
     const result = await channel.send("malformed-once");
     expect(result.status).toBe("completed");
@@ -498,17 +575,140 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("completed");
   }, 15_000);
 
-  windowsOnly("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
+  it("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
     const survived = await channel.send("malformed-nine-then-ok");
     expect(survived.status).toBe("completed");
+    const before = events.length;
     const result = await channel.send("malformed-ten");
     expect(result.status).toBe("interrupted");
     expect(result.error?.kind).toBe("transport");
     expect(result.error?.message).toContain("10 unparseable lines in a row");
+    const errors = events.slice(before).filter((event) => event.type === "error").map((event) => event.data as NativeError);
+    // Review 3 C3: the tenth line keeps its own diagnostic before the connection is lost.
+    expect(errors.filter((error) => error.kind === "other")).toHaveLength(10);
+    expect(errors.at(-1)?.kind).toBe("transport");
+    expect(events.slice(before).filter((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")).toHaveLength(10);
     await channel.close();
     expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
     expect(events.filter((event) => event.type === "closed")).toHaveLength(1);
+  }, 15_000);
+
+  windowsOnly("records the whole redacted unparseable line and cuts only the error message (review 3 C2)", async () => {
+    const { channel, events } = await setup();
+    expect((await channel.send("malformed-long")).text).toBe("after long bad line");
+    const raw = events.find((event) => event.type === "raw" && (event.data as { type?: string }).type === "unparseable_line")!.data as { text: string };
+    expect(raw.text).toContain("y".repeat(40));
+    expect(raw.text).not.toMatch(/sk-ant-a/);
+    const error = events.find((event) => event.type === "error")!.data as NativeError;
+    expect(error.message).not.toMatch(/sk-ant-a/);
+    expect(error.message.endsWith("...")).toBe(true);
+  }, 15_000);
+
+  windowsOnly("settles a turn whose result line was unparseable once, and keeps the channel for the next turn (review 3 C1)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 50 });
+    const lost = await channel.send("malformed-idle");
+    expect(lost.status).toBe("failed");
+    expect(lost.error).toMatchObject({ kind: "other", message: expect.stringContaining("no progress on the turn within 50 ms") });
+    expect((await channel.send("hello")).status).toBe("completed");
+    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
+    expect(events.some((event) => event.type === "closed")).toBe(false);
+  }, 15_000);
+
+  windowsOnly("stops a turn natively when it stays quiet after an unparseable line (review 3 C1)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 5_000 });
+    const stopped = await channel.send("malformed");
+    expect(stopped.status).toBe("failed");
+    expect(stopped.error?.kind).toBe("other");
+    expect((await channel.send("hello")).status).toBe("completed");
+    expect(events.filter((event) => event.type === "turn_end")).toHaveLength(2);
+  }, 15_000);
+
+  windowsOnly("keeps recovery armed through frames that belong to no turn (#96 C6)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
+    const stopped = await channel.send("malformed-unrelated");
+    expect(stopped.status).toBe("failed");
+    expect(stopped.error?.kind).toBe("other");
+    expect(events.some((event) => event.type === "error" && (event.data as NativeError).message.includes("no progress on the turn within 100 ms"))).toBe(true);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 8_000);
+
+  windowsOnly("keeps recovery armed through a subagent's output after the turn lost its result (#94 C11)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
+    const started = Date.now();
+    const stopped = await channel.send("malformed-auxiliary");
+    // The fake's subagent writes for about 3 s; recovery must not wait for it to fall silent.
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(stopped.status).toBe("failed");
+    expect(events.some((event) => event.type === "error" && (event.data as NativeError).message.includes("no progress on the turn within 100 ms"))).toBe(true);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 8_000);
+
+  windowsOnly("keeps a typed provider error and its metadata through recovery, with the diagnostic beside it (#94 C13)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+    const rate = await channel.send("malformed-rate");
+    expect(rate.status).toBe("failed");
+    expect(rate.error).toEqual({ kind: "rate_limit", message: "rate_limit_event: rejected", resetAt: new Date(1900000000 * 1000).toISOString() });
+    const login = await channel.send("malformed-login-idle");
+    expect(login.status).toBe("failed");
+    expect(login.error?.kind).toBe("login_needed");
+    const diagnostics = events.filter((event) => event.type === "error" && (event.data as NativeError).message.includes("no progress on the turn within 50 ms"));
+    expect(diagnostics).toHaveLength(2);
+    expect((await channel.send("hello")).status).toBe("completed");
+  }, 15_000);
+
+  windowsOnly("restarts the quiet window at each frame of the turn's own progress (#96 C6)", async () => {
+    const { channel } = await setup({ badLineQuietMs: 100, interruptTimeoutMs: 5_000 });
+    const done = await channel.send("malformed-then-progress");
+    expect(done.status).toBe("completed");
+    expect(done.text).toBe("progress finished");
+  }, 8_000);
+
+  windowsOnly("contains the channel when a recovery interrupt is never confirmed, and settles after containment (#96 C5)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+    const result = await channel.send("malformed-ignore-interrupt");
+    // The turn may still be running natively, so it is not settled as an ordinary failure on a live channel.
+    expect(result.status).toBe("interrupted");
+    expect(result.error?.kind).toBe("transport");
+    const closed = events.find((event) => event.type === "closed")?.data as { containmentStopped?: boolean } | undefined;
+    expect(closed?.containmentStopped).toBe(true);
+    expect((await channel.send("hello")).status).toBe("interrupted");
+  }, 15_000);
+
+  windowsOnly("keeps a typed provider error on the turn when recovery's interrupt is never confirmed (#94 C17)", async () => {
+    const { channel, events } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+    const result = await channel.send("malformed-rate-ignore-interrupt");
+    expect(result.status).toBe("interrupted");
+    expect(result.error).toEqual({ kind: "rate_limit", message: "rate_limit_event: rejected", resetAt: new Date(1900000000 * 1000).toISOString() });
+    // The transport diagnostic stays on the channel's own error and close events.
+    expect(events.some((event) => event.type === "error" && (event.data as NativeError).kind === "transport")).toBe(true);
+    const closed = events.find((event) => event.type === "closed")?.data as { reason?: NativeError; containmentStopped?: boolean } | undefined;
+    expect(closed?.reason?.kind).toBe("transport");
+    expect(closed?.containmentStopped).toBe(true);
+  }, 15_000);
+
+  windowsOnly("reports failed containment over an earlier typed provider error (#94 C17)", async () => {
+    const original = managedProcesses.spawnManagedProcess;
+    const injected = vi.spyOn(managedProcesses, "spawnManagedProcess").mockImplementationOnce(async (options) => {
+      const child = await original(options);
+      return { ...child, close: async () => { await child.close(); throw new Error("injected containment uncertainty"); } };
+    });
+    try {
+      const { channel } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 200 });
+      const result = await channel.send("malformed-rate-ignore-interrupt");
+      // Native work may still be running, so the turn must not read as a rate limit to wait out.
+      expect(result.error?.kind).toBe("transport");
+      expect(result.error?.message).toContain("containment failed");
+    } finally { injected.mockRestore(); }
+  }, 15_000);
+
+  windowsOnly("marks a missing cost boundary when recovery settles a turn without a usable total (#96 C7)", async () => {
+    const { channel } = await setup({ badLineQuietMs: 50, interruptTimeoutMs: 50 });
+    expect((await channel.send("one")).usage?.costUsd).toBeCloseTo(0.03, 6);
+    expect((await channel.send("malformed-idle-cost")).status).toBe("failed");
+    // This total includes the lost turn's cost, so it only restores the baseline.
+    expect((await channel.send("two")).usage?.costUsd).toBeUndefined();
+    expect((await channel.send("three")).usage?.costUsd).toBeCloseTo(0.03, 6);
   }, 15_000);
 
   windowsOnly("uses only the main conversation for the meter and preserves native terminal/cache usage", async () => {
@@ -536,9 +736,12 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("still alive")).text).toContain("turn 5");
   }, 15_000);
 
-  it("leaves missing usage unknown and does not substitute estimated tokens", async () => {
+  windowsOnly("leaves missing usage unknown and does not substitute estimated tokens", async () => {
     const { channel } = await setup();
-    expect((await channel.send("unknown-usage")).usage).toBeUndefined();
+    const result = await channel.send("unknown-usage");
+    // Review 3 C1 on #103: a failed spawn also leaves usage undefined, so the turn must complete.
+    expect(result).toMatchObject({ status: "completed", text: "No usage available" });
+    expect(result.usage).toBeUndefined();
   }, 15_000);
 
   windowsOnly("settles a stream death mid-tool call as interrupted and preserves partial files", async () => {

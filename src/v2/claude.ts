@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { access, constants, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { ChannelEvent, ChannelOptions, ModelUsage, NativeChannel, NativeError, RetryNotice, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
-import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
+import { resolveLaunch, spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 type Frame = Record<string, unknown>;
 const object = (value: unknown): Frame | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Frame : undefined;
@@ -27,55 +27,38 @@ export interface ClaudeChannelOptions extends ChannelOptions {
   versionTimeoutMs?: number;
   /** The environment the launch target is resolved from (default: the post office's own). */
   env?: NodeJS.ProcessEnv;
+  /** Test seam for the quiet window after an unparseable line. */
+  badLineQuietMs?: number;
 }
 
 /** CH-1: the one validated target both the `--version` probe and the session start. */
 export interface ClaudeLaunch { file: string; args: string[]; env: NodeJS.ProcessEnv; dropped: string[] }
 
-const foldCase = process.platform === "win32" || process.platform === "darwin";
-const inside = (child: string, parent: string): boolean => {
-  const rel = relative(foldCase ? parent.toLowerCase() : parent, foldCase ? child.toLowerCase() : child);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-};
-const isFile = async (path: string): Promise<boolean> => {
-  try { if (!(await stat(path)).isFile()) return false; if (process.platform !== "win32") await access(path, constants.X_OK); return true; }
-  catch { return false; }
-};
-
 /**
- * CH-1: resolve claude once. The post office's `PATH` loses every relative, empty or unresolvable
- * entry and every entry in the soldier's folder, compared by real path; `claude` is looked up in what
- * is left (on Windows with each `PATHEXT` extension in order, never with none, never in the current
- * folder), and the session gets that cleaned `PATH`. A configured command must be absolute.
+ * CH-1: resolve claude once, through the containment's own checks (`resolveLaunch`): the post office's `PATH`
+ * loses every relative, empty or unresolvable entry and every entry in the soldier's folder, its checkout or a
+ * worktree, compared by real path; `claude` is looked up in what is left (on Windows with each `PATHEXT`
+ * extension in order, never with none, never in the current folder); the file found must itself lie outside
+ * them by real path; and the session gets that cleaned `PATH`. A configured command must be absolute.
  * Returns the refusal line when no trusted claude is found.
  */
 export async function resolveClaudeLaunch(command: { file: string; args?: string[] } | undefined, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<ClaudeLaunch | string> {
-  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-  const folder = await realpath(cwd).catch(() => cwd);
-  const kept: string[] = []; const dropped: string[] = [];
-  for (const entry of (env[pathKey] ?? "").split(delimiter)) {
-    const real = entry && isAbsolute(entry) ? await realpath(entry).catch(() => undefined) : undefined;
-    if (real && !inside(real, folder)) kept.push(entry); else dropped.push(entry);
+  if (command && !isAbsolute(command.file)) return `claude command ${command.file} is not an absolute path`;
+  try {
+    const launch = await resolveLaunch(command?.file ?? "claude", cwd, env);
+    return { file: launch.file, args: command?.args ?? [], env: launch.env, dropped: launch.dropped };
+  } catch (error) {
+    if (!command && (error as NodeJS.ErrnoException).code === "ENOENT") return "claude was not found on PATH outside the soldier's folder; install claude";
+    return `claude cannot be started: ${error instanceof Error ? error.message : String(error)}`;
   }
-  const launchEnv: NodeJS.ProcessEnv = { ...env, [pathKey]: kept.join(delimiter) };
-  if (process.platform === "win32") launchEnv.NoDefaultCurrentDirectoryInExePath = "1";
-  if (command) {
-    if (!isAbsolute(command.file)) return `claude command ${command.file} is not an absolute path`;
-    return { file: command.file, args: command.args ?? [], env: launchEnv, dropped };
-  }
-  const extensions = process.platform === "win32" ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
-  for (const entry of kept) for (const extension of extensions) {
-    const candidate = join(entry, `claude${extension}`);
-    if (await isFile(candidate)) return { file: candidate, args: [], env: launchEnv, dropped };
-  }
-  return "claude was not found on PATH outside the soldier's folder; install claude";
 }
 
 /** CH-2: auto memory stays off, in the process environment and in `--settings`, which outranks the user's, project and local settings. */
 const AUTO_MEMORY_VARIABLE = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
 const AUTO_MEMORY_SETTINGS = JSON.stringify({ env: { [AUTO_MEMORY_VARIABLE]: "1" } });
 /** M1-AC14: every claude process the adapter starts, the version probe included, over an inherited value. */
-const claudeEnvironment = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({ ...base, [AUTO_MEMORY_VARIABLE]: "1" });
+// Every spelling of the variable is replaced, so no inherited value of another case outranks it on Windows.
+const claudeEnvironment = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({ ...Object.fromEntries(Object.entries(base).filter(([key]) => key.toUpperCase() !== AUTO_MEMORY_VARIABLE)), [AUTO_MEMORY_VARIABLE]: "1" });
 
 const versionParts = (text: string): number[] | undefined => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.slice(1).map(Number);
 const isOlder = (found: number[], oldest: number[]): boolean => {
@@ -121,6 +104,8 @@ const permissionModeFor = (autonomy: ChannelOptions["autonomy"]): string => auto
 /** A start the CLI refused because managed settings forbid a flag (PO-1). `--mcp-config` under disableSideloadFlags is PO-4's, never this. */
 const MANAGED_REFUSAL = /managed settings|disableBypassPermissionsMode|disabled by your organization/i;
 const SIDELOAD_REFUSAL = /disableSideloadFlags|--mcp-config/i;
+/** A turn quiet this long after an unparseable line may have lost its result; long tool runs emit no frames. */
+const BAD_LINE_QUIET_MS = 10 * 60_000;
 
 interface PendingTurn {
   id: string;
@@ -145,6 +130,7 @@ export function claudeChannelArgs(options: ChannelOptions, instructionPath?: str
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
     "--model", options.model, "--permission-mode", permission,
+    // CH-2: --settings outranks user, project and local settings, so none turns auto memory back on.
     "--settings", AUTO_MEMORY_SETTINGS,
     ...(instructionPath ? ["--append-system-prompt-file", instructionPath] : ["--append-system-prompt", options.instructions]),
   ];
@@ -227,6 +213,7 @@ export class ClaudeChannel implements NativeChannel {
   private closingResult?: TurnResult;
   private reason: NativeError = { kind: "transport", message: "Claude channel closed" };
   private stopTimer?: NodeJS.Timeout;
+  private badLineTimer?: NodeJS.Timeout;
   private instructionDirectory?: string;
   private model?: string;
   private sawFrame = false;
@@ -265,6 +252,7 @@ export class ClaudeChannel implements NativeChannel {
       instructionPath = join(this.instructionDirectory, "instructions.txt");
       await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
     }
+    // The PATH was cleaned once above; the "path" event already names what was dropped, so the child's own list is empty.
     return spawnManagedProcess({ file: command.file, args: [...command.args, ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: claudeEnvironment(command.env) });
   }
 
@@ -321,13 +309,19 @@ export class ClaudeChannel implements NativeChannel {
     try { frame = object(JSON.parse(line)); } catch { /* A malformed protocol cannot safely delimit the active turn. */ }
     if (!frame || typeof frame.type !== "string") {
       this.badLines++;
-      const excerpt = line.length > BAD_LINE_EXCERPT ? `${line.slice(0, BAD_LINE_EXCERPT)}...` : line;
-      const message = `Claude emitted an unparseable line: ${String(redact(excerpt))}`;
-      this.emit("raw", { type: "unparseable_line", text: String(redact(excerpt)) });
+      // CH-1: redact the whole line (already bounded by MAX_FRAME_BYTES) first, so no secret is cut in
+      // half; the record keeps the full redacted diagnostic and the message shows its excerpt.
+      const redacted = String(redact(line));
+      const excerpt = redacted.length > BAD_LINE_EXCERPT ? `${redacted.slice(0, BAD_LINE_EXCERPT)}...` : redacted;
+      const message = `Claude emitted an unparseable line: ${excerpt}`;
+      this.emit("raw", { type: "unparseable_line", text: redacted });
+      // Review 3 C3: every line, the tenth included, keeps its own diagnostic before the connection is lost.
+      this.emit("error", { kind: "other", message } satisfies NativeError);
       if (this.badLines >= MAX_BAD_LINES_IN_A_ROW) void this.failTransport(`Claude connection lost: ${MAX_BAD_LINES_IN_A_ROW} unparseable lines in a row`);
-      else this.emit("error", { kind: "other", message } satisfies NativeError);
+      else if (this.current && !this.current.stopped && !this.badLineTimer) this.armBadLineTimer(this.current);
       return;
     }
+    // Only a settled turn disarms recovery: a valid frame that belongs to no turn proves nothing about this one.
     this.badLines = 0;
     this.sawFrame = true;
     this.emit("raw", frame);
@@ -366,6 +360,10 @@ export class ClaudeChannel implements NativeChannel {
     }
     if (frame.type === "result") { this.result(frame); return; }
     if (!turn) return;
+    // The turn's own progress extends the quiet window; other valid frames leave its deadline as it was.
+    // A subagent's output (a parent tool use) is auxiliary: it cannot show the main turn still has a result coming (#94 C11).
+    const auxiliary = typeof frame.parent_tool_use_id === "string";
+    if (this.badLineTimer && !auxiliary && ["stream_event", "assistant", "user", "rate_limit_event", "model_refusal_no_fallback"].includes(frame.type as string)) this.armBadLineTimer(turn);
     if (frame.type === "rate_limit_event") {
       const info = object(frame.rate_limit_info);
       if (info?.status === "rejected") {
@@ -562,12 +560,55 @@ export class ClaudeChannel implements NativeChannel {
     return usage && this.current?.stopped ? { ...usage, outputTokens: undefined } : usage;
   }
 
+  /** (Re)starts the quiet window after an unparseable line; it ends only when the turn settles. */
+  private armBadLineTimer(turn: PendingTurn): void {
+    clearTimeout(this.badLineTimer);
+    this.badLineTimer = setTimeout(() => {
+      this.badLineTimer = undefined;
+      // A turn waiting for the owner's approval is not silent: keep the window armed instead of stopping it.
+      if (this.current === turn && this.approvals.size) this.armBadLineTimer(turn);
+      else void this.recover(turn);
+    }, this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS);
+    this.badLineTimer.unref();
+  }
+
+  /**
+   * The bad line may have been the turn's result. After a quiet window, ask Claude to stop the
+   * turn natively. An acknowledged interrupt with no result in a second window means the turn was
+   * already over, so it settles locally as failed and the connection stays open. An interrupt that
+   * is never acknowledged may leave the native turn running: that takes the bounded containment
+   * close, and the turn settles only after containment is classified.
+   */
+  private async recover(turn: PendingTurn): Promise<void> {
+    if (this.current !== turn || turn.stopped || this.closed) return;
+    const quiet = this.options.badLineQuietMs ?? BAD_LINE_QUIET_MS;
+    turn.stopped = true;
+    const diagnostic: NativeError = { kind: "other", message: `Claude made no progress on the turn within ${quiet} ms of an unparseable line` };
+    // A typed provider error seen earlier (a rate-limit reset, a login requirement) stays the turn's
+    // error; the recovery diagnostic is recorded beside it as its own event (#94 C13).
+    if (!turn.error || turn.error.kind === "other") turn.error = diagnostic;
+    this.emit("error", diagnostic);
+    this.approvals.clear();
+    let acknowledged = false;
+    this.stopTimer = setTimeout(() => {
+      if (this.current !== turn) return;
+      if (!acknowledged) { void this.failTransport("Claude did not confirm a stop within 30 seconds of an unparseable line"); return; }
+      // The lost result's cost is unknown: the next total only restores the baseline (#96 C7).
+      this.missingCostBoundary = true;
+      this.finish({ status: "failed", text: turn.text, refusal: false, sessionId: this.sessionId, contextTokens: turn.contextTokens, usage: this.eventUsage(turn), error: turn.error });
+    }, this.options.interruptTimeoutMs ?? 30_000);
+    this.stopTimer.unref();
+    await this.control({ subtype: "interrupt" }).then(() => { acknowledged = true; }, () => undefined);
+  }
+
   private finish(result: TurnResult): void {
     const turn = this.current;
     if (!turn) return;
     this.current = undefined;
     clearTimeout(this.stopTimer);
     this.stopTimer = undefined;
+    clearTimeout(this.badLineTimer);
+    this.badLineTimer = undefined;
     this.approvals.clear();
     this.emit("turn_end", result);
     turn.resolve(result);
@@ -644,6 +685,7 @@ export class ClaudeChannel implements NativeChannel {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
     clearTimeout(this.stopTimer);
+    clearTimeout(this.badLineTimer);
     this.approvals.clear();
     for (const pending of this.controls.values()) { clearTimeout(pending.timer); pending.reject(new Error(this.reason.message)); }
     this.controls.clear();
@@ -664,7 +706,11 @@ export class ClaudeChannel implements NativeChannel {
       }
       // A failed containment check must unblock callers without claiming cleanup succeeded.
       // The post office keeps such a channel down and never automatically resumes its queue.
-      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.closingUsage(), error: this.reason });
+      // A typed provider error the turn already saw (a rate-limit reset, a login requirement) stays the
+      // turn's error; the transport diagnostic stays on the error and closed events (#94 C17). Failed
+      // containment outranks it: native work may still be running, so the turn must not read as a wait.
+      const typed = containmentStopped && this.current?.error && this.current.error.kind !== "other" && this.current.error.kind !== "transport" ? this.current.error : undefined;
+      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.closingUsage(), error: typed ?? this.reason });
       this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped, refusedStart: this.refusedStart });
     })();
     return this.closePromise;
