@@ -566,6 +566,27 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     expect(turn).toBe(2);
     expect(events.some((event) => event.type === "down")).toBe(true);
   }, 30_000);
+
+  it("reports a held opened-record gap unmarked when the send ends on a lost lease before its opening (C29, PO-5)", async () => {
+    const { repo, office, events } = await writer({});
+    // A file where the logs folder belongs: the `opened` record's write and its retry fail.
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("tank", { claims: ["src/a.ts"] });
+    const held = (office as unknown as { heldGaps: Map<string, Error> }).heldGaps;
+    // The renewal fails only once the send holds the opened-record gap, so the send ends before run() could account for it.
+    const renew = vi.spyOn(Locks.prototype, "renew").mockImplementation(async () => { await until(() => held.size > 0); return false; });
+    try {
+      await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
+    } finally { renew.mockRestore(); }
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ soldier: "tank" });
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+    expect(held.size).toBe(0);
+    // The office stays open: the lost lease takes only that session down.
+    expect(() => (office as unknown as { check: () => void }).check()).not.toThrow();
+  }, 30_000);
 });
 
 describe("the session log on the office's real path (Codex review 7 on #116)", () => {
