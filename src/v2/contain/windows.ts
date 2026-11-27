@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { realpath as realpathCallback } from "node:fs";
-import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, constants, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -18,14 +18,22 @@ export interface ManagedProcess {
   readonly exited: Promise<ProcessExit>;
   /** Session teardown, not turn teardown: persistent CLI services belong to the session. */
   close(): Promise<void>;
+  /** PO-14: kills the whole tree at once, with no shutdown grace. A driver without it leaves it out. */
+  kill?(): Promise<void>;
   /** CH-1: the PATH entries left out of the lookup and the child's PATH. */
   readonly droppedPath: string[];
+  /** #111 C19: after a confirmed close, what the driver's own cleanup left behind; a diagnostic, never a teardown failure. */
+  readonly cleanupDiagnostic?: string;
 }
 export interface ManagedProcessOptions {
   file: string;
   args?: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  /** CH-1 (#111 C10): the real path an earlier `resolveLaunch` validated; the launch is refused if the file now resolves elsewhere. */
+  identity?: string;
+  /** Cancels a launch still in progress: it rejects, and anything it started is killed. */
+  signal?: AbortSignal;
 }
 
 
@@ -88,28 +96,71 @@ async function trustedPath(cwd: string, env: NodeJS.ProcessEnv): Promise<{ kept:
   return { kept, dropped, roots };
 }
 
-async function resolveWindowsCommand(file: string, cwd: string, env: NodeJS.ProcessEnv, path: string[]): Promise<string> {
-  // A bare name is looked up only in trusted PATH entries, with each PATHEXT suffix in order, never with none.
+/** A regular file, executable on POSIX: a folder with an executable's name is never a candidate (#111 CH-1). */
+async function isExecutableFile(path: string): Promise<boolean> {
+  try { if (!(await stat(path)).isFile()) return false; if (process.platform !== "win32") await access(path, constants.X_OK); return true; }
+  catch { return false; }
+}
+
+async function resolveCommand(file: string, env: NodeJS.ProcessEnv, path: string[]): Promise<string> {
+  // A bare name is looked up only in trusted PATH entries, on Windows with each PATHEXT suffix in order, never with none.
   // A configured command is an absolute path; a relative one would come from the soldier's folder.
   if (!isAbsolute(file) && /[\\/]/.test(file)) throw Object.assign(new Error(`executable ${file} must be a bare name or an absolute path`), { code: "ENOENT" });
-  const extensions = extname(file) ? [""] : (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  const extensions = process.platform !== "win32" || extname(file) ? [""] : (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
   for (const directory of isAbsolute(file) ? [""] : path) for (const extension of extensions) {
     const candidate = directory ? join(directory, `${file}${extension}`) : `${file}${extension}`;
-    try { await access(candidate); return candidate; } catch { /* Try the next executable suffix. */ }
+    if (await isExecutableFile(candidate)) return candidate;
   }
   throw Object.assign(new Error(`could not find executable ${file}`), { code: "ENOENT" });
+}
+
+/** CH-1: the one validated launch: the trusted PATH, the environment the CLI gets, and the executable itself, checked by real path. */
+export interface LaunchTarget { file: string; real: string; env: NodeJS.ProcessEnv; dropped: string[] }
+
+/**
+ * CH-1: every check that decides what a soldier's CLI is and what it inherits. The post office calls this once per
+ * soldier (#111 C8: the version probe and the session start the same target); each spawn re-checks the absolute file.
+ */
+export async function resolveLaunch(file: string, cwd: string, inherited: NodeJS.ProcessEnv = process.env): Promise<LaunchTarget> {
+  const path = await trustedPath(cwd, inherited);
+  const pathKey = Object.keys(inherited).find((key) => key.toLowerCase() === "path") ?? "Path";
+  // cmd.exe would otherwise search the current folder before PATH for every name a shim runs.
+  const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
+    [pathKey]: path.kept.join(delimiter), ...(process.platform === "win32" ? { NoDefaultCurrentDirectoryInExePath: "1" } : {}) };
+  const executable = await resolveCommand(file, env, path.kept);
+  return { file: executable, real: await verifyExecutable(executable, path.roots), env, dropped: path.dropped };
 }
 
 /**
  * CH-1: the selected file itself, links followed, must lie outside the checkout and its worktrees.
  * The check needs the real path: one that can't be read refuses the launch, never falls back to the lexical path (C17).
+ * Returns that real path: the identity that is launched (#111 C10).
  */
-export async function verifyExecutable(executable: string, roots: string[], real: (path: string) => Promise<string> = realpath): Promise<void> {
+export async function verifyExecutable(executable: string, roots: string[], real: (path: string) => Promise<string> = realpath): Promise<string> {
   let resolved: string;
-  try { resolved = comparable(await real(executable)); } catch (error) {
+  try { resolved = await real(executable); } catch (error) {
     throw Object.assign(new Error(`could not verify the real path of executable ${executable}: ${(error as Error).message}`), { code: "EACCES" });
   }
-  if (roots.some((root) => inside(resolved, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+  if (roots.some((root) => inside(comparable(resolved), root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
+  return resolved;
+}
+
+/**
+ * PO-1 (#111 C11): the launch checks failed before any process started, so the caller can report a refused start.
+ * Failures after the supervisor starts are containment failures and carry no such flag.
+ */
+/** #111 C16: keeps the error and its flags, and names a temp folder that could not be removed as a secondary detail. */
+const withRemoval = (error: Error, removal: Error | undefined): Error => removal
+  ? Object.assign(error, { message: `${error.message} (its temp folder could not be removed: ${removal.message})`, removalError: removal })
+  : error;
+const refuse = (error: unknown) => Object.assign(error instanceof Error ? error : new Error(String(error)), { launchRefused: true });
+async function checkedLaunch(options: ManagedProcessOptions): Promise<LaunchTarget> {
+  let launch: LaunchTarget;
+  try { launch = await resolveLaunch(options.file, options.cwd, options.env ?? process.env); } catch (error) { throw refuse(error); }
+  if (options.identity !== undefined && comparable(options.identity) !== comparable(launch.real)) {
+    throw refuse(Object.assign(new Error(`executable ${options.file} changed since it was checked: it was ${options.identity}, now ${launch.real}`), { code: "EACCES" }));
+  }
+  return launch;
 }
 
 /** Windows argv quoting for native executables, including embedded quotes and trailing backslashes. */
@@ -132,20 +183,22 @@ function windowsCommand(file: string, args: string[], env: NodeJS.ProcessEnv): {
 }
 
 async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  const inherited = options.env ?? process.env;
-  const path = await trustedPath(options.cwd, inherited);
-  const pathKey = Object.keys(inherited).find((key) => key.toLowerCase() === "path") ?? "Path";
-  // cmd.exe would otherwise search the current folder before PATH for every name a shim runs.
-  const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
-    [pathKey]: path.kept.join(delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
-  const executable = await resolveWindowsCommand(options.file, options.cwd, env, path.kept);
-  await verifyExecutable(executable, path.roots);
-  const command = windowsCommand(executable, options.args ?? [], env);
+  // C10 (#123): every setup step can resume after the abort, so each one checks before the next and nothing is spawned.
+  const stopIfCancelled = () => { if (options.signal?.aborted) throw new Error("the launch was cancelled"); };
+  stopIfCancelled();
+  // C10 (#111): start the real path just validated, not the lexical name an alias could move to another target.
+  // This closes the gap between the probe and the session; the file can still change before CreateProcess.
+  const { real: executable, env, dropped } = await checkedLaunch(options);
+  stopIfCancelled();
+  // C11: everything up to the supervisor's spawn runs before any process exists, so its failures are refusals too.
+  let command: ReturnType<typeof windowsCommand>;
+  try { command = windowsCommand(executable, options.args ?? [], env); } catch (error) { throw refuse(error); }
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
-  const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
+  const directory = await mkdtemp(join(tmpdir(), "shadow-job-")).catch((error: unknown) => { throw refuse(error); });
   const script = join(directory, "supervisor.ps1");
-  await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
+  // #111 C16: removal never throws over the launch's outcome; its failure comes back to be attached as a detail.
+  const removeDirectory = () => rm(directory, { recursive: true, force: true }).then(() => undefined, (error: unknown) => error instanceof Error ? error : new Error(String(error)));
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
@@ -154,6 +207,11 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   let started!: () => void;
   let failed!: (error: Error) => void;
   const ready = new Promise<void>((done, fail) => { started = done; failed = fail; });
+  ready.catch(() => {});
+  // A cancelled launch fails like any other: the catch below kills the supervisor, and its kill-on-close job the tree.
+  const cancel = () => failed(new Error("the launch was cancelled"));
+  options.signal?.addEventListener("abort", cancel, { once: true });
+  if (options.signal?.aborted) cancel();
   const server = createServer((socket) => {
     let buffer = "";
     let authenticated = false;
@@ -179,7 +237,10 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   });
   let child: ChildProcessWithoutNullStreams | undefined;
   try {
+    await writeFile(script, WINDOWS_SUPERVISOR, { encoding: "utf8", mode: 0o600 });
+    stopIfCancelled();
     await new Promise<void>((done, fail) => { server.once("error", fail); server.listen(`\\\\.\\pipe\\${pipeName}`, done); });
+    stopIfCancelled();
     const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     child = spawn(powershell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script], {
       cwd: options.cwd, env, windowsHide: true, stdio: "pipe",
@@ -197,32 +258,40 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     }));
     wrapper.stdin.write(`${JSON.stringify({ ...command, cwd: options.cwd, pipeName, token })}\n`);
     const launchTimer = setTimeout(() => failed(new Error(`Windows supervisor did not launch within 15 seconds${diagnostic ? `: ${diagnostic}` : ""}`)), 15_000);
-    try { await ready; } finally { clearTimeout(launchTimer); }
+    try { await ready; } finally { clearTimeout(launchTimer); options.signal?.removeEventListener("abort", cancel); }
     wrapper.stderr.off("data", captureDiagnostic);
     let closing: Promise<void> | undefined;
+    let cleanupDiagnostic: string | undefined;
+    const close = () => closing ??= (async () => {
+      const killed = setTimeout(() => wrapper.kill(), 15_000);
+      wrapper.stdin.end();
+      control?.write("close\n");
+      try { await wrapperClosed; } finally { clearTimeout(killed); control?.destroy(); server.close(); }
+      // #111 C16, C19: the cleanup proof alone decides confirmed or unconfirmed; a folder that cannot be removed
+      // after the proof is a separate diagnostic, never a teardown failure.
+      const removal = await removeDirectory();
+      if (!treeClosed) throw withRemoval(new Error("Windows supervisor ended without confirming session process-tree cleanup"), removal);
+      if (removal) cleanupDiagnostic = `the session process tree was confirmed stopped, but its temp folder could not be removed: ${removal.message}`;
+    })();
     return {
-      pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, droppedPath: path.dropped,
-      close() {
-        return closing ??= (async () => {
-          const killed = setTimeout(() => wrapper.kill(), 15_000);
-          wrapper.stdin.end();
-          control?.write("close\n");
-          try { await wrapperClosed; } finally {
-            clearTimeout(killed); control?.destroy(); server.close();
-            await rm(directory, { recursive: true, force: true });
-          }
-          if (!treeClosed) throw new Error("Windows supervisor ended without confirming session process-tree cleanup");
-        })();
-      },
+      pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, droppedPath: dropped,
+      get cleanupDiagnostic() { return cleanupDiagnostic; },
+      close,
+      // PO-14: "kill" makes the supervisor terminate the job with no grace, even during a close.
+      kill: () => { control?.write("kill\n"); return close(); },
     };
   } catch (error) {
+    options.signal?.removeEventListener("abort", cancel);
     control?.destroy(); server.close();
     if (child && child.exitCode === null) {
       child.kill();
       await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, 2_000).unref(); });
     }
-    await rm(directory, { recursive: true, force: true });
-    throw error;
+    // No supervisor process (the pipe could not listen, or PowerShell never spawned): a refused start (C11).
+    // A supervisor that ran and then failed, even before CreateProcess, leaves its cleanup unconfirmed (#111 C12, PO-15).
+    // #111 C16: that outcome is classified before the folder's removal, which can only add a detail, never replace it.
+    const failure = child?.pid !== undefined ? Object.assign(error instanceof Error ? error : new Error(String(error)), { containmentFailed: true }) : refuse(error);
+    throw withRemoval(failure, await removeDirectory());
   }
 }
 
@@ -279,7 +348,7 @@ public static class ShadowJobSupervisor {
       events=new StreamWriter(pipe,new UTF8Encoding(false),1024,true); events.AutoFlush=true;
       var stop=new ManualResetEvent(false); int shutdownReason=0;
       var control=new Thread(delegate() {
-        try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); while(reader.ReadLine()!=null) { Interlocked.CompareExchange(ref shutdownReason,1,0); stop.Set(); } } catch {}
+        try { var reader=new StreamReader(pipe,Encoding.UTF8,false,1024,true); string line; while((line=reader.ReadLine())!=null) { if(line=="kill") Interlocked.Exchange(ref shutdownReason,2); else Interlocked.CompareExchange(ref shutdownReason,1,0); stop.Set(); } } catch {}
         // Control EOF means the owner disappeared; it must contain the job immediately.
         Interlocked.Exchange(ref shutdownReason,2); stop.Set();
       }); control.IsBackground=true; control.Start();

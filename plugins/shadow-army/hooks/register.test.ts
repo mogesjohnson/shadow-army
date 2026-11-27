@@ -507,3 +507,24 @@ describe("relay diagnostics in the UI log (SEC-6)", () => {
     expect(logs).toEqual(["Shadow Army: Error: post office relay ended: boom\\u{202e}\\u{1b}[0m [redacted]"]);
   });
 });
+
+describe("the event stream's transcript lines", () => {
+  it("shows the post office's retry notice as a plain line during backoff, not as an error", async () => {
+    const harness = await mod(() => ({ status: "completed", summary: "ok" }));
+    const notice = { type: "notice", soldier: "claude-sonnet", data: { kind: "retry", message: "claude-sonnet: claude is retrying (attempt 1 of 10, in 0.5 s, 529 overloaded)" } };
+    const failure = { type: "error", soldier: "claude-sonnet", data: { kind: "transport", message: "lost" } };
+    harness.$.process.spawn = () => ({
+      async *[Symbol.asyncIterator]() {
+        yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: "/repo" } })}\n` };
+        yield { stream: "stdout", text: `${JSON.stringify(notice)}\n${JSON.stringify(failure)}\n` };
+        await new Promise(() => {});
+      },
+      return: async () => ({ done: true }),
+    }) as never;
+    await harness.send("claude-sonnet --claim a go");
+    await vi.waitFor(() => expect(harness.logs).toHaveLength(2));
+    expect(harness.logs[0]).toBe("Shadow Army: claude-sonnet: claude is retrying (attempt 1 of 10, in 0.5 s, 529 overloaded)");
+    expect(harness.logs[0]).not.toMatch(/error|\{/);
+    expect(harness.logs[1]).toContain('"kind":"transport"');
+  });
+});
