@@ -293,6 +293,23 @@ describe("a new registration's pointers, overlap and record (C15, C16, C17)", ()
     expect(await again.check()).toEqual({ held: false });
   }, 60_000);
 
+  it("holds a gone worktree whose recorded removal ended or stopped, in-process and after a restart (C21)", async () => {
+    const { base, repo, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo), other = worktree(base, repo, "other");
+    await hold.register(snap);
+    await hold.register(other);
+    hold.beginRemoval(snap);
+    hold.endRemoval(snap); // the removal failed: its folder is still there
+    hold.beginRemoval(other); // this one stopped with the post office
+    const again = open();
+    expect(await again.start()).toEqual({ held: false });
+    rmSync(snap.workTree, { recursive: true, force: true });
+    rmSync(other.workTree, { recursive: true, force: true });
+    const held = await again.check();
+    expect(held).toMatchObject({ held: true, files: expect.arrayContaining([expect.stringMatching(/snap$/), expect.stringMatching(/other$/)]) });
+  }, 60_000);
+
   it("keeps the saved baseline when a clean start finds a bad pointer, so restoring it alone releases nothing (C22)", async () => {
     const { base, repo, open } = setup(), hold = open();
     await hold.start();

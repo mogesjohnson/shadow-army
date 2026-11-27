@@ -316,7 +316,9 @@ export class HarnessHold {
     this.trusted = saved.trusted;
     this.turnOpen = saved.turnOpen === true;
     this.timeout = saved.timeout; // a timeout's hold outlives the restart, until g tries again
-    this.removing = saved.removing ?? [];
+    // No removal runs across a restart: a mark whose folder is still there is one that stopped, so it's dropped,
+    // and a removal that goes on marks it again (C21).
+    this.removing = (saved.removing ?? []).filter((key) => { const repo = this.repos.find((other) => keyOf(other) === key); return repo !== undefined && typeOf(repo.workTree) === undefined; });
     const current = await this.read();
     if (!(saved.held || saved.turnOpen || saved.running || saved.timeout) && !current.problems.length) { this.trust(current.state); return { held: false }; }
     const { files, why } = this.compare(current);
@@ -443,12 +445,22 @@ export class HarnessHold {
 
   /**
    * Shadow Army's own command is about to remove it: recorded before anything goes, so a folder of it found gone,
-   * now or after a restart, is that removal's and not held (C21, WSP-10). `unregister` finishes it.
+   * now or after a restart, is that removal's and not held (C21, WSP-10). `unregister` finishes it; `endRemoval`
+   * ends one that failed or stopped.
    */
   beginRemoval(repo: GitRepo) {
     const key = keyOf(repo);
     if (key === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo)) || this.removing.includes(key)) return;
-    this.removing = [...this.removing, key];
+    const before = this.removing;
+    this.removing = [...before, key];
+    try { this.save(); } catch (error) { this.removing = before; throw error; }
+  }
+
+  /** The removal `beginRemoval` recorded failed or stopped: a folder of it found gone after this is held (C21). */
+  endRemoval(repo: GitRepo) {
+    const key = keyOf(repo);
+    if (!this.removing.includes(key)) return;
+    this.removing = this.removing.filter((other) => other !== key);
     this.save();
   }
 
