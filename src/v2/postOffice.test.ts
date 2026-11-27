@@ -678,6 +678,28 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect(failed[0]!.data).not.toHaveProperty("refused");
   }, 30_000);
 
+  it("reports a standalone open's failed opened record after its retry while idle, and a later refused send apart (C26, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    // No send, no other record, no close: the notice still comes, once the retry has failed.
+    await until(() => events.some((event) => event.type === "log_failed"));
+    expect((office.army() as Array<{ key: string; state: string }>).find((soldier) => soldier.key === "scout")?.state).toBe("idle");
+    // A later send refused in that same, already reported gap still gets its one refused line.
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    await office.close();
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(2);
+    expect(failed[0]).toMatchObject({ soldier: "scout" });
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+    expect(failed[1]!.data).toMatchObject({ refused: true });
+  }, 30_000);
+
   it("reports an opened-record gap with its soldier when its session closes during the retry, the office still up (C20, PO-5)", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];
@@ -706,7 +728,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     await rm(logsDir, { recursive: true, force: true });
     await writeFile(logsDir, "not a folder");
     const { session } = await office.open("scout");
-    await until(() => (office as unknown as { heldGaps: Map<string, Error> }).heldGaps.size > 0);
+    // C26: no send reserved the session, so its opening gap is reported once its retry fails.
+    await until(() => events.some((event) => event.type === "log_failed"));
     // The folder comes back and one session line goes in: the opening gap is over.
     await rm(logsDir, { force: true });
     await mkdir(logsDir);

@@ -165,6 +165,8 @@ export class PostOffice {
   private readonly openedWrites = new Set<string>();
   /** A gap opened by the `opened` record, not yet reported: the first send decides whether it is a refusal (C19). */
   private readonly heldGaps = new Map<string, Error>();
+  /** Sessions whose send's opening failure already went out as its own refused notice. */
+  private readonly refusalsReported = new Set<string>();
   /** Session id to its streamed blocks: the block the next fragment belongs to, and the kinds each held block has (C14). */
   private readonly blocks = new Map<string, { current: string; held: Map<string, Set<(typeof FRAGMENT_KINDS)[number]>> }>();
   /** `log_failed` notices on their way into the office log (M1-AC4). */
@@ -193,8 +195,11 @@ export class PostOffice {
   private logFailed(name: string, error: Error): void {
     // M1-AC4: the office log failing while it records a notice is the same failure (a full disk), already reported once.
     if (name === "post-office" && this.noticesWriting > 0) return;
-    // C19: a gap the `opened` record opened waits for the first send; if that send is refused for the same gap, the one event is marked refused.
-    if (this.openedWrites.has(name)) { this.heldGaps.set(name, error); return; }
+    // C19/C26: a gap the `opened` record opened waits only when a send has reserved the session: if that send is refused
+    // for the same gap, the one event is marked refused. A standalone open is reported now, after its retry.
+    const paired = [...this.sessions.values()].some((session) => session.id === name && session.used);
+    if (this.openedWrites.has(name) && paired) { this.heldGaps.set(name, error); return; }
+    if (this.openingWrites.has(name)) this.refusalsReported.add(name);
     this.reportGap(name, error, this.openingWrites.has(name));
   }
 
@@ -556,7 +561,10 @@ export class PostOffice {
     const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() }).finally(() => this.openingWrites.delete(session.id));
     const held = this.heldGaps.get(session.id);
     this.heldGaps.delete(session.id);
+    const reported = this.refusalsReported.delete(session.id);
     if (held) this.reportGap(session.id, held, !opened.written);
+    // A refusal inside a gap already reported (a standalone open's, C26) still gets its one refused line.
+    else if (!opened.written && !reported) this.reportGap(session.id, opened.error ?? new Error("unknown error"), true);
     if (!opened.written) {
       throw new Error(`message not sent: the session log could not record the turn's start (${String(redact(opened.error?.message ?? "unknown error", this.secrets))})`);
     }
