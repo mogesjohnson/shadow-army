@@ -50,7 +50,7 @@ describe("M1a slice, end to end with the fake claude (no real model)", () => {
     const { wrapper, plan } = fakeWithWrites();
     const events: OfficeEvent[] = [];
     const roster = makeRoster({ tank: { cli: "claude", model: "synthetic", roles: ["build"], write: true } });
-    const server = await startOfficeServer({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+    const server = await startOfficeServer({ cwd: repo.dir, credential, roster, live: true, onEvent: (event) => events.push(event),
       channelFactory: (options) => new ClaudeChannel({ ...options, interruptTimeoutMs: 500, command: { file: process.execPath, args: [wrapper] } }) }); servers.push(server);
     const command = async (value: Record<string, unknown>) => {
       const response = await fetch(`${server.url}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify(value) });
