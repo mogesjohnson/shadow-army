@@ -261,7 +261,8 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     }
     await rm(directory, { recursive: true, force: true });
     // No supervisor yet (the pipe could not listen): nothing started, so a refused start (C11).
-    throw child ? error : refuse(error);
+    // A supervisor that started and then failed leaves its cleanup unconfirmed (#111 C12, PO-15).
+    throw child ? Object.assign(error instanceof Error ? error : new Error(String(error)), { containmentFailed: true }) : refuse(error);
   }
 }
 
