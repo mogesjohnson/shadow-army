@@ -22,6 +22,10 @@ export interface WriteOutcome {
   base: string;
   /** Short sha of the branch tip when it holds any change. */
   commit?: string;
+  /** Full commit ID of the tip the audit committed; the apply uses it, never the movable branch name. */
+  tip?: string;
+  /** Full commit ID this turn started from: the previous turn's audited tip, or the base. Only `start..tip` is this turn's. */
+  start: string;
   claims: string[];
   inScope: string[];
   /** Changed outside the claims and reverted. */
@@ -30,7 +34,7 @@ export interface WriteOutcome {
   leaseLost: boolean;
   /** The owner's folder had uncommitted changes the worktree (made from HEAD) does not contain. */
   uncommittedIgnored: boolean;
-  /** The audited change: `git diff base HEAD` in the worktree, claimed files only. */
+  /** This turn's audited change: `git diff start tip` in the worktree, claimed files only. */
   diff: string;
   /** True only when the turn completed and passed the guard and the audit with a change to apply. */
   applicable: boolean;
@@ -49,6 +53,12 @@ export interface TurnResult {
   /** Office summaries are bounded independently of the native full reply retained in logs. */
   summary?: string;
   write?: WriteOutcome;
+  /**
+   * Something failed after the apply had already changed the owner's folder, so the turn is reported instead of thrown:
+   * the session log could not be written, a later record step failed, or the other running turns' guards were not moved
+   * past the apply. Reasons are joined with "; ". `write.apply` still says what the apply changed.
+   */
+  logFailure?: string;
 }
 export interface ChannelEvent {
   type: "text" | "thinking" | "tool_call" | "tool_result" | "approval" | "usage" | "turn_end" | "error" | "closed" | "raw";
