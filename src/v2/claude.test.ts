@@ -9,11 +9,24 @@ import * as managedProcesses from "./processTree.js";
 import type { ChannelEvent, NativeError, TurnUsage } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, resolveClaudeLaunch, VERSION_TIMEOUT_MS } from "./claude.js";
 
-// A pass-through wrapper, so one test can fail the instruction file's write after its folder was made (#111 C18).
+// Pass-through wrappers, so one test can fail the instruction file's write after its folder was made (#111 C18),
+// and one can fail the removal of the Windows supervisor's temp folder after a confirmed stop (#111 C19).
 vi.mock("node:fs/promises", async (original) => {
   const real = await original<typeof import("node:fs/promises")>();
-  return { ...real, writeFile: vi.fn(real.writeFile) };
+  return { ...real, writeFile: vi.fn(real.writeFile), rm: vi.fn(real.rm) };
 });
+/** #111 C19: every removal of a supervisor temp folder fails with EBUSY until the returned restore removes them. */
+function busySupervisorFolders(): () => Promise<void> {
+  const remove = vi.mocked(rm);
+  const realRm = remove.getMockImplementation()! as typeof rm;
+  const left: string[] = [];
+  remove.mockImplementation((async (path: string, options?: object) => {
+    if (!/shadow-job-/.test(String(path))) return realRm(path, options);
+    left.push(String(path));
+    throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+  }) as typeof rm);
+  return async () => { remove.mockImplementation(realRm); await Promise.all(left.map((path) => realRm(path, { recursive: true, force: true }))); };
+}
 const channels: ClaudeChannel[] = [];
 const folders: string[] = [];
 async function setup(extra: { interruptTimeoutMs?: number; versionTimeoutMs?: number; badLineQuietMs?: number; autonomy?: "supervised" | "auto" | "full"; fakeArgs?: string[] } = {}) {
@@ -540,7 +553,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(second.usage?.raw.total_cost_usd).toBe(0.06);
   }, 15_000);
 
-  it("turns auto memory off in the environment and in --settings over an inherited 0 (CH-2, C3)", async () => {
+  windowsOnly("turns auto memory off in the environment and in --settings over an inherited 0 (CH-2, C3)", async () => {
     const previous = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
     process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "0";
     try {
@@ -567,7 +580,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(events.filter((event) => event.type === "text").map((event) => event.data)).toEqual(["split 🌙"]);
   }, 15_000);
 
-  it("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
+  windowsOnly("shows one unparseable line as a redacted error of kind other and carries on (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
     const result = await channel.send("malformed-once");
     expect(result.status).toBe("completed");
@@ -581,7 +594,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect((await channel.send("hello")).status).toBe("completed");
   }, 15_000);
 
-  it("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
+  windowsOnly("counts only ten unparseable lines in a row as a lost connection, settling the turn once (W11-2, CH-1)", async () => {
     const { channel, events } = await setup();
     const survived = await channel.send("malformed-nine-then-ok");
     expect(survived.status).toBe("completed");
@@ -978,6 +991,29 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ containmentStopped: false, refusedStart: false });
   });
+
+  // #111 C19: the cleanup proof decides confirmed or unconfirmed; a temp folder left behind is a separate diagnostic.
+  windowsOnly("opens the session when the probe's stop is confirmed but its temp folder cannot be removed (#111 C19)", async () => {
+    const restore = busySupervisorFolders();
+    try {
+      const { channel, events } = await setup();
+      expect((await channel.send("hello")).status).toBe("completed");
+      const errors = events.filter((event) => event.type === "error").map((event) => event.data as NativeError);
+      expect(errors).toEqual([expect.objectContaining({ kind: "other", message: expect.stringMatching(/--version probe: .*temp folder could not be removed.*EBUSY/) })]);
+      await channel.close();
+      expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ containmentStopped: true });
+    } finally { await restore(); }
+  }, 30_000);
+
+  windowsOnly("keeps a session's confirmed stop when its temp folder cannot be removed, naming the folder as a diagnostic (#111 C19)", async () => {
+    const { channel, events } = await setup();
+    expect((await channel.send("hello")).status).toBe("completed");
+    const restore = busySupervisorFolders();
+    try { await expect(channel.close()).resolves.toBeUndefined(); } finally { await restore(); }
+    expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ containmentStopped: true });
+    const errors = events.filter((event) => event.type === "error").map((event) => event.data as NativeError);
+    expect(errors).toEqual([expect.objectContaining({ kind: "other", message: expect.stringMatching(/temp folder could not be removed.*EBUSY/) })]);
+  }, 30_000);
 
   it("keeps containment unconfirmed when the probe's supervisor fails to start (#111 C12)", async () => {
     const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockRejectedValueOnce(Object.assign(new Error("Windows supervisor exited before launch"), { containmentFailed: true }));
