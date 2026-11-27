@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { checkContainment, createContainmentGate, type CheckOptions, type ChecksumsOutcome, type Clock, type StepContext, type StepOutcome, type SystemSteps } from "./check.js";
+import * as contain from "./index.js";
 import type { ManagedProcess } from "./index.js";
 import { failureMessage, type Failure, type Where } from "./messages.js";
 
@@ -20,12 +21,14 @@ const flush = () => new Promise<void>((done) => setImmediate(done));
 const digest = { file: "guardian", sha256: "ab".repeat(32) };
 
 type PipeAtKill = "eof" | "leak" | "error" | "close";
-/** A contained probe that reports both pids; at `close()` its `stdout` ends (or leaks, fails, closes without end). */
-function fakeProbe(atKill: PipeAtKill = "eof", over: { closeHangs?: boolean; launch?: Promise<void> } = {}) {
+/** A contained probe that reports both pids; at `kill()` or `close()` its `stdout` ends (or leaks, fails, closes without end). */
+function fakeProbe(atKill: PipeAtKill = "eof", over: { closeHangs?: boolean; launch?: Promise<void>; noKill?: boolean } = {}) {
   let closes = 0;
+  let kills = 0;
   let stdout!: PassThrough;
   return {
     closed: () => closes,
+    killed: () => kills,
     stdout: () => stdout,
     spawn: (async () => {
       await over.launch;
@@ -33,16 +36,16 @@ function fakeProbe(atKill: PipeAtKill = "eof", over: { closeHangs?: boolean; lau
       stdout.write('{"role":"probe","pid":10}\n{"role":"grandchild","pid":12}\n');
       const pipe = stdout;
       let first = true;
+      const end = () => {
+        if (first && atKill === "eof") pipe.end();
+        if (first && atKill === "error") pipe.destroy(new Error("EPIPE"));
+        if (first && atKill === "close") pipe.destroy();
+        first = false;
+      };
       return {
         pid: 10, stdin: new Writable(), stdout, stderr: new PassThrough(), exited: new Promise(() => {}),
-        close: async () => {
-          closes++;
-          if (first && atKill === "eof") pipe.end();
-          if (first && atKill === "error") pipe.destroy(new Error("EPIPE"));
-          if (first && atKill === "close") pipe.destroy();
-          first = false;
-          if (over.closeHangs) await new Promise(() => {});
-        },
+        close: async () => { closes++; end(); if (over.closeHangs) await new Promise(() => {}); },
+        ...(over.noKill ? {} : { kill: async () => { kills++; end(); } }),
       } as unknown as ManagedProcess;
     }) satisfies CheckOptions["spawn"],
   };
@@ -94,7 +97,7 @@ describe("PO-14 check", () => {
     expect(result).toMatchObject({ ok: false, step: "probe", failure: { cause: "outlived" } });
     expect(!result.ok && result.message).toMatch(/a test process outlived its containment/);
     await flush();
-    expect(probe.closed()).toBe(2);
+    expect([probe.killed(), probe.closed()]).toEqual([2, 0]);
   });
 
   it.each<[PipeAtKill, string]>([
@@ -119,8 +122,30 @@ describe("PO-14 check", () => {
     const result = await checkContainment(base({ spawn: probe.spawn, killTree: () => { kills++; probe.stdout().end(); } }));
     expect(result.ok).toBe(true);
     expect([kills, probe.closed()]).toEqual([1, 0]);
-    const byDefault = await checkContainment(base({ spawn: fakeProbe("eof", { closeHangs: true }).spawn }));
-    expect(byDefault.ok).toBe(true);
+  });
+
+  it("kills the probe through the driver's no-grace kill() by default, never the graceful close() (C4)", async () => {
+    const probe = fakeProbe("eof", { closeHangs: true });
+    expect((await checkContainment(base({ spawn: probe.spawn }))).ok).toBe(true);
+    expect([probe.killed(), probe.closed()]).toEqual([1, 0]);
+    const graceOnly = await checkContainment(base({ spawn: fakeProbe("eof", { noKill: true }).spawn }));
+    expect(graceOnly).toMatchObject({ ok: false, step: "probe", failure: { detail: "the test process could not be killed (its driver has no kill without grace)" } });
+  });
+
+  it("passes the check's abort signal to the default launch (C2)", async () => {
+    const clock = new FakeClock();
+    let seen: AbortSignal | undefined;
+    const launch = vi.spyOn(contain, "spawnManagedProcess").mockImplementationOnce((options) => {
+      seen = options.signal;
+      return new Promise(() => {});
+    });
+    try {
+      const pending = checkContainment({ ...base({ clock }), spawn: undefined });
+      await flush();
+      await clock.advance(10_000);
+      expect(await pending).toMatchObject({ ok: false, step: "probe", failure: { cause: "timeout" } });
+      expect(seen?.aborted).toBe(true);
+    } finally { launch.mockRestore(); }
   });
 
   it("closes a probe whose launch completes after the deadline, and gives the launch the abort signal (C2)", async () => {
@@ -133,10 +158,10 @@ describe("PO-14 check", () => {
     await clock.advance(10_000);
     expect(await pending).toMatchObject({ ok: false, step: "probe", failure: { cause: "timeout" } });
     expect(signal?.aborted).toBe(true);
-    expect(probe.closed()).toBe(0);
+    expect(probe.killed()).toBe(0);
     launched();
     await flush();
-    expect(probe.closed()).toBe(1);
+    expect(probe.killed()).toBe(1);
   });
 
   it("fails when the listing misses the grandchild, or on macOS the coalition is not new", async () => {
@@ -355,4 +380,29 @@ describe("native/probe.mjs", () => {
     }
     await ended;
   });
+});
+describe.skipIf(process.platform !== "win32")("Windows driver: cancel and no-grace kill (C2, C4)", () => {
+  // A CLI that ignores stdin's end, so a graceful close waits out the supervisor's 2 s grace.
+  const stubborn = { file: process.execPath, args: ["-e", "process.stdin.resume(); setInterval(() => {}, 1000)"], cwd: process.cwd() };
+
+  it("rejects a launch whose signal aborts while it starts", async () => {
+    const controller = new AbortController();
+    const launch = contain.spawnManagedProcess({ ...stubborn, signal: controller.signal });
+    controller.abort();
+    await expect(launch).rejects.toThrow("the launch was cancelled");
+    await expect(contain.spawnManagedProcess({ ...stubborn, signal: AbortSignal.abort() })).rejects.toThrow("the launch was cancelled");
+  }, 30_000);
+
+  it("kills the tree without the shutdown grace that close() gives", async () => {
+    const graceful = await contain.spawnManagedProcess(stubborn);
+    let at = performance.now();
+    await graceful.close();
+    const closeMs = performance.now() - at;
+    const killed = await contain.spawnManagedProcess(stubborn);
+    at = performance.now();
+    await killed.kill!();
+    const killMs = performance.now() - at;
+    expect(closeMs).toBeGreaterThan(1900);
+    expect(killMs).toBeLessThan(1500);
+  }, 30_000);
 });

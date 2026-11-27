@@ -64,8 +64,8 @@ export interface CheckOptions {
   /** Starts a CLI in containment; by default the one PO-12's table names for this system. `signal` aborts a launch. */
   spawn?: (options: ManagedProcessOptions, signal: AbortSignal) => Promise<ManagedProcess>;
   /**
-   * Step 4's kill of the probe's whole tree, with no grace (PO-14). By default `close()`, not awaited: the drivers'
-   * close still grants shutdown grace until they have a no-grace kill.
+   * Step 4's kill of the probe's whole tree, with no grace (PO-14). By default the driver's `kill()`, not awaited;
+   * a driver without one fails the check rather than fall back to the graceful `close()`.
    */
   killTree?: (child: ManagedProcess) => void;
   probePath?: string;
@@ -144,7 +144,7 @@ type ProbeOptions = Required<Pick<CheckOptions, "platform" | "spawn" | "probePat
 async function probeStep(ctx: StepContext, o: ProbeOptions, steps: SystemSteps): Promise<Outcome> {
   // Owned from the moment it is asked for: a launch that completes after the check failed is closed then.
   const launching = o.spawn({ file: process.execPath, args: [o.probePath], cwd: tmpdir() }, ctx.signal);
-  ctx.killOnFail(() => launching.then((started) => started.close(), () => {}));
+  ctx.killOnFail(() => launching.then((started) => (started.kill ? started.kill() : started.close()), () => {}));
   let child: ManagedProcess;
   try {
     child = await Promise.race([launching, aborted(ctx.signal)]);
@@ -237,8 +237,12 @@ export async function checkContainment(options: CheckOptions): Promise<CheckResu
   };
   const steps = options.systems[`${platform}-${arch}`];
   const need = (step: string): Failure => ({ cause: "not-built", step });
-  const spawn = options.spawn ?? ((spawnOptions: ManagedProcessOptions) => spawnManagedProcess(spawnOptions, platform, arch));
-  const killTree = options.killTree ?? ((child: ManagedProcess) => { void child.close().catch(() => {}); });
+  const spawn = options.spawn
+    ?? ((spawnOptions: ManagedProcessOptions, signal: AbortSignal) => spawnManagedProcess({ ...spawnOptions, signal }, platform, arch));
+  const killTree = options.killTree ?? ((child: ManagedProcess) => {
+    if (!child.kill) throw new Error("its driver has no kill without grace");
+    void child.kill().catch(() => {});
+  });
   const runners: Record<StepName, () => Promise<Outcome>> = {
     async helper() {
       try { (options.dispatch ?? containmentFor)(platform, arch); } catch { return fail({ cause: "no-helper" }); }
