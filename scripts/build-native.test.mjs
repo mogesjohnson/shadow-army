@@ -94,6 +94,16 @@ describe("elfProblem", () => {
     expect(elfProblem(elf(x64, { extra: Array(72).fill({ type: 4 }) }), "x64")).toBeUndefined(); // 73 * 56 <= 4096
     const aligned = { load: { vaddr: 0x410000, align: 0x10000 }, entry: 0x410000 + 64 + 56 };
     expect(elfProblem(elf(x64, aligned), "x64")).toBeUndefined();
+    expect(elfProblem(elf(arm64, aligned), "arm64")).toBeUndefined();
+    expect(elfProblem(elf(arm64, { extra: Array(72).fill({ type: 4 }) }), "arm64")).toBeUndefined();
+  });
+
+  it("refuses an arm64 load segment that a 16 or 64 KiB page kernel can't map (C13)", () => {
+    const at4k = { load: { vaddr: 0x401000 }, entry: 0x401000 + 64 + 56 };
+    expect(elfProblem(elf(x64, at4k), "x64")).toBeUndefined();
+    expect(elfProblem(elf(arm64, at4k), "arm64")).toMatch(/page/);
+    const at16k = { load: { vaddr: 0x404000 }, entry: 0x404000 + 64 + 56 };
+    expect(elfProblem(elf(arm64, at16k), "arm64")).toMatch(/page/);
   });
 
   it.each([
