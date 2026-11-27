@@ -305,16 +305,31 @@ describe("native/probe.mjs", () => {
   it("reports itself and a grandchild, and its pipe ends once both are gone", async () => {
     const child = spawn(process.execPath, [fileURLToPath(new URL("../../../native/probe.mjs", import.meta.url))], { stdio: ["ignore", "pipe", "ignore"] });
     const pids = new Set<number>([child.pid!]);
+    const roles: string[] = [];
     let text = "";
+    let seen = 0;
     const ended = new Promise<void>((done) => child.stdout.on("end", () => done()));
-    const both = new Promise<void>((done) => child.stdout.on("data", (chunk: Buffer) => {
-      text += chunk.toString();
-      for (const line of text.split("\n").filter(Boolean)) pids.add((JSON.parse(line) as { pid: number }).pid);
-      if (pids.size === 2) done();
-    }));
+    const both = new Promise<void>((done, fail) => {
+      const timer = setTimeout(() => fail(new Error("the probe did not report itself and a grandchild in time")), 4_000);
+      child.stdout.on("error", (e) => { clearTimeout(timer); fail(e); });
+      child.stdout.on("data", (chunk: Buffer) => {
+        text += chunk.toString();
+        const lines = text.split("\n");
+        text = lines.pop() ?? ""; // a partial last line waits for its newline
+        for (const line of lines.filter(Boolean)) {
+          try {
+            const report = JSON.parse(line) as { pid: number; role: string };
+            pids.add(report.pid);
+            roles.push(report.role);
+            seen += 1;
+          } catch (e) { clearTimeout(timer); fail(e); return; }
+        }
+        if (seen >= 2 && pids.size === 2) { clearTimeout(timer); done(); }
+      });
+    });
     try {
       await both;
-      expect(text.trim().split("\n").map((line) => (JSON.parse(line) as { role: string }).role).sort()).toEqual(["grandchild", "probe"]);
+      expect(roles.sort()).toEqual(["grandchild", "probe"]);
     } finally {
       for (const pid of pids) try { process.kill(pid); } catch { /* already gone */ }
     }
