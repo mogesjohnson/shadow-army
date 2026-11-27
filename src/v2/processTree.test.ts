@@ -183,6 +183,28 @@ describe.skipIf(!windows)("session process containment (Windows; Not tested on o
     }
   }, 30_000);
 
+  it("keeps a confirmed stop confirmed when its temp folder cannot be removed, and names the folder apart (#111 C19)", async () => {
+    const remove = vi.mocked(fsPromises.rm);
+    const realRm = remove.getMockImplementation()!;
+    let folder = "";
+    remove.mockImplementation((async (path: string, options?: object) => {
+      if (!/shadow-job-/.test(String(path))) return (realRm as typeof rm)(path, options);
+      folder = String(path);
+      throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+    }) as typeof rm);
+    try {
+      const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", "process.exit(0)"], cwd: await directory() });
+      session.stdout.resume(); session.stderr.resume();
+      expect((await session.exited).code).toBe(0);
+      await expect(session.close()).resolves.toBeUndefined();
+      expect(session.cleanupDiagnostic).toMatch(/temp folder could not be removed.*EBUSY/);
+      expect(folder).not.toBe("");
+    } finally {
+      remove.mockImplementation(realRm);
+      if (folder) directories.push(folder);
+    }
+  }, 30_000);
+
   it("launches a Windows npm-style cmd shim without a visible window", async () => {
     // The shim lives outside the soldier's folder: an executable inside it is refused (C11).
     const cwd = await directory(); const bin = await directory(); const script = join(bin, "echo.cjs"); const shim = join(bin, "fake.cmd");

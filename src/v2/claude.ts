@@ -73,7 +73,7 @@ const isOlder = (found: number[], oldest: number[]): boolean => {
  * start is not a crash (PO-1), so the caller reports it with kind "other". Rejects, with
  * `containmentFailed`, when the probe's processes cannot be confirmed stopped.
  */
-export async function claudeVersionProblem(command: { file: string; identity?: string; args?: string[]; env?: NodeJS.ProcessEnv }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS): Promise<string | undefined> {
+export async function claudeVersionProblem(command: { file: string; identity?: string; args?: string[]; env?: NodeJS.ProcessEnv }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS, onDiagnostic?: (message: string) => void): Promise<string | undefined> {
   let child: ManagedProcess;
   try { child = await spawnManagedProcess({ file: command.file, identity: command.identity, args: [...(command.args ?? []), "--settings", AUTO_MEMORY_SETTINGS, "--version"], cwd, env: claudeEnvironment(command.env) }); }
   catch (error) {
@@ -97,6 +97,8 @@ export async function claudeVersionProblem(command: { file: string; identity?: s
   // #111 C17 (HOST-2): at the deadline the tree ends at once with PO-14's no-grace kill, and its cleanup proof is awaited.
   try { await (outcome === timedOut && child.kill ? child.kill() : child.close()); }
   catch (error) { throw Object.assign(new Error(`claude --version probe containment failed: ${error instanceof Error ? error.message : String(error)}`), { containmentFailed: true }); }
+  // #111 C19: the stop is confirmed; a temp folder left behind is only a diagnostic.
+  if (child.cleanupDiagnostic) onDiagnostic?.(`claude --version probe: ${child.cleanupDiagnostic}`);
   if (outcome === timedOut) return `claude --version gave no answer in ${timeoutMs / 1000} s`;
   const found = versionParts(output);
   if (!found) return `claude --version gave an answer that is not a version: ${output.trim().slice(0, 80) || "(nothing)"}`;
@@ -248,7 +250,7 @@ export class ClaudeChannel implements NativeChannel {
     if (typeof command === "string") throw Object.assign(new Error(command), { refusedStart: true });
     if (command.dropped.length) this.emit("raw", { type: "path", dropped: command.dropped });
     // CH-2: an old or silent claude opens no session. This is a refused start, not a crash.
-    const problem = await claudeVersionProblem(command, this.options.cwd, this.options.versionTimeoutMs);
+    const problem = await claudeVersionProblem(command, this.options.cwd, this.options.versionTimeoutMs, (message) => this.emit("error", { kind: "other", message }));
     if (problem) throw Object.assign(new Error(problem), { refusedStart: true });
     let instructionPath: string | undefined;
     // npm's Windows .cmd shim cannot preserve multiline argv. The vendor's append-file flag
@@ -717,6 +719,8 @@ export class ClaudeChannel implements NativeChannel {
       let containmentStopped = !this.containmentFailed;
       try {
         if (child) { child.stdin.end(); await child.close(); }
+        // #111 C19: the cleanup proof decides containmentStopped; a temp folder left behind is a separate diagnostic.
+        if (child?.cleanupDiagnostic) this.emit("error", { kind: "other", message: `Claude process cleanup: ${child.cleanupDiagnostic}` });
       } catch (error) {
         containmentStopped = false;
         this.reason = { kind: "transport", message: `Claude process containment failed: ${error instanceof Error ? error.message : String(error)}` };

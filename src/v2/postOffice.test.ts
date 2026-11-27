@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import * as fsPromises from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,11 @@ import { buildStandingInstructions, estimateInstructionTokens, MAX_INSTRUCTION_T
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
+// A pass-through wrapper, so one test can fail the removal of the Windows supervisor's temp folder (#111 C19).
+vi.mock("node:fs/promises", async (original) => {
+  const real = await original<typeof import("node:fs/promises")>();
+  return { ...real, rm: vi.fn(real.rm) };
+});
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 async function setup() {
@@ -456,6 +462,36 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     await expect(office.send("medic", "x", { claims: ["../outside"] })).rejects.toThrow();
     expect(started).toHaveLength(1);
   }, 30_000);
+
+  // #111 C19: a confirmed stop whose temp folder stays is a clean close: claims are released and the soldier reopens.
+  windowsOnly("releases claims and reopens after a confirmed stop whose temp folder cannot be removed (#111 C19)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event),
+      channelFactory: (options) => new ClaudeChannel({ ...options, command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs")] } }) });
+    offices.push(office);
+    const remove = vi.mocked(fsPromises.rm);
+    const realRm = remove.getMockImplementation()! as typeof rm;
+    const left: string[] = [];
+    try {
+      await office.open("tank", { claims: ["src/**"] });
+      remove.mockImplementation((async (path: string, options?: object) => {
+        if (!/shadow-job-/.test(String(path))) return realRm(path, options);
+        left.push(String(path));
+        throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+      }) as typeof rm);
+      await expect(office.closeSession("tank")).resolves.toBeUndefined();
+      remove.mockImplementation(realRm);
+      expect(left).not.toHaveLength(0);
+      expect(events.some((event) => event.type === "down")).toBe(false);
+      await expect(office.open("medic", { claims: ["src/a.ts"] })).resolves.toBeDefined();
+      await office.closeSession("medic");
+      await expect(office.open("tank", { claims: ["src/**"] })).resolves.toBeDefined();
+    } finally {
+      remove.mockImplementation(realRm);
+      await Promise.all(left.map((path) => realRm(path, { recursive: true, force: true })));
+    }
+  }, 45_000);
 
   windowsOnly("keeps the claimed work of a cut-short turn on the branch, unusable until the owner decides", async () => {
     const repo = makeRepo(); repos.push(repo);

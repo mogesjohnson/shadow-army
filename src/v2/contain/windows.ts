@@ -22,6 +22,8 @@ export interface ManagedProcess {
   kill?(): Promise<void>;
   /** CH-1: the PATH entries left out of the lookup and the child's PATH. */
   readonly droppedPath: string[];
+  /** #111 C19: after a confirmed close, what the driver's own cleanup left behind; a diagnostic, never a teardown failure. */
+  readonly cleanupDiagnostic?: string;
 }
 export interface ManagedProcessOptions {
   file: string;
@@ -259,18 +261,21 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     try { await ready; } finally { clearTimeout(launchTimer); options.signal?.removeEventListener("abort", cancel); }
     wrapper.stderr.off("data", captureDiagnostic);
     let closing: Promise<void> | undefined;
+    let cleanupDiagnostic: string | undefined;
     const close = () => closing ??= (async () => {
       const killed = setTimeout(() => wrapper.kill(), 15_000);
       wrapper.stdin.end();
       control?.write("close\n");
       try { await wrapperClosed; } finally { clearTimeout(killed); control?.destroy(); server.close(); }
-      // #111 C16: the tree's outcome is decided first; a folder that cannot be removed is a secondary detail.
+      // #111 C16, C19: the cleanup proof alone decides confirmed or unconfirmed; a folder that cannot be removed
+      // after the proof is a separate diagnostic, never a teardown failure.
       const removal = await removeDirectory();
       if (!treeClosed) throw withRemoval(new Error("Windows supervisor ended without confirming session process-tree cleanup"), removal);
-      if (removal) throw new Error(`the session process tree was confirmed stopped, but its temp folder could not be removed: ${removal.message}`);
+      if (removal) cleanupDiagnostic = `the session process tree was confirmed stopped, but its temp folder could not be removed: ${removal.message}`;
     })();
     return {
       pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, droppedPath: dropped,
+      get cleanupDiagnostic() { return cleanupDiagnostic; },
       close,
       // PO-14: "kill" makes the supervisor terminate the job with no grace, even during a close.
       kill: () => { control?.write("kill\n"); return close(); },
