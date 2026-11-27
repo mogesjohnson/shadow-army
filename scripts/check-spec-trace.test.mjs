@@ -79,6 +79,23 @@ describe("spec traceability", () => {
     expect(checkSpecTrace(noRefs).problems).toContain("CH-1: Appendix A's row names #16, which its text doesn't");
     expect(checkSpecTrace(rows("| CH-1 | 2.0 WS-7 |")).problems).toEqual([]);
   });
+  it("expands a legacy range, so replacing it with its endpoints is caught", () => {
+    const spec = (marker, row) => valid.replace("Second requirement.", `Second requirement (from 2.0 ${marker}).`).replace("|---|---|", `|---|---|\n| CH-1 | ${row} |`);
+    expect(checkSpecTrace(spec("GIT-1 to GIT-4", "2.0 GIT-1 to GIT-4")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("GIT-1 to GIT-4", "2.0 GIT-1, GIT-4")).problems).toEqual(["CH-1: cites GIT-2, which Appendix A's row doesn't", "CH-1: cites GIT-3, which Appendix A's row doesn't"]);
+    expect(checkSpecTrace(spec("GIT-1 to GIT-4", "2.0 GIT-1 to 4")).problems).toEqual([]);
+    expect(checkSpecTrace(spec("GIT-1, GIT-4", "2.0 GIT-1 to GIT-4")).problems).toEqual(["CH-1: Appendix A's row names GIT-2, which its text doesn't", "CH-1: Appendix A's row names GIT-3, which its text doesn't"]);
+    expect(checkSpecTrace(spec("GIT-4 to GIT-1", "2.0 GIT-1, GIT-4")).problems).toContain("invalid legacy range GIT-4 to GIT-1");
+    expect(checkSpecTrace(spec("GIT-9007199254740000 to 9007199254741000", "2.0 GIT-1")).problems).toContain("invalid legacy range GIT-9007199254740000 to 9007199254741000");
+    expect(checkSpecTrace(spec("WS-7 to 2.0 semantics", "2.0 WS-7")).problems).toEqual([]);
+  });
+  it("accepts an appendix-only source whether or not the requirement's text also names it", () => {
+    const po8 = (text) => valid.replace("- **CH-1** (M1; C, I) Second requirement.", `- **PO-8** (M1; I) ${text}\n- **CH-1** (M1; C, I) Second requirement.`).replace("|---|---|", "|---|---|\n| PO-8 | v1 #22, #16 |").replace("- PO-1;", "- PO-1;\n- PO-8;").replace("(PO-1, CH-1)", "(PO-1, PO-8, CH-1)");
+    expect(checkSpecTrace(po8("Ends once.")).problems).toEqual([]);
+    expect(checkSpecTrace(po8("Ends once (from v1 #22 and #16: the guard).")).problems).toEqual([]);
+    expect(checkSpecTrace(po8("Ends once (from v1 #22).")).problems).toEqual([]);
+    expect(checkSpecTrace(po8("Ends once.").replace("#22, #16", "#22")).problems).toEqual(["PO-8: appendix-only source #16 is not in Appendix A's row"]);
+  });
   it("rejects an acceptance criterion stranded outside the milestone section", () => {
     expect(checkSpecTrace(`${valid}\n- **M1-AC99** Orphan (PO-1).`).problems).toContain("M1-AC99: acceptance criterion is outside a milestone");
   });
@@ -135,6 +152,10 @@ describe("Appendix B rule 9: tests name the requirements", () => {
       '/PO-5/.test("PO-6"); matcher.test("PO-7"); it.each(["PO-8"]); foo(it("x", () => {}), "PO-9");',
     ].join("\n");
     expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1", "CH-1", "PO-2", "PO-3"]);
+  });
+  it("excludes a member call whatever whitespace or comments surround the dot", () => {
+    const text = 'matcher . test("PO-7");\nmatcher\n  .test("PO-8"); matcher /* x */ . /* y */ test("PO-9"); a?.test("PO-10"); it("PO-1 real", () => {});';
+    expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1"]);
   });
   // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
   it("takes the repository tests as they are, and catches a planted break in them", () => {

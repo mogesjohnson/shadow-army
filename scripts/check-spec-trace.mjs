@@ -12,11 +12,27 @@ const TEST_ID = new RegExp(`\\b(?:(?:${PREFIXES})-\\d+|M\\d+-AC\\d+)\\b`, "g");
 const EVIDENCE = new Set(["U", "C", "I", "X", "F", "S", "L", "R"]);
 // A source marker in a requirement's own text: "(from 2.0 WS-1)", "as in 2.0's CFG-4", or "carries over v1's rule".
 const SOURCE_MARKER = /\(from\s+([^)]*)\)|as in 2\.0's\s+([A-Z]+-\d+)|carr(?:y|ies) over v1's|v1's [^.\n]*? carr(?:y|ies) over/gi;
-// Sources only Appendix A's row names, because the requirement's own text doesn't (a spec edit that cites them
-// removes the entry, and a stale entry is a problem). ARM-1, ARM-2 and ARM-5 carry v1's design rules with no
+// Sources Appendix A's row may name although the requirement's own text doesn't (the older shipped spec). A spec
+// whose text cites them too passes as well (the review spec's PO-8), so the entry is a compatibility allowance. ARM-1, ARM-2 and ARM-5 carry v1's design rules with no
 // marker or reference; PO-8 and ARM-6 take further v1 and 2.0 guard rules named only in the table.
 const APPENDIX_ONLY_SOURCE = new Map([["ARM-1", []], ["ARM-2", []], ["ARM-5", []], ["PO-8", ["#22", "#16"]], ["ARM-6", ["GUARD-3"]]]);
-const LEGACY_REF = /\b[A-Z]+-\d+\b|#\d+/g;
+// A legacy source: "GIT-1", "#16", or a range "GIT-1 to GIT-4" / "GIT-1 to 4".
+const LEGACY_REF = /\b([A-Z]+)-(\d+)(?:[ \t]+to[ \t]+(?:([A-Z]+)-)?(\d+)(?![.\d]))?\b|#\d+/g;
+
+/** Every legacy source in `text`, with each range expanded so that none is compared by its endpoints alone. */
+function legacyRefs(text, problems) {
+  const refs = [];
+  for (const match of text.matchAll(LEGACY_REF)) {
+    const [whole, area, first, endArea, last] = match;
+    if (area === undefined) refs.push(whole);
+    else if (last === undefined) refs.push(`${area}-${first}`);
+    else if (!Number.isSafeInteger(Number(first)) || !Number.isSafeInteger(Number(last)) || (endArea && endArea !== area) || Number(last) < Number(first) || Number(last) - Number(first) > 10_000) {
+      problems.push(`invalid legacy range ${whole}`);
+      refs.push(`${area}-${first}`, `${endArea ?? area}-${last}`);
+    } else for (let n = Number(first); n <= Number(last); n++) refs.push(`${area}-${n}`);
+  }
+  return refs;
+}
 
 export function expandReferences(text, problems = []) {
   const ids = [];
@@ -136,16 +152,15 @@ export function checkSpecTrace(source) {
     if (withdrawn) continue;
     const marked = [...body.matchAll(SOURCE_MARKER)];
     // A marker may also name this spec's own requirements (WSP-10's config); only legacy sources must be in the row.
-    const cited = new Set(marked.flatMap((marker) => (marker[1] ?? marker[2] ?? "").match(LEGACY_REF) ?? []).filter((ref) => !requirements.has(ref)));
+    const cited = new Set(marked.flatMap((marker) => legacyRefs(marker[1] ?? marker[2] ?? "", problems)).filter((ref) => !requirements.has(ref)));
     const row = rows.get(id);
     const expected = marked.length > 0 || APPENDIX_ONLY_SOURCE.has(id);
     if (expected && row === undefined) problems.push(`${id}: carried over but not in Appendix A`);
     else if (!expected && row !== undefined) problems.push(`${id}: in Appendix A but its text names no source`);
     else if (row !== undefined) {
-      const listed = new Set((row.match(LEGACY_REF) ?? []).filter((ref) => !requirements.has(ref)));
+      const listed = new Set(legacyRefs(row, problems).filter((ref) => !requirements.has(ref)));
       for (const ref of cited) if (!listed.has(ref)) problems.push(`${id}: cites ${ref}, which Appendix A's row doesn't`);
       const only = APPENDIX_ONLY_SOURCE.get(id) ?? [];
-      for (const ref of only) if (cited.has(ref)) problems.push(`${id}: its text now names ${ref}, so the appendix-only entry is stale`);
       for (const ref of only) if (!listed.has(ref)) problems.push(`${id}: appendix-only source ${ref} is not in Appendix A's row`);
       for (const ref of listed) if (!cited.has(ref) && !only.includes(ref)) problems.push(`${id}: Appendix A's row names ${ref}, which its text doesn't`);
       if (!/\S/.test(row)) problems.push(`${id}: Appendix A's row names no source`);
@@ -183,7 +198,9 @@ export function parseImplemented(source) {
 export function testReferenceText(source) {
   const out = [];
   // A call's callee: it, test or describe with members (it.skip), not a method of another object (re.test).
-  const callee = /(?<![.\w$#])(?:it|test|describe)((?:\.[A-Za-z]+)*)\s*$/;
+  const calleePattern = /(?<![\w$#])(?:it|test|describe)((?:\.[A-Za-z]+)*)\s*$/;
+  // A member call, whatever sits between the dot and the name, is no test call. Comments never reach `code`.
+  const callee = { exec: (code) => { const m = calleePattern.exec(code); return m && !/(?<!\.\.)\.\s*$/.test(code.slice(0, m.index)) ? m : null; } };
   const factory = /\.(?:each|for|skipIf|runIf|extend)$/;
   // One flag per open parenthesis: whether its first argument is a test title.
   const open = [];
