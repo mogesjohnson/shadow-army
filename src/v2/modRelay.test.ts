@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import { rmdirSync, symlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
+import { repoRoot } from "../workspace/git.js";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import { until } from "./fixture-main.testutil.js";
@@ -11,7 +14,10 @@ windowsOnly("the actual mod relay exposes only a loopback endpoint and releases 
   const repo = makeRepo();
   const credential = "d2".repeat(32);
   const entry = fileURLToPath(new URL("../../dist/v2/modRelay.js", import.meta.url));
-  const relay = spawn(process.execPath, [entry, "--cwd", repo.dir], { cwd: repo.dir, windowsHide: true, stdio: "pipe" });
+  // M1-AC25: started through a junction to a subfolder, the relay still names the post office's canonical root.
+  const alias = join(tmpdir(), `shadow-alias-${process.pid}-${Date.now()}`);
+  symlinkSync(join(repo.dir, "src"), alias, "junction");
+  const relay = spawn(process.execPath, [entry, "--cwd", alias], { cwd: repo.dir, windowsHide: true, stdio: "pipe" });
   const closed = new Promise<number | null>((done) => relay.once("close", done));
   let output = "", diagnostic = "";
   relay.stdout.on("data", (chunk) => { output += chunk; });
@@ -24,6 +30,7 @@ windowsOnly("the actual mod relay exposes only a loopback endpoint and releases 
     expect(ready).toBeDefined();
     endpoint = ready.data.url;
     expect(endpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(ready.data.root).toBe(await repoRoot(repo.dir));
     const headers = { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" };
     const command = (action: string, session?: string) => fetch(`${endpoint}/command`, { method: "POST", headers, body: JSON.stringify({ action, session }) });
     expect((await command("army")).status).toBe(200);
@@ -39,6 +46,7 @@ windowsOnly("the actual mod relay exposes only a loopback endpoint and releases 
       if (endpoint) await fetch(`${endpoint}/command`, { method: "POST", headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "shutdown" }) }).catch(() => {});
       relay.kill("SIGTERM"); await closed;
     }
+    rmdirSync(alias);
     repo.cleanup();
   }
 }, 40_000);

@@ -1,9 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpath as realpathCallback } from "node:fs";
+import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, extname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 import { Writable, type Readable } from "node:stream";
 
 export interface ProcessExit { code: number | null; signal: NodeJS.Signals | null }
@@ -16,6 +18,8 @@ export interface ManagedProcess {
   readonly exited: Promise<ProcessExit>;
   /** Session teardown, not turn teardown: persistent CLI services belong to the session. */
   close(): Promise<void>;
+  /** CH-1: the PATH entries left out of the lookup and the child's PATH. */
+  readonly droppedPath: string[];
 }
 export interface ManagedProcessOptions {
   file: string;
@@ -30,15 +34,82 @@ export async function spawnManagedProcess(options: ManagedProcessOptions): Promi
   return spawnWindows(options);
 }
 
-async function resolveWindowsCommand(file: string, cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
+// Real path with links, junctions and 8.3 short names followed (GetFinalPathNameByHandle on Windows).
+const realpath = promisify(realpathCallback.native);
+const comparable = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+// Outside means a whole leading ".." segment: a child folder named "..bin" is still inside.
+const inside = (path: string, root: string) => { const rel = relative(root, path); return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel); };
+
+/** The soldier's folder, its repository's checkout and every worktree of it, read from git's own files (no git run). */
+async function repositoryFolders(cwd: string): Promise<string[]> {
+  const folders = [cwd];
+  try {
+    let gitDir = join(cwd, ".git");
+    if ((await stat(gitDir)).isFile()) {
+      const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(gitDir, "utf8"));
+      if (!pointer) return folders;
+      gitDir = resolve(cwd, pointer[1]!);
+    }
+    const common = await readFile(join(gitDir, "commondir"), "utf8").then((text) => resolve(gitDir, text.trim()), () => gitDir);
+    folders.push(dirname(common));
+    for (const entry of await readdir(join(common, "worktrees")).catch(() => [] as string[])) {
+      const linked = (await readFile(join(common, "worktrees", entry, "gitdir"), "utf8").catch(() => "")).trim();
+      if (linked) folders.push(dirname(resolve(common, "worktrees", entry, linked)));
+    }
+  } catch { /* Not a repository: the folder itself is still excluded. */ }
+  return folders;
+}
+
+/**
+ * CH-1: the repository folders by real path. A folder that no longer exists (a stale worktree entry) holds nothing
+ * and keeps its lexical path; any other failure leaves the root unverified, so the launch is refused (C17).
+ */
+export async function verifiedRoots(folders: string[], real: (path: string) => Promise<string> = realpath): Promise<string[]> {
+  return Promise.all(folders.map(async (folder) => {
+    try { return comparable(await real(folder)); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return comparable(resolve(folder));
+      throw Object.assign(new Error(`could not verify the real path of repository folder ${folder}: ${(error as Error).message}`), { code: "EACCES" });
+    }
+  }));
+}
+
+/**
+ * CH-1: the CLI's PATH is the caller's less every relative or empty entry, every entry that can't be
+ * resolved, and every entry in the folder, its checkout or a worktree, compared by real path.
+ */
+async function trustedPath(cwd: string, env: NodeJS.ProcessEnv): Promise<{ kept: string[]; dropped: string[]; roots: string[] }> {
   const pathValue = Object.entries(env).find(([key]) => key.toLowerCase() === "path")?.[1] ?? "";
-  const extensions = extname(file) ? [""] : ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")];
-  const directories = isAbsolute(file) || /[\\/]/.test(file) ? [""] : [cwd, ...pathValue.split(delimiter)];
-  for (const directory of directories) for (const extension of extensions) {
-    const candidate = directory ? join(directory, `${file}${extension}`) : resolve(cwd, `${file}${extension}`);
+  const roots = await verifiedRoots(await repositoryFolders(cwd));
+  const kept: string[] = [], dropped: string[] = [];
+  for (const entry of pathValue.split(delimiter)) {
+    const real = entry && isAbsolute(entry) ? await realpath(entry).catch(() => undefined) : undefined;
+    if (real && !roots.some((root) => inside(comparable(real), root))) kept.push(entry); else dropped.push(entry);
+  }
+  return { kept, dropped, roots };
+}
+
+async function resolveWindowsCommand(file: string, cwd: string, env: NodeJS.ProcessEnv, path: string[]): Promise<string> {
+  // A bare name is looked up only in trusted PATH entries, with each PATHEXT suffix in order, never with none.
+  // A configured command is an absolute path; a relative one would come from the soldier's folder.
+  if (!isAbsolute(file) && /[\\/]/.test(file)) throw Object.assign(new Error(`executable ${file} must be a bare name or an absolute path`), { code: "ENOENT" });
+  const extensions = extname(file) ? [""] : (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  for (const directory of isAbsolute(file) ? [""] : path) for (const extension of extensions) {
+    const candidate = directory ? join(directory, `${file}${extension}`) : `${file}${extension}`;
     try { await access(candidate); return candidate; } catch { /* Try the next executable suffix. */ }
   }
   throw Object.assign(new Error(`could not find executable ${file}`), { code: "ENOENT" });
+}
+
+/**
+ * CH-1: the selected file itself, links followed, must lie outside the checkout and its worktrees.
+ * The check needs the real path: one that can't be read refuses the launch, never falls back to the lexical path (C17).
+ */
+export async function verifyExecutable(executable: string, roots: string[], real: (path: string) => Promise<string> = realpath): Promise<void> {
+  let resolved: string;
+  try { resolved = comparable(await real(executable)); } catch (error) {
+    throw Object.assign(new Error(`could not verify the real path of executable ${executable}: ${(error as Error).message}`), { code: "EACCES" });
+  }
+  if (roots.some((root) => inside(resolved, root))) throw Object.assign(new Error(`executable ${executable} is inside the soldier's repository`), { code: "EACCES" });
 }
 
 /** Windows argv quoting for native executables, including embedded quotes and trailing backslashes. */
@@ -61,8 +132,15 @@ function windowsCommand(file: string, args: string[], env: NodeJS.ProcessEnv): {
 }
 
 async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  const env = options.env ?? process.env;
-  const command = windowsCommand(await resolveWindowsCommand(options.file, options.cwd, env), options.args ?? [], env);
+  const inherited = options.env ?? process.env;
+  const path = await trustedPath(options.cwd, inherited);
+  const pathKey = Object.keys(inherited).find((key) => key.toLowerCase() === "path") ?? "Path";
+  // cmd.exe would otherwise search the current folder before PATH for every name a shim runs.
+  const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => key.toLowerCase() !== "path" && key.toLowerCase() !== "nodefaultcurrentdirectoryinexepath")),
+    [pathKey]: path.kept.join(delimiter), NoDefaultCurrentDirectoryInExePath: "1" };
+  const executable = await resolveWindowsCommand(options.file, options.cwd, env, path.kept);
+  await verifyExecutable(executable, path.roots);
+  const command = windowsCommand(executable, options.args ?? [], env);
   const pipeName = `shadow-army-${randomUUID()}`;
   const token = randomUUID();
   const directory = await mkdtemp(join(tmpdir(), "shadow-job-"));
@@ -123,7 +201,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
     wrapper.stderr.off("data", captureDiagnostic);
     let closing: Promise<void> | undefined;
     return {
-      pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited,
+      pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, droppedPath: path.dropped,
       close() {
         return closing ??= (async () => {
           const killed = setTimeout(() => wrapper.kill(), 15_000);
