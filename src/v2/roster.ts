@@ -39,7 +39,8 @@ export function resolveShadowNames(keys: readonly string[], configured: Readonly
     names.set(key, own?.trim() ?? shadowName(key));
   }
   const byName = new Map<string, string>();
-  const byKey = new Map(keys.map((k) => [k.toLowerCase(), k]));
+  const byKey = new Map<string, string[]>();
+  for (const k of keys) byKey.set(k.toLowerCase(), [...(byKey.get(k.toLowerCase()) ?? []), k]);
   for (const [key, name] of names) {
     const lower = name.toLowerCase();
     const sameName = byName.get(lower);
@@ -48,9 +49,8 @@ export function resolveShadowNames(keys: readonly string[], configured: Readonly
     } else {
       byName.set(lower, key);
     }
-    const owner = byKey.get(lower);
-    if (owner !== undefined && owner !== key) {
-      problems.push(`shadow name "${name}" of "${key}" is the key of soldier "${owner}"`);
+    for (const owner of byKey.get(lower) ?? []) {
+      if (owner !== key) problems.push(`shadow name "${name}" of "${key}" is the key of soldier "${owner}"`);
     }
   }
   if (problems.length) throw new RosterError(`shadow names clash:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
