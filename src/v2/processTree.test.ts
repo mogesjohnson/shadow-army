@@ -31,11 +31,11 @@ afterEach(async () => {
 
 const windows = process.platform === "win32";
 
-// M1a containment is Windows only. Linux and macOS are "Not tested" (D-34): they fail clearly.
+// Linux and macOS have no containment driver yet (M1b): PO-14 says so and nothing starts.
 describe.skipIf(windows)("session process containment off Windows", () => {
-  it("fails clearly and starts nothing: Not tested here (D-34)", async () => {
+  it("fails with the no-helper message and starts nothing", async () => {
     await expect(spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd: await directory() }))
-      .rejects.toThrow(/Windows only.*not tested.*D-34/);
+      .rejects.toThrow(/No containment helper for .*, so no soldier can start/);
   });
 });
 
