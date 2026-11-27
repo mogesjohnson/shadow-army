@@ -10,6 +10,8 @@ interface Runtime {
   root?: string;
   credential: string;
   closing: boolean;
+  /** The `session.end` reason the army was released with, kept for a relay that reports ready afterwards. */
+  releaseReason?: string;
   ready: Promise<void>;
   accept: () => void;
   reject: (error: Error) => void;
@@ -17,7 +19,8 @@ interface Runtime {
   stream?: HookStream<ProcessSpawnChunk, ProcessSpawnResult>;
   deadline?: Timer;
   heartbeat?: Timer;
-  renewing: boolean;
+  /** The renewal now waiting for its answer, if any; it stops counting as waiting after 5 s (HOST-2). */
+  renewing?: symbol;
   diagnostic: string;
   finished?: Promise<void>;
 }
@@ -26,6 +29,14 @@ interface Runtime {
 // and $.state is readable by other plugins; neither may hold the Monarch secret.
 let active: Runtime | undefined;
 const retiring = new Set<Runtime>();
+/** HOST-2 / M1-AC9: set at `session.start` of a session that is not the owner's interactive one; the mod then does nothing. */
+let inert = false;
+const RENEW_EVERY_MS = 10_000;
+const RENEW_WAIT_MS = 5_000;
+/** `session.end` reasons that keep the army running (HOST-2, PO-7). */
+const KEEPS_ARMY = new Set(["clear", "resume"]);
+/** Counts army-ending `session.end` events; a start begun before one is abandoned rather than published. */
+let ends = 0;
 
 function safeText(value: unknown, credential = ""): string {
   let text = String(value);
@@ -58,15 +69,16 @@ async function post($: EngineInterface, runtime: Runtime, command: Record<string
   }
 }
 
-async function release($: EngineInterface, runtime: Runtime): Promise<void> {
+async function release($: EngineInterface, runtime: Runtime, reason?: string): Promise<void> {
   // Stop renewals before a network wait: session.end shares the native 1.5s
   // deadline, and /clear keeps the Claude process/module alive afterwards.
   runtime.closing = true;
+  runtime.releaseReason ??= reason;
   cancelTimers(runtime);
   runtime.reject(new Error("Claude session ended before the post office was ready"));
   retiring.add(runtime);
   if (active === runtime) active = undefined;
-  if (runtime.url) await post($, runtime, { action: "release", session: runtime.session });
+  if (runtime.url) await post($, runtime, { action: "release", session: runtime.session, ...(reason ? { reason } : {}) });
   // The relay remains drained while the detached helper finishes cleanup. If
   // native unload kills the relay first, the independent helper's lease expires.
 }
@@ -84,13 +96,16 @@ function fail($: EngineInterface, runtime: Runtime, error: unknown): void {
   if (runtime.stream) void runtime.stream.return({ code: null, signal: null }).catch(() => {});
 }
 
-async function renew($: EngineInterface, runtime: Runtime): Promise<void> {
-  if (runtime.closing) return;
-  if (await $.session.id() !== runtime.session) {
-    await release($, runtime);
-    return;
-  }
-  if (!runtime.closing) await post($, runtime, { action: "renew", session: runtime.session });
+/** One renewal. The army's id stays the army's after `/clear`, `/resume` or `/branch` gives Claude another, so it is never compared with `$.session.id()`. A failed renewal stops nothing: the next goes at its time. */
+function renew($: EngineInterface, runtime: Runtime): void {
+  if (runtime.closing || runtime.renewing) return;
+  const mine = Symbol("renewal");
+  runtime.renewing = mine;
+  const waiting = $.clock.after(RENEW_WAIT_MS, () => { if (runtime.renewing === mine) runtime.renewing = undefined; });
+  void post($, runtime, { action: "renew", session: runtime.session }).catch(() => {}).finally(() => {
+    waiting.cancel();
+    if (runtime.renewing === mine) runtime.renewing = undefined;
+  });
 }
 
 function event($: EngineInterface, runtime: Runtime, line: string): void {
@@ -108,14 +123,10 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     runtime.deadline = undefined;
     if (runtime.closing) {
       // An end event may beat relay startup. Release a late ready helper too.
-      void post($, runtime, { action: "release", session: runtime.session }).catch(() => {});
+      void post($, runtime, { action: "release", session: runtime.session, ...(runtime.releaseReason ? { reason: runtime.releaseReason } : {}) }).catch(() => {});
       return;
     }
-    runtime.heartbeat = $.clock.every(5_000, () => {
-      if (runtime.closing || runtime.renewing) return;
-      runtime.renewing = true;
-      void renew($, runtime).catch((error) => fail($, runtime, error)).finally(() => { runtime.renewing = false; });
-    });
+    runtime.heartbeat = $.clock.every(RENEW_EVERY_MS, () => renew($, runtime));
     runtime.accept();
     return;
   }
@@ -167,20 +178,24 @@ async function consume($: EngineInterface, runtime: Runtime): Promise<void> {
 }
 
 async function ensure($: EngineInterface): Promise<Runtime> {
+  const begun = ends;
+  const ended = () => { if (ends !== begun) throw new Error("The army ended before the command could run"); };
   const session = await $.session.id();
   const cwd = await $.session.cwd();
-  if (active && (active.session !== session || active.cwd !== cwd)) await release($, active);
+  ended();
+  // The army keeps the id it started with after /clear, /resume or /branch (HOST-2), so only another folder replaces it.
+  if (active && active.cwd !== cwd) await release($, active);
   let runtime = active;
   if (!runtime || runtime.closing) {
     // The end hook only requests release. A later foreground command waits for the
     // old relay/helper to finish guard finalization and release the folder marker.
     await Promise.all([...retiring].map((old) => old.finished));
-    if (await $.session.id() !== session) throw new Error("Claude session changed while the previous army was closing");
-    // Another concurrent foreground call may have opened this session while we waited.
-    if (active && !active.closing && active.session === session && active.cwd === cwd) {
+    ended();
+    // Another concurrent foreground call may have opened the army while we waited.
+    if (active && !active.closing && active.cwd === cwd) {
       const shared = active;
       await shared.ready;
-      if (shared.closing || await $.session.id() !== session) throw new Error("Army session closed during startup");
+      if (shared.closing) throw new Error("Army session closed during startup");
       return shared;
     }
     let accept!: () => void;
@@ -190,7 +205,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     runtime = {
       session, cwd, credential: Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""),
-      closing: false, ready, accept, reject, renewing: false, diagnostic: "",
+      closing: false, ready, accept, reject, diagnostic: "",
     };
     active = runtime;
     const owned = runtime;
@@ -198,12 +213,7 @@ async function ensure($: EngineInterface): Promise<Runtime> {
     owned.finished = consume($, owned).catch((error) => fail($, owned, error)).finally(() => { retiring.delete(owned); });
   }
   await runtime.ready;
-  if (runtime.session !== session || runtime.closing || await $.session.id() !== session) {
-    // A command that began before /clear cannot claim a runtime another command
-    // opened for the new session, or release that newer command's lease.
-    if (runtime.session === session) await release($, runtime);
-    throw new Error("Claude session changed before the army command could run");
-  }
+  if (runtime.closing) throw new Error("The army ended before the command could run");
   return runtime;
 }
 
@@ -279,7 +289,7 @@ async function send($: EngineInterface, args: string): Promise<string> {
   const soldier = soldiers.find((item) => item.key.toLowerCase() === name.toLowerCase() || item.name.toLowerCase() === name.toLowerCase());
   if (!soldier) return "Nothing sent: unknown soldier.";
   if (!soldier.supported || !soldier.roles.includes("build")) return show(`Nothing sent: ${soldier.name} is not a claude soldier with the build role.`);
-  if (runtime.closing || await $.session.id() !== runtime.session) throw new Error("Claude session changed before the send could run");
+  if (runtime.closing) throw new Error("The army ended before the send could run");
   const opened = await post($, runtime, { action: "open", soldier: soldier.key, claims }) as { session?: string };
   const delivery = await post($, runtime, { action: "send", soldier: soldier.key, text: brief, claims }) as Delivery;
   return card(soldier, delivery, `${runtime.root}/.shadow/v2/logs/${opened.session ?? soldier.key}.jsonl`, runtime.credential);
@@ -287,17 +297,23 @@ async function send($: EngineInterface, args: string): Promise<string> {
 
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
+    // M1-AC9: a session that is not the owner's interactive one (a soldier's -p session) gets nothing from the mod.
+    inert = e.isInteractive === false && !e.surface;
+    if (inert) return next(e);
     await $.command.register({ name: "send", description: "Send one brief to a claude soldier and wait for its summary.", argumentHint: "<soldier> --claim <path-or-glob> <brief>", immediate: true });
     return next(e);
   });
-  on("command.run", { command: "send" }, async ($, e) => {
+  on("command.run", { command: "send" }, async ($, e, next) => {
+    if (inert) return next(e);
     try { return { text: await send($, e.args) }; }
     catch (error) { return { text: show(`Shadow Army: ${safeText(error instanceof Error ? error.message : error, active?.credential)}`) }; }
   }).catch((_$, _e, next) => ({ text: show(`Shadow Army: ${safeText(next.error.message)}`) }));
   on("session.end", async ($, e, next) => {
     const runtime = active;
-    if (runtime?.session === e.sessionId) {
-      try { await release($, runtime); }
+    // /clear and /resume keep the army and its renewals; any other end stops renewing first, then releases with the reason (HOST-2).
+    if (!inert && !KEEPS_ARMY.has(String(e.reason))) ends++;
+    if (runtime && !inert && !KEEPS_ARMY.has(String(e.reason))) {
+      try { await release($, runtime, typeof e.reason === "string" ? e.reason : undefined); }
       catch { /* Cancelled renewals let the independent lease expire if release cannot arrive. */ }
     }
     return next(e);

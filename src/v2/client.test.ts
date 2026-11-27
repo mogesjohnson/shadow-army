@@ -100,7 +100,7 @@ describe("M1 caller subprocess contract", () => {
   windowsOnly("accepts a one-shot credential pipe, keeps serving after EOF, and exits on authenticated shutdown", async () => {
     const repo = makeRepo(); repos.push(repo);
     const runtime = launch(repo.dir);
-    runtime.child.stdin.end(`${JSON.stringify({ credential })}\n`);
+    runtime.child.stdin.end(`${JSON.stringify({ credential, mode: "live" })}\n`);
     await until(() => runtime.events.some((event) => event.type === "ready") || runtime.child.exitCode !== null);
     expect(runtime.diagnostic()).toBe("");
     const ready = runtime.events.find((event) => event.type === "ready");

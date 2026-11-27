@@ -12,6 +12,7 @@ import type { ChannelEvent, ChannelFactory, NativeChannel, TurnResult, WriteOutc
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, InstructionsTooLargeError, MAX_INSTRUCTION_TOKENS } from "./instructions.js";
 import { redact, REDACTED, SessionLogs } from "./logs.js";
+import type { LeaseRecord } from "./lease.js";
 import { loadV2Roster, resolveShadowNames } from "./roster.js";
 
 /** Streamed fragments the log holds until their block ends (C1): thinking first, as the CLI streams it. */
@@ -35,6 +36,7 @@ const endsBlock = (event: ChannelEvent): boolean => {
     || (frame?.type === "stream_event" && (frame.event?.type === "content_block_stop" || frame.event?.type === "message_stop"));
 };
 
+export type LeaseEndReason = "Claude Code ended" | "the owner logged out" | "no renewal from the mod for 30 s";
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
   cwd: string;
@@ -638,9 +640,13 @@ export class PostOffice {
 
   refused(): void { this.record({ type: "command_refused", data: { reason: "wrong or missing Monarch credential" } }); }
 
-  leaseEnded(session: string, reason: "expired" | "released"): void {
+  /** PO-7: the shutdown's reason, which tells the owner's logout from Claude Code ending and from a lapsed lease. */
+  leaseEnded(session: string, reason: LeaseEndReason): void {
     this.record({ type: "lease_ended", data: { session, reason } });
   }
+
+  /** PO-7: the lease's start, each long step and each refusal go to the redacting log; renewals are never logged one by one. */
+  leaseRecord(record: LeaseRecord): void { this.record(record); }
 
   close(): Promise<void> {
     return this.closePromise ??= (async () => {
