@@ -101,6 +101,30 @@ describe("a log failure in the owner's transcript (PO-5)", () => {
     expect(logs).toEqual(["Shadow Army: logs not written · the log tank-1 could not be written: disk full", "Shadow Army · claude-sonnet: {}"]);
   });
 
+  it("renders a refused send once: the marked log_failed event stays in the stream but the refusal owns the display (C18)", async () => {
+    // eslint-disable-next-line prefer-const
+    let emitRef: (event: Record<string, unknown>) => void = () => {};
+    const reason = "the log tank-1 could not be written; the send was refused: disk full";
+    // The real refusal comes from the `send` action, whose opening write failed.
+    const m = await mod(() => { emitRef({ soldier: "claude-sonnet", type: "log_failed", data: { log: "tank-1", refused: true, reason } }); throw new Error(reason); });
+    emitRef = m.emit;
+    const row = await m.send("claude-sonnet --claim a go");
+    expect(row).toContain(reason);
+    m.emit({ type: "channel_down", soldier: "claude-sonnet", data: {} });
+    await vi.waitFor(() => expect(m.logs).toContain("Shadow Army · claude-sonnet: {}"));
+    // One line for Claude: the refusal. The marked event adds no second one.
+    expect(m.logs).toEqual(["Shadow Army · claude-sonnet: {}"]);
+  });
+
+  it("still renders an unmarked log_failed event once per gap (C18)", async () => {
+    const { send, emit, logs } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a go");
+    emit(failed("later lines are retried: disk full"));
+    emit({ type: "channel_down", soldier: "claude-sonnet", data: {} });
+    await vi.waitFor(() => expect(logs).toContain("Shadow Army · claude-sonnet: {}"));
+    expect(logs.filter((line) => line.startsWith("Shadow Army: logs not written"))).toHaveLength(1);
+  });
+
   it("sanitizes the reason and keeps it to one line", async () => {
     const { send, emit, logs, spawns } = await mod(() => ({ status: "completed", summary: "ok" }));
     await send("claude-sonnet --claim a go");
