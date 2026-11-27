@@ -508,7 +508,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect(delivered).toEqual([]);
   }, 30_000);
 
-  it("shows no log_failed notice when the opening write is what stops the send: the refusal is the one line (C13, M1-AC4)", async () => {
+  it("keeps the log_failed event, marked refused, when the opening write stops the send; no duplicate transcript line (C13, C15, PO-5)", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];
     const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
@@ -517,7 +517,9 @@ for await (const line of createInterface({ input: process.stdin })) {
     const opened = await office.open("scout");
     await breakLog(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`));
     await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
-    expect(events.filter((event) => event.type === "log_failed")).toEqual([]);
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).toMatchObject({ log: opened.session, refused: true, reason: expect.stringContaining("the send was refused") });
     await office.close();
     expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toEqual([]);
   }, 30_000);

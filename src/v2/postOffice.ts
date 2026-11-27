@@ -177,13 +177,13 @@ export class PostOffice {
   private logFailed(name: string, error: Error): void {
     // M1-AC4: the office log failing while it records a notice is the same failure (a full disk), already reported once.
     if (name === "post-office" && this.noticesWriting > 0) return;
-    // C13: the refused send already tells the owner; a second line would say the same thing twice.
-    if (this.openingWrites.has(name)) return;
     const soldier = [...this.sessions.values()].find((session) => session.id === name)?.spec.key;
+    // C13/C15: when the opening write is what stops the send, the event still goes out (PO-5) marked refused; only the duplicate transcript line is dropped.
+    const refused = this.openingWrites.has(name);
     const notice = redact({ ...(soldier ? { soldier } : {}), type: "log_failed",
-      data: { log: name, reason: `the log ${name} could not be written; later lines are retried and the gap is counted: ${error.message}` } }, this.secrets) as OfficeEvent;
+      data: { log: name, ...(refused ? { refused: true } : {}), reason: `the log ${name} could not be written; ${refused ? "the send was refused" : "later lines are retried and the gap is counted"}: ${error.message}` } }, this.secrets) as OfficeEvent;
     try { this.options.onEvent?.(notice); } catch { /* the owner's handler cannot stop the turn */ }
-    if (name === "post-office") return;
+    if (name === "post-office" || refused) return;
     this.noticesWriting++;
     void this.logs.write("post-office", { ...notice, time: new Date().toISOString() }).finally(() => { this.noticesWriting--; });
   }
