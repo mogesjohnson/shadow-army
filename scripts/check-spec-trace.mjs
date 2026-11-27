@@ -12,8 +12,10 @@ const TEST_ID = new RegExp(`\\b(?:(?:${PREFIXES})-\\d+|M\\d+-AC\\d+)\\b`, "g");
 const EVIDENCE = new Set(["U", "C", "I", "X", "F", "S", "L", "R"]);
 // A source marker in a requirement's own text: "(from 2.0 WS-1)", "as in 2.0's CFG-4", or "carries over v1's rule".
 const SOURCE_MARKER = /\(from\s+([^)]*)\)|as in 2\.0's\s+([A-Z]+-\d+)|carr(?:y|ies) over v1's|v1's [^.\n]*? carr(?:y|ies) over/gi;
-// Carried over from v1's design rules with no marker in their own text: Appendix A's row is their only source.
-const APPENDIX_ONLY_SOURCE = new Set(["ARM-1", "ARM-2", "ARM-5"]);
+// Sources only Appendix A's row names, because the requirement's own text doesn't (a spec edit that cites them
+// removes the entry, and a stale entry is a problem). ARM-1, ARM-2 and ARM-5 carry v1's design rules with no
+// marker or reference; PO-8 and ARM-6 take further v1 and 2.0 guard rules named only in the table.
+const APPENDIX_ONLY_SOURCE = new Map([["ARM-1", []], ["ARM-2", []], ["ARM-5", []], ["PO-8", ["#22", "#16"]], ["ARM-6", ["GUARD-3"]]]);
 const LEGACY_REF = /\b[A-Z]+-\d+\b|#\d+/g;
 
 export function expandReferences(text, problems = []) {
@@ -123,7 +125,12 @@ export function checkSpecTrace(source) {
   const rows = new Map();
   for (const row of appendix.split("\n")) {
     const cells = row.split("|");
-    if (cells.length > 2) for (const id of expandReferences(cells[1], problems)) rows.set(id, cells[2]);
+    if (cells.length > 2) {
+      for (const id of new Set(expandReferences(cells[1], problems))) {
+        if (rows.has(id)) problems.push(`Appendix A lists ${id} twice`);
+        else rows.set(id, cells[2]);
+      }
+    }
   }
   for (const [id, { body, withdrawn }] of requirements) {
     if (withdrawn) continue;
@@ -135,8 +142,12 @@ export function checkSpecTrace(source) {
     if (expected && row === undefined) problems.push(`${id}: carried over but not in Appendix A`);
     else if (!expected && row !== undefined) problems.push(`${id}: in Appendix A but its text names no source`);
     else if (row !== undefined) {
-      const listed = new Set(row.match(LEGACY_REF) ?? []);
+      const listed = new Set((row.match(LEGACY_REF) ?? []).filter((ref) => !requirements.has(ref)));
       for (const ref of cited) if (!listed.has(ref)) problems.push(`${id}: cites ${ref}, which Appendix A's row doesn't`);
+      const only = APPENDIX_ONLY_SOURCE.get(id) ?? [];
+      for (const ref of only) if (cited.has(ref)) problems.push(`${id}: its text now names ${ref}, so the appendix-only entry is stale`);
+      for (const ref of only) if (!listed.has(ref)) problems.push(`${id}: appendix-only source ${ref} is not in Appendix A's row`);
+      for (const ref of listed) if (!cited.has(ref) && !only.includes(ref)) problems.push(`${id}: Appendix A's row names ${ref}, which its text doesn't`);
       if (!/\S/.test(row)) problems.push(`${id}: Appendix A's row names no source`);
     }
   }
@@ -171,7 +182,13 @@ export function parseImplemented(source) {
  */
 export function testReferenceText(source) {
   const out = [];
-  const title = /\b(?:it|test|describe)(?:\.[A-Za-z]+)*\s*\(\s*$/;
+  // A call's callee: it, test or describe with members (it.skip), not a method of another object (re.test).
+  const callee = /(?<![.\w$#])(?:it|test|describe)((?:\.[A-Za-z]+)*)\s*$/;
+  const factory = /\.(?:each|for|skipIf|runIf|extend)$/;
+  // One flag per open parenthesis: whether its first argument is a test title.
+  const open = [];
+  // Set once a factory call's ")" (or a factory's tagged template) closes: a "(" right after it opens a curried title.
+  let closed = false;
   let code = "";
   for (let i = 0; i < source.length; ) {
     const c = source[i];
@@ -184,7 +201,8 @@ export function testReferenceText(source) {
       out.push(source.slice(i, end < 0 ? source.length : end));
       i = end < 0 ? source.length : end + 2;
     } else if (c === '"' || c === "'" || c === "`") {
-      const isTitle = title.test(code);
+      const isTitle = open[open.length - 1] === true && /\(\s*$/.test(code);
+      const tagged = c === "`" && factory.test(callee.exec(code)?.[1] ?? "");
       let text = "";
       for (i++; i < source.length && source[i] !== c; i++) {
         if (source[i] === "\\") i++;
@@ -198,17 +216,29 @@ export function testReferenceText(source) {
       }
       i++;
       if (isTitle) out.push(text);
-      code = (code + '""').slice(-40);
-    } else if (c === "/" && /(?:^|[(,=:[!&|?{};])\s*$/.test(code)) {
+      code = (code + '""').slice(-60);
+      closed = tagged;
+    } else if (c === "/" && /(?:^|[(,=:[!&|?{};>]|\b(?:return|typeof|case|void|yield|await|of|in))\s*$/.test(code)) {
       // A regular expression literal: skip it, since it may hold a quote.
       for (i++; i < source.length && source[i] !== "/" && source[i] !== "\n"; i++) {
         if (source[i] === "\\") i++;
         else if (source[i] === "[") while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
       }
       i++;
-      code = (code + "/r/").slice(-40);
+      code = (code + "/r/").slice(-60);
+      closed = false;
     } else {
-      code = (code + c).slice(-40);
+      if (c === "(") {
+        const direct = callee.exec(code);
+        const isFactory = !closed && direct !== null && factory.test(direct[1]);
+        // A title position: the call itself, or the call right after a factory such as it.each(...).
+        open.push(closed || (direct !== null && !isFactory));
+        closed = false;
+        if (isFactory) open[open.length - 1] = "factory";
+      } else if (c === ")") {
+        closed = open.pop() === "factory";
+      } else if (!/\s/.test(c)) closed = false;
+      code = (code + c).slice(-60);
       i++;
     }
   }

@@ -69,6 +69,16 @@ describe("spec traceability", () => {
     expect(checkSpecTrace(valid.replace("|---|---|", "|---|---|\n| CH-1 | v1 #16 |")).problems).toContain("CH-1: in Appendix A but its text names no source");
     expect(checkSpecTrace(carried).problems).toContain("CH-1: carried over but not in Appendix A");
   });
+  it("rejects a row that adds a source its requirement doesn't name, and a repeated row", () => {
+    const carried = valid.replace("Second requirement.", "Second requirement (from 2.0 WS-7).");
+    const rows = (...lines) => carried.replace("|---|---|", `|---|---|\n${lines.join("\n")}`);
+    expect(checkSpecTrace(rows("| CH-1 | 2.0 WS-7; v1 #99 |")).problems).toContain("CH-1: Appendix A's row names #99, which its text doesn't");
+    expect(checkSpecTrace(rows("| CH-1 | 2.0 WS-7 |", "| CH-1 | 2.0 WS-7 |")).problems).toContain("Appendix A lists CH-1 twice");
+    expect(checkSpecTrace(rows("| CH-1 | 2.0 WS-7 |", "| PO-1, CH-1 | 2.0 WS-7 |")).problems).toContain("Appendix A lists CH-1 twice");
+    const noRefs = valid.replace("Second requirement.", "Second requirement (from v1).").replace("|---|---|", "|---|---|\n| CH-1 | v1 #16 |");
+    expect(checkSpecTrace(noRefs).problems).toContain("CH-1: Appendix A's row names #16, which its text doesn't");
+    expect(checkSpecTrace(rows("| CH-1 | 2.0 WS-7 |")).problems).toEqual([]);
+  });
   it("rejects an acceptance criterion stranded outside the milestone section", () => {
     expect(checkSpecTrace(`${valid}\n- **M1-AC99** Orphan (PO-1).`).problems).toContain("M1-AC99: acceptance criterion is outside a milestone");
   });
@@ -115,6 +125,16 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1", "CH-1"]);
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", files('it("x", () => { run("PO-1 CH-1"); });')).problems).toEqual(["PO-1: implemented, but no test names it", ...unnamedCh1]);
     expect(checkTestReferences(trace, "M1\n", files('it("x", () => { run("PO-9"); });')).problems).toEqual([]);
+  });
+  it("credits the title of a curried it.each or describe.skipIf call, and not a method named test", () => {
+    const text = [
+      'it.each([["PO-4"]])("PO-1 curried %s", () => {});',
+      'describe.skipIf(CH_2)("CH-1 suite", () => { it.skip.each`a`("PO-2 tagged", () => {}); });',
+      'it.concurrent("PO-3 plain", () => {});',
+      'const q = (s) => /"/.test(s); this.#test("PO-10");',
+      '/PO-5/.test("PO-6"); matcher.test("PO-7"); it.each(["PO-8"]); foo(it("x", () => {}), "PO-9");',
+    ].join("\n");
+    expect(testReferenceText(text).match(/\b[A-Z]+-\d+\b/g)).toEqual(["PO-1", "CH-1", "PO-2", "PO-3"]);
   });
   // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
   it("takes the repository tests as they are, and catches a planted break in them", () => {
