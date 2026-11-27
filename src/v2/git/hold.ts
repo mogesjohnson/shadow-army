@@ -279,6 +279,7 @@ function valid(value: unknown): value is Persisted {
 }
 
 const UNREADABLE = ["can't be read, so what the last post office trusted is unknown", "accept the folder as it is to go on"] as const;
+const UNRECORDED = "a harness git command stopped before its outcome was recorded, so it may have timed out";
 
 export class HarnessHold {
   private repos: GitRepo[];
@@ -288,6 +289,8 @@ export class HarnessHold {
   private turnOpen = false;
   /** Harness git commands started whose after-check hasn't finished: the record says `running` while any is (C10). */
   private active = 0;
+  /** Commands whose after-check settled but whose `active` decrement no write recorded yet: the next write folds them in (C26). */
+  private settled = 0;
   private timeout: string | undefined;
   /** Submodule names, at any depth, from the last scan. */
   private names: string[] = [];
@@ -315,7 +318,9 @@ export class HarnessHold {
     this.repos = [this.options.repo, ...saved.repos.filter((repo) => keyOf(repo) !== keyOf(this.options.repo))];
     this.trusted = saved.trusted;
     this.turnOpen = saved.turnOpen === true;
-    this.timeout = saved.timeout; // a timeout's hold outlives the restart, until g tries again
+    // A timeout's hold outlives the restart, until g tries again. So does a command whose outcome no write recorded:
+    // its timeout may be the write that failed, and unchanged metadata can't say it wasn't (C25).
+    this.timeout = saved.timeout ?? (saved.running ? UNRECORDED : undefined);
     // No removal runs across a restart: a mark whose folder is still there is one that stopped, so it's dropped,
     // and a removal that goes on marks it again (C21).
     // Memory only: a write here would come before `held` is restored. A stop before the next write drops it again.
@@ -499,7 +504,7 @@ export class HarnessHold {
     const config: [string, string][] = kind !== "guard" ? []
       : [["diff.ignoreSubmodules", "none"], ...this.names.map((name): [string, string] => [`submodule.${name}.ignore`, "none"])];
     this.update(() => { this.active++; });
-    let result: GitResult | undefined, failure: unknown, after: HoldCheck;
+    let result: GitResult | undefined, failure: unknown, after: HoldCheck | undefined;
     try {
       try { result = await this.options.gitFor(covered, config).run(args, kind); } catch (error) {
         failure = error;
@@ -509,11 +514,13 @@ export class HarnessHold {
       }
       after = await this.check();
     } finally {
-      // A failed write leaves the record saying running, more held than memory, and the next write corrects it.
-      try { this.update(() => { this.active--; }); } catch (error) { this.active--; throw error; }
+      // `running` is cleared only by a write that records the outcome with it: the after-check's, or a hold kept in
+      // memory when its own write failed. A failed write leaves it to the next one (C26). An after-check that didn't
+      // settle leaves the record saying running, so a restart holds until g tries again (C25).
+      if (after !== undefined || this.held) try { this.update(() => { this.active--; }); } catch (error) { this.settled++; throw error; }
     }
     if (failure !== undefined) throw failure;
-    if (after.held) throw new HarnessGitHeld(after.line);
+    if (after!.held) throw new HarnessGitHeld(after!.line);
     return result!;
   }
 
@@ -576,7 +583,8 @@ export class HarnessHold {
   private hold(files: string[], why: string, how = "undo it to go on"): HoldCheck & { held: true } {
     const line = this.line(files, why, how);
     const fresh = !this.files || this.files.join("\0") !== files.join("\0");
-    this.update(() => { this.files = files; });
+    // Fail closed: a hold whose write fails stands in memory, and the next write records it (C26).
+    try { this.update(() => { this.files = files; }); } catch (error) { this.files = files; throw error; }
     if (fresh) this.options.log?.({ event: "held", files, reason: why });
     return { held: true, files, line };
   }
@@ -600,12 +608,13 @@ export class HarnessHold {
   /**
    * Persist first (C23, C24): `change` is applied and the record written in one step, with nothing awaited
    * between; if the write fails, every field is put back as it was, so the caller's retry writes it again.
-   * Every change to what the record holds goes through here.
+   * Every change to what the record holds goes through here. Settled commands are folded in (C26).
    */
   private update(change: () => void) {
     const before = { repos: this.repos, trusted: this.trusted, files: this.files, turnOpen: this.turnOpen, active: this.active,
-      timeout: this.timeout, removing: this.removing, unverified: this.unverified };
+      settled: this.settled, timeout: this.timeout, removing: this.removing, unverified: this.unverified };
     change();
+    this.active -= this.settled; this.settled = 0;
     try { this.save(); } catch (error) { Object.assign(this, before); throw error; }
   }
 

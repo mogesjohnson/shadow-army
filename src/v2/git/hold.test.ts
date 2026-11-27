@@ -570,4 +570,52 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     unblock();
     await expect(again.run(main, ["status"])).rejects.toThrow("timed out twice"); // still held: retry() wrote nothing
   }, 60_000);
+
+  it("holds a restart that finds a command's outcome unrecorded, though its timeout's write failed, until g tries again (C25)", async () => {
+    const { main, statePath, open } = setup();
+    let release!: () => void, checking!: () => void, unblock = () => {}, timedOut = false;
+    const gate = new Promise<void>((done) => { release = done; }), pending = new Promise<void>((done) => { checking = done; });
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      if (args[0] === "log") { timedOut = true; unblock = blockWrite(statePath); throw new HarnessGitHeld("git log timed out twice"); }
+      if (timedOut) { checking(); await gate; }
+      return runner.run(args, kind);
+    } }));
+    await hold.start();
+    const running = hold.run(main, ["log"]);
+    await pending;
+    expect(record(statePath)).toMatchObject({ running: true });
+    expect(record(statePath).timeout).toBeUndefined(); // the timeout's write failed
+    unblock();
+    const again = open(); // the post office stopped during the after-check; the metadata is unchanged
+    await again.start();
+    await expect(again.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+    const third = open(); await third.start(); // the record the restart wrote still holds
+    await expect(third.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+    third.retry();
+    expect((await third.run(main, ["status"])).code).toBe(0);
+    release(); await expect(running).rejects.toThrow();
+    await expect(hold.run(main, ["status"])).rejects.toThrow("timed out twice"); // held in memory, and on disk by the finally
+    expect(record(statePath).timeout).toBe("git log timed out twice");
+  }, 60_000);
+
+  it("keeps a hold the after-check found though its write and the finally's fail, so a later write records it (C26)", async () => {
+    const { base, repo, main, statePath, open } = setup();
+    let unblock = () => {};
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      const result = await runner.run(args, kind);
+      if (args[0] === "status") { appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n"); unblock = blockWrite(statePath); }
+      return result;
+    } }));
+    await hold.start();
+    const other = worktree(base, repo, "other");
+    await hold.register(other);
+    hold.beginRemoval(other);
+    await expect(hold.run(main, ["status"])).rejects.toThrow();
+    expect(hold.held).toBe(true);
+    unblock();
+    hold.endRemoval(other); // an unrelated write, once storage recovers
+    expect(record(statePath)).toMatchObject({ held: { files: [".git/info/exclude"] } });
+    expect(record(statePath).running).toBeUndefined();
+    expect(await open().start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
+  }, 60_000);
 });
