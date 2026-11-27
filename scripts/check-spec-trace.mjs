@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -257,6 +257,8 @@ function vitestList(root, flags, files, vitest, timeout) {
     child.on("close", (status, signal) => {
       settle();
       if (status !== 0) return rejectList(new Error(signal ? `stopped by ${signal}` : `exit ${status}: ${firstLine(text)}`));
+      // vitest exits 0 without a list when a file's errors stop collection.
+      if (!existsSync(output)) return rejectList(new Error(`it wrote no list: ${firstLine(text)}`));
       try {
         const listed = JSON.parse(readFileSync(output, "utf8"));
         if (!Array.isArray(listed) || !listed.every((entry) => typeof entry?.file === "string")) throw new Error("its output is not a list of tests");
@@ -277,11 +279,14 @@ function vitestList(root, flags, files, vitest, timeout) {
 /**
  * The tests that can name a requirement: each test vitest collects from the test files under `directories`, as
  * { path, name } with its full name (the describe chain and its title, joined by " > "). Only those files are passed
- * to vitest, so a suite outside them is never loaded. It fails closed: when `vitest list` fails (a file does not
+ * to vitest, so a suite outside them is not loaded, unless its path ends with one of theirs (vitest matches a file
+ * argument as a substring). It fails closed: when `vitest list` fails (a file does not
  * load, the command errors or passes `timeout`), the result names no test and says why in `problems`. A test file
  * under `directories` that the vitest config does not take in is reported too, since rule 9 cannot read it.
  */
-export async function listTests(root, { directories = TEST_DIRECTORIES, vitest = join(root, "node_modules/vitest/vitest.mjs"), timeout = 600_000 } = {}) {
+export async function listTests(given, { directories = TEST_DIRECTORIES, vitest = join(given, "node_modules/vitest/vitest.mjs"), timeout = 600_000 } = {}) {
+  // vitest reports real paths (macOS's /var is /private/var), so compare against the real root.
+  const root = realpathSync(given);
   const inside = (file) => {
     const path = relative(root, file).replaceAll("\\", "/");
     return directories.some((directory) => path.startsWith(`${directory}/`)) ? path : undefined;
@@ -289,7 +294,7 @@ export async function listTests(root, { directories = TEST_DIRECTORIES, vitest =
   try {
     const found = findTests(root, directories);
     // With no file, vitest would list every suite the config takes in.
-    if (!found.length) return { tests: [], files: 0, problems: [] };
+    if (!found.length) return { tests: [], files: 0, problems: [`no test file under ${directories.join(", ")}, so no test names anything`] };
     const tests = [];
     for (const { file, name } of await vitestList(root, LIST_FLAGS, found, vitest, timeout)) {
       if (typeof name !== "string") throw new Error(`${file}: a test without a name`);

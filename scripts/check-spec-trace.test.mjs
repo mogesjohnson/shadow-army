@@ -212,6 +212,12 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     expect(listing).toEqual({ tests: [{ path: "src/trace.test.mjs", name: "PO-1 by its title" }, { path: "src/trace.test.mjs", name: "checks behavior" }], files: 1, problems: [] });
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual(unnamedCh1);
   }, 120_000);
+  it("fails closed with vitest's message when it writes no list, and when no test file is found", async () => {
+    const root = suite({ "src/named.test.mjs": 'it("PO-1", () => {});\n', "quiet.mjs": 'console.error("collection stopped by an error");\n' });
+    roots.push(root);
+    expect((await listTests(root, { vitest: join(root, "quiet.mjs") })).problems).toEqual(["vitest list failed, so no test names anything: it wrote no list: collection stopped by an error"]);
+    expect((await listTests(root, { vitest, directories: ["plugins"] })).problems).toEqual(["no test file under plugins, so no test names anything"]);
+  }, 30_000);
   // A collector that ignores SIGTERM and starts a child that does too.
   const hang = `import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
