@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { windowsOnly } from "./windowsOnly.testutil.js";
@@ -8,6 +9,11 @@ import * as managedProcesses from "./processTree.js";
 import type { ChannelEvent, NativeError, TurnUsage } from "./channel.js";
 import { ClaudeChannel, claudeChannelArgs, claudeVersionProblem, OLDEST_CLAUDE, resolveClaudeLaunch, VERSION_TIMEOUT_MS } from "./claude.js";
 
+// A pass-through wrapper, so one test can fail the instruction file's write after its folder was made (#111 C18).
+vi.mock("node:fs/promises", async (original) => {
+  const real = await original<typeof import("node:fs/promises")>();
+  return { ...real, writeFile: vi.fn(real.writeFile) };
+});
 const channels: ClaudeChannel[] = [];
 const folders: string[] = [];
 async function setup(extra: { interruptTimeoutMs?: number; versionTimeoutMs?: number; badLineQuietMs?: number; autonomy?: "supervised" | "auto" | "full"; fakeArgs?: string[] } = {}) {
@@ -1035,6 +1041,36 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(launches).toBe(1);
     expect(events.find((event) => event.type === "error")?.data).toMatchObject({ kind: "other" });
     expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ refusedStart: true, containmentStopped: true });
+  });
+
+  // #111 C18: the folder exists and the write fails; the start is still refused, and close removes the folder.
+  windowsOnly("refuses the start and removes the folder when the instruction file's write fails", async () => {
+    const versionOutput = new PassThrough();
+    versionOutput.end("2.1.295 (Claude Code)\n");
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+      pid: 3, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {}, droppedPath: [],
+    });
+    const write = vi.mocked(writeFile);
+    const realWrite = write.getMockImplementation()!;
+    let folder = "";
+    write.mockImplementation((async (path: Parameters<typeof writeFile>[0], ...rest: unknown[]) => {
+      if (!/shadow-claude-instructions-/.test(String(path))) return (realWrite as (...args: unknown[]) => Promise<void>)(path, ...rest);
+      folder = dirname(String(path));
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    }) as typeof writeFile);
+    const events: ChannelEvent[] = [];
+    let launches = 0;
+    try {
+      const cwd = await mkdtemp(join(tmpdir(), "sa-instruction-write-")); folders.push(cwd);
+      const channel = new ClaudeChannel({ cwd, model: "probe", instructions: "line one\nline two", onEvent: (event) => events.push(event), command: { file: process.execPath } });
+      channels.push(channel);
+      await until(() => events.some((event) => event.type === "closed"));
+    } finally { launches = spawn.mock.calls.length; spawn.mockRestore(); write.mockImplementation(realWrite); }
+    expect(launches).toBe(1);
+    expect(folder).not.toBe("");
+    expect(events.find((event) => event.type === "error")?.data).toMatchObject({ kind: "other", message: expect.stringContaining("ENOSPC") });
+    expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ refusedStart: true, containmentStopped: true });
+    await until(() => !existsSync(folder));
   });
 
   windowsOnly("a login needed keeps its kind whether the fake keeps running or exits after it (CH-2, M1-AC4)", async () => {
