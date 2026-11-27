@@ -66,7 +66,7 @@ export class OfficeClient {
       this.child.once("error", (error) => { this.ended = true; clearTimeout(timer); failed(error); resolve(); });
       this.child.once("close", () => { this.ended = true; clearTimeout(timer); failed(new Error(`post office ended${diagnostic ? `: ${diagnostic}` : ""}`)); resolve(); });
     });
-    this.child.stdin.end(`${JSON.stringify({ credential: this.#credential, ...(options.lease ? { lease: options.lease } : {}) })}\n`);
+    this.child.stdin.end(`${JSON.stringify({ credential: this.#credential, ...(options.lease ? { mode: "mod", lease: options.lease } : { mode: "live" }) })}\n`);
   }
 
   /** The relay exposes only this loopback endpoint; its credential stays in memory. */
