@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { credential, roster } from "./fixture-main.testutil.js";
-import { redact, REDACTED, SessionLogs } from "./logs.js";
+import { redact, REDACTED, SessionLogs, UnflushedAppend } from "./logs.js";
 import { PostOffice } from "./postOffice.js";
 
 const dirs: string[] = [];
@@ -288,6 +288,23 @@ describe("a failed log write (PO-5, M1-AC4)", () => {
     expect(parsed(file.text())).toEqual([{ type: "log-gap", lost: 3, time: expect.any(String) }, { n: 4 }, { n: 5 }]);
   });
 
+  it("says once when a line closes a gap, and never for a log without one (C22)", async () => {
+    vi.useFakeTimers();
+    const file = fakeFile();
+    const onRecovered = vi.fn();
+    const logs = new SessionLogs("logs", [], { append: file.append, onRecovered });
+    await logs.write("soldier-1", { n: 1 });
+    file.failing.count = 2;
+    const lost = logs.write("soldier-1", { n: 2 });
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await lost).written).toBe(false);
+    expect(onRecovered).not.toHaveBeenCalled();
+    await logs.write("soldier-1", { n: 3 });
+    await logs.write("soldier-1", { n: 4 });
+    expect(onRecovered).toHaveBeenCalledTimes(1);
+    expect(onRecovered).toHaveBeenCalledWith("soldier-1");
+  });
+
   it("ends a line cut short by a failed write before the next one, and a reader skips it", async () => {
     vi.useFakeTimers();
     const file = fakeFile();
@@ -372,16 +389,50 @@ describe("the flushed opening row (PO-5)", () => {
     expect(onFailure).toHaveBeenCalledTimes(1);
   });
 
-  it("writes and flushes the row again when only the first flush fails", async () => {
+  const rows = async (dir: string): Promise<unknown[]> =>
+    (await readFile(join(dir, "soldier-1.jsonl"), "utf8")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+
+  it("flushes the row again, without appending it twice, when only the first flush fails (C21)", async () => {
     const sync = await spyOnSync();
     sync.mockRejectedValueOnce(new Error("EIO: flush failed"));
     const dir = await directory();
     const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
     expect(await logs.write("soldier-1", { type: "turn_started" })).toEqual({ written: true });
     expect(sync).toHaveBeenCalledTimes(1 + syncsPerRow);
-    // The retry ends the unflushed try's line before writing the row again.
-    expect((await readFile(join(dir, "soldier-1.jsonl"), "utf8")).trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)))
-      .toContainEqual({ type: "turn_started" });
+    expect(await rows(dir)).toEqual([{ type: "turn_started" }]);
+  });
+
+  it("keeps one opening row when both flushes fail, and marks it refused right after it (C21)", async () => {
+    const sync = await spyOnSync();
+    sync.mockRejectedValueOnce(new Error("EIO: flush failed")).mockRejectedValueOnce(new Error("EIO: flush failed"));
+    const dir = await directory();
+    const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
+    expect((await logs.write("soldier-1", { type: "turn_started" })).written).toBe(false);
+    expect(await rows(dir)).toEqual([{ type: "turn_started" }]);
+    expect((await logs.write("soldier-1", { type: "text" })).written).toBe(true);
+    expect(await rows(dir)).toEqual([{ type: "turn_started" }, { type: "log-gap", lost: 1, refused: true, time: expect.any(String) }, { type: "text" }]);
+  });
+
+  it("ends an earlier gap when an unflushed opening row carries its line in, and reports the refusal as a new gap (C22)", async () => {
+    let text = "";
+    const faults = ["disk full", "disk full", "unflushed"];
+    const append = async (_path: string, chunk: string): Promise<void> => {
+      const fault = faults.shift();
+      if (fault === "disk full") throw new Error(fault);
+      text += chunk;
+      if (fault) throw new UnflushedAppend(new Error("EIO: flush failed"));
+    };
+    const flush = vi.fn(async () => { throw new Error("EIO: flush failed"); });
+    const onFailure = vi.fn();
+    const onRecovered = vi.fn();
+    const logs = new SessionLogs("logs", [], { append, flush, onFailure, onRecovered, retryDelayMs: 1 });
+    expect((await logs.write("soldier-1", { type: "opened" })).written).toBe(false);
+    expect((await logs.write("soldier-1", { type: "turn_started" })).written).toBe(false);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(onRecovered).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledTimes(2);
+    expect(text.split("\n").filter(Boolean).map((line) => JSON.parse(line)))
+      .toEqual([{ type: "log-gap", lost: 1, time: expect.any(String) }, { type: "turn_started" }]);
   });
 
   it("does not deliver a message whose opening row cannot be flushed, and delivers the next one once it can", async () => {
