@@ -1,34 +1,39 @@
-# Handoff: orchestrator 66 (`195eada0`) to orchestrator 67 (2026-11-27 ~15:25 UTC)
+# Handoff: orchestrator 67 (`facc5354`) to orchestrator 68 (2026-11-27 ~16:55 UTC)
 
 This file is self-contained: do not read older handoffs.
 
-## The owner's orders in force
+## Why it stopped
 
-- **Codex runs with full permissions (owner, 2026-11-27):** `~/.codex/config.toml` has `approval_policy = "never"`, `sandbox_mode = "danger-full-access"` (backup `config.toml.bak-2026-11-27`). Codex tabs no longer ask per command. **If a Codex tab shows no progress for 10 minutes, look at its screen** (TRACE screenshot, scaled).
-- **Tabs (owner, 2026-11-27):** "use powershell, not command line. use the same open window that i have you in. just hit the plus". TRACE can click + but `type_text` into the tab always fails (`focus_changed`). Working route: a launcher `.ps1` in `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/launch/` (copy one: Set-Location, `$env:NO_COLOR=1`, the `claude ...` or `codex ...` line), then from the PowerShell tool: `Get-ChildItem Env:CLAUDE* | ForEach-Object { Remove-Item "Env:$($_.Name)" }; wt.exe -w 0 new-tab -p "Windows PowerShell" --title <name> powershell -NoExit -ExecutionPolicy Bypass -File <ps1>`. Memory: `tabs-via-plus-powershell.md`.
-- Codex review tabs are launched by the orch (memory `codex-review-tabs.md`); Codex **weekly limit was 19% left** at 10:09 UTC. Close a Codex tab once its `## Result` is written; always close the TRACE session after each use.
-- Merge bottom-first on Codex approval at the exact head, from your own Bash (`gh pr ready`, `gh pr merge <n> --merge --match-head-commit <sha>`). Stop new work at 85% of Claude's 5h window. Opus medium for trust state and ordering; Sonnet otherwise.
-- Memory pressure: Claude Code killed background timers once (RAM ~3 GB free of 15.6). Close finished tabs promptly.
+Claude's weekly limit was at **1%** (owner, 16:50 UTC). The owner stopped all workers and is restarting the computer. **Start no worker until the weekly limit has reset**; check the cockpit line first.
 
-## Running workers (PowerShell tabs in the orch window; they report to the current orch)
+## The owner's orders in force (2026-11-27)
 
-| Worker | Session | PR | Task | Files | Review file when done |
-|---|---|---|---|---|---|
-| w237-fix117 | `679e12c4` | #117 head `b99215d` | Codex 131 C16 [P1]: fail-closed slash/brace classification | `scripts/check-spec-trace*.mjs` | 133 |
-| w238-fix116 | `a3daed95` | #116 head `f7851ba` | Codex 132 C20-C23 (2 P1, 2 P2): write-once logs, close awaits writes | `src/v2/logs*.ts`, `src/v2/postOffice*.ts` | 134 |
-| w239-fix106 | just launched | #106 head `8d32d90` | Codex 130 C23-C24 [P1]: persist first, then memory, in hold.ts | `src/v2/git/hold*.ts` | 135 |
+- **The owner runs Codex now:** "i will make sure to have codex run you dont do it anymore". Orchs write the review file and tell the owner it is ready; no Codex tabs.
+- **Fewer Codex rounds** ("fix 1 then so we have less codex reviews"): `.shadow/v2-tools/tasks/codex-fix-common.md`, section "Fewer Codex rounds". Every review file carries the verbatim **Review bar** paragraph (block only on supported-path defects against spec/AC/class rule with a repro; unnamed threats are P2 build notes; all blockers in one round). Workers fix the class module-wide and self-review as Codex would, starting by 110k.
+- **Claude reviews when Codex is out** ("can we also do our own reviews if codex is not avaivble"): a fresh Claude reviewer (never the author; Opus medium, high for trust code) runs the same review file, posts "Claude review" C items and the `## Result`. Merging on a Claude-only approval still needs the owner's yes; the owner was asked and has not answered.
+- Tabs: launcher `.ps1` in `.shadow/v2-tools/tasks/launch/` + `wt.exe -w 0 new-tab -p "Windows PowerShell" --title <name> powershell -NoExit -ExecutionPolicy Bypass -File <ps1>` from the PowerShell tool, after clearing `Env:CLAUDE*`.
+- Merge bottom-first on approval at the exact head, from your own Bash. Opus medium for trust state; Sonnet otherwise.
+- Memory pressure: Claude Code killed orch-67's background timers (RAM under 1 GB free). Keep at most two workers; close tabs promptly. If timers are killed, do not restart them unasked; act on worker messages.
 
-Briefs: `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/w23{7,8,9}-*.md`. SendMessage each your name. When one reports: `git log -1 origin/<branch>`, `git diff --stat <old>..<new>`, close its tab, launch a Codex tab on its review file (launcher like `launch/w239-fix106.ps1` but running `codex "Do the review in C:/Users/johns/codex-reviews/shadow-army/11-27-2026-codex-review-<n>.md. Follow it exactly and write its ## Result."`). Read results with `awk '/^## Result/{p=1;next} p' <file>` (the words appear earlier in the instructions). Next free review file: **136**.
+## The three PRs in the fix loop (all draft, mergeable, base `main`)
 
-Tabs still open besides the workers: the Codex tab of review 130 (done; close it).
+| PR | Head before | Last review | Open findings | Worker (stopped) | Brief | Review file when done |
+|---|---|---|---|---|---|---|
+| #106 hold | `f949e6b` -> pushed `6991ebf` (C25-C26 fixed; no self-review, replies, body refresh or file 138 yet) | 135 | C25-C26 (P1) | w242-fix106 `3ac03d4d` | `tasks/w242-fix106.md` | 138 |
+| #116 logs | `9e7d54d` | 136 | C27-C29 (P1) | w243-fix116 `f2e52368` | `tasks/w243-fix116.md` | 139 |
+| #117 trace | `26d1d35` | 137 | C22-C25 (P1) | not launched | `tasks/w244-fix117.md` + `launch/w244-fix117.ps1` | 140 |
+
+w242 and w243 were told to push only passing work and write `## Left` in their briefs. **First:** `git log -1 origin/<branch>` for each, read each brief's `## Left`, and relaunch fresh workers on what is left (same brief; their worktrees `AIConnections-worktrees/w242-fix106` and `w243-fix116` may hold uncommitted work: inspect before reuse). Then launch w244. Next free review file: **141**.
+
+Decisions taken by orch-67 (the owner may overrule): #117 rule 9 reads titles from `vitest list --json --staticParse=false` (lexer removed, 26d1d35); VER-7 will credit test titles only (w244 edits that spec line). #116 C28 (file replaced mid-call) may be a P2 build note under the review bar.
 
 ## Next, after #106, #116, #117 merge
 
-1. Sync: all ten `claude/63-m1b-base-*` are 177-185 commits behind main; guardian, mod-sweep, mod-trust, po-chain, po-chain2, po-trust, watch conflict with main; linux-driver, mod-preflight, server-wiring merge clean. #144 conflicts with its base `claude/63-m1b-claude-list`. Outside the lane, #75, #87, #98, #100 conflict with main. One sync worker per conflict; #132 also edits `native/linux/sa-contain.c`.
-2. Stacks: #125 -> #127, #129 -> #132; #126 -> #130; #135 -> #138 -> #144; #136 -> #137; #139 -> #140, #141. Singles: #128, #131, #133, #134, #142, #143. Paused briefs: `tasks/w192-fix138.md`, `tasks/w194-fix141.md`.
-3. Paused until M1 merges: Ink lane #145-#151. Outside: #75, #81, #83 (spec record, stays open), #87, #88, #98, #100.
+1. Sync: the ten `claude/63-m1b-base-*` are ~180 commits behind main; guardian, mod-sweep, mod-trust, po-chain, po-chain2, po-trust, watch conflict. #144 conflicts with `claude/63-m1b-claude-list`. #75, #87, #98, #100 conflict with main.
+2. Stacks: #125 -> #127, #129 -> #132; #126 -> #130; #135 -> #138 -> #144; #136 -> #137; #139 -> #140, #141. Singles: #128, #131, #133, #134, #142, #143. Paused: `tasks/w192-fix138.md`, `tasks/w194-fix141.md`.
+3. Paused until M1 merges: Ink lane #145-#151. 37 PRs open in all. After M1: M2-M7 (spec section 6).
 
 ## Lessons
 
-- Repeat findings on the same class (C15 -> C16, C21 -> C23): brief one rule for the class (fail closed; persist first; write once) on Opus medium, not another case patch.
-- Before the config change, Codex 0.160 stopped on approval prompts that TRACE cannot answer.
+- Repeat findings on one class: replace the mechanism (tool output over hand parsing) or state the class rule; never patch one more case.
+- A worker at 150k with an unread self-review pushed anyway, and Codex found five more P1s. Self-review starts by 110k.

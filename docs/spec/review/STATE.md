@@ -2,9 +2,10 @@
 
 A short current state, rewritten at each orchestrator handoff. The working detail is in [`handoffs/LATEST.md`](handoffs/LATEST.md). The log up to 2026-11-25 is in git: `git show 013be2e:docs/spec/review/STATE.md`.
 
+- **Stopped 2026-11-27 ~16:55 UTC (orch-67): Claude weekly limit at 1%.** Fix loop: #106 (6991ebf, C25-C26 fixed, file 138 not written), #116 (C27-C29, w243 stopped), #117 (C22-C25, brief w244 ready). The owner now runs Codex; orchs write review files. New rules: Review bar in every review file, Claude reviews when Codex is out. See handoffs/LATEST.md.
 - **Order (the owner, 2026-11-26): bottom-first, merge on approval without asking, orchestrators merge from their own Bash.** orch-66 (2026-11-27 ~15:25 UTC): #109 and #111 are in `main`. #106, #116, #117 each got a second round from Codex (files 130-132); fix workers w239, w238, w237 run on them (files 135, 134, 133). Codex runs with full permissions (owner, 2026-11-27). Next free file: 136.
 - **Spec:** v0.29 (2026-11-25): D-40 and D-41 applied (v2.1's standalone `shadow` app; PO-22, the viewer's read-only feed, milestone M7; open Q11). D-42 (2026-11-27, `410961e`): the Linux helper needs Linux 5.1. Frozen for the build since v0.28 (D-39, prototype first); M1 is cut to M1a (Windows-only slice) and M1b (the rest of M1).
-- **Build:** M1a on PRs #89 to #104; M1b on #105 to #144, stacked on `claude/63-m1b` and its `claude/63-m1b-base-*` branches. 40 PRs open (2026-11-27).
+- **Build:** M1a on PRs #89 to #104; M1b on #105 to #144, stacked on `claude/63-m1b` and its `claude/63-m1b-base-*` branches. 37 PRs open (2026-11-27 pm).
 - **Merged:** M1a (#95, #94), the M1b base #152, #107, #115, #113, #123, #109 and #111 are in `main`. Folded and closed: #90, #92, #93. Fold 2 (#110, #120, #121, #124) lives in #109, #106 and #111.
 - **Flatten plan (owner approved 2026-11-26):** fold 2 done by orch-56 (#110, #120, #121, #124 folded into #109, #106, #111); fold 1 and fold 3 queued (`.shadow/v2-tools/tasks/orch-51-flatten.md`).
 - **Codex:** reviews a push within minutes. Review files live in `C:/Users/johns/codex-reviews/shadow-army/`.
