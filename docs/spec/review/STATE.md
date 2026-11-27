@@ -2,10 +2,10 @@
 
 A short current state, rewritten at each orchestrator handoff. The working detail is in [`handoffs/LATEST.md`](handoffs/LATEST.md). The log up to 2026-11-25 is in git: `git show 013be2e:docs/spec/review/STATE.md`.
 
-- **Order (the owner, 2026-11-26): bottom-first, merge on approval without asking, orchestrators merge from their own Bash.** orch-63 (2026-11-27 ~04:50 UTC): **#113 (`f1f61be`, Codex 113)** is in `main`. Codex files 117 to 120 (#109, #116, #111, #117) wait for Codex. Fix workers w221 (#106) and w224 (#123) are running. Next free file: 121.
-- **Spec:** v0.29 (2026-11-25): D-40 and D-41 applied (v2.1's standalone `shadow` app; PO-22, the viewer's read-only feed, milestone M7; open Q11). Frozen for the build since v0.28 (D-39, prototype first); M1 is cut to M1a (Windows-only slice) and M1b (the rest of M1).
+- **Order (the owner, 2026-11-26): bottom-first, merge on approval without asking, orchestrators merge from their own Bash.** orch-64 (2026-11-27 ~05:35 UTC): **#123 (`99bf3a3`, Codex 121)** is in `main`. Codex files 123, 125, 127 (#109, #111, #117) wait for Codex; fix workers w229 (#106, file 126) and w231 (#116, file 128) are running. Next free file: 129. New workers up to 5h 95% (the owner, 2026-11-27).
+- **Spec:** v0.29 (2026-11-25): D-40 and D-41 applied (v2.1's standalone `shadow` app; PO-22, the viewer's read-only feed, milestone M7; open Q11). D-42 (2026-11-27, `410961e`): the Linux helper needs Linux 5.1. Frozen for the build since v0.28 (D-39, prototype first); M1 is cut to M1a (Windows-only slice) and M1b (the rest of M1).
 - **Build:** M1a on PRs #89 to #104; M1b on #105 to #144, stacked on `claude/63-m1b` and its `claude/63-m1b-base-*` branches. 40 PRs open (2026-11-27).
-- **Merged:** M1a (#95, #94), the M1b base #152, #107, #115 and #113 are in `main`. Folded and closed: #90, #92, #93. Fold 2 (#110, #120, #121, #124) lives in #109, #106 and #111.
+- **Merged:** M1a (#95, #94), the M1b base #152, #107, #115, #113 and #123 are in `main`. Folded and closed: #90, #92, #93. Fold 2 (#110, #120, #121, #124) lives in #109, #106 and #111.
 - **Flatten plan (owner approved 2026-11-26):** fold 2 done by orch-56 (#110, #120, #121, #124 folded into #109, #106, #111); fold 1 and fold 3 queued (`.shadow/v2-tools/tasks/orch-51-flatten.md`).
 - **Codex:** reviews a push within minutes. Review files live in `C:/Users/johns/codex-reviews/shadow-army/`.
 - **Process (the owner, 2026-11-26):** Codex reviews, workers fix, test, then merge on approval, unasked. "Speed-up five": flat PRs (one per milestone part, at most one level of stacking, V6 commit sizes kept, PR size overridden), self-review before push, one lane until M1 is merged, Sonnet by default, merge on approval. Details in RUNBOOK.md section 0.

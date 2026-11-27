@@ -23,7 +23,7 @@ The orchestrator (`orch-<n>`) opens one terminal tab per task. Each worker (`w<n
 **Start.** Read `handoffs/LATEST.md` only. It is self-contained: do not read older handoffs, `STATE.md`, `NEXT-SESSION.md`, `PLAYBOOK.md` or the flow file unless a task needs them. Start the hi timer and a `sleep 300` watch timer. Close the previous orchestrator's tab once the cockpit marks it parked. SendMessage each running worker your name.
 
 **Tasks and briefs.**
-- A task is about 70k of work with a list of the files it may change. Two live workers never share a file; overlapping tasks run in order. At most three workers at once. No new worker while the cockpit's 5-hour figure is 80% or more.
+- A task is about 70k of work with a list of the files it may change. Two live workers never share a file; overlapping tasks run in order. At most three workers at once. No new worker while the cockpit's 5-hour figure is 95% or more (the owner, 2026-11-27: "we can push 95% for 5h"; was 80%).
 - The brief goes in `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/tasks/<name>.md`: the task, its files and the files it must not touch, branch and base, model and effort, what done means, and the orchestrator's name. Codex-fix briefs point at `codex-fix-common.md` beside them.
 - **Model and effort:** Sonnet by default (the owner, 2026-11-26). Opus medium only for concurrency, security stores, process termination and design; Sonnet high for safety code (redaction, filters); Sonnet medium for ordinary modules; Haiku low for mechanical edits.
 - **Lead the prompt with the task**, not "You are worker": the cockpit's duplicate-task stop compares prompts.
