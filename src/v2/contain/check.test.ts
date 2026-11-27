@@ -47,17 +47,19 @@ describe("native/probe.mjs", () => {
     let seen = 0;
     const ended = new Promise<void>((done) => child.stdout.on("end", () => done()));
     const both = new Promise<void>((done, fail) => {
-      const timer = setTimeout(() => fail(new Error("the probe did not report itself and a grandchild in time")), 10_000);
+      const timer = setTimeout(() => fail(new Error("the probe did not report itself and a grandchild in time")), 4_000);
       child.stdout.on("error", (e) => { clearTimeout(timer); fail(e); });
       child.stdout.on("data", (chunk: Buffer) => {
         text += chunk.toString();
         const lines = text.split("\n");
         text = lines.pop() ?? ""; // a partial last line waits for its newline
         for (const line of lines.filter(Boolean)) {
-          const report = JSON.parse(line) as { pid: number; role: string };
-          pids.add(report.pid);
-          roles.push(report.role);
-          seen += 1;
+          try {
+            const report = JSON.parse(line) as { pid: number; role: string };
+            pids.add(report.pid);
+            roles.push(report.role);
+            seen += 1;
+          } catch (e) { clearTimeout(timer); fail(e); return; }
         }
         if (seen >= 2 && pids.size === 2) { clearTimeout(timer); done(); }
       });
