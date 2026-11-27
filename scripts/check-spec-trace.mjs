@@ -198,9 +198,13 @@ export function parseImplemented(source) {
   return { milestone, ids, problems };
 }
 
-// After these a "/" starts a regular expression, not a division.
-const REGEX_AFTER = new Set(["(", ",", "=", ":", "[", "!", "&", "|", "?", "?.", "{", "}", ";", ">", "<", "+", "-", "*", "%", "^", "~"]);
-const REGEX_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "of", "in", "delete", "instanceof", "new", "throw"]);
+// A "/" is a division only after a token that can end an expression: a name, number, string, template or regex, a
+// closing ")" or "]", or a postfix ++ or --. After any other token it starts a regular expression.
+const REGEX_AFTER = new Set(["...", "(", ",", "=", ":", "[", "!", "&", "|", "?", "?.", "{", "}", ";", ">", "<", "+", "-", "*", "%", "^", "~"]);
+const REGEX_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "of", "in", "delete", "instanceof", "new", "throw", "else", "do", "default"]);
+// The ")" closing the condition of one of these is followed by a statement, so a "/" after it starts a regex.
+const CONDITION_KEYWORDS = new Set(["if", "while", "for", "with"]);
+const AWAIT = new Set(["await"]);
 const TEST_CALLEES = new Set(["it", "test", "describe"]);
 // it.each(table)(title) and describe.skipIf(flag)(title): the title comes after a second call or a tagged template.
 const TEST_FACTORIES = new Set(["each", "for", "skipIf", "runIf", "extend"]);
@@ -216,7 +220,11 @@ function lexCode(source, comments) {
   // From `i`; with `nested`, up to the "}" that closes a template's substitution.
   const scan = (nested) => {
     const found = [];
+    // One entry per open "(": whether it opens the condition of an if, while, for or with.
+    const parens = [];
     let depth = 0;
+    // Whether found[index] is a keyword of `words`, not a property of that name (obj.of).
+    const keywordAt = (index, words) => found[index]?.kind === "name" && words.has(found[index].value) && !(found[index - 1]?.kind === "punct" && (found[index - 1].value === "." || found[index - 1].value === "?."));
     while (i < source.length) {
       const at = i;
       const c = source[i];
@@ -248,14 +256,17 @@ function lexCode(source, comments) {
         }
         i++;
         found.push({ kind: "template", value: text, at });
-      } else if (c === "/" && (!prev || (prev.kind === "punct" && REGEX_AFTER.has(prev.value)) || (prev.kind === "name" && REGEX_KEYWORDS.has(prev.value)))) {
+      } else if (c === "/" && (!prev || (prev.kind === "punct" && ((REGEX_AFTER.has(prev.value) && !prev.postfix) || (prev.value === ")" && prev.condition))) || keywordAt(found.length - 1, REGEX_KEYWORDS))) {
         // A regular expression literal: skip it, since it may hold a quote.
         for (i++; i < source.length && source[i] !== "/" && source[i] !== "\n"; i++) {
           if (source[i] === "\\") i++;
           else if (source[i] === "[") while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
         }
-        i++;
-        while (/[A-Za-z]/.test(source[i] ?? "")) i++;
+        // A "/" that nothing closes on its line was no regex (JSX, say): leave the newline and the next line alone.
+        if (source[i] === "/") {
+          i++;
+          while (/[A-Za-z]/.test(source[i] ?? "")) i++;
+        }
         found.push({ kind: "regex", value: "", at });
       } else {
         identifier.lastIndex = i;
@@ -267,12 +278,17 @@ function lexCode(source, comments) {
           i += (name ?? digits).length;
           continue;
         }
-        const value = source.startsWith("...", i) ? "..." : c === "?" && source[i + 1] === "." && !/\d/.test(source[i + 2] ?? "") ? "?." : c;
+        const value = source.startsWith("...", i) ? "..." : (c === "+" || c === "-") && source[i + 1] === c ? c + c : c === "?" && source[i + 1] === "." && !/\d/.test(source[i + 2] ?? "") ? "?." : c;
         i += value.length;
         if (c === "}" && nested && depth === 0) return found;
         if (c === "{") depth++;
         else if (c === "}") depth--;
-        found.push({ kind: "punct", value, at });
+        const token = { kind: "punct", value, at };
+        // x! (a non-null assertion, glued to the name, call or index it follows) ends an expression: x! / 2 is a division.
+        if (c === "!" && prev && !/\s/.test(source[at - 1] ?? " ") && (prev.kind === "number" || (prev.kind === "name" && !keywordAt(found.length - 1, REGEX_KEYWORDS)) || (prev.kind === "punct" && (prev.value === ")" || prev.value === "]" || prev.postfix)))) token.postfix = true;
+        if (c === "(") parens.push(keywordAt(found.length - 1, CONDITION_KEYWORDS) || (keywordAt(found.length - 1, AWAIT) && keywordAt(found.length - 2, CONDITION_KEYWORDS)));
+        else if (c === ")") token.condition = parens.pop() === true;
+        found.push(token);
       }
     }
     return found;

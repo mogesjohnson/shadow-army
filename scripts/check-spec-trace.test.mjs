@@ -194,6 +194,31 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     expect(ids('it.each<[string, number]>(rows)("PO-17 %s", f); it<Ctx>("CH-5 typed", f); it(`PO-1${n}0 joined`, f);')).toEqual(["PO-17", "CH-5", "PO-1"]);
     expect(ids(`it\n("PO-12 no dot", f); test.each(["PO-13"]); it(x, "PO-14"); it(/PO-15/, "PO-16");`)).toEqual(["PO-12"]);
   });
+  it("tells division from a regular expression literal (review 120 C14)", () => {
+    const ids = (text) => testReferenceText(text).match(/\b[A-Z]+-\d+\b/g) ?? [];
+    // Division after an expression: a postfix ++ or --, a member named of, a name, a number, an index, a parenthesis.
+    expect(ids('let n = 0; const ratio = n++ / 2;\nit("PO-1 after ++", () => {});')).toEqual(["PO-1"]);
+    expect(ids('const r = n-- / 2;\nit("PO-2 after --", () => {});')).toEqual(["PO-2"]);
+    expect(ids('const r = obj.of / 2;\nit("PO-3 member of", () => {});')).toEqual(["PO-3"]);
+    expect(ids('const r = a / b / c;\nit("PO-4 chain", () => {});')).toEqual(["PO-4"]);
+    expect(ids('const r = x[0] / 2 + (a) / 2 + 4 / 2;\nit("PO-5 index", () => {});')).toEqual(["PO-5"]);
+    expect(ids('const r = `t` / 2 + "s" / 2;\nit("PO-6 literals", () => {});')).toEqual(["PO-6"]);
+    // A regex literal after an if, while, for or with condition, a keyword, an operator or a closing brace is no title.
+    expect(ids('if (x) /it\\("PO-7"/.test(s);\nit("PO-8 real", () => {});')).toEqual(["PO-8"]);
+    expect(ids('while (x) /it\\("PO-9"/.test(s); for (;;) /it\\("PO-10"/.test(s);\nit("PO-11 real", () => {});')).toEqual(["PO-11"]);
+    expect(ids('x = /it\\("PO-12"/;\nit("PO-13 real", () => {});')).toEqual(["PO-13"]);
+    expect(ids('function f() { return /it\\("PO-14"/; }\nit("PO-15 real", () => {});')).toEqual(["PO-15"]);
+    expect(ids('const re = /[/]it\\("PO-16"/;\nit("PO-17 real", () => {});')).toEqual(["PO-17"]);
+    expect(ids('if (a) {}\n/it\\("PO-18"/.test(s);\nit("PO-19 real", () => {});')).toEqual(["PO-19"]);
+    expect(ids('else /it\\("PO-20"/.test(s);\nfor (const m of /it\\("PO-21"/g) {}\nit("PO-22 real", () => {});')).toEqual(["PO-22"]);
+    // A condition's parenthesis does not leak into the next: (a) after an if body, or f(a) after a nested condition, is a division.
+    expect(ids('if (x) { y(); } const r = (a) / 2;\nit("PO-23", () => {});')).toEqual(["PO-23"]);
+    expect(ids('if ((a)) /it\\("PO-24"/.test(s); const r = f(a) / 2;\nit("PO-25", () => {});')).toEqual(["PO-25"]);
+    // A TypeScript non-null assertion ends an expression; a "/" the lexer cannot close on its line never eats the next line.
+    expect(ids('const r = total! / 2 + a.b![0]! / 2 + f()! / 2;\nit("PO-26 non-null", () => {});')).toEqual(["PO-26"]);
+    expect(ids('const r = [.../it\\("PO-27"/.exec(s)]; export default /it\\("PO-28"/;\nit("PO-29 real", () => {});')).toEqual(["PO-29"]);
+    expect(ids('const r = x ? y : <p>hi</p>;\nit("PO-30 after a stray slash", () => {});')).toEqual(["PO-30"]);
+  });
   // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
   it("takes the repository tests as they are, and catches a planted break in them", () => {
     // docs/spec/v2.md here may trail the review branch, so compare against the baseline, not against zero.
