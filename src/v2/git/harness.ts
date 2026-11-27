@@ -147,7 +147,7 @@ async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProces
   const exited = new Promise<ProcessExit>((done) => child.once("exit", (code, signal) => done({ code, signal })));
   // The process group is the tree; killing it ends git and everything it started.
   const close = async () => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ } };
-  return { pid: child.pid!, stdin: new Writable({ write: (_chunk, _encoding, done) => done() }), stdout: child.stdout, stderr: child.stderr, exited, close };
+  return { pid: child.pid!, stdin: new Writable({ write: (_chunk, _encoding, done) => done() }), stdout: child.stdout, stderr: child.stderr, exited, close, droppedPath: [] };
 }
 
 const collect = async (stream: AsyncIterable<Buffer | string>) => {
