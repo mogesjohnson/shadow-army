@@ -1,10 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as childProcess from "node:child_process";
+import * as fsPromises from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { spawnManagedProcess, verifiedRoots, verifyExecutable, type ManagedProcess } from "./processTree.js";
 
+// Pass-through wrappers, so one test can fail a launch after the supervisor spawned and fail its temp folder's removal (#111 C16).
+vi.mock("node:child_process", async (original) => {
+  const real = await original<typeof import("node:child_process")>();
+  return { ...real, spawn: vi.fn(real.spawn) };
+});
+vi.mock("node:fs/promises", async (original) => {
+  const real = await original<typeof import("node:fs/promises")>();
+  return { ...real, rm: vi.fn(real.rm) };
+});
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -45,7 +56,34 @@ describe("CH-1 executable check", () => {
     const failing = async (path: string) => { throw Object.assign(new Error(`EPERM: realpath ${path}`), { code: "EPERM" }); };
     await expect(verifyExecutable(outside, [root.toLowerCase()], failing)).rejects.toMatchObject({ code: "EACCES", message: expect.stringMatching(/could not verify the real path/) });
     await expect(verifyExecutable(outside, [root.toLowerCase()], async () => join(root, "bin", "claude.exe"))).rejects.toThrow(/inside the soldier's repository/);
-    await expect(verifyExecutable(outside, [root.toLowerCase()], async (path) => path)).resolves.toBeUndefined();
+    await expect(verifyExecutable(outside, [root.toLowerCase()], async (path) => path)).resolves.toBe(outside);
+  });
+
+  it.skipIf(!windows)("flags a supervisor that fails before readiness as a containment failure, and no supervisor as a refusal (#111 C12)", async () => {
+    const cwd = await directory();
+    // The supervisor runs, then its CreateProcess fails on a file that is not a program.
+    const tools = await directory();
+    const broken = join(tools, "broken.exe");
+    await writeFile(broken, "not a program");
+    await expect(spawnManagedProcess({ file: broken, cwd })).rejects.toMatchObject({ containmentFailed: true });
+    // PowerShell never spawns: no supervisor process existed, so nothing can be left running.
+    const systemRoot = process.env.SystemRoot;
+    process.env.SystemRoot = join(cwd, "no-windows-here");
+    let failure: unknown;
+    try { await spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd }); } catch (error) { failure = error; }
+    finally { process.env.SystemRoot = systemRoot; }
+    expect(failure).toMatchObject({ launchRefused: true });
+    expect((failure as { containmentFailed?: boolean }).containmentFailed).toBeUndefined();
+  }, 30_000);
+
+  it.skipIf(!windows)("refuses a launch whose executable no longer resolves to the identity checked earlier, before any process starts (#111 C10, C11)", async () => {
+    const cwd = await directory();
+    const elsewhere = join(cwd, "..", "sa-c10-other", "claude.exe");
+    await expect(spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd, identity: elsewhere }))
+      .rejects.toMatchObject({ code: "EACCES", launchRefused: true, message: expect.stringMatching(/changed since it was checked/) });
+    await expect(spawnManagedProcess({ file: "shadow-definitely-missing-executable", cwd })).rejects.toMatchObject({ code: "ENOENT", launchRefused: true });
+    const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd, identity: await realpath(process.execPath) }); sessions.push(session);
+    await session.exited;
   });
 
   it("refuses a repository folder whose real path cannot be read, and keeps a missing one by its lexical path (C17)", async () => {
@@ -115,6 +153,56 @@ describe.skipIf(!windows)("session process containment (Windows; Not tested on o
 
   it("fails a missing executable without launching an unmanaged fallback", async () => {
     await expect(spawnManagedProcess({ file: "shadow-definitely-missing-executable", cwd: await directory() })).rejects.toThrow();
+  }, 30_000);
+
+  it("keeps a started supervisor's containment failure when its temp folder cannot be removed (#111 C16)", async () => {
+    const controller = new AbortController();
+    const spawn = vi.mocked(childProcess.spawn);
+    const realSpawn = spawn.getMockImplementation()!;
+    const remove = vi.mocked(fsPromises.rm);
+    const realRm = remove.getMockImplementation()!;
+    let folder = "";
+    // The supervisor starts, then the launch fails before it is ready; then removing its temp folder fails too.
+    spawn.mockImplementation(((...args: Parameters<typeof childProcess.spawn>) => {
+      const child = (realSpawn as typeof childProcess.spawn)(...args);
+      if (/powershell\.exe$/i.test(String(args[0]))) controller.abort();
+      return child;
+    }) as typeof childProcess.spawn);
+    remove.mockImplementation((async (path: string, options?: object) => {
+      if (!/shadow-job-/.test(String(path))) return (realRm as typeof rm)(path, options);
+      folder = String(path);
+      throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+    }) as typeof rm);
+    try {
+      const launch = spawnManagedProcess({ file: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], cwd: await directory(), signal: controller.signal });
+      await expect(launch).rejects.toMatchObject({ containmentFailed: true, message: expect.stringMatching(/the launch was cancelled.*could not be removed.*EBUSY/) });
+      expect(folder).not.toBe("");
+    } finally {
+      spawn.mockImplementation(realSpawn); remove.mockImplementation(realRm);
+      if (folder) directories.push(folder);
+    }
+  }, 30_000);
+
+  it("keeps a confirmed stop confirmed when its temp folder cannot be removed, and names the folder apart (#111 C19)", async () => {
+    const remove = vi.mocked(fsPromises.rm);
+    const realRm = remove.getMockImplementation()!;
+    let folder = "";
+    remove.mockImplementation((async (path: string, options?: object) => {
+      if (!/shadow-job-/.test(String(path))) return (realRm as typeof rm)(path, options);
+      folder = String(path);
+      throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+    }) as typeof rm);
+    try {
+      const session = await spawnManagedProcess({ file: process.execPath, args: ["-e", "process.exit(0)"], cwd: await directory() });
+      session.stdout.resume(); session.stderr.resume();
+      expect((await session.exited).code).toBe(0);
+      await expect(session.close()).resolves.toBeUndefined();
+      expect(session.cleanupDiagnostic).toMatch(/temp folder could not be removed.*EBUSY/);
+      expect(folder).not.toBe("");
+    } finally {
+      remove.mockImplementation(realRm);
+      if (folder) directories.push(folder);
+    }
   }, 30_000);
 
   it("launches a Windows npm-style cmd shim without a visible window", async () => {

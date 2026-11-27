@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { ChannelEvent, ChannelOptions, NativeChannel, NativeError, TurnResult, TurnUsage } from "./channel.js";
+import type { ChannelEvent, ChannelOptions, ModelUsage, NativeChannel, NativeError, RetryNotice, TurnResult, TurnUsage } from "./channel.js";
 import { redact } from "./logs.js";
-import { spawnManagedProcess, type ManagedProcess } from "./processTree.js";
+import { resolveLaunch, spawnManagedProcess, type ManagedProcess } from "./processTree.js";
 
 type Frame = Record<string, unknown>;
 const object = (value: unknown): Frame | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Frame : undefined;
@@ -15,6 +15,103 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 /** CH-1: one unparseable line is an error and the session carries on; this many in a row is a lost connection. */
 export const MAX_BAD_LINES_IN_A_ROW = 10;
 const BAD_LINE_EXCERPT = 200;
+/** CH-2: the oldest claude a soldier runs on. */
+export const OLDEST_CLAUDE = "2.1.277";
+/** Spec "Versions": a `--version` run ends after 10 s, with every process it started. */
+export const VERSION_TIMEOUT_MS = 10_000;
+/** How long the exit handler waits for stderr to finish, so a refusal's words are read. */
+const STDERR_DRAIN_MS = 500;
+
+export interface ClaudeChannelOptions extends ChannelOptions {
+  /** Test seam for the 10 s `--version` bound. */
+  versionTimeoutMs?: number;
+  /** The environment the launch target is resolved from (default: the post office's own). */
+  env?: NodeJS.ProcessEnv;
+  /** Test seam for the quiet window after an unparseable line. */
+  badLineQuietMs?: number;
+}
+
+/** CH-1: the one validated target both the `--version` probe and the session start, by its real path (#111 C10). */
+export interface ClaudeLaunch { file: string; identity: string; args: string[]; env: NodeJS.ProcessEnv; dropped: string[] }
+
+/**
+ * CH-1: resolve claude once, through the containment's own checks (`resolveLaunch`): the post office's `PATH`
+ * loses every relative, empty or unresolvable entry and every entry in the soldier's folder, its checkout or a
+ * worktree, compared by real path; `claude` is looked up in what is left (on Windows with each `PATHEXT`
+ * extension in order, never with none, never in the current folder); the file found must itself lie outside
+ * them by real path; and the session gets that cleaned `PATH`. A configured command must be absolute.
+ * Returns the refusal line when no trusted claude is found.
+ */
+export async function resolveClaudeLaunch(command: { file: string; args?: string[] } | undefined, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<ClaudeLaunch | string> {
+  if (command && !isAbsolute(command.file)) return `claude command ${command.file} is not an absolute path`;
+  try {
+    const launch = await resolveLaunch(command?.file ?? "claude", cwd, env);
+    // The name keeps its PATHEXT lookup on revalidation; the driver launches the identity (an extensionless real target too).
+    return { file: launch.file, identity: launch.real, args: command?.args ?? [], env: launch.env, dropped: launch.dropped };
+  } catch (error) {
+    if (!command && (error as NodeJS.ErrnoException).code === "ENOENT") return "claude was not found on PATH outside the soldier's folder; install claude";
+    return `claude cannot be started: ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/** CH-2: auto memory stays off, in the process environment and in `--settings`, which outranks the user's, project and local settings. */
+const AUTO_MEMORY_VARIABLE = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+const AUTO_MEMORY_SETTINGS = JSON.stringify({ env: { [AUTO_MEMORY_VARIABLE]: "1" } });
+/** M1-AC14: every claude process the adapter starts, the version probe included, over an inherited value. */
+// Every spelling of the variable is replaced, so no inherited value of another case outranks it on Windows.
+const claudeEnvironment = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({ ...Object.fromEntries(Object.entries(base).filter(([key]) => key.toUpperCase() !== AUTO_MEMORY_VARIABLE)), [AUTO_MEMORY_VARIABLE]: "1" });
+
+const versionParts = (text: string): number[] | undefined => /(\d+)\.(\d+)\.(\d+)/.exec(text)?.slice(1).map(Number);
+const isOlder = (found: number[], oldest: number[]): boolean => {
+  for (let i = 0; i < 3; i++) if (found[i] !== oldest[i]) return found[i] < oldest[i];
+  return false;
+};
+
+/**
+ * CH-2: read `claude --version` before a session opens. Returns the line for the soldier's log and
+ * Claude's transcript when claude is too old, gave no answer in time, or could not be run. Such a
+ * start is not a crash (PO-1), so the caller reports it with kind "other". Rejects, with
+ * `containmentFailed`, when the probe's processes cannot be confirmed stopped.
+ */
+export async function claudeVersionProblem(command: { file: string; identity?: string; args?: string[]; env?: NodeJS.ProcessEnv }, cwd: string, timeoutMs = VERSION_TIMEOUT_MS, onDiagnostic?: (message: string) => void): Promise<string | undefined> {
+  let child: ManagedProcess;
+  try { child = await spawnManagedProcess({ file: command.file, identity: command.identity, args: [...(command.args ?? []), "--settings", AUTO_MEMORY_SETTINGS, "--version"], cwd, env: claudeEnvironment(command.env) }); }
+  catch (error) {
+    // #111 C12: a probe supervisor that started and failed leaves cleanup unconfirmed; that is not a refusal.
+    if ((error as { containmentFailed?: boolean } | undefined)?.containmentFailed) throw Object.assign(new Error(`claude --version probe containment failed: ${(error as Error).message}`), { containmentFailed: true });
+    return `claude --version could not run: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  let output = "";
+  child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+  child.stdin.on("error", () => {});
+  // #111 C13: stdin stays open until exit or the deadline; ending it starts the Windows supervisor's 2 s close grace.
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("timeout");
+  const outcome = await Promise.race([
+    child.exited.then(() => "exited" as const, () => "exited" as const),
+    new Promise<typeof timedOut>((resolve) => { timer = setTimeout(() => resolve(timedOut), timeoutMs); }),
+  ]);
+  clearTimeout(timer);
+  if (outcome === "exited") await new Promise((resolve) => setTimeout(resolve, 20)); // let stdout's last chunk land
+  // Fail closed: no session opens until the probe's processes are confirmed stopped.
+  // #111 C17 (HOST-2): at the deadline the tree ends at once with PO-14's no-grace kill, and its cleanup proof is awaited.
+  try { await (outcome === timedOut && child.kill ? child.kill() : child.close()); }
+  catch (error) { throw Object.assign(new Error(`claude --version probe containment failed: ${error instanceof Error ? error.message : String(error)}`), { containmentFailed: true }); }
+  // #111 C19: the stop is confirmed; a temp folder left behind is only a diagnostic.
+  if (child.cleanupDiagnostic) onDiagnostic?.(`claude --version probe: ${child.cleanupDiagnostic}`);
+  if (outcome === timedOut) return `claude --version gave no answer in ${timeoutMs / 1000} s`;
+  const found = versionParts(output);
+  if (!found) return `claude --version gave an answer that is not a version: ${output.trim().slice(0, 80) || "(nothing)"}`;
+  if (isOlder(found, versionParts(OLDEST_CLAUDE)!)) return `claude ${found.join(".")} is older than ${OLDEST_CLAUDE}; update claude`;
+  return undefined;
+}
+
+/** CH-2: the permission mode each autonomy level passes. */
+const permissionModeFor = (autonomy: ChannelOptions["autonomy"]): string => autonomy === "full" ? "bypassPermissions" : autonomy === "auto" ? "auto" : "plan";
+
+/** A start the CLI refused because managed settings forbid a flag (PO-1). `--mcp-config` under disableSideloadFlags is PO-4's, never this. */
+const MANAGED_REFUSAL = /managed settings|disableBypassPermissionsMode|disabled by your organization/i;
+const SIDELOAD_REFUSAL = /disableSideloadFlags|--mcp-config/i;
 /** A turn quiet this long after an unparseable line may have lost its result; long tool runs emit no frames. */
 const BAD_LINE_QUIET_MS = 10 * 60_000;
 
@@ -25,21 +122,24 @@ interface PendingTurn {
   contextTokens?: number;
   error?: NativeError;
   refusal: boolean;
+  model?: string;
   partialText: boolean;
   stopped: boolean;
   usageSteps: Map<string, { assistant?: Frame; stream?: Frame; outputTokens?: number }>;
   streamMessageId?: string;
+  /** The message was /clear, /reset or /new: claude starts its totals over (CH-2). */
+  resetsTotals: boolean;
 }
 
 /** Native Claude flags only: preserve its prompt, tools, permissions and session persistence. */
 export function claudeChannelArgs(options: ChannelOptions, instructionPath?: string): string[] {
-  const permission = options.autonomy === "full" ? "bypassPermissions" : options.autonomy === "auto" ? "auto" : "plan";
+  const permission = permissionModeFor(options.autonomy);
   return [
     "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
     "--include-partial-messages", "--permission-prompts", "host", "--permission-prompt-tool", "stdio",
     "--model", options.model, "--permission-mode", permission,
     // CH-2: --settings outranks user, project and local settings, so none turns auto memory back on.
-    "--settings", JSON.stringify({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } }),
+    "--settings", AUTO_MEMORY_SETTINGS,
     ...(instructionPath ? ["--append-system-prompt-file", instructionPath] : ["--append-system-prompt", options.instructions]),
   ];
 }
@@ -67,6 +167,37 @@ export function claudeNativeError(frame: Frame, message: string): NativeError {
  * Background frames are retained verbatim. PO-8's job/continuation quiescence and claim audit
  * belong to M2/M6; persistent LSP and MCP processes are never classified as turn-owned jobs here.
  */
+/** CH-2: the running counters in each `modelUsage` entry. `contextWindow` and the like are settings, not counters. */
+const MODEL_COUNTERS = ["inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "webSearchRequests", "costUSD"] as const;
+function modelCounters(modelUsage: Frame | undefined): Record<string, Record<string, number>> | undefined {
+  if (!modelUsage) return undefined;
+  const models: Record<string, Record<string, number>> = {};
+  for (const [model, value] of Object.entries(modelUsage)) {
+    const entry = object(value);
+    if (!entry) continue;
+    models[model] = Object.fromEntries(MODEL_COUNTERS.flatMap((key) => number(entry[key]) === undefined ? [] : [[key, number(entry[key])!]]));
+  }
+  return models;
+}
+/** #111 C6: only a map with entries, each one carrying counters, can be the next result's per-model baseline. */
+function usableBaseline(modelUsage: Frame | undefined, counters: Record<string, Record<string, number>> | undefined): boolean {
+  const names = Object.keys(modelUsage ?? {});
+  return names.length > 0 && names.every((model) => Object.keys(counters?.[model] ?? {}).length > 0);
+}
+/** #124 C1: the CLI's per-model counters under TurnUsage's own names. */
+const MODEL_FIELDS: Record<(typeof MODEL_COUNTERS)[number], keyof ModelUsage> = { inputTokens: "inputTokens", outputTokens: "outputTokens", cacheReadInputTokens: "cachedInputTokens", cacheCreationInputTokens: "cacheCreationInputTokens", webSearchRequests: "webSearchRequests", costUSD: "costUsd" };
+function turnModels(models: Record<string, Record<string, number>>): Record<string, ModelUsage> {
+  return Object.fromEntries(Object.entries(models).map(([model, counters]) => [model, Object.fromEntries(Object.entries(counters).map(([key, value]) => [MODEL_FIELDS[key as keyof typeof MODEL_FIELDS], value]))]));
+}
+/** A turn's own per-model figures: these totals less the baseline's, a model absent from the baseline counting from zero.
+ * A counter the baseline's entry for a model did not carry is unknown, so it is left out (#111 C6). */
+function modelDeltas(current: Record<string, Record<string, number>>, baseline: Record<string, Record<string, number>> | undefined): Record<string, Record<string, number>> {
+  return Object.fromEntries(Object.entries(current).map(([model, counters]) => {
+    const before = baseline?.[model];
+    return [model, Object.fromEntries(Object.entries(counters).flatMap(([key, value]) => before && before[key] === undefined ? [] : [[key, value - (before?.[key] ?? 0)]]))];
+  }));
+}
+
 export class ClaudeChannel implements NativeChannel {
   private readonly process: Promise<ManagedProcess>;
   private readonly ready: Promise<void>;
@@ -78,6 +209,10 @@ export class ClaudeChannel implements NativeChannel {
   private sessionId?: string;
   private cumulativeCost?: number;
   private missingCostBoundary = false;
+  /** The last usable result's `modelUsage` counters: the per-model baseline (CH-2). */
+  private modelBaseline?: Record<string, Record<string, number>>;
+  /** #111 C6: that result's map was no baseline, apart from whether its cost was one. */
+  private missingModelBoundary = false;
   private closePromise?: Promise<void>;
   private closed = false;
   private acceptFrames = true;
@@ -88,28 +223,61 @@ export class ClaudeChannel implements NativeChannel {
   private stopTimer?: NodeJS.Timeout;
   private badLineTimer?: NodeJS.Timeout;
   private instructionDirectory?: string;
+  private model?: string;
+  private sawFrame = false;
+  private stderrText = "";
+  private stderrDone: Promise<void> = Promise.resolve();
+  private loginNeeded?: NativeError;
+  /** PO-1: an old, silent or managed-refused claude. The closed event says so, and it is never restarted. */
+  private refusedStart = false;
+  private containmentFailed = false;
 
-  constructor(private readonly options: ChannelOptions & { badLineQuietMs?: number }) {
+  constructor(private readonly options: ClaudeChannelOptions) {
     this.process = this.spawn();
     this.ready = this.open();
     // Spawn/initialization errors must remain observed even if the owner closes before sending.
-    void this.ready.catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
+    void this.ready.catch((error: unknown) => {
+      const flags = error as { refusedStart?: boolean; containmentFailed?: boolean } | undefined;
+      if (flags?.refusedStart) this.refusedStart = true;
+      if (flags?.containmentFailed) this.containmentFailed = true;
+      return this.failTransport(error instanceof Error ? error.message : String(error), false, flags?.refusedStart ? "other" : "transport");
+    });
   }
 
   private async spawn(): Promise<ManagedProcess> {
-    const command = this.options.command ?? { file: "claude" };
+    // CH-1: one validated target for the probe and the session. No trusted claude is a refused start.
+    const command = await resolveClaudeLaunch(this.options.command, this.options.cwd, this.options.env);
+    if (typeof command === "string") throw Object.assign(new Error(command), { refusedStart: true });
+    if (command.dropped.length) this.emit("raw", { type: "path", dropped: command.dropped });
+    // CH-2: an old or silent claude opens no session. This is a refused start, not a crash.
+    const problem = await claudeVersionProblem(command, this.options.cwd, this.options.versionTimeoutMs, (message) => this.emit("error", { kind: "other", message }));
+    if (problem) throw Object.assign(new Error(problem), { refusedStart: true });
     let instructionPath: string | undefined;
     // npm's Windows .cmd shim cannot preserve multiline argv. The vendor's append-file flag
     // preserves the same standing text and default prompt. Credentials never enter these options.
     if (process.platform === "win32" && /[\r\n]/.test(this.options.instructions)) {
-      this.instructionDirectory = await mkdtemp(join(tmpdir(), "shadow-claude-instructions-"));
-      instructionPath = join(this.instructionDirectory, "instructions.txt");
-      await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
+      // #111 C14: no session process exists yet, so a failure here is a refused start; close() removes any partial file.
+      try {
+        this.instructionDirectory = await mkdtemp(join(tmpdir(), "shadow-claude-instructions-"));
+        instructionPath = join(this.instructionDirectory, "instructions.txt");
+        await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
+      } catch (error) {
+        throw Object.assign(new Error(`claude's instruction file could not be prepared: ${error instanceof Error ? error.message : String(error)}`), { refusedStart: true });
+      }
     }
-    // CH-2: auto memory off over any inherited value, so a soldier neither loads nor writes the owner's memory.
-    const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "CLAUDE_CODE_DISABLE_AUTO_MEMORY")), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" };
-    const child = await spawnManagedProcess({ file: command.file, args: [...(command.args ?? []), ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env });
-    if (child.droppedPath.length) this.emit("raw", { type: "path_dropped", entries: child.droppedPath });
+    // C10: the session starts the identity the probe checked; the driver refuses it if the file now resolves elsewhere.
+    let child: ManagedProcess;
+    try { child = await spawnManagedProcess({ file: command.file, identity: command.identity, args: [...command.args, ...claudeChannelArgs(this.options, instructionPath)], cwd: this.options.cwd, env: claudeEnvironment(command.env) }); }
+    catch (error) {
+      // PO-1 (C11): a launch refused before any CLI started is a refused start; a containment failure stays a transport close.
+      const flags = error as { launchRefused?: boolean; containmentFailed?: boolean } | undefined;
+      if (flags?.launchRefused) throw Object.assign(error as Error, { refusedStart: true });
+      // #111 C12: the supervisor started and failed; its cleanup is unconfirmed, so the soldier stays down.
+      if (flags?.containmentFailed) throw Object.assign(new Error(`Claude process containment failed to start: ${(error as Error).message}`), { containmentFailed: true });
+      throw error;
+    }
+    // The PATH was cleaned once above; an entry this late check dropped (a root changed meanwhile) is reported too.
+    if (child.droppedPath.length) this.emit("raw", { type: "path", dropped: child.droppedPath });
     return child;
   }
 
@@ -117,22 +285,34 @@ export class ClaudeChannel implements NativeChannel {
     this.options.onEvent({ type, data });
   }
 
+  /** The process or its output ended. Wait briefly for stderr, so a refusal's words are read before the reason is fixed. */
+  private async ended(message: string): Promise<void> {
+    if (this.closed) return;
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([this.stderrDone, new Promise((resolve) => { timer = setTimeout(resolve, STDERR_DRAIN_MS); })]);
+    clearTimeout(timer);
+    await this.failTransport(message, true);
+  }
+
   private async open(): Promise<void> {
     const child = await this.process;
     if (this.closed) return;
+    this.stderrDone = new Promise((resolve) => { child.stderr.once("end", () => resolve()); child.stderr.once("close", () => resolve()); });
     child.stdout.on("data", (chunk: Buffer) => this.read(this.decoder.write(chunk)));
     child.stdout.on("end", () => {
       this.read(this.decoder.end());
       if (this.buffer.trim()) this.parseLine(this.buffer);
       this.buffer = "";
-      if (!this.closed) void this.failTransport("Claude output stream ended", true);
+      void this.ended("Claude output stream ended");
     });
     child.stdout.on("error", (error: Error) => { void this.failTransport(error.message); });
     child.stdin.on("error", (error: Error) => { void this.failTransport(error.message); });
-    child.stderr.on("data", (chunk: Buffer) => this.emit("raw", { type: "stderr", text: chunk.toString("utf8") }));
-    void child.exited.then((exit) => {
-      if (!this.closed) void this.failTransport(`Claude process ended (${exit.code ?? exit.signal ?? "unknown"})`, true);
-    }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
+    child.stderr.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      if (this.stderrText.length < 8192) this.stderrText += text;
+      this.emit("raw", { type: "stderr", text });
+    });
+    void child.exited.then((exit) => this.ended(`Claude process ended (${exit.code ?? exit.signal ?? "unknown"})`)).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
     await this.control({ subtype: "initialize", hooks: null });
   }
 
@@ -168,6 +348,7 @@ export class ClaudeChannel implements NativeChannel {
     }
     // Only a settled turn disarms recovery: a valid frame that belongs to no turn proves nothing about this one.
     this.badLines = 0;
+    this.sawFrame = true;
     this.emit("raw", frame);
     if (typeof frame.session_id === "string") this.sessionId = frame.session_id;
     const response = object(frame.response);
@@ -196,6 +377,12 @@ export class ClaudeChannel implements NativeChannel {
       return;
     }
     const turn = this.current;
+    if (frame.type === "system" && frame.subtype === "init") { this.init(frame); return; }
+    if (frame.type === "system" && frame.subtype === "api_retry") {
+      // CH-2: the CLI is backing off. A notice, not an error; the turn goes on.
+      this.emit("retry", { attempt: number(frame.attempt), maxRetries: number(frame.max_retries), retryDelayMs: number(frame.retry_delay_ms), errorStatus: frame.error_status, error: frame.error } satisfies RetryNotice);
+      return;
+    }
     if (frame.type === "result") { this.result(frame); return; }
     if (!turn) return;
     // The turn's own progress extends the quiet window; other valid frames leave its deadline as it was.
@@ -238,6 +425,7 @@ export class ClaudeChannel implements NativeChannel {
       const message = object(frame.message);
       const text = textContent(frame);
       if (frame.parent_tool_use_id === null) {
+        this.noteModel(turn, string(message?.model));
         const usage = object(message?.usage);
         this.recordUsage(turn, string(message?.id), usage, "assistant");
         if (usage && number(usage.input_tokens) !== undefined) {
@@ -246,7 +434,11 @@ export class ClaudeChannel implements NativeChannel {
         }
         if (message?.stop_reason === "refusal") turn.refusal = true;
         if (text && !turn.partialText) { turn.text += text; this.emit("text", text); }
-        if (frame.error) { turn.error = claudeNativeError(frame, text); this.emit("error", turn.error); }
+        if (frame.error) {
+          turn.error = claudeNativeError(frame, text);
+          if (turn.error.kind === "login_needed") this.loginNeeded = turn.error;
+          this.emit("error", turn.error);
+        }
       } else if (message?.usage) this.emit("usage", { scope: "auxiliary", raw: message.usage });
       if (Array.isArray(message?.content)) for (const part of message.content) {
         const block = object(part);
@@ -258,6 +450,24 @@ export class ClaudeChannel implements NativeChannel {
       if (Array.isArray(content)) for (const part of content) if (object(part)?.type === "tool_result") this.emit("tool_result", part);
     }
     if (frame.type === "model_refusal_no_fallback") turn.refusal = true;
+  }
+
+  /** CH-2: system/init names the model in use, and the mode claude actually runs in (M1-AC5). */
+  private init(frame: Frame): void {
+    this.noteModel(this.current, string(frame.model));
+    const mode = string(frame.permissionMode) ?? string(frame.permission_mode);
+    const expected = permissionModeFor(this.options.autonomy);
+    if (mode !== undefined && mode !== expected) {
+      this.emit("error", { kind: "other", message: `Claude runs in permission mode ${mode}, but Shadow Army passed ${expected} for autonomy ${this.options.autonomy ?? "supervised"}` } satisfies NativeError);
+    }
+  }
+
+  /** CH-2: the model in use is claude's own report. A change it makes by itself is logged, and the turn's usage names the new model. */
+  private noteModel(turn: PendingTurn | undefined, model: string | undefined): void {
+    if (!model) return;
+    if (this.model !== undefined && model !== this.model) this.emit("raw", { type: "model_changed", from: this.model, to: model });
+    this.model = model;
+    if (turn) turn.model = model;
   }
 
   private recordUsage(turn: PendingTurn, id: string | undefined, usage: Frame | undefined, source: "assistant" | "stream"): void {
@@ -291,11 +501,13 @@ export class ClaudeChannel implements NativeChannel {
   private result(frame: Frame): void {
     const turn = this.current;
     // A notification or stale result cannot change another turn's usage/cost boundary.
-    if (!turn || object(frame.origin)?.kind === "task-notification") return;
-    // CH-2: a result ends this turn only when its uuid, or its uuid list, names this turn's message.
-    // A result naming no message stays a log-only raw frame: it settles nothing and moves no baseline.
-    const named = [frame.user_message_uuid, ...(Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : [])];
-    if (!named.includes(turn.id)) return;
+    // CH-2: a result ends a message's turn only when it names that message. Any other result is recorded and ends nothing.
+    // Either field may name it; a result that names no message ends nothing.
+    const named = [...(Array.isArray(frame.user_message_uuids) ? frame.user_message_uuids : []), ...(typeof frame.user_message_uuid === "string" ? [frame.user_message_uuid] : [])];
+    if (!turn || object(frame.origin)?.kind === "task-notification" || !named.includes(turn.id)) {
+      this.emit("raw", { type: "result_ignored", user_message_uuid: frame.user_message_uuid, origin: frame.origin });
+      return;
+    }
     const errors = Array.isArray(frame.errors) ? frame.errors.filter((value): value is string => typeof value === "string") : [];
     const text = string(frame.result) ?? (errors.length ? errors.join("\n") : turn.text);
     const failed = frame.is_error === true || string(frame.subtype)?.startsWith("error_") === true;
@@ -310,36 +522,67 @@ export class ClaudeChannel implements NativeChannel {
     const cumulative = number(frame.total_cost_usd);
     const previous = this.cumulativeCost;
     const nativeUsage = object(frame.usage);
-    const zeroExecutionResult = frame.subtype === "error_during_execution" && nativeUsage && ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].every((key) => number(nativeUsage[key]) === 0);
-    const recoverUsage = interrupted || nativeInterrupted || zeroExecutionResult;
-    const unusableCost = recoverUsage && (cumulative === undefined || cumulative === 0 || cumulative < (previous ?? 0));
-    const costGap = this.missingCostBoundary;
-    // A result with no cumulative total leaves its turn's cost unknown; the next total only restores the baseline.
-    if (unusableCost || cumulative === undefined) this.missingCostBoundary = true;
-    else if (cumulative !== undefined) { this.cumulativeCost = cumulative; this.missingCostBoundary = false; }
+    const modelUsage = object(frame.modelUsage);
+    const zeroFields = nativeUsage !== undefined && ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].every((key) => number(nativeUsage[key]) === 0);
+    // CH-2: a result whose usage, total_cost_usd and modelUsage are all zero (as after a crash) reports nothing.
+    const counters = modelCounters(modelUsage);
+    const zeroModels = counters === undefined || Object.values(counters).every((entry) => Object.values(entry).every((value) => value === 0));
+    const zeroResult = zeroFields && cumulative === 0 && zeroModels;
+    const zeroExecutionResult = frame.subtype === "error_during_execution" && zeroFields;
+    // CH-2: a result that ends a turn the adapter stopped leaves out what the stop cut short.
+    const stoppedTurn = interrupted || nativeInterrupted;
+    const recoverUsage = stoppedTurn || zeroExecutionResult || zeroResult;
+    // CH-2: claude starts its totals over after /clear, /reset or /new, and a total above zero but below the baseline has started over too.
+    const noBaseline = this.missingCostBoundary;
+    const startedOver = cumulative !== undefined && cumulative > 0 && (turn.resetsTotals || !noBaseline && previous !== undefined && cumulative < previous);
+    let costUsd: number | undefined;
+    let models: Record<string, Record<string, number>> | undefined;
+    // CH-2: a zero total is never a baseline, so the next result has none either.
+    if (cumulative === undefined || cumulative === 0) this.missingCostBoundary = true;
+    else {
+      costUsd = stoppedTurn ? undefined : startedOver ? cumulative : noBaseline ? undefined : cumulative - (previous ?? 0);
+      if (counters && !stoppedTurn && (startedOver || !noBaseline && !this.missingModelBoundary)) models = modelDeltas(counters, startedOver ? undefined : this.modelBaseline);
+      this.modelBaseline = counters;
+      this.missingModelBoundary = !usableBaseline(modelUsage, counters);
+      this.cumulativeCost = cumulative;
+      this.missingCostBoundary = false;
+    }
     const terminal = { ...nativeUsage, ...(frame.modelUsage === undefined ? {} : { modelUsage: frame.modelUsage }), ...(cumulative === undefined ? {} : { total_cost_usd: cumulative }) };
-    const costUsage = cumulative === undefined || unusableCost ? undefined : {
-      costUsd: cumulative === undefined || costGap ? undefined : cumulative >= (previous ?? 0) ? cumulative - (previous ?? 0) : undefined,
-      costSource: "native_cli_estimate" as const,
-    };
+    const costUsage = costUsd === undefined ? undefined : { costUsd, costSource: "native_cli_estimate" as const };
     let usage: TurnUsage | undefined;
     if (recoverUsage) {
-      const observed = this.eventUsage(turn, terminal);
+      // CH-2: a stopped or zero result's own output and cost are not reported; its input and cache are summed over the main-loop messages.
+      const summed = this.eventUsage(turn, terminal);
+      const observed = summed && { ...summed, outputTokens: undefined };
       // The native dollar estimate is distinct from the interrupted result's unusable
       // token counters. Retain it only when its cumulative boundary is actually usable.
       if (observed || costUsage) usage = { ...observed, ...costUsage, raw: observed?.raw ?? { source: "assistant_and_stream", terminal } };
+    } else if (noBaseline && !startedOver && cumulative !== undefined && cumulative > 0) {
+      // CH-2: with no result before it, input and cache are summed over the main-loop messages and output comes from `usage`.
+      const summed = this.eventUsage(turn, terminal);
+      usage = { inputTokens: summed?.inputTokens, cachedInputTokens: summed?.cachedInputTokens, outputTokens: number(nativeUsage?.output_tokens), raw: summed?.raw ?? terminal };
     } else if (nativeUsage || cumulative !== undefined) usage = {
       inputTokens: number(nativeUsage?.input_tokens), cachedInputTokens: number(nativeUsage?.cache_read_input_tokens), outputTokens: number(nativeUsage?.output_tokens), ...costUsage, raw: terminal,
     };
+    // CH-2, OBS-3: the turn's own figures by model, subagents included. Absent where CH-2 gives only main-loop figures.
+    if (usage && models) usage = { ...usage, models: turnModels(models), raw: { ...usage.raw, models } };
+    if (usage && turn.model) usage = { ...usage, raw: { ...usage.raw, model: turn.model } };
     if (usage) this.emit("usage", { scope: "turn", ...usage });
     const error = failure && !interrupted ? terminalError ?? claudeNativeError(frame, errors.length ? errors.join("\n") : text) : undefined;
     // Some error results expose only the generic terminal code; keep an earlier typed API error.
     const nativeError = error?.kind === "other" && turn.error ? { ...turn.error, message: turn.error.kind === "other" ? error.message || turn.error.message : turn.error.message } : error;
+    if (nativeError?.kind === "login_needed") this.loginNeeded = nativeError;
     const result: TurnResult = { status: interrupted ? "interrupted" : failure ? "failed" : "completed", text, refusal: !failure && (turn.refusal || frame.stop_reason === "refusal"), sessionId: this.sessionId, contextTokens: turn.contextTokens, usage, ...(nativeError ? { error: nativeError } : {}) };
     // A root-exit notification can outrun stdout on a separate transport. Drain native output
     // while containment closes, then decide whether this turn had already completed.
     if (this.closed) { if (this.drainTerminal) this.closingResult = result; }
     else this.finish(result);
+  }
+
+  /** CH-2: a turn the adapter stopped reports no output, even when its stream closes before a result. */
+  private closingUsage(): TurnUsage | undefined {
+    const usage = this.eventUsage(this.current);
+    return usage && this.current?.stopped ? { ...usage, outputTokens: undefined } : usage;
   }
 
   /** (Re)starts the quiet window after an unparseable line; it ends only when the turn settles. */
@@ -401,10 +644,10 @@ export class ClaudeChannel implements NativeChannel {
     if (this.closed) return Promise.resolve({ status: "interrupted", text: "", refusal: false, sessionId: this.sessionId, error: this.reason });
     return new Promise((resolve) => {
       const id = randomUUID();
-      this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false, usageSteps: new Map() };
+      this.current = { id, resolve, text: "", refusal: false, partialText: false, stopped: false, usageSteps: new Map(), resetsTotals: /^\s*\/(clear|reset|new)\s*$/i.test(text) };
       void this.ready.then(async () => {
         if (!this.current || this.current.id !== id || this.closed) return;
-        await this.write({ type: "user", uuid: id, session_id: this.sessionId ?? "", message: { role: "user", content: text }, parent_tool_use_id: null });
+        await this.write({ type: "user", uuid: id, session_id: this.sessionId ?? "", message: { role: "user", content: text }, parent_tool_use_id: null, priority: "later" });
       }).catch((error: unknown) => this.failTransport(error instanceof Error ? error.message : String(error)));
     });
   }
@@ -447,9 +690,17 @@ export class ClaudeChannel implements NativeChannel {
     await this.write({ type: "control_response", response: { subtype: "success", request_id: requestId, response: answer } });
   }
 
-  private async failTransport(message: string, drainTerminal = false): Promise<void> {
+  private async failTransport(message: string, drainTerminal = false, kind: NativeError["kind"] = "transport"): Promise<void> {
     if (this.closed) return;
-    this.reason = { kind: "transport", message };
+    this.reason = { kind, message };
+    if (drainTerminal && !this.sawFrame && MANAGED_REFUSAL.test(this.stderrText) && !SIDELOAD_REFUSAL.test(this.stderrText)) {
+      // PO-1: a start managed settings refuse is not a crash and is never restarted.
+      this.refusedStart = true;
+      this.reason = { kind: "other", message: `claude can't start at ${this.options.autonomy ?? "supervised"}: your organization's managed settings refuse it (${this.stderrText.trim().split(/\r?\n/)[0].slice(0, 200)}) · lower its autonomy` };
+    } else if (drainTerminal && this.loginNeeded) {
+      // CH-2: a login needed never restarts the channel, even when the CLI exits after it.
+      this.reason = { ...this.loginNeeded };
+    }
     this.drainTerminal = drainTerminal;
     this.emit("error", this.reason);
     await this.close();
@@ -465,9 +716,11 @@ export class ClaudeChannel implements NativeChannel {
     this.controls.clear();
     this.closePromise = (async () => {
       const child = await this.process.catch(() => undefined);
-      let containmentStopped = true;
+      let containmentStopped = !this.containmentFailed;
       try {
         if (child) { child.stdin.end(); await child.close(); }
+        // #111 C19: the cleanup proof decides containmentStopped; a temp folder left behind is a separate diagnostic.
+        if (child?.cleanupDiagnostic) this.emit("error", { kind: "other", message: `Claude process cleanup: ${child.cleanupDiagnostic}` });
       } catch (error) {
         containmentStopped = false;
         this.reason = { kind: "transport", message: `Claude process containment failed: ${error instanceof Error ? error.message : String(error)}` };
@@ -484,8 +737,8 @@ export class ClaudeChannel implements NativeChannel {
       // turn's error; the transport diagnostic stays on the error and closed events (#94 C17). Failed
       // containment outranks it: native work may still be running, so the turn must not read as a wait.
       const typed = containmentStopped && this.current?.error && this.current.error.kind !== "other" && this.current.error.kind !== "transport" ? this.current.error : undefined;
-      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.eventUsage(this.current), error: typed ?? this.reason });
-      this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped });
+      this.finish(containmentStopped && this.closingResult ? this.closingResult : { status: "interrupted", text: this.current?.text ?? "", refusal: false, sessionId: this.sessionId, contextTokens: this.current?.contextTokens, usage: this.closingUsage(), error: typed ?? this.reason });
+      this.emit("closed", { sessionId: this.sessionId, reason: this.reason, containmentStopped, refusedStart: this.refusedStart });
     })();
     return this.closePromise;
   }

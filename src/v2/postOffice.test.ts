@@ -1,5 +1,7 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import * as fsPromises from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { git } from "../workspace/git.js";
 import { Locks } from "../workspace/locks.js";
@@ -7,10 +9,17 @@ import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { makeRoster } from "../core/roster.testutil.js";
 import { windowsOnly } from "./windowsOnly.testutil.js";
 import type { ChannelOptions, NativeChannel } from "./channel.js";
+import { ClaudeChannel } from "./claude.js";
+import * as managedProcesses from "./processTree.js";
 import { buildStandingInstructions, estimateInstructionTokens, MAX_INSTRUCTION_TOKENS } from "./instructions.js";
 import { PostOffice, type OfficeEvent } from "./postOffice.js";
 import { credential, factory, roster, until } from "./fixture-main.testutil.js";
 
+// A pass-through wrapper, so one test can fail the removal of the Windows supervisor's temp folder (#111 C19).
+vi.mock("node:fs/promises", async (original) => {
+  const real = await original<typeof import("node:fs/promises")>();
+  return { ...real, rm: vi.fn(real.rm) };
+});
 const offices: PostOffice[] = [];
 const repos: ReturnType<typeof makeRepo>[] = [];
 async function setup() {
@@ -171,6 +180,88 @@ describe("M1 office integration with synthetic native processes", () => {
     await expect(office.send("scout", "must not replay")).rejects.toThrow("reconnect explicitly");
     await office.open("scout"); expect(channels).toHaveLength(5);
     expect(channels[4]!.sent).toEqual([]);
+  }, 30_000);
+
+  // #124 C4, M1-AC14: a restart the post office makes launches claude with auto memory off, like the first start.
+  windowsOnly("restarts a crashed claude with auto memory off in its environment and --settings, probe included", async () => {
+    const inherited = process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY;
+    process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "0";
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess");
+    try {
+      const repo = makeRepo(); repos.push(repo);
+      const events: OfficeEvent[] = [];
+      const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
+        channelFactory: (options) => new ClaudeChannel({ ...options, command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs")] } }) });
+      offices.push(office);
+      expect((await office.send("scout", "cutoff")).status).not.toBe("completed");
+      await until(() => events.some((event) => event.type === "restarted"));
+      expect((await office.send("scout", "hello")).status).toBe("completed");
+      const launches = spawn.mock.calls.map(([options]) => options);
+      // Two starts, each a --version probe and a session.
+      expect(launches).toHaveLength(4);
+      expect(launches.filter((options) => options.args?.includes("--version"))).toHaveLength(2);
+      for (const options of launches) {
+        expect(options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+        expect(JSON.parse(options.args![options.args!.indexOf("--settings") + 1])).toEqual({ env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } });
+      }
+      expect(office.army()).toEqual([expect.objectContaining({ restarts: 1 })]);
+    } finally {
+      spawn.mockRestore();
+      if (inherited === undefined) delete process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY; else process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = inherited;
+    }
+  }, 30_000);
+
+  it("marks a refused start down and never restarts it (#111 C3)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const channels: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return { async send(text) { return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    await office.open("scout");
+    channels[0]!.onEvent({ type: "error", data: { kind: "other", message: "claude 2.1.276 is older than 2.1.277; update claude" } });
+    channels[0]!.onEvent({ type: "closed", data: { refusedStart: true, containmentStopped: true } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(channels).toHaveLength(1);
+    expect(events.filter((event) => event.type === "restarted")).toHaveLength(0);
+    expect(events.find((event) => event.type === "down")?.data).toMatchObject({ reason: expect.stringContaining("refused to start") });
+    expect(office.army()).toEqual([expect.objectContaining({ state: "down", restarts: 0 })]);
+    await expect(office.send("scout", "not retried")).rejects.toThrow("reconnect explicitly");
+  }, 30_000);
+
+  it("keeps a soldier down, never restarted, when its containment fails to start (#111 C12, PO-1, PO-15)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const versionOutput = new PassThrough();
+    versionOutput.end("2.1.295 (Claude Code)" + String.fromCharCode(10));
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+      pid: 3, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {}, droppedPath: [],
+    }).mockRejectedValueOnce(Object.assign(new Error("Windows supervisor did not launch within 15 seconds"), { containmentFailed: true }));
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, restartDelaysMs: [0, 0, 0], onEvent: (event) => events.push(event),
+      channelFactory: (options) => new ClaudeChannel({ ...options, command: { file: process.execPath } }) });
+    try {
+      expect((await office.send("scout", "hello")).error?.kind).toBe("transport");
+      await until(() => events.some((event) => event.type === "down"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(events.filter((event) => event.type === "restarted")).toHaveLength(0);
+      expect(events.find((event) => event.type === "down")?.data).toMatchObject({ reason: expect.stringContaining("could not be confirmed stopped") });
+      expect(office.army()).toEqual([expect.objectContaining({ state: "down", restarts: 0 })]);
+    } finally { spawn.mockRestore(); await office.close().catch(() => {}); }
+  }, 30_000);
+
+  it("gives the owner a notice, not an error, when the CLI retries (#111 C5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const channels: ChannelOptions[] = [];
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event), channelFactory: (options): NativeChannel => {
+      channels.push(options);
+      return { async send(text) { options.onEvent({ type: "retry", data: { attempt: 2, maxRetries: 10, retryDelayMs: 1200, errorStatus: 529, error: "overloaded" } }); return { status: "completed", text, refusal: false }; }, async interrupt() {}, async respondApproval() {}, async close() {} };
+    } }); offices.push(office);
+    expect((await office.send("scout", "hello")).status).toBe("completed");
+    expect(events.find((event) => event.type === "notice")).toEqual({ soldier: "scout", type: "notice", data: { kind: "retry", message: "scout: claude is retrying (attempt 2 of 10, in 1.2 s; 529 overloaded)" } });
+    expect(events.filter((event) => event.type === "error" || event.type === "down")).toHaveLength(0);
   }, 30_000);
 
   it("blocks restart and owner reconnect when native descendant termination is uncertain", async () => {
@@ -371,6 +462,36 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     await expect(office.send("medic", "x", { claims: ["../outside"] })).rejects.toThrow();
     expect(started).toHaveLength(1);
   }, 30_000);
+
+  // #111 C19: a confirmed stop whose temp folder stays is a clean close: claims are released and the soldier reopens.
+  windowsOnly("releases claims and reopens after a confirmed stop whose temp folder cannot be removed (#111 C19)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster: builders, onEvent: (event) => events.push(event),
+      channelFactory: (options) => new ClaudeChannel({ ...options, command: { file: process.execPath, args: [resolve("test/fakes/claude.mjs")] } }) });
+    offices.push(office);
+    const remove = vi.mocked(fsPromises.rm);
+    const realRm = remove.getMockImplementation()! as typeof rm;
+    const left: string[] = [];
+    try {
+      await office.open("tank", { claims: ["src/**"] });
+      remove.mockImplementation((async (path: string, options?: object) => {
+        if (!/shadow-job-/.test(String(path))) return realRm(path, options);
+        left.push(String(path));
+        throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+      }) as typeof rm);
+      await expect(office.closeSession("tank")).resolves.toBeUndefined();
+      remove.mockImplementation(realRm);
+      expect(left).not.toHaveLength(0);
+      expect(events.some((event) => event.type === "down")).toBe(false);
+      await expect(office.open("medic", { claims: ["src/a.ts"] })).resolves.toBeDefined();
+      await office.closeSession("medic");
+      await expect(office.open("tank", { claims: ["src/**"] })).resolves.toBeDefined();
+    } finally {
+      remove.mockImplementation(realRm);
+      await Promise.all(left.map((path) => realRm(path, { recursive: true, force: true })));
+    }
+  }, 45_000);
 
   windowsOnly("keeps the claimed work of a cut-short turn on the branch, unusable until the owner decides", async () => {
     const repo = makeRepo(); repos.push(repo);

@@ -2,4 +2,4 @@
 export { spawnManagedProcess } from "./contain/index.js";
 export type { ManagedProcess, ManagedProcessOptions, ProcessExit } from "./contain/index.js";
 // CH-1 path checks, exported for their tests (C17).
-export { verifiedRoots, verifyExecutable } from "./contain/windows.js";
+export { resolveLaunch, verifiedRoots, verifyExecutable, type LaunchTarget } from "./contain/windows.js";

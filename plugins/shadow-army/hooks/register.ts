@@ -132,6 +132,11 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
   }
   // M1 observes the event stream without adding another model turn/context.
   // The richer pane and transcript cards belong to the later mod milestones.
+  // A CLI backing off before an API retry shows as a retry, not as an error: its own plain line.
+  if (!runtime.closing && value.type === "notice" && typeof value.data?.message === "string") {
+    $.ui.log(safeText(`Shadow Army: ${value.data.message}`, runtime.credential));
+    return;
+  }
   if (!runtime.closing && ["error", "channel_down", "containment_uncertain"].includes(value.type)) {
     uiLog($, `Shadow Army${value.soldier ? ` · ${value.soldier}` : ""}: ${JSON.stringify(value.data)}`, runtime.credential);
   }
