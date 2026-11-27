@@ -198,24 +198,41 @@ export function parseImplemented(source) {
   return { milestone, ids, problems };
 }
 
-// A "/" is a division only after a token that can end an expression: a name, number, string, template or regex, a
-// closing ")" or "]", the "}" of an object literal, or a postfix ++ or --. After any other token, including a
-// division's own "/" and the "}" of a block, it starts a regular expression.
-const REGEX_AFTER = new Set(["...", "(", ",", "=", ":", "[", "!", "&", "|", "?", "?.", "??", "{", ";", ">", "<", "+", "-", "*", "/", "%", "^", "~"]);
-// A "{" after one of these opens an object literal (an expression); after anything else it opens a block.
-const BRACE_EXPRESSION_AFTER = new Set(["...", "(", ",", "=", "[", "!", "&", "|", "?", "?.", "??", "<", "+", "-", "*", "/", "%", "^", "~"]);
-const EXPRESSION_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "of", "in", "delete", "instanceof", "new", "throw"]);
-const REGEX_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "of", "in", "delete", "instanceof", "new", "throw", "else", "do", "default"]);
-// The ")" closing the condition of one of these is followed by a statement, so a "/" after it starts a regex.
+// The lexer fails closed (review 131 C16). A "/" either surely starts a regular expression, surely divides, or is
+// ambiguous; an ambiguous one is reported (AmbiguousSlash) and its file credits no ID, since a wrong guess can expose a
+// regular expression's or a string's text as a title. A "/" divides only after a token that ends an expression on the
+// same line: a name, number, string, template or regex, a ")" or "]", the "}" of an object literal, or a postfix ++, --
+// or !. With a line break between them, that token may end a TypeScript type instead (let x: T, then ASI), so it is
+// ambiguous; so is a "/" after "<" or ">", which may close a type's arguments or a JSX tag, and after a "}" whose brace
+// may be a function's or a class's body, a declaration's or an expression's.
+const REGEX_AFTER = new Set(["...", "(", ",", "=", ":", "[", "!", "&", "|", "?", "?.", "??", "{", ";", "+", "-", "*", "/", "%", "^", "~"]);
+// A "{" after one of these opens an object literal; after ";", "{" or "}" (or nothing) it opens a block.
+const OBJECT_AFTER = new Set(["...", "(", ",", "=", "[", "!", "&", "|", "?", "??", "<", "+", "-", "*", "/", "%", "^", "~"]);
+const BLOCK_AFTER = new Set([";", "{", "}"]);
+const BLOCK_KEYWORDS = new Set(["else", "do", "try", "finally"]);
+// A line break after one of these ends the statement (ASI), so a "{" on the next line opens a block.
+const RESTRICTED_KEYWORDS = new Set(["return", "throw", "yield", "break", "continue"]);
+const EXPRESSION_KEYWORDS = new Set(["return", "typeof", "case", "void", "yield", "await", "in", "delete", "instanceof", "new", "throw"]);
+const REGEX_KEYWORDS = new Set([...EXPRESSION_KEYWORDS, "else", "do", "default"]);
+// The ")" closing the head of one of these is followed by a statement (or the "{" of a block).
 const CONDITION_KEYWORDS = new Set(["if", "while", "for", "with"]);
+const HEAD_KEYWORDS = new Set([...CONDITION_KEYWORDS, "switch", "catch"]);
 const AWAIT = new Set(["await"]);
 const TEST_CALLEES = new Set(["it", "test", "describe"]);
 // it.each(table)(title) and describe.skipIf(flag)(title): the title comes after a second call or a tagged template.
 const TEST_FACTORIES = new Set(["each", "for", "skipIf", "runIf", "extend"]);
 
+class AmbiguousSlash extends Error {
+  constructor(at, why) {
+    super(why);
+    this.at = at;
+  }
+}
+
 /**
  * Splits `source` into code tokens: identifiers, strings, template literals, regular expressions, numbers and
- * punctuation. Whitespace and comments separate tokens without being one; each comment goes to `comments` with its position.
+ * punctuation. Whitespace and comments separate tokens without being one; each comment goes to `comments` with its
+ * position. Throws AmbiguousSlash at a "/" it cannot classify.
  */
 function lexCode(source, comments) {
   const identifier = /#?[\p{L}_$][\p{L}\p{N}_$]*/uy;
@@ -224,22 +241,74 @@ function lexCode(source, comments) {
   // From `i`; with `nested`, up to the "}" that closes a template's substitution.
   const scan = (nested) => {
     const found = [];
-    // One entry per open "(": whether it opens the condition of an if, while, for or with.
+    // Whether a line break comes after the last token: ASI may end a statement there.
+    let newline = false;
+    const push = (token) => {
+      token.newline = newline;
+      newline = false;
+      found.push(token);
+    };
+    // One entry per open "(": the keyword whose head it opens (if, for, switch...), or "".
     const parens = [];
-    // One entry per open "{": whether it opens an object literal, and how many "?" still wait for their ":" inside it.
+    // One entry per open "{", "(" or "[": the brace's kind, and how many "?" still wait for their ":" inside it.
     const braces = [];
-    const top = { expression: false, ternary: 0 };
+    const top = { kind: nested ? "object" : "block", ternary: 0 };
     // Whether found[index] is a keyword of `words`, not a property of that name (obj.of).
     const keywordAt = (index, words) => found[index]?.kind === "name" && words.has(found[index].value) && !(found[index - 1]?.kind === "punct" && (found[index - 1].value === "." || found[index - 1].value === "?."));
+    // "of" is a keyword only in the head of a for loop.
+    const ofAt = (index) => keywordAt(index, new Set(["of"])) && parens[parens.length - 1] === "for";
+    // The kind of a "{" here: "object", "block", or "unknown" (a function's or a class's body, say).
+    const braceKind = (prev, index) => {
+      if (!prev) return nested ? "object" : "block";
+      if (prev.kind === "name") {
+        if (keywordAt(index, RESTRICTED_KEYWORDS) && newline) return "block";
+        if (keywordAt(index, AWAIT) && newline) return "unknown";
+        if (keywordAt(index, EXPRESSION_KEYWORDS) || ofAt(index)) return "object";
+        return keywordAt(index, BLOCK_KEYWORDS) ? "block" : "unknown";
+      }
+      if (prev.kind !== "punct" || prev.postfix) return "unknown";
+      if (prev.arrow) return "block";
+      if (prev.value === ":") return prev.colon;
+      if (prev.value === ")") return HEAD_KEYWORDS.has(prev.keyword) ? "block" : "unknown";
+      // Inside "(" or "[" (a for loop's head: for (; {}.a;)) a ";" is followed by an expression, not a statement.
+      if (BLOCK_AFTER.has(prev.value)) return braces[braces.length - 1]?.brace === false ? "unknown" : "block";
+      return OBJECT_AFTER.has(prev.value) ? "object" : "unknown";
+    };
+    // Whether a "/" here starts a regular expression (true) or divides (false); throws when that is unsure.
+    const startsRegex = (prev, index, at) => {
+      const ends = (what) => {
+        if (newline) throw new AmbiguousSlash(at, `a line break after ${what} may end a type`);
+        return false;
+      };
+      if (!prev) return true;
+      if (prev.kind === "regex" || prev.postfix || (prev.kind === "punct" && (prev.value === "++" || prev.value === "--"))) return false;
+      if (prev.kind === "name") return keywordAt(index, REGEX_KEYWORDS) || ofAt(index) || ends(`"${prev.value}"`);
+      if (prev.kind !== "punct") return ends(`a ${prev.kind}`);
+      if (prev.value === ")") return CONDITION_KEYWORDS.has(prev.keyword) || ends('")"');
+      if (prev.value === "]") return ends('"]"');
+      if (prev.value === "}") {
+        if (prev.brace === "block") return true;
+        if (prev.brace === "object") return ends('an object literal\'s "}"');
+        throw new AmbiguousSlash(at, 'the "}" before it may end a statement or an expression, as a function\'s body may');
+      }
+      if (prev.arrow) return true;
+      if (prev.value === "<" || prev.value === ">") throw new AmbiguousSlash(at, `"${prev.value}" before it may close type arguments or a JSX tag`);
+      if (REGEX_AFTER.has(prev.value)) return true;
+      throw new AmbiguousSlash(at, `"${prev.value}" before it`);
+    };
     while (i < source.length) {
       const at = i;
       const c = source[i];
       const prev = found[found.length - 1];
-      if (/\s/.test(c)) i++;
-      else if (c === "/" && (source[i + 1] === "/" || source[i + 1] === "*")) {
+      if (/\s/.test(c)) {
+        if (c === "\n") newline = true;
+        i++;
+      } else if (c === "/" && (source[i + 1] === "/" || source[i + 1] === "*")) {
         const line = source[i + 1] === "/";
         const end = source.indexOf(line ? "\n" : "*/", i + 2);
-        comments.push({ at, text: source.slice(i, end < 0 ? source.length : end) });
+        const text = source.slice(i, end < 0 ? source.length : end);
+        if (text.includes("\n")) newline = true;
+        comments.push({ at, text });
         i = end < 0 ? source.length : line ? end : end + 2;
       } else if (c === '"' || c === "'") {
         let text = "";
@@ -248,7 +317,7 @@ function lexCode(source, comments) {
           else text += source[i];
         }
         i++;
-        found.push({ kind: "string", value: text, at });
+        push({ kind: "string", value: text, at });
       } else if (c === "`") {
         let text = "";
         for (i++; i < source.length && source[i] !== "`"; ) {
@@ -261,29 +330,24 @@ function lexCode(source, comments) {
           } else text += source[i++];
         }
         i++;
-        found.push({ kind: "template", value: text, at });
-      } else if (c === "/" && (!prev || (prev.kind === "punct" && ((REGEX_AFTER.has(prev.value) && !prev.postfix) || (prev.value === ")" && prev.condition) || (prev.value === "}" && !prev.expression))) || keywordAt(found.length - 1, REGEX_KEYWORDS))) {
+        push({ kind: "template", value: text, at });
+      } else if (c === "/" && startsRegex(prev, found.length - 1, at)) {
         // A regular expression literal: skip it, since it may hold a quote.
         for (i++; i < source.length && source[i] !== "/" && source[i] !== "\n"; i++) {
           if (source[i] === "\\") i++;
-          else if (source[i] === "[") while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
+          else if (source[i] === "[") while (i < source.length && source[i] !== "]" && source[i] !== "\n") i += source[i] === "\\" ? 2 : 1;
         }
-        if (source[i] === "/") {
-          i++;
-          while (/[A-Za-z]/.test(source[i] ?? "")) i++;
-          found.push({ kind: "regex", value: "", at });
-        } else {
-          // A "/" that nothing closes on its line was no regex (JSX, say): go back to it and lex what follows as code.
-          i = at + 1;
-          found.push({ kind: "punct", value: "/", at });
-        }
+        if (source[i] !== "/") throw new AmbiguousSlash(at, "a regular expression must start here, but nothing closes it on its line");
+        i++;
+        while (/[A-Za-z]/.test(source[i] ?? "")) i++;
+        push({ kind: "regex", value: "", at });
       } else {
         identifier.lastIndex = i;
         number.lastIndex = i;
         const name = identifier.exec(source)?.[0];
         const digits = name ? undefined : number.exec(source)?.[0];
         if (name || digits) {
-          found.push({ kind: name ? "name" : "number", value: name ?? digits, at });
+          push({ kind: name ? "name" : "number", value: name ?? digits, at });
           i += (name ?? digits).length;
           continue;
         }
@@ -292,28 +356,26 @@ function lexCode(source, comments) {
         if (c === "}" && nested && !braces.some((scope) => scope.brace)) return found;
         const frame = braces[braces.length - 1] ?? top;
         const token = { kind: "punct", value, at };
-        if (c === "(" || c === "[") braces.push({ expression: false, ternary: 0, brace: false });
+        if (c === "(" || c === "[") braces.push({ kind: "unknown", ternary: 0, brace: false });
         else if ((c === ")" || c === "]") && braces.length > 0 && !frame.brace) braces.pop();
         else if (value === "?") frame.ternary++;
-        // "=>" is an arrow: its "{" opens a body. A ":" inside an object literal or closing a "?" leaves an expression after it.
+        // "=>" is an arrow: its "{" opens a body. A ":" closing a "?" or inside an object literal is followed by an
+        // expression; one in a block (a label or a case) by a statement; elsewhere (a type annotation) it is unknown.
         else if (c === ">" && prev?.kind === "punct" && prev.value === "=" && prev.at === at - 1) token.arrow = true;
         else if (c === ":") {
-          token.expression = frame.expression || frame.ternary > 0;
+          token.colon = frame.ternary > 0 ? "object" : frame.kind;
           if (frame.ternary > 0) frame.ternary--;
-        } else if (c === "{") {
-          // The first token of a template substitution is an expression, so a "{" there is an object literal.
-          const expression = !prev ? nested : prev.kind === "name" ? keywordAt(found.length - 1, EXPRESSION_KEYWORDS) : prev.kind === "punct" && (prev.value === ":" ? prev.expression === true : !prev.arrow && BRACE_EXPRESSION_AFTER.has(prev.value));
-          braces.push({ expression, ternary: 0, brace: true });
-        } else if (c === "}") {
+        } else if (c === "{") braces.push({ kind: braceKind(prev, found.length - 1), ternary: 0, brace: true });
+        else if (c === "}") {
           // Drop any "(" or "[" left open inside the block, then the "{" itself.
           while (braces.length > 0 && !braces[braces.length - 1].brace) braces.pop();
-          token.expression = braces.pop()?.expression === true;
+          token.brace = braces.pop()?.kind ?? "unknown";
         }
         // x! (a non-null assertion, glued to the name, call or index it follows) ends an expression: x! / 2 is a division.
         if (c === "!" && prev && !/\s/.test(source[at - 1] ?? " ") && (prev.kind === "number" || (prev.kind === "name" && !keywordAt(found.length - 1, REGEX_KEYWORDS)) || (prev.kind === "punct" && (prev.value === ")" || prev.value === "]" || prev.postfix)))) token.postfix = true;
-        if (c === "(") parens.push(keywordAt(found.length - 1, CONDITION_KEYWORDS) || (keywordAt(found.length - 1, AWAIT) && keywordAt(found.length - 2, CONDITION_KEYWORDS)));
-        else if (c === ")") token.condition = parens.pop() === true;
-        found.push(token);
+        if (c === "(") parens.push(keywordAt(found.length - 1, HEAD_KEYWORDS) ? found[found.length - 1].value : keywordAt(found.length - 1, AWAIT) && keywordAt(found.length - 2, CONDITION_KEYWORDS) ? found[found.length - 2].value : "");
+        else if (c === ")") token.keyword = parens.pop() ?? "";
+        push(token);
       }
     }
     return found;
@@ -325,11 +387,20 @@ const isPunct = (token, value) => token?.kind === "punct" && token.value === val
 
 /**
  * The text of a test file that can name a requirement: its comments and the titles of its it, test and
- * describe calls. Other strings are fixtures, so an ID inside one counts for nothing.
+ * describe calls. Other strings are fixtures, so an ID inside one counts for nothing. A file whose lexing hits an
+ * ambiguous "/" gives no text at all, and the reason goes to `problems` with its line.
  */
-export function testReferenceText(source) {
+export function testReferenceText(source, problems = []) {
   const out = [];
-  const tokens = lexCode(source, out);
+  let tokens;
+  try {
+    tokens = lexCode(source, out);
+  } catch (error) {
+    if (!(error instanceof AmbiguousSlash)) throw error;
+    const line = source.slice(0, error.at).split("\n").length;
+    problems.push(`line ${line}: cannot tell whether "/" divides or starts a regular expression (${error.message}), so the file names nothing; add a semicolon or parentheses`);
+    return "";
+  }
   // The index after the ")" that closes the "(" at `open`.
   const afterCall = (open) => {
     for (let depth = 0, k = open; k < tokens.length; k++) {
@@ -377,7 +448,10 @@ export function checkTestReferences(trace, implementedSource, tests) {
   const problems = [...implemented.problems];
   const named = new Map();
   for (const { path, text } of tests) {
-    for (const id of new Set(testReferenceText(text).match(TEST_ID) ?? [])) {
+    const unclear = [];
+    const ids = new Set(testReferenceText(text, unclear).match(TEST_ID) ?? []);
+    problems.push(...unclear.map((problem) => `${path}: ${problem}`));
+    for (const id of ids) {
       if (!trace.requirementIds.has(id) && !trace.acceptanceIds.has(id)) problems.push(`${path}: names ${id}, which this spec doesn't have`);
       else if (!named.has(id)) named.set(id, path);
     }

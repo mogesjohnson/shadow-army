@@ -217,7 +217,8 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     // A TypeScript non-null assertion ends an expression; a "/" the lexer cannot close on its line never eats the next line.
     expect(ids('const r = total! / 2 + a.b![0]! / 2 + f()! / 2;\nit("PO-26 non-null", () => {});')).toEqual(["PO-26"]);
     expect(ids('const r = [.../it\\("PO-27"/.exec(s)]; export default /it\\("PO-28"/;\nit("PO-29 real", () => {});')).toEqual(["PO-29"]);
-    expect(ids('const r = x ? y : <p>hi</p>;\nit("PO-30 after a stray slash", () => {});')).toEqual(["PO-30"]);
+    // A JSX closing tag's "/" is ambiguous (review 131 C16): the file names nothing.
+    expect(ids('const r = x ? y : <p>hi</p>;\nit("PO-30 after a stray slash", () => {});')).toEqual([]);
   });
   it("classifies a slash by the kind of brace and token before it (review 127 C15)", () => {
     const ids = (text) => testReferenceText(text).match(/\b[A-Z]+-\d+\b/g) ?? [];
@@ -235,13 +236,35 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     expect(ids('const ratio = n / /it("PO-72 fake")/.test(s); it("PO-73 true", () => {});')).toEqual(["PO-73"]);
     expect(ids('const r = a / /it\\("PO-74"/.source.length; it("PO-75 true", () => {});')).toEqual(["PO-75"]);
     expect(ids('x = {} / /it\\("PO-76"/.source; it("PO-77 true", () => {});')).toEqual(["PO-77"]);
-    // The "}" of a block, a function body or a class ends a statement, so the slash starts a regex.
+    // The "}" of a block or an arrow's body ends a statement, so the slash starts a regex.
     expect(ids('if (a) {} /it\\("PO-83"/.test(s); it("PO-84 true", () => {});')).toEqual(["PO-84"]);
     expect(ids('const f = () => {}\n/it\\("PO-85"/.test(s); it("PO-86 true", () => {});')).toEqual(["PO-86"]);
-    expect(ids('class A { m() {} }\n/it\\("PO-87"/.test(s); try {} finally {} /it\\("PO-88"/.test(s); it("PO-89 true", () => {});')).toEqual(["PO-89"]);
+    expect(ids('try {} finally {} /it\\("PO-88"/.test(s); it("PO-89 true", () => {});')).toEqual(["PO-89"]);
     expect(ids('switch (a) { case 1: {} }\n/it\\("PO-90"/.test(s); lbl: {} /it\\("PO-91"/.test(s); it("PO-92 true", () => {});')).toEqual(["PO-92"]);
-    // A "/" with no closing slash on its line is no regex: the lexer goes back to it and keeps what follows.
-    expect(ids('const r = c ? <p>hi</p> : 1; it("PO-93 same line", () => {});')).toEqual(["PO-93"]);
+    // A "/" after "<" may close a JSX tag: the file names nothing (review 131 C16).
+    expect(ids('const r = c ? <p>hi</p> : 1; it("PO-93 same line", () => {});')).toEqual([]);
+  });
+  it("credits nothing from a slash it cannot classify, and says where (review 131 C16)", () => {
+    const read = (text) => {
+      const problems = [];
+      return { ids: testReferenceText(text, problems).match(/\b[A-Z]+-\d+\b/g) ?? [], problems };
+    };
+    // A line break after a restricted keyword ends the statement (ASI): the braces are a block, the slash a regex.
+    for (const keyword of ["return", "yield", "break", "continue"]) {
+      expect(read(`function* f(s) { ${keyword}\n{ marker: 1 } /x|it("PO-1")/.test(s); }\nit("CH-1 real", f);`)).toEqual({ ids: ["CH-1"], problems: [] });
+    }
+    expect(read("function f() { return { a: 1 } / 2; } // PO-2 same line")).toEqual({ ids: ["PO-2"], problems: [] });
+    // An arrow's body, a label's block and the head of an if or a while end before a regex.
+    const sure = 'const f = () => {}\n/it("PO-3")/.test(s); lbl: {} /it("PO-4")/.test(s); if (a) /it("PO-5")/.test(s); while (b) /it("PO-6")/.test(s); it("CH-2 real", f);';
+    expect(read(sure)).toEqual({ ids: ["CH-2"], problems: [] });
+    // A function's or a class's body, a brace after ">", a line break after a possible type, and "<" or ">" before a slash.
+    const unsure = ["const r = function () {} / 2; // PO-7", "const r = class {} / 2; // PO-7", "const b = n > { valueOf: () => 8 } / 2; // PO-7",
+      'function f() {}\n/it("PO-7")/.test(s);', 'let x: Foo\n/it("PO-7")/.test(s);', 'type T = { a: 1 }\n/it("PO-7")/.test(s);',
+      "const r = c ? <p>hi</p> : 1; // PO-7", 'const n = a as Array<T> / it("PO-7") / 1;', 'const r = /it("PO-7") unclosed', "for (; {} / 2; ) {} // PO-7"];
+    for (const text of unsure) {
+      expect(read(`it("CH-3 before", f);\n${text}`)).toEqual({ ids: [], problems: [expect.stringMatching(/^line [23]: cannot tell whether "\/" divides/)] });
+    }
+    expect(checkTestReferences(trace, "M1\n", files('it("PO-1", f);\nconst r = function () {} / 2;')).problems).toEqual([expect.stringMatching(/^src\/v2\/x\.test\.ts: line 2: cannot tell/)]);
   });
   // VER-7, M1-AC7: the traceability script's own tests count, and its fixtures do not.
   it("takes the repository tests as they are, and catches a planted break in them", () => {
