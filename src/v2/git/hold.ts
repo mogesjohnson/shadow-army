@@ -282,6 +282,8 @@ export class HarnessHold {
   private names: string[] = [];
   /** The last record exists but can't be read or checked: held, and the record left as it is, until the owner accepts. */
   private unverified = false;
+  /** The registration or unregistration running now, if any: the next waits for it (C16). */
+  private registering: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: HarnessHoldOptions) { this.repos = [options.repo]; }
 
@@ -329,14 +331,27 @@ export class HarnessHold {
    * user's config) keeps the hash already trusted, so a change to it is still held (C13). A repository already
    * trusted is checked against that baseline, never trusted again: a change holds.
    */
-  async register(repo: GitRepo): Promise<void> {
-    const key = keyOf(repo), known = this.repos.find((other) => keyOf(other) === key);
-    if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
+  register(repo: GitRepo): Promise<void> {
+    // One at a time: two overlapping registrations would each see no baseline and the later replace the first (C16).
+    const next = this.registering.then(() => this.registerNow(repo));
+    this.registering = next.catch(() => {});
+    return next;
+  }
+
+  private async registerNow(repo: GitRepo): Promise<void> {
+    const key = keyOf(repo), find = () => this.repos.find((other) => keyOf(other) === key);
+    if (find() && !same(find()!, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
     if (!this.trusted) throw new Error("harness git: a repository registers only once the folder's own state is trusted");
-    const { state, problems } = await readState(this.options.repo, known ?? repo, this.options.gitFor, this.options.limits);
+    const pointers = find() && this.trusted[key] ? undefined : this.pointers(repo); // no baseline yet: checked first
+    const { state, problems } = await readState(this.options.repo, find() ?? repo, this.options.gitFor, this.options.limits);
     if (problems.length) throw new Uninspectable(problems.join(", "), "the repository can't be trusted");
-    if (!known && !this.repos.some((other) => keyOf(other) === key)) this.repos.push(repo);
-    const baseline = this.trusted?.[key];
+    // The pointers the scan hashed are the ones checked against the tuple, not ones swapped in meanwhile (C15).
+    for (const [label, hash] of Object.entries(pointers ?? {})) {
+      if (state[label] !== hash) throw new Error(`harness git: ${label.replace(/^submodule /, "")} changed while ${repo.gitDir} registered`);
+    }
+    // Looked up again after the scan: a registration that finished meanwhile set the baseline this one is checked against (C16).
+    const known = find(), baseline = this.trusted?.[key];
+    if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
     if (known && baseline) {
       const files = changedFiles(baseline, state);
       if (files.length) throw new HarnessGitHeld(this.hold(files, "changed since it was trusted").line);
@@ -355,16 +370,61 @@ export class HarnessHold {
       const before = isOwn(label) ? hash : others.find((hashes) => label in hashes)?.[label];
       if (before !== undefined) own[label] = before; // shared state no other repository trusted is left out, so it holds
     }
+    // Shared state that already differs is held, in the same write as the baseline, so no restart trusts it (C17).
+    const files = changedFiles(own, state), why = "changed before it was registered";
+    const before = { repos: this.repos, trusted: this.trusted, files: this.files };
+    this.repos = known ? this.repos : [...this.repos, repo];
     this.trusted = { ...this.trusted, [key]: own };
-    this.save();
-    this.options.log?.({ event: "trusted", hashes: own });
-    // Shared state that already differs is held now, and recorded, so a restart before the next check keeps it.
-    const files = changedFiles(own, state);
-    if (files.length) throw new HarnessGitHeld(this.hold(files, "changed before it was registered").line);
+    if (files.length) this.files = [...new Set([...this.files ?? [], ...files])].sort();
+    // A record that can't be written leaves nothing registered, in memory either.
+    try { this.save(); } catch (error) { Object.assign(this, before); throw error; }
+    // Recorded now. A held repository stays registered though this throws: the caller unregisters it to remove it.
+    try { this.options.log?.({ event: "trusted", hashes: own }); } finally {
+      if (files.length) this.options.log?.({ event: "held", files, reason: why });
+    }
+    if (files.length) throw new HarnessGitHeld(this.line(files, why));
+  }
+
+  /**
+   * A new repository's pointers, checked against the tuple it registers with (WSP-10): its `.git` (a file naming
+   * `gitDir`, or `gitDir` itself), its `commondir` (required unless `gitDir` is the common folder) and any `gitdir`
+   * (naming its `.git`). Gives each pointer file's hash under the scan's label, so the scan's own read is checked too.
+   */
+  private pointers(repo: GitRepo): TrustedState {
+    const label = (path: string) => `submodule ${this.label(path)}`, out: TrustedState = {};
+    const read = (path: string, what: string) => {
+      const type = typeOf(path);
+      if (type !== "file") throw new Error(`harness git: ${path} ${type === undefined ? "is missing" : "isn't a regular file"}, so ${what} can't be checked`);
+      const text = readRegular(path, this.options.limits?.bytes ?? LIMITS.bytes);
+      out[label(path)] = sha(text);
+      return text.toString("utf8").trim();
+    };
+    const expect = (path: string, named: string, want: string) => {
+      if (canon(named) !== canon(want)) throw new Error(`harness git: ${path} names ${named}, not the registered ${want}`);
+    };
+    const dotGit = join(repo.workTree, ".git");
+    if (typeOf(dotGit) === "folder") expect(dotGit, dotGit, repo.gitDir);
+    else {
+      const named = /^gitdir:\s*(.+)$/.exec(read(dotGit, "the working tree's git folder"))?.[1];
+      if (!named) throw new Error(`harness git: ${dotGit} names no git folder`);
+      expect(dotGit, resolve(repo.workTree, named), repo.gitDir);
+    }
+    const commondir = join(repo.gitDir, "commondir");
+    if (typeOf(commondir) !== undefined || canon(repo.gitDir) !== canon(repo.commonDir)) expect(commondir, resolve(repo.gitDir, read(commondir, "the common folder")), repo.commonDir);
+    const gitdir = join(repo.gitDir, "gitdir");
+    if (typeOf(gitdir) !== undefined) expect(gitdir, resolve(repo.gitDir, read(gitdir, "the working tree")), dotGit);
+    return out;
   }
 
   /** Shadow Army's own command removed it. */
-  async unregister(repo: GitRepo): Promise<void> {
+  unregister(repo: GitRepo): Promise<void> {
+    // In the registrations' queue, so no baseline goes away while a registration is checked against it.
+    const next = this.registering.then(() => this.unregisterNow(repo));
+    this.registering = next.catch(() => {});
+    return next;
+  }
+
+  private async unregisterNow(repo: GitRepo): Promise<void> {
     if (keyOf(repo) === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo))) return;
     this.repos = this.repos.filter((other) => !same(other, repo));
     if (this.trusted) delete this.trusted[keyOf(repo)];
@@ -440,13 +500,15 @@ export class HarnessHold {
   private label(path: string) { return new Scan(this.options.repo, this.options.gitFor).where(path); }
 
   private hold(files: string[], why: string, how = "undo it to go on"): HoldCheck & { held: true } {
-    const line = `Shadow Army: harness git held · ${files.join(", ")} ${why} · ${how}`;
+    const line = this.line(files, why, how);
     const fresh = !this.files || this.files.join("\0") !== files.join("\0");
     this.files = files;
     this.save();
     if (fresh) this.options.log?.({ event: "held", files, reason: why });
     return { held: true, files, line };
   }
+
+  private line(files: string[], why: string, how = "undo it to go on") { return `Shadow Army: harness git held · ${files.join(", ")} ${why} · ${how}`; }
 
   private trust(state: Record<string, TrustedState>) {
     this.trusted = state; this.files = undefined; this.save();

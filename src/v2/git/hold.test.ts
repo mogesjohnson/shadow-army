@@ -166,6 +166,67 @@ describe("registration trusts only the new repository's own state (C13)", () => 
   }, 60_000);
 });
 
+describe("a new registration's pointers, overlap and record (C15, C16, C17)", () => {
+  const worktree = (base: string, repo: HostileRepo, name = "snap"): GitRepo => {
+    const tree = join(base, name);
+    plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "worktree", "add", "-q", "--detach", tree);
+    return { gitDir: join(repo.gitDir, "worktrees", name), workTree: tree, commonDir: repo.gitDir };
+  };
+
+  it("refuses a worktree whose `.git`, `commondir` or `gitdir` is missing or names another folder (C15)", async () => {
+    const { base, repo, open } = setup(), hold = open();
+    await hold.start();
+    const cases: [string, (snap: GitRepo) => void, string][] = [
+      ["no commondir", (snap) => rmSync(join(snap.gitDir, "commondir")), "is missing"],
+      ["commondir elsewhere", (snap) => writeFileSync(join(snap.gitDir, "commondir"), `${temp()}\n`), "not the registered"],
+      ["gitdir elsewhere", (snap) => writeFileSync(join(snap.gitDir, "gitdir"), `${join(temp(), ".git")}\n`), "not the registered"],
+      [".git elsewhere", (snap) => { rmSync(join(snap.workTree, ".git")); writeFileSync(join(snap.workTree, ".git"), `gitdir: ${temp()}\n`); }, "not the registered"],
+      ["no .git", (snap) => rmSync(join(snap.workTree, ".git")), "is missing"],
+    ];
+    for (const [name, change, message] of cases) {
+      const snap = worktree(base, repo, name.replace(/\W/g, "-"));
+      change(snap);
+      await expect(hold.register(snap), name).rejects.toThrow(message);
+      await expect(hold.run(snap, ["status"]), name).rejects.toThrow("isn't a repository this hold covers");
+    }
+    expect(await hold.check()).toEqual({ held: false });
+  }, 60_000);
+
+  it("checks the later of two overlapping registrations against the first one's baseline (C16)", async () => {
+    const { base, repo, events, open } = setup();
+    let changed = false;
+    const hold = open((where, runner) => ({ run: async (args, kind) => {
+      // The first scan's last step: the worktree's own info/ changes before the second scan reads it.
+      if (args[0] === "ls-files" && where.gitDir.endsWith("snap") && !changed) { changed = true; mkdirSync(join(where.gitDir, "info"), { recursive: true }); writeFileSync(join(where.gitDir, "info", "exclude"), "x\n"); }
+      return runner.run(args, kind);
+    } }));
+    await hold.start();
+    const snap = worktree(base, repo), from = events.length;
+    const [first, second] = await Promise.allSettled([hold.register(snap), hold.register(snap)]);
+    expect(first.status).toBe("fulfilled");
+    expect(second).toMatchObject({ status: "rejected", reason: expect.any(HarnessGitHeld) });
+    expect(events.slice(from).map((event) => event.event)).toEqual(["trusted", "held"]);
+    expect(await hold.check()).toMatchObject({ held: true, files: [expect.stringMatching(/worktrees\/snap\/info\/exclude$/)] });
+    await hold.accept();
+    const other = worktree(base, repo, "other");
+    await Promise.all([hold.register(other), hold.unregister(other)]); // in the order called
+    await expect(hold.run(other, ["status"])).rejects.toThrow("isn't a repository this hold covers");
+  }, 60_000);
+
+  it("records a hold found while registering with the baseline, so a log that throws can't leave it trusted (C17)", async () => {
+    const { base, repo, events, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo);
+    plantChange(repo, "config");
+    const push = events.push;
+    events.push = (...items: HoldEvent[]) => { if (items.some((event) => event.event === "trusted")) throw new Error("log failed"); return push.apply(events, items); };
+    await expect(hold.register(snap)).rejects.toThrow("log failed");
+    events.push = push;
+    expect(events.at(-1)).toMatchObject({ event: "held", files: [".git/config"] }); // logged though the trusted line failed
+    expect(await open().start()).toMatchObject({ held: true, files: [".git/config"] });
+  }, 60_000);
+});
+
 describe("a repository's whole identity (C9)", () => {
   it("runs only in a registered repository's own working tree and common folder, with the paths it registered", async () => {
     const { base, repo, main, open } = setup(), given: GitRepo[] = [];
