@@ -595,6 +595,15 @@ Each decision: the question and its kind (big, technical or trivial; PLAYBOOK se
 - **Choice:** B ("yes to both", 2026-11-25). Typed event payloads (PO-5) and usage (OBS-3) are needed for the app to read the feed.
 - **Applied:** v0.29 (2026-11-25): PO-22 beside PO-5, a new milestone M7 (v2.1) with M7-AC1, open question Q11 (how the viewer gets its credential and the port), §3, PO-3 and Appendix D. Building it waits for the M1b stack to merge.
 
+## D-42 Linux 5.1 minimum for the helper (orch-64, 2026-11-27)
+
+- **Question:** PO-12 promised Linux 3.4 or later, but the Linux helper signals each process through its `/proc/<pid>` directory with `pidfd_send_signal`, which Linux added in 5.1, and probes it before `ready`. On a 4.19 kernel the probe fails with `ENOSYS` and every session is refused (Codex review 117, C15, on #109).
+- **Kind:** small. It narrows the supported Linux range; no behavior on 5.1 or later changes.
+- **Options:** A, a fallback without pidfd on older kernels: `kill()` by pid number, which loses PO-10's PID safety (a reused pid could be signalled); B, raise the minimum to Linux 5.1 and refuse the session on an older kernel.
+- **Choice:** B, by orch-64 under the owner's pre-approval of 2026-11-23. On `ENOSYS` the helper reports `refused` with "Linux 5.1 or later is required" instead of `ready` and exits 2; the post office shows it as a refused start and does not retry.
+- **Why:** PID-safe signalling is part of the containment guarantee, and kernels before 5.1 are past upstream end of life (4.19 ended in December 2024).
+- **Applied:** PO-12's first Linux sub-bullet (2026-11-27); the helper on #109.
+
 ## Values set in the fix pass
 
 Limits and defaults that a confirmed fix left open. The orchestrator set each from the evidence named, with no bake-off, because one answer was clearly sensible. Any of them can be overruled by the owner, or reopened by a round-2 reviewer with evidence.
