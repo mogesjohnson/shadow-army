@@ -118,7 +118,7 @@ export async function acquireLock(dir: string, record: LockRecord, startTimeOf: 
       try { after = await generations(dir); } catch (error) {
         try { await takeBack(dir, mine); } catch (cleanup) {
           const reason = (cleanup as Error).message;
-          return { ok: false, kind: "not-written", rollback: { path: mine, error: reason, retry: () => takeBack(dir, mine) },
+          return { ok: false, kind: "not-written", rollback: { path: mine, error: reason, retry: once(() => takeBack(dir, mine, true)) },
             message: `${lockMessages.notWritten(writeReason(error))}; its own lock ${top + 1}.lock can't be taken back: ${reason}` };
         }
         return notWritten(error);
@@ -143,14 +143,28 @@ async function refusal(holder: LockRecord, starter: ProcessId, startTimeOf: Star
   return { ok: false, kind: "running", message: lockMessages.running(holder.pid), holder };
 }
 
-/** Removes this start's own generation, or else marks it released; throws when neither works. */
-async function takeBack(dir: string, path: string): Promise<void> {
-  let removal: unknown;
-  try { await unlink(path); return; } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    removal = error;
-  }
-  try { await release(dir, path); } catch (error) { throw new Error(`${writeReason(removal)}, then ${writeReason(error)}`); }
+/**
+ * Removes this start's own generation, or else marks it released; throws when neither works.
+ * With `keepNumber` (a retry handed to the caller) it marks first, so the number stays used and no
+ * later start can take it while a handle still names it (C6).
+ */
+async function takeBack(dir: string, path: string, keepNumber = false): Promise<void> {
+  const remove = async () => { await unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); };
+  const steps = keepNumber ? [() => release(dir, path), remove] : [remove, () => release(dir, path)];
+  let first: unknown;
+  try { await steps[0]!(); return; } catch (error) { first = error; }
+  try { await steps[1]!(); } catch (error) { throw new Error(`${writeReason(first)}, then ${writeReason(error)}`); }
+}
+
+/** A retry that runs one attempt at a time and, once one succeeds, does nothing more. */
+function once(run: () => Promise<void>): () => Promise<void> {
+  let done = false;
+  let running: Promise<void> | undefined;
+  return () => {
+    if (done) return Promise.resolve();
+    running ??= run().then(() => { done = true; }, (error: unknown) => { running = undefined; throw error; });
+    return running;
+  };
 }
 
 async function release(dir: string, path: string): Promise<void> {

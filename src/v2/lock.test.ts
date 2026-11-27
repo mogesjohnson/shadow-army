@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acquireLock, lockMessages, type LockRecord, type StartTimeOf } from "./lock.js";
 
 /** Faults armed by a test: the lock's temporary writes, and the Nth folder scan, fail. */
-const fault = vi.hoisted(() => ({ tmpWrite: null as string | null, scanCall: 0, scans: 0, lockUnlink: null as string | null, lockRename: null as string | null }));
+const fault = vi.hoisted(() => ({ tmpWrite: null as string | null, scanCall: 0, scans: 0, lockUnlink: null as string | null, lockRename: null as string | null, lockRenames: 0 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const failure = (code: string) => Object.assign(new Error(code), { code });
@@ -20,6 +20,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return actual.unlink(...args);
     },
     rename: async (...args: Parameters<typeof actual.rename>) => {
+      if (String(args[1]).endsWith(".lock")) fault.lockRenames++;
       if (fault.lockRename && String(args[1]).endsWith(".lock")) throw failure(fault.lockRename);
       return actual.rename(...args);
     },
@@ -33,7 +34,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 let dir: string;
 beforeEach(async () => { dir = join(await mkdtemp(join(tmpdir(), "sa-lock-")), "lock"); });
 afterEach(async () => {
-  Object.assign(fault, { tmpWrite: null, scanCall: 0, scans: 0, lockUnlink: null, lockRename: null });
+  Object.assign(fault, { tmpWrite: null, scanCall: 0, scans: 0, lockUnlink: null, lockRename: null, lockRenames: 0 });
   await rm(join(dir, ".."), { recursive: true, force: true });
 });
 
@@ -165,10 +166,27 @@ describe("PO-1's lock", () => {
     // While the rollback is pending, its own live generation still answers a start, as the army closing.
     expect(await acquireLock(dir, office(20), live)).toMatchObject({ ok: false, kind: "closing" });
     await expect(result.rollback.retry()).rejects.toThrow();
-    Object.assign(fault, { lockUnlink: null, lockRename: null });
+    Object.assign(fault, { lockUnlink: null, lockRename: null, lockRenames: 0 });
     await result.rollback.retry();
-    expect(await lockFiles()).toEqual([]);
+    expect(JSON.parse(await readFile(join(dir, "1.lock"), "utf8"))).toEqual({ released: true });
     expect(await acquireLock(dir, office(20), live)).toMatchObject({ ok: true });
+  });
+
+  it("never lets a retained rollback retry touch a later start's lock (Codex review 107, C6)", async () => {
+    Object.assign(fault, { scanCall: 2, lockUnlink: "EBUSY", lockRename: "EPERM" });
+    const live = processes({ 10: "1000", 20: "2000", [claude.pid]: claude.startTime });
+    const result = await acquireLock(dir, office(10), live);
+    if (result.ok || !result.rollback) throw new Error("expected a pending rollback");
+    Object.assign(fault, { scanCall: 0, lockUnlink: null, lockRename: null, lockRenames: 0 });
+    // Two retries at once share one take-back; the generation's number stays used.
+    await Promise.all([result.rollback.retry(), result.rollback.retry()]);
+    expect(fault.lockRenames).toBe(1);
+    const later = await acquireLock(dir, office(20), live);
+    if (!later.ok) throw new Error(later.message);
+    await result.rollback.retry();
+    expect(await lockFiles()).toEqual(["2.lock"]);
+    expect(JSON.parse(await readFile(join(dir, "2.lock"), "utf8")).pid).toBe(20);
+    expect(await acquireLock(dir, office(30), live)).toMatchObject({ ok: false, kind: "closing", holder: { pid: 20 } });
   });
 
   describe("two starts on one stale lock", () => {
