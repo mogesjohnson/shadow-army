@@ -987,6 +987,30 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(contained.closed).toMatchObject({ refusedStart: false });
   });
 
+  // #111 C14: no session process starts when the multiline instruction file cannot be prepared, so it is a refused start.
+  windowsOnly("treats a failure to prepare the instruction file as a refused start, not a crash", async () => {
+    const versionOutput = new PassThrough();
+    versionOutput.end("2.1.295 (Claude Code)\n");
+    const spawn = vi.spyOn(managedProcesses, "spawnManagedProcess").mockResolvedValueOnce({
+      pid: 3, stdin: new PassThrough(), stdout: versionOutput, stderr: new PassThrough(), exited: Promise.resolve({ code: 0, signal: null }), close: async () => {}, droppedPath: [],
+    });
+    const blocker = await mkdtemp(join(tmpdir(), "sa-no-temp-")); folders.push(blocker);
+    await writeFile(join(blocker, "file"), "");
+    const saved = { TEMP: process.env.TEMP, TMP: process.env.TMP };
+    const events: ChannelEvent[] = [];
+    let channel: ClaudeChannel;
+    let launches = 0;
+    try {
+      process.env.TEMP = process.env.TMP = join(blocker, "file", "below");
+      channel = new ClaudeChannel({ cwd: blocker, model: "probe", instructions: "line one\nline two", onEvent: (event) => events.push(event), command: { file: process.execPath } });
+      channels.push(channel);
+      await until(() => events.some((event) => event.type === "closed"));
+    } finally { launches = spawn.mock.calls.length; process.env.TEMP = saved.TEMP; process.env.TMP = saved.TMP; spawn.mockRestore(); }
+    expect(launches).toBe(1);
+    expect(events.find((event) => event.type === "error")?.data).toMatchObject({ kind: "other" });
+    expect(events.find((event) => event.type === "closed")?.data).toMatchObject({ refusedStart: true, containmentStopped: true });
+  });
+
   windowsOnly("a login needed keeps its kind whether the fake keeps running or exits after it (CH-2, M1-AC4)", async () => {
     const running = await setup();
     expect((await running.channel.send("login")).error?.kind).toBe("login_needed");

@@ -249,9 +249,14 @@ export class ClaudeChannel implements NativeChannel {
     // npm's Windows .cmd shim cannot preserve multiline argv. The vendor's append-file flag
     // preserves the same standing text and default prompt. Credentials never enter these options.
     if (process.platform === "win32" && /[\r\n]/.test(this.options.instructions)) {
-      this.instructionDirectory = await mkdtemp(join(tmpdir(), "shadow-claude-instructions-"));
-      instructionPath = join(this.instructionDirectory, "instructions.txt");
-      await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
+      // #111 C14: no session process exists yet, so a failure here is a refused start; close() removes any partial file.
+      try {
+        this.instructionDirectory = await mkdtemp(join(tmpdir(), "shadow-claude-instructions-"));
+        instructionPath = join(this.instructionDirectory, "instructions.txt");
+        await writeFile(instructionPath, this.options.instructions, { encoding: "utf8", mode: 0o600 });
+      } catch (error) {
+        throw Object.assign(new Error(`claude's instruction file could not be prepared: ${error instanceof Error ? error.message : String(error)}`), { refusedStart: true });
+      }
     }
     // C10: the session starts the identity the probe checked; the driver refuses it if the file now resolves elsewhere.
     let child: ManagedProcess;
