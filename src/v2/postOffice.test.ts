@@ -586,11 +586,12 @@ describe("the session log on the office's real path (Codex review 7 on #116)", (
     const fake = join(fakeDir, "split-claude.mjs");
     const [a, b, c] = [credential.slice(0, 20), credential.slice(20, 44), credential.slice(44)];
     await writeFile(fake, `import { createInterface } from "node:readline";
+if (process.argv.includes("--version")) { process.stdout.write("2.1.295 (Claude Code)\\n"); process.exit(0); }
 const emit = (frame) => process.stdout.write(JSON.stringify({ session_id: "split", ...frame }) + "\\n");
 const delta = (delta) => emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta } });
 for await (const line of createInterface({ input: process.stdin })) {
   const frame = JSON.parse(line);
-  if (frame.type === "control_request") { emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } }); continue; }
+  if (frame.type === "control_request") { emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } }); emit({ type: "system", subtype: "init", model: "fake-claude", permissionMode: "plan" }); continue; }
   for (const part of ["think ${a}", "${b}", "${c} done"]) delta({ type: "thinking_delta", thinking: part });
   emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_stop" } });
   for (const part of ["key ${a}", "${b}", "${c} end"]) delta({ type: "text_delta", text: part });
