@@ -161,6 +161,10 @@ export class PostOffice {
   private readonly toolInputs = new Map<string, Map<string, ToolInput>>();
   /** Sessions whose opening record is being written: a failure there is reported by the refused send alone (C13). */
   private readonly openingWrites = new Set<string>();
+  /** Sessions whose `opened` record is being written. */
+  private readonly openedWrites = new Set<string>();
+  /** A gap opened by the `opened` record, not yet reported: the first send decides whether it is a refusal (C19). */
+  private readonly heldGaps = new Map<string, Error>();
   /** Session id to its streamed blocks: the block the next fragment belongs to, and the kinds each held block has (C14). */
   private readonly blocks = new Map<string, { current: string; held: Map<string, Set<(typeof FRAGMENT_KINDS)[number]>> }>();
   /** `log_failed` notices on their way into the office log (M1-AC4). */
@@ -185,9 +189,14 @@ export class PostOffice {
   private logFailed(name: string, error: Error): void {
     // M1-AC4: the office log failing while it records a notice is the same failure (a full disk), already reported once.
     if (name === "post-office" && this.noticesWriting > 0) return;
+    // C19: a gap the `opened` record opened waits for the first send; if that send is refused for the same gap, the one event is marked refused.
+    if (this.openedWrites.has(name)) { this.heldGaps.set(name, error); return; }
+    this.reportGap(name, error, this.openingWrites.has(name));
+  }
+
+  private reportGap(name: string, error: Error, refused: boolean): void {
     const soldier = [...this.sessions.values()].find((session) => session.id === name)?.spec.key;
     // C13/C15: when the opening write is what stops the send, the event still goes out (PO-5) marked refused; only the duplicate transcript line is dropped.
-    const refused = this.openingWrites.has(name);
     const notice = redact({ ...(soldier ? { soldier } : {}), type: "log_failed",
       data: { log: name, ...(refused ? { refused: true } : {}), reason: `the log ${name} could not be written; ${refused ? "the send was refused" : "later lines are retried and the gap is counted"}: ${error.message}` } }, this.secrets) as OfficeEvent;
     try { this.options.onEvent?.(notice); } catch { /* the owner's handler cannot stop the turn */ }
@@ -297,8 +306,11 @@ export class PostOffice {
   private record(event: OfficeEvent, session?: Session): void {
     const safe = redact(event, this.secrets) as OfficeEvent;
     this.options.onEvent?.(safe);
+    const opening = session && event.type === "opened" ? session.id : undefined;
     this.logPending = this.logPending.then(async () => {
-      await this.logs.write(session ? session.id : "post-office", { ...safe, time: new Date().toISOString() });
+      if (opening) this.openedWrites.add(opening);
+      try { await this.logs.write(session ? session.id : "post-office", { ...safe, time: new Date().toISOString() }); }
+      finally { if (opening) this.openedWrites.delete(opening); }
     }).catch((error: unknown) => {
       this.logFailure = error instanceof Error ? error : new Error(String(error));
       // A broken audit must stop further work; close also resolves a turn waiting for native output.
@@ -526,6 +538,9 @@ export class PostOffice {
     await this.logPending;
     this.openingWrites.add(session.id);
     const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() }).finally(() => this.openingWrites.delete(session.id));
+    const held = this.heldGaps.get(session.id);
+    this.heldGaps.delete(session.id);
+    if (held) this.reportGap(session.id, held, !opened.written);
     if (!opened.written) {
       throw new Error(`message not sent: the session log could not record the turn's start (${String(redact(opened.error?.message ?? "unknown error", this.secrets))})`);
     }
@@ -708,6 +723,10 @@ export class PostOffice {
       this.closed = true;
       await Promise.allSettled(this.opening.values());
       const ended = await Promise.allSettled([...this.sessions.keys()].map((key) => this.closeSession(key)));
+      await this.logPending;
+      // C19: a gap no send claimed is reported unmarked before the office ends.
+      for (const [name, error] of this.heldGaps) this.reportGap(name, error, false);
+      this.heldGaps.clear();
       this.record({ type: "closed", data: { retained: true } });
       await this.logPending;
       const failed = ended.filter((item): item is PromiseRejectedResult => item.status === "rejected");

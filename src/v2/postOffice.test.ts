@@ -645,6 +645,39 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toEqual([]);
   }, 30_000);
 
+  it("marks the one gap event refused when the opened write fails first and the send's opening write fails in the same gap (C19, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    // A file where the logs folder belongs: every append fails, from the `opened` record on.
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    expect(delivered).toEqual([]);
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).toMatchObject({ refused: true });
+  }, 30_000);
+
+  it("still reports an opened-record gap no send claimed, unmarked, when the office closes (C19, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    await office.close();
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+  }, 30_000);
+
   it("flushes each streamed block at its own stop, so interleaved streams are not mixed (C14, PO-5)", async () => {
     const repo = makeRepo(); repos.push(repo);
     let emit: ChannelOptions["onEvent"] = () => {};
