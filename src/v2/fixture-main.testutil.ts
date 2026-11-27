@@ -24,7 +24,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const diagnostic = openSync(resolve(cwd, "launcher-stderr.log"), "a");
     const child = spawn(process.execPath, ["--import", new URL("../../node_modules/tsx/dist/loader.mjs", import.meta.url).href, fileURLToPath(import.meta.url), "--cwd", cwd], { cwd, detached: true, windowsHide: true, stdio: ["pipe", "inherit", diagnostic] });
     closeSync(diagnostic);
-    child.stdin.end(`${JSON.stringify({ credential })}\n`);
+    child.stdin.end(`${JSON.stringify({ credential, mode: "live" })}\n`);
     // Abrupt exit skips all launcher cleanup without an OS command that might kill its tree.
     process.stdin.once("data", () => process.exit(99));
     setInterval(() => {}, 1000);

@@ -2,13 +2,20 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import { open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { PostOffice, type OfficeOptions } from "./postOffice.js";
+import { PostOffice, type LeaseEndReason, type OfficeOptions } from "./postOffice.js";
 import type { TurnResult } from "./channel.js";
 import { redact } from "./logs.js";
-import { SessionLease, type LeaseOptions } from "./lease.js";
+import { assertSessionId, SessionLease, type LeaseClock, type LeaseOptions } from "./lease.js";
 
 export interface OfficeServer { url: string; office: PostOffice; close(): Promise<void>; }
-export interface ServerOptions extends OfficeOptions { host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; }
+/** Exactly one launcher (PO-7): the mod gives `lease` with Claude's session id; `sa live` gives `live: true` and has no lease. */
+export interface ServerOptions extends OfficeOptions { host?: string; port?: number; onShutdown?: () => void; lease?: LeaseOptions; live?: boolean; leaseClock?: LeaseClock; }
+
+/** PO-7: a release carries `session.end`'s reason, so the shutdown tells the owner's logout from Claude Code ending. */
+function releaseReason(reason: unknown): LeaseEndReason {
+  if (reason !== undefined && (typeof reason !== "string" || !/^[a-z_]{1,64}$/.test(reason))) throw new Error("release reason must be a session.end reason");
+  return reason === "logout" ? "the owner logged out" : "Claude Code ended";
+}
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
   let size = 0;
@@ -72,6 +79,8 @@ export function sendResponse(result: TurnResult): SendResponse {
 export async function startOfficeServer(options: ServerOptions): Promise<OfficeServer> {
   const host = options.host ?? "127.0.0.1";
   if (host !== "127.0.0.1" && host !== "::1") throw new Error(`post office refuses non-loopback address ${host}`);
+  if (!!options.lease === !!options.live) throw new Error("post office refuses to start: it needs the mod's session lease or `sa live`, exactly one");
+  if (options.lease) assertSessionId(options.lease.session);
   const office = await PostOffice.create(options);
   let unlock: (() => Promise<void>) | undefined;
   let server: Server | undefined;
@@ -103,7 +112,8 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
         }
         try {
           const command = await body(request);
-          lease?.assertActive();
+          // A renewal or release after the end is refused, and logged, by the lease itself.
+          if (command.action !== "renew" && command.action !== "release") lease?.assertActive();
           const key = typeof command.soldier === "string" ? command.soldier : "";
           let value: unknown;
           switch (command.action) {
@@ -112,8 +122,9 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
               value = lease.renew(command.session); break;
             case "release":
               if (!lease) throw new Error("post office has no mod session lease");
+              const ended = releaseReason(command.reason);
               lease.release(command.session);
-              office.leaseEnded(lease.session, "released");
+              office.leaseEnded(lease.session, ended);
               value = { ok: true }; break;
             case "army": value = office.army(); break;
             case "open": value = await office.open(key, turnOptions(command.claims)); break;
@@ -168,10 +179,11 @@ export async function startOfficeServer(options: ServerOptions): Promise<OfficeS
         await unlock!();
       })();
     } };
+    // `sa live`'s post office has no lease, and renew and release are refused.
     if (options.lease) lease = new SessionLease(options.lease, () => {
-      office.leaseEnded(lease!.session, "expired");
+      office.leaseEnded(lease!.session, "no renewal from the mod for 30 s");
       requestShutdown();
-    });
+    }, options.leaseClock, (record) => office.leaseRecord(record));
     return api;
   } catch (error) {
     lease?.dispose();

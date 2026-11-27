@@ -16,7 +16,7 @@ const SOLDIERS = [
 ];
 
 /** A fake `$`: the relay's stream, the loopback endpoint and the clock are scripted; nothing real runs. */
-async function mod(respond: (command: any) => unknown = () => ({}), relay: { before?: any[]; after?: any[]; ready?: boolean; cwd?: string; root?: string } = {}) {
+async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?: string; git?: string; hang?: string; before?: any[]; after?: any[]; ready?: boolean; root?: string } = {}) {
   vi.resetModules();
   const { register } = await import("./register.js");
   const handlers: Record<string, Handler> = {};
@@ -29,11 +29,17 @@ async function mod(respond: (command: any) => unknown = () => ({}), relay: { bef
   const commands: any[] = [];
   const logs: string[] = [];
   const registered: any[] = [];
+  const claudeId = { value: "session-1" };
+  const every: { ms: number; run: () => void; cancelled: boolean }[] = [];
+  const after: { ms: number; run: () => void; cancelled: boolean }[] = [];
   const $ = {
-    session: { id: async () => "session-1", cwd: async () => relay.cwd ?? "/repo" },
+    session: { id: async () => claudeId.value, cwd: async () => env.cwd ?? "/repo" },
     plugin: { root: "/x/plugins/shadow-army" },
-    fs: { exists: async () => true },
-    clock: { every: () => ({ cancel() {} }), after: () => ({ cancel() {} }) },
+    fs: { exists: async (path: string) => env.git === undefined || path === `${env.git}/.git` || path.includes("/dist/") },
+    clock: {
+      every: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; every.push(t); return { cancel() { t.cancelled = true; } }; },
+      after: (ms: number, run: () => void) => { const t = { ms, run, cancelled: false }; after.push(t); return { cancel() { t.cancelled = true; } }; },
+    },
     ui: { log: (line: string) => logs.push(line) },
     command: { register: async (spec: unknown) => { registered.push(spec); } },
     process: {
@@ -43,10 +49,10 @@ async function mod(respond: (command: any) => unknown = () => ({}), relay: { bef
         const closed = new Promise<void>((done) => { stop = done; });
         return {
           async *[Symbol.asyncIterator]() {
-            for (const chunk of relay.before ?? []) yield chunk;
-            if (relay.ready === false) return;
-            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: relay.root ?? "/repo" } })}\n` };
-            for (const chunk of relay.after ?? []) yield chunk;
+            for (const chunk of env.before ?? []) yield chunk;
+            if (env.ready === false) return;
+            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: env.root ?? "/repo" } })}\n` };
+            for (const chunk of env.after ?? []) yield chunk;
             await closed;
           },
           return: async () => { stop(); return { done: true }; },
@@ -57,6 +63,7 @@ async function mod(respond: (command: any) => unknown = () => ({}), relay: { bef
       fetch: async (_url: string, init: { body: string }) => {
         const command = JSON.parse(init.body);
         commands.push(command);
+        if (command.action === env.hang) await new Promise(() => {});
         if (command.action === "army") return { ok: true, status: 200, text: JSON.stringify({ result: SOLDIERS }) };
         if (command.action === "open") return { ok: true, status: 200, text: JSON.stringify({ result: { session: "tank-1" } }) };
         try { return { ok: true, status: 200, text: JSON.stringify({ result: respond(command) }) }; }
@@ -65,7 +72,10 @@ async function mod(respond: (command: any) => unknown = () => ({}), relay: { bef
     },
   };
   const send = async (args: string): Promise<string> => (await handlers["command.run"]!($, { args })).text;
-  return { $, handlers, spawns, commands, logs, registered, send };
+  /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
+  const heartbeat = () => every.find((t) => !t.cancelled);
+  const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
+  return { $, handlers, spawns, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
 }
 
 describe("the /send command (M1-AC23)", () => {
@@ -154,6 +164,152 @@ describe("the /send command (M1-AC23)", () => {
     await send("claude-sonnet --claim a do it");
     await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
     expect(commands.at(-1)).toEqual({ action: "release", session: "session-1" });
+  });
+});
+
+describe("the lease renewals (M1b-14, HOST-2, M1-AC1, M1-AC9)", () => {
+  const renewals = (commands: any[]) => commands.filter((c) => c.action === "renew");
+
+  it("renews every 10 seconds with the army's id", async () => {
+    const { send, heartbeat, tick, commands } = await mod(() => ({ status: "completed" }));
+    await send("claude-sonnet --claim a go");
+    expect(heartbeat()!.ms).toBe(10_000);
+    await tick(); await tick();
+    expect(renewals(commands)).toEqual([{ action: "renew", session: "session-1" }, { action: "renew", session: "session-1" }]);
+  });
+
+  it("keeps at most one renewal waiting, and skips one that falls due meanwhile", async () => {
+    const { send, tick, commands } = await mod(() => ({}), { hang: "renew" });
+    await send("claude-sonnet --claim a go").catch(() => {});
+    await tick(); await tick(); await tick();
+    expect(renewals(commands)).toHaveLength(1);
+  });
+
+  it("stops counting a renewal as waiting after 5 seconds, and the next renewal then goes", async () => {
+    const { send, tick, after, commands } = await mod(() => ({}), { hang: "renew" });
+    await send("claude-sonnet --claim a go").catch(() => {});
+    await tick();
+    const wait = after.find((t) => t.ms === 5_000)!;
+    expect(wait).toBeDefined();
+    wait.run();
+    await tick();
+    expect(renewals(commands)).toHaveLength(2);
+  });
+
+  it("does not stop on a failed renewal and does not retry it early", async () => {
+    let n = 0;
+    const { send, tick, commands, heartbeat, logs } = await mod((c) => { if (c.action === "renew" && ++n === 1) throw new Error("lease busy"); return { status: "completed" }; });
+    await send("claude-sonnet --claim a go");
+    await tick();
+    expect(renewals(commands)).toHaveLength(1);
+    expect(heartbeat()).toBeDefined();
+    expect(logs).toEqual([]);
+    await tick();
+    expect(renewals(commands)).toHaveLength(2);
+  });
+
+  it("keeps renewing with the army's id after /clear, and reuses the same post office", async () => {
+    const { $, handlers, send, claudeId, tick, commands, spawns } = await mod(() => ({ status: "completed" }));
+    await send("claude-sonnet --claim a go");
+    claudeId.value = "session-2";
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "clear" }, async () => undefined);
+    await tick();
+    await send("claude-sonnet --claim a go");
+    expect(commands.some((c) => c.action === "release")).toBe(false);
+    expect(renewals(commands)).toEqual([{ action: "renew", session: "session-1" }]);
+    expect(spawns).toHaveLength(1);
+  });
+
+  it("keeps renewing at a resume", async () => {
+    const { $, handlers, send, tick, commands } = await mod(() => ({ status: "completed" }));
+    await send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "resume" }, async () => undefined);
+    await tick();
+    expect(commands.some((c) => c.action === "release")).toBe(false);
+    expect(renewals(commands)).toHaveLength(1);
+  });
+
+  it.each(["logout", "prompt_input_exit", "other"])("stops renewing, then releases with the reason, at a %s end", async (reason) => {
+    const { $, handlers, send, every, commands } = await mod(() => ({ status: "completed" }));
+    await send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1", reason }, async () => undefined);
+    expect(every.every((t) => t.cancelled)).toBe(true);
+    expect(commands.at(-1)).toEqual({ action: "release", session: "session-1", reason });
+  });
+
+  it("releases with the army's id even when Claude's id has changed", async () => {
+    const { $, handlers, send, claudeId, commands } = await mod(() => ({ status: "completed" }));
+    await send("claude-sonnet --claim a go");
+    claudeId.value = "session-2";
+    await handlers["session.end"]!($, { sessionId: "session-2", reason: "logout" }, async () => undefined);
+    expect(commands.at(-1)).toMatchObject({ action: "release", session: "session-1" });
+  });
+
+  it("starts no army when a logout comes while the first command awaits the session (C1)", async () => {
+    const { $, handlers, send, spawns, every, commands } = await mod(() => ({ status: "completed" }));
+    let open!: () => void;
+    const gate = new Promise<void>((done) => { open = done; });
+    $.session.cwd = async () => { await gate; return "/repo"; };
+    const pending = send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "logout" }, async () => undefined);
+    open();
+    expect(await pending).toMatch(/army ended/);
+    expect(spawns).toHaveLength(0);
+    expect(every).toHaveLength(0);
+    expect(commands).toHaveLength(0);
+  });
+
+  it("starts the army normally when a /clear comes while the first command awaits the session (C1)", async () => {
+    const { $, handlers, send, spawns, heartbeat } = await mod(() => ({ status: "completed" }));
+    let open!: () => void;
+    const gate = new Promise<void>((done) => { open = done; });
+    $.session.cwd = async () => { await gate; return "/repo"; };
+    const pending = send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "clear" }, async () => undefined);
+    open();
+    expect(await pending).toMatch(/completed/);
+    expect(spawns).toHaveLength(1);
+    expect(heartbeat()).toBeDefined();
+  });
+
+  it("releases a relay that reports ready after a logout with the logout reason (C2)", async () => {
+    const { $, handlers, send, every, commands } = await mod(() => ({ status: "completed" }));
+    let open!: () => void;
+    const gate = new Promise<void>((done) => { open = done; });
+    $.process.spawn = () => ({
+      async *[Symbol.asyncIterator]() {
+        await gate;
+        yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: "/repo" } })}\n` };
+      },
+      return: async () => ({ done: true }),
+    }) as never;
+    const pending = send("claude-sonnet --claim a go");
+    await new Promise((done) => setTimeout(done, 0));
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "logout" }, async () => undefined);
+    open();
+    expect(await pending).toMatch(/ended/);
+    await new Promise((done) => setTimeout(done, 0));
+    expect(commands).toEqual([{ action: "release", session: "session-1", reason: "logout" }]);
+    expect(every).toHaveLength(0);
+  });
+
+  it("registers nothing, starts nothing and sends nothing in a session that is not interactive (M1-AC9)", async () => {
+    const { $, handlers, registered, spawns, commands, every } = await mod();
+    await handlers["session.start"]!($, { isInteractive: false }, async () => undefined);
+    const next = vi.fn(async () => undefined);
+    await handlers["command.run"]!($, { args: "claude-sonnet --claim a go" }, next);
+    await handlers["session.end"]!($, { sessionId: "session-1", reason: "logout" }, async () => undefined);
+    expect(registered).toEqual([]);
+    expect(next).toHaveBeenCalled();
+    expect(spawns).toEqual([]);
+    expect(commands).toEqual([]);
+    expect(every).toEqual([]);
+  });
+
+  it("still registers when isInteractive is false but a surface is present", async () => {
+    const { $, handlers, registered } = await mod();
+    await handlers["session.start"]!($, { isInteractive: false, surface: "pane" }, async () => undefined);
+    expect(registered).toHaveLength(1);
   });
 });
 
