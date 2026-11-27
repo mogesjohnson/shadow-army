@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { repoRoot } from "../workspace/git.js";
 import { OfficeClient } from "./client.js";
 import { redact } from "./logs.js";
 
@@ -46,7 +47,8 @@ export async function runModRelay(options: { cwd?: string; command?: { file: str
       },
     });
     const url = await client.endpoint();
-    output({ type: "ready", data: { url } });
+    // M1-AC25: the post office keeps .shadow under this canonical root, so the mod names logs from it, not from its cwd.
+    output({ type: "ready", data: { url, root: await repoRoot(cwd) } });
   } catch (error) {
     process.exitCode = 1;
     if (!errorLost) process.stderr.write(`${String(redact(String(error), [credential]))}\n`);
