@@ -267,7 +267,7 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       // #111 C16: the tree's outcome is decided first; a folder that cannot be removed is a secondary detail.
       const removal = await removeDirectory();
       if (!treeClosed) throw withRemoval(new Error("Windows supervisor ended without confirming session process-tree cleanup"), removal);
-      if (removal) throw removal;
+      if (removal) throw new Error(`the session process tree was confirmed stopped, but its temp folder could not be removed: ${removal.message}`);
     })();
     return {
       pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, droppedPath: dropped,

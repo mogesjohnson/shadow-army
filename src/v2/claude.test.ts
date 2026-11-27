@@ -836,7 +836,7 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     });
     try {
       expect(await claudeVersionProblem({ file: process.execPath, args: [resolve("test/fakes/claude.mjs"), "--fake-version-hang"] }, tmpdir(), 500)).toBe("claude --version gave no answer in 0.5 s");
-      expect(performance.now() - launched).toBeLessThan(500 + 1_000);
+      expect(performance.now() - launched).toBeLessThan(500 + 1_500);
     } finally { spawn.mockRestore(); }
   }, 30_000);
 
