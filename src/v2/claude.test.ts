@@ -812,6 +812,15 @@ describe("native persistent Claude channel (synthetic protocol; no provider call
     expect(OLDEST_CLAUDE).toBe("2.1.277");
   });
 
+  // #111 C13: the probe's stdin stays open until exit or the deadline, so the supervisor's 2 s close grace never cuts it short.
+  windowsOnly("gives --version its whole deadline: a late answer counts, and a hang gets the timeout line", async () => {
+    const fake = resolve("test/fakes/claude.mjs");
+    expect(await claudeVersionProblem({ file: process.execPath, args: [fake, "--fake-version-delay", "3000"] }, tmpdir(), 8_000)).toBeUndefined();
+    const started = Date.now();
+    expect(await claudeVersionProblem({ file: process.execPath, args: [fake, "--fake-version-hang"] }, tmpdir(), 4_000)).toBe("claude --version gave no answer in 4 s");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(3_900);
+  }, 30_000);
+
   windowsOnly("ends a --version that never exits, and the soldier does not start (M1-AC4)", async () => {
     const started = Date.now();
     expect(await claudeVersionProblem({ file: process.execPath, args: [resolve("test/fakes/claude.mjs"), "--fake-version-hang"] }, tmpdir(), 300)).toBe("claude --version gave no answer in 0.3 s");

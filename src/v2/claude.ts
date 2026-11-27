@@ -80,7 +80,7 @@ export async function claudeVersionProblem(command: { file: string; identity?: s
   let output = "";
   child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
   child.stdin.on("error", () => {});
-  child.stdin.end();
+  // #111 C13: stdin stays open until exit or the deadline; ending it starts the Windows supervisor's 2 s close grace.
   let timer: NodeJS.Timeout | undefined;
   const timedOut = Symbol("timeout");
   const outcome = await Promise.race([

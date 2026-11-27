@@ -8,6 +8,7 @@ import { join } from "node:path";
 // Fault switches arrive as arguments after the adapter's own, since the channel passes no environment:
 //   --fake-version <text>       what `--version` prints (default 2.1.295)
 //   --fake-version-hang         `--version` never answers or exits
+//   --fake-version-delay <ms>   `--version` answers only after this many milliseconds
 //   --fake-refuse-managed       exit before any event with a managed-settings refusal on stderr
 //   --fake-mode <mode>          the permissionMode that system/init reports instead of the one passed
 const argv = process.argv.slice(2);
@@ -15,6 +16,7 @@ const flag = (name) => argv.includes(name);
 const option = (name) => argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined;
 if (flag("--version")) {
   if (flag("--fake-version-hang")) { process.stdin.resume(); setInterval(() => {}, 1000); await new Promise(() => {}); }
+  if (option("--fake-version-delay")) await new Promise((resolve) => setTimeout(resolve, Number(option("--fake-version-delay"))));
   process.stdout.write(`${option("--fake-version") ?? "2.1.295"} (Claude Code)\n`);
   process.exit(0);
 }
