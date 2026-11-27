@@ -618,4 +618,28 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     expect(record(statePath).running).toBeUndefined();
     expect(await open().start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
   }, 60_000);
+
+  it("says a restart held by a timeout or an unrecorded outcome is held, with the line to show (self-review)", async () => {
+    const { main, statePath, open } = setup();
+    const timing = open((_, runner) => ({ run: async (args, kind) => {
+      if (args[0] === "log") throw new HarnessGitHeld("git log timed out twice");
+      return runner.run(args, kind);
+    } }));
+    await timing.start();
+    await expect(timing.run(main, ["log"])).rejects.toThrow("timed out twice");
+    expect(await open().start()).toEqual({ held: true, files: [], line: "Shadow Army: harness git held · git log timed out twice · g tries again" });
+    writeFileSync(statePath, JSON.stringify({ ...record(statePath), timeout: undefined, running: true }));
+    expect(await open().start()).toMatchObject({ held: true, line: expect.stringContaining("may have timed out") });
+  }, 60_000);
+
+  it("logs a hold whose first write failed once a later write records it (self-review)", async () => {
+    const { repo, events, statePath, open } = setup(), hold = open();
+    await hold.start();
+    plantChange(repo, "hook");
+    const unblock = blockWrite(statePath);
+    await expect(hold.check()).rejects.toThrow();
+    unblock();
+    expect(await hold.check()).toMatchObject({ held: true });
+    expect(events.map((event) => event.event)).toEqual(["trusted", "held"]);
+  }, 60_000);
 });

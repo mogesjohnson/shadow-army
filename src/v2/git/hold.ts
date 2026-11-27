@@ -300,6 +300,8 @@ export class HarnessHold {
   private registering: Promise<void> = Promise.resolve();
   /** Repositories (`keyOf`) whose removal began (C21). */
   private removing: string[] = [];
+  /** A hold whose write failed, kept in memory: its `held` event is logged once a write records it. */
+  private unlogged = false;
 
   constructor(private readonly options: HarnessHoldOptions) { this.repos = [options.repo]; }
 
@@ -328,7 +330,11 @@ export class HarnessHold {
     const current = await this.read();
     if (!(saved.held || saved.turnOpen || saved.running || saved.timeout) && !current.problems.length) { this.trust(current.state); return { held: false }; }
     const { files, why } = this.compare(current);
-    if (!files.length) { this.update(() => { this.files = undefined; }); return { held: false }; }
+    if (!files.length) {
+      this.update(() => { this.files = undefined; });
+      // Held by a timeout, or an outcome no write recorded, alone: still held, and said so with its line (M1-AC10).
+      return this.timeout ? { held: true, files: [], line: this.line([], this.timeout, "g tries again") } : { held: false };
+    }
     return this.hold(files, `${why === "changed" ? "differs from" : `${why}, or differs from`} what the last post office trusted · can't be told from your own edit`);
   }
 
@@ -582,14 +588,15 @@ export class HarnessHold {
 
   private hold(files: string[], why: string, how = "undo it to go on"): HoldCheck & { held: true } {
     const line = this.line(files, why, how);
-    const fresh = !this.files || this.files.join("\0") !== files.join("\0");
+    const fresh = this.unlogged || !this.files || this.files.join("\0") !== files.join("\0");
     // Fail closed: a hold whose write fails stands in memory, and the next write records it (C26).
-    try { this.update(() => { this.files = files; }); } catch (error) { this.files = files; throw error; }
+    try { this.update(() => { this.files = files; }); } catch (error) { this.files = files; this.unlogged = true; throw error; }
+    this.unlogged = false;
     if (fresh) this.options.log?.({ event: "held", files, reason: why });
     return { held: true, files, line };
   }
 
-  private line(files: string[], why: string, how = "undo it to go on") { return `Shadow Army: harness git held · ${files.join(", ")} ${why} · ${how}`; }
+  private line(files: string[], why: string, how = "undo it to go on") { return `Shadow Army: harness git held · ${files.length ? `${files.join(", ")} ` : ""}${why} · ${how}`; }
 
   private trust(state: Record<string, TrustedState>, accepted = false) {
     this.update(() => { this.trusted = state; this.files = undefined; if (accepted) this.unverified = false; });
