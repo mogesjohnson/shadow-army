@@ -390,7 +390,8 @@ describe("the flushed opening row (PO-5)", () => {
     const logs = new SessionLogs(await directory(), [], { onFailure, retryDelayMs: 1 });
     const result = await logs.write("soldier-1", { type: "turn_started" });
     expect(result).toMatchObject({ written: false, error: { message: "EIO: flush failed" } });
-    expect(sync).toHaveBeenCalledTimes(2);
+    // Each try's opening sync and its refusal's (C27).
+    expect(sync).toHaveBeenCalledTimes(4);
     expect(onFailure).toHaveBeenCalledTimes(1);
   });
 
@@ -399,8 +400,9 @@ describe("the flushed opening row (PO-5)", () => {
     sync.mockRejectedValueOnce(new Error("EIO: flush failed"));
     const dir = await directory();
     const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
-    expect(await logs.write("soldier-1", { type: "turn_started" })).toEqual({ written: true });
-    expect(sync).toHaveBeenCalledTimes(1 + syncsPerOpening);
+    expect(await logs.write("soldier-1", { type: "turn_started" })).toMatchObject({ written: true });
+    // The failed sync, the refusal's own sync (C27, a folder sync too off Windows), then the retry's syncs.
+    expect(sync.mock.calls.length).toBeGreaterThan(1 + syncsPerOpening);
     const list = await rows(dir);
     expect(types(list)).toEqual(["turn_started", "turn_refused", "turn_started", "turn_confirmed"]);
     expect(list[1]!.openings).toEqual([list[0]!.opening]);
@@ -415,27 +417,58 @@ describe("the flushed opening row (PO-5)", () => {
       throw new Error("EIO: flush failed");
     });
     const logs = new SessionLogs(dir, [], { retryDelayMs: 1 });
-    expect(await logs.write("soldier-1", { type: "turn_started" })).toEqual({ written: true });
+    expect(await logs.write("soldier-1", { type: "turn_started" })).toMatchObject({ written: true });
     expect(confirmedOpenings(await readFile(join(dir, "soldier-1.jsonl"), "utf8")).size).toBe(1);
-    expect(types(await rows(dir, "moved.jsonl"))).toEqual(["turn_started"]);
+    expect(types(await rows(dir, "moved.jsonl"))).toEqual(["turn_started", "turn_refused"]);
     expect(confirmedOpenings(await readFile(join(dir, "moved.jsonl"), "utf8")).size).toBe(0);
   });
 
   /** An in-memory log whose opening handles fail as `faults` say, one entry per try. */
-  function memoryLog(faults: ("sync" | "moved" | undefined)[]) {
+  function memoryLog(faults: ("sync" | "confirm" | "moved" | "later" | undefined)[]) {
     let text = "";
     const openFile = async (): Promise<OpeningFile> => {
       const fault = faults.shift();
+      let syncs = 0;
+      let checks = 0;
       return {
         write: async (chunk) => { text += chunk; },
-        sync: async () => { if (fault === "sync") throw new Error("EIO: flush failed"); },
-        isAt: async () => fault !== "moved",
+        // "confirm": only the confirmation's sync fails; "later": the file is replaced after the opening's checks.
+        sync: async () => { syncs++; if (fault === "sync" || (fault === "confirm" && syncs === 2)) throw new Error("EIO: flush failed"); },
+        isAt: async () => fault !== "moved" && !(fault === "later" && ++checks > 2),
         close: async () => {},
       };
     };
     const append = async (_path: string, chunk: string): Promise<void> => { text += chunk; };
     return { openFile, append, rows: () => text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>), text: () => text };
   }
+
+  it("follows a confirmation whose sync failed with a refusal on the same handle, so a restart reads no confirmed turn (C27)", async () => {
+    const log = memoryLog(["sync", "confirm"]);
+    const options = { openFile: log.openFile, append: log.append, retryDelayMs: 1 };
+    expect((await new SessionLogs("logs", [], options).write("soldier-1", { type: "turn_started" })).written).toBe(false);
+    const tried = log.rows().filter((row) => row.type === "turn_started").map((row) => row.opening);
+    // The first try's refusal is not synced, so the retry's row names it again.
+    expect(types(log.rows())).toEqual(["turn_started", "turn_refused", "turn_refused", "turn_started", "turn_confirmed", "turn_refused"]);
+    expect(log.rows().filter((row) => row.type === "turn_refused").flatMap((row) => row.openings as string[])).toEqual([tried[0], tried[0], tried[1]]);
+    expect(confirmedOpenings(log.text())).toEqual(new Set());
+    // The restart: a fresh writer that knows nothing of the refusal appends the next record.
+    expect((await new SessionLogs("logs", [], options).write("soldier-1", { type: "text" })).written).toBe(true);
+    expect(confirmedOpenings(log.text())).toEqual(new Set());
+  });
+
+  it("holds a confirmed opening's file until the turn settles, and reports a log replaced before delivery (C28)", async () => {
+    const log = memoryLog([undefined, undefined, "later"]);
+    const logs = new SessionLogs("logs", [], { openFile: log.openFile, append: log.append, retryDelayMs: 1 });
+    const delivered = await logs.write("soldier-1", { type: "turn_started" });
+    expect(await delivered.settle!(true)).toBeUndefined();
+    expect(log.rows().at(-1)).toEqual({ type: "turn_delivered", opening: log.rows()[0]!.opening, time: expect.any(String) });
+    const refused = await logs.write("soldier-1", { type: "turn_started" });
+    expect(await refused.settle!(false)).toBeUndefined();
+    expect(confirmedOpenings(log.text())).toEqual(new Set([log.rows()[0]!.opening]));
+    const replaced = await logs.write("soldier-1", { type: "turn_started" });
+    expect(replaced.written).toBe(true);
+    expect(await replaced.settle!(true)).toMatchObject({ message: expect.stringContaining("moved or replaced") });
+  });
 
   it("refuses an opening whose synced file the path no longer names (C24)", async () => {
     const log = memoryLog(["moved", "moved"]);
@@ -445,12 +478,14 @@ describe("the flushed opening row (PO-5)", () => {
 
   it("leaves no confirmed opening when both syncs fail, so a restarted reader sees a refused send (C25)", async () => {
     const sync = await spyOnSync();
-    sync.mockRejectedValueOnce(new Error("EIO: flush failed")).mockRejectedValueOnce(new Error("EIO: flush failed"));
+    sync.mockRejectedValue(new Error("EIO: flush failed"));
     const dir = await directory();
     expect((await new SessionLogs(dir, [], { retryDelayMs: 1 }).write("soldier-1", { type: "turn_started" })).written).toBe(false);
+    sync.mockRestore();
     // The restart: a fresh writer, and recovery reading the file before and after its next record.
     const read = async (): Promise<Set<string>> => confirmedOpenings(await readFile(join(dir, "soldier-1.jsonl"), "utf8"));
-    expect(types(await rows(dir))).toEqual(["turn_started", "turn_refused", "turn_started"]);
+    // Each try's own refusal row, unsynced, and the first try named again before the retry's row (C27).
+    expect(types(await rows(dir))).toEqual(["turn_started", "turn_refused", "turn_refused", "turn_started", "turn_refused"]);
     expect(await read()).toEqual(new Set());
     expect((await new SessionLogs(dir, []).write("soldier-1", { type: "text" })).written).toBe(true);
     expect(await read()).toEqual(new Set());

@@ -127,6 +127,12 @@ export interface LogWriteResult {
   /** False when the line (and any gap line before it) could not be written, even after the retry. */
   written: boolean;
   error?: Error;
+  /**
+   * A confirmed opening keeps its file open until the caller settles it (C28): `true` once the message went in, which
+   * writes a `turn_delivered` row, or `false` when it never did, which writes a `turn_refused` row. Resolves with an
+   * error when that row could not be synced to the file the log's path still names.
+   */
+  settle?: (delivered: boolean) => Promise<Error | undefined>;
 }
 
 /** One handle on a log file: a turn's opening is written and synced through it, never through a reopened path (C24). */
@@ -185,6 +191,8 @@ const defaultAppend = async (path: string, text: string): Promise<void> => {
 const opensTurn = (data: unknown): boolean => (data as { type?: unknown } | null)?.type === "turn_started";
 const CONFIRMED = "turn_confirmed";
 const REFUSED = "turn_refused";
+const DELIVERED = "turn_delivered";
+const moved = (name: string): Error => new Error(`the log ${name} was moved or replaced while a turn's opening was written`);
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const asError = (caught: unknown): Error => caught instanceof Error ? caught : new Error(String(caught));
@@ -215,11 +223,12 @@ export function confirmedOpenings(text: string): Set<string> {
  * written line is written again with the same `gap` id; a reader keeps the last line of each gap.
  * Only what is on disk counts: a turn's opening row carries an `opening` id, and the message may go in only once
  * that row and then a `turn_confirmed` row naming it were each synced through the one handle on the file the log's
- * path still names (C24). A try whose sync fails is never synced again: the retry writes a new row with a new id,
- * and the next line written is preceded by a `turn_refused` row naming the failed tries' ids. So recovery tells a
- * refused opening from a turn in flight by the file alone ({@link confirmedOpenings}, C25). The one case the file
- * cannot settle: a refused try whose confirmation is on disk (its sync or the last path check failed after it) when no
- * later line of that log is ever written.
+ * path still names (C24). A try whose sync fails is never synced again: the retry writes a new row with a new id.
+ * A `turn_refused` row naming the failed try follows on the same handle (C27); when that row cannot be synced either,
+ * the next line written is preceded by one. So recovery tells a refused opening from a turn in flight by the file
+ * alone ({@link confirmedOpenings}, C25). The held handle then writes `turn_delivered` or `turn_refused` once the
+ * caller settles the turn, and checks the path again (C28). The one case the file cannot settle: the disk refuses
+ * every write after a confirmation lands and the process ends before another line of that log is written.
  */
 export class SessionLogs {
   private readonly pending = new Map<string, Promise<unknown>>();
@@ -276,7 +285,7 @@ export class SessionLogs {
     }
   }
 
-  private enqueue(name: string, task: () => Promise<LogWriteResult>): Promise<LogWriteResult> {
+  private enqueue<T>(name: string, task: () => Promise<T>): Promise<T> {
     // Each write runs whatever the one before it did, and the cleanup never rejects.
     const next = (this.pending.get(name) ?? Promise.resolve()).then(task, task);
     this.pending.set(name, next);
@@ -342,27 +351,61 @@ export class SessionLogs {
       const opening = randomUUID();
       let file: OpeningFile | undefined;
       let wrote = false;
+      let ended = true;
       try {
         file = await this.openFile(path);
         const prefix = this.prefix(name, refused);
         wrote = true;
+        ended = false;
         await file.write(`${prefix}${JSON.stringify({ ...record, opening })}\n`);
+        ended = true;
         await file.sync();
-        // Checked before the confirmation too, so a moved file seldom gets one; after it, a move leaves the residual case.
-        if (!(await file.isAt(path))) throw new Error(`the log ${name} was moved or replaced while a turn's opening was written`);
+        // Checked before the confirmation too, so a moved file seldom gets one.
+        if (!(await file.isAt(path))) throw moved(name);
+        ended = false;
         await file.write(`${JSON.stringify({ type: CONFIRMED, opening, time: new Date().toISOString() })}\n`);
+        ended = true;
         await file.sync();
-        if (!(await file.isAt(path))) throw new Error(`the log ${name} was moved or replaced while a turn's opening was written`);
-        return this.written(name);
+        if (!(await file.isAt(path))) throw moved(name);
+        const held = file;
+        file = undefined;
+        return { ...this.written(name), settle: this.settler(name, path, held, opening) };
       } catch (caught) {
         error = asError(caught);
-        // Anything this try wrote may be in the file, confirmation included: it is named refused before the next line.
-        if (wrote) { refused.push(opening); this.cut.add(name); }
+        // C27: anything this try wrote may be in the file, confirmation included, so a refusal follows on the same
+        // handle. Only when that row is not synced where the path points is the id also carried to the next line.
+        if (wrote && !(await this.rowOn(file!, path, { type: REFUSED, openings: [opening] }, ended))) { refused.push(opening); this.cut.add(name); }
       } finally {
         await file?.close().catch(() => {});
       }
     }
     if (refused.length) this.refused.set(name, [...(this.refused.get(name) ?? []), ...refused]);
     return this.lost(name, error!);
+  }
+
+  /** Writes and syncs one row through `file`: true only when it is on disk in the file the path still names. */
+  private async rowOn(file: OpeningFile, path: string, row: Record<string, unknown>, ended = true): Promise<boolean> {
+    try {
+      await file.write(`${ended ? "" : "\n"}${JSON.stringify({ ...row, time: new Date().toISOString() })}\n`);
+      await file.sync();
+      return await file.isAt(path);
+    } catch {
+      return false;
+    }
+  }
+
+  /** C28: the held handle's last row, in the log's queue; the path is checked once more after the message went in. */
+  private settler(name: string, path: string, file: OpeningFile, opening: string): (delivered: boolean) => Promise<Error | undefined> {
+    let settled: Promise<Error | undefined> | undefined;
+    return (delivered) => settled ??= this.enqueue(name, async () => {
+      try {
+        if (await this.rowOn(file, path, delivered ? { type: DELIVERED, opening } : { type: REFUSED, openings: [opening] })) return undefined;
+        this.cut.add(name);
+        if (!delivered) { this.refused.set(name, [...(this.refused.get(name) ?? []), opening]); return moved(name); }
+        return new Error(`the log ${name} could not record the turn's delivery: it was moved or replaced, or its sync failed`);
+      } finally {
+        await file.close().catch(() => {});
+      }
+    });
   }
 }
