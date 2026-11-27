@@ -20,10 +20,10 @@ Claude's weekly limit was at **1%** (owner, 16:50 UTC). The owner stopped all wo
 | PR | Head before | Last review | Open findings | Worker (stopped) | Brief | Review file when done |
 |---|---|---|---|---|---|---|
 | #106 hold | `f949e6b` -> pushed `6991ebf` (C25-C26 fixed; no self-review, replies, body refresh or file 138 yet) | 135 | C25-C26 (P1) | w242-fix106 `3ac03d4d` | `tasks/w242-fix106.md` | 138 |
-| #116 logs | `9e7d54d` | 136 | C27-C29 (P1) | w243-fix116 `f2e52368` | `tasks/w243-fix116.md` | 139 |
+| #116 logs | `9e7d54d` -> pushed `6b28a18` (C27 fixed+test; C29 fixed, no test; C28 prep moved, rest P2 note; no self-review, replies or file 139 yet) | 136 | C27-C29 (P1) | w243-fix116 `f2e52368` | `tasks/w243-fix116.md` | 139 |
 | #117 trace | `26d1d35` | 137 | C22-C25 (P1) | not launched | `tasks/w244-fix117.md` + `launch/w244-fix117.ps1` | 140 |
 
-w242 and w243 were told to push only passing work and write `## Left` in their briefs. **First:** `git log -1 origin/<branch>` for each, read each brief's `## Left`, and relaunch fresh workers on what is left (same brief; their worktrees `AIConnections-worktrees/w242-fix106` and `w243-fix116` may hold uncommitted work: inspect before reuse). Then launch w244. Next free review file: **141**.
+w242 and w243 were told to push only passing work and write `## Left` in their briefs. **First:** `git log -1 origin/<branch>` for each, read each brief's `## Left`, and relaunch fresh workers on what is left (same brief; their worktrees `AIConnections-worktrees/w242-fix106` and `w243-fix116` were pushed (6991ebf, 6b28a18): check for leftovers). Then launch w244. Next free review file: **141**.
 
 Decisions taken by orch-67 (the owner may overrule): #117 rule 9 reads titles from `vitest list --json --staticParse=false` (lexer removed, 26d1d35); VER-7 will credit test titles only (w244 edits that spec line). #116 C28 (file replaced mid-call) may be a P2 build note under the review bar.
 
