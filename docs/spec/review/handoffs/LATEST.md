@@ -1,46 +1,44 @@
-# Handoff: orchestrator 62 (`6ec1cd7a`) to orchestrator 63 (2026-11-27 ~03:58 UTC)
+# Handoff: orchestrator 63 (`23085a41`) to orchestrator 64 (2026-11-27 ~04:50 UTC)
 
-This file is self-contained: do not read older handoffs. The 5-hour window was at 77% at 03:57 UTC and resets at 23:20 local time. **Start no new worker at 80% or more** unless the owner says so. RAM is tight, about 3.5 GB free.
+This file is self-contained: do not read older handoffs. The 5-hour window reset at 04:20 UTC and was at 29% at 04:47. **Start no new worker at 80% or more.** (The owner's one-off exception before the reset is over.) RAM is tight.
 
 ## The owner's orders in force
 
 - **Bottom-first** (memory `bottom-first.md`). Merge on approval without asking, from your own Bash: `gh pr ready <n>`, then `gh pr merge <n> --merge --match-head-commit <full sha>`. First retarget any PR stacked on the branch.
-- **The owner hands Codex the review files.** Write the next file as soon as a PR's head is ready, and tell the owner its path. Independent PRs can each have a file at the same time.
+- **Codex review files:** write the next file as soon as a PR's head is ready, and **give the owner its full path at once** (the owner asked again, 2026-11-27). Independent PRs can each have a file at the same time.
 - Model and effort: Sonnet by default. Opus medium for concurrency, process termination, launch security and design.
 
-## Done by orch-62
+## Done by orch-63
 
-- **#115 merged** at `9c833b8` (Codex 108 approved `c7187cb`; C7 is a nonblocking P2 checklist note).
-- w211 merged main into #116, and w212 merged main into #113, #115, #117 and #123. Fixes were pushed for #106 (w210), #109 (w213), #116 (w215) and #111 (w214).
+- **#113 merged** at `f1f61be` (Codex 113 approved `97587be`, one nonblocking P2).
+- Fixes pushed and sent to Codex: #123 `ec1b0b3` (file 114, then changes requested), #117 three rounds, #109 `2a2d272`, #116 `0e9bca3`, #111 `00697ab`.
 
 ## With Codex (files in `~/codex-reviews/shadow-army/`)
 
 | File | PR | Head | Status |
 |---|---|---|---|
-| 109 | #106 harness Git hold | `663dd27` | waiting; fixes C13 (review 102) |
-| 110 | #109 Linux helper | `547a836` | waiting; fixes C10 and C11 (review 104) |
-| 111 | #116 logs | `1a3c4a4` | waiting; fixes C13 and C14 (review 106) |
-| 112 | #111 claude faults | `1c4eab7` | waiting; fixes C10 and C11 (review 105), with 2 build notes |
+| 117 | #109 Linux helper | `2a2d272` | waiting; fixes C12 to C14 (review 110) |
+| 118 | #116 logs | `0e9bca3` | waiting; fixes C15 to C17 (review 111) |
+| 119 | #111 claude faults | `00697ab` | waiting; fixes C12 to C15 (review 112) |
+| 120 | #117 trace check | `9c59313` | waiting; fixes C11 to C13 (review 116), token lexer |
 
-**Next free file: 113.** Read each file's `## Result`. Approved means merge it. Changes requested means start a fix worker (brief in `.shadow/v2-tools/tasks/`, pointing at `codex-fix-common.md`), then write the next file. Each brief now tells the worker to use a **detached worktree** and `git push origin HEAD:<branch>`, because stale w2x/w3x worktrees still hold the branches.
+**Next free file: 121.** Read each file's `## Result`. Approved: merge it. Changes requested: start a fix worker (brief in `.shadow/v2-tools/tasks/`, pointing at `codex-fix-common.md`, detached worktree, `git push origin HEAD:<branch>`), then write the next file. Copy the brief format of `tasks/w223-fix111.md`.
 
-## Running (they report to orch-62: SendMessage each one your name first)
+## Running (they report to orch-63: SendMessage each one your name first)
 
-- **w217-fix123** (Opus medium, session `162ca938`, brief `tasks/w217-fix123.md`), on #123 (`claude/63-m1b-po-check-run`). C8 is fixed at `bbdda72`. It is now doing C2 and C4, a signal option and a no-grace `kill()` in `src/v2/contain/windows.ts` (plan under `## Left`), then C9, the Size line. The cockpit held it while w214 edited `windows.ts`. #111 also changes `windows.ts`, so expect a small merge conflict between #111 and #123 later.
-- **w218-fix113** (Opus medium, session `50cf0b05`, brief `tasks/w218-fix113.md`), on #113: Codex 107's C6 [P1], rollback ownership after generation reuse.
-- **w216-fix117** (Sonnet medium, just launched, brief `tasks/w216-fix117.md`), on #117: C1 and C4, both P1 from Codex review 20.
+- **w221-fix106** (Opus medium, session `986f1655`, brief `tasks/w221-fix106.md`), on #106 (`claude/63-m1b-harness-git`): Codex 109's C15 to C18 in `src/v2/git/hold.ts` (trust baseline, overlapping registrations, hold persisted with the registration). Old head `663dd27`. When done, write file 121.
+- **w224-fix123** (Opus medium, just launched, brief `tasks/w224-fix123.md`), on #123 (`claude/63-m1b-po-check-run`): Codex 114's C10 [P1] (stop launch before spawning on abort, `contain/windows.ts`) and C11 [P2]. Old head `ec1b0b3`.
 
-When one reports: check `git log`/`git show --stat` against its report, close its tab with TRACE, then write the next Codex file.
+When one reports: check `git log`/`git show --stat` against its report, close its tab with TRACE, then write the next Codex file and give the owner its path.
 
 ## Next, bottom-up
 
-1. Merge #106, #109, #111 and #116 on approval. After each merge, check the others with `git merge-tree --write-tree origin/main origin/<branch>`. #111 and #123 both touch `contain/windows.ts`.
-2. #113, #117 and #123 go to Codex once their fixes are in.
-3. Stacks on `claude/63-m1b-base-*`: #125 -> #127, #129 -> #132; #126 -> #130; #135 -> #138 -> #144; #136 -> #137; #139 -> #140, #141. Singles: #128, #131, #133, #134, #142, #143. Each base PR needs main merged in, then it is retargeted to `main`. Paused briefs: `tasks/w192-fix138.md` and `tasks/w194-fix141.md` (`## Left`).
-4. Paused until M1 merges: the Ink lane, #145 to #151. Outside the lane: #75, #81, #83 (the spec record, which stays open), #87, #88, #98 and #100. 42 PRs were open at 03:30 UTC, 41 after #115.
+1. Merge #106, #109, #111, #116, #117, #123 on approval. After each merge, check the others with `git merge-tree --write-tree origin/main origin/<branch>`. **#111 and #123 conflict in `contain/windows.ts`**: whichever merges second needs a sync worker (Opus medium; it is process code) to merge main in, then a short Codex file.
+2. Stacks on `claude/63-m1b-base-*`: #125 -> #127, #129 -> #132; #126 -> #130; #135 -> #138 -> #144; #136 -> #137; #139 -> #140, #141. Singles: #128, #131, #133, #134, #142, #143. Each base PR needs main merged in, then it is retargeted to `main`. Wait until the batch above has merged (each merge moves main). Paused briefs: `tasks/w192-fix138.md`, `tasks/w194-fix141.md`.
+3. Paused until M1 merges: the Ink lane, #145 to #151. Outside the lane: #75, #81, #83 (the spec record, stays open), #87, #88, #98, #100.
 
 ## Lessons
 
-- Close a reporting worker's tab **before** launching the next one, or you briefly run four tabs.
-- Unfixed P1s left from older reviews (#117, #123) only showed up when a sync worker listed open findings. Ask every sync worker for that list.
-- The cockpit's same-file guard applies across worktrees. Two tasks that touch the same path run one after the other, even on different branches.
+- Codex now reviews in minutes. Expect a result for each file within about 15 minutes, and keep three workers busy.
+- #117's regex scanner took three rounds. For parsers, brief the approach (tokens, normalization) and ask for sibling test inputs, not only Codex's exact cases.
+- Two PRs that touch the same file are fixed one after the other (the cockpit's same-file guard works across worktrees).
