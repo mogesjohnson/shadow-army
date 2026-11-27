@@ -36,6 +36,15 @@ const endsBlock = (event: ChannelEvent): boolean => {
     || (frame?.type === "stream_event" && (frame.event?.type === "content_block_stop" || frame.event?.type === "message_stop"));
 };
 
+/** What a block-ending event ends: one block, or every block of one stream (a message's end or an assistant frame). */
+interface BlockScope { parent: string; block?: string }
+const blockScope = (event: ChannelEvent): BlockScope | undefined => {
+  const frame = frameOf(event) as RawFrame | undefined;
+  if (!frame) return undefined;
+  const parent = frame.parent_tool_use_id ?? "main";
+  return frame.type === "stream_event" && frame.event?.type === "content_block_stop" ? { parent, block: `${parent}:${String(frame.event?.index)}` } : { parent };
+};
+
 export type LeaseEndReason = "Claude Code ended" | "the owner logged out" | "no renewal from the mod for 30 s";
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
 export interface OfficeOptions {
@@ -142,6 +151,10 @@ export class PostOffice {
   private logFailure?: Error;
   /** Session id to its held tool input, by block (C10). */
   private readonly toolInputs = new Map<string, Map<string, ToolInput>>();
+  /** Sessions whose opening record is being written: a failure there is reported by the refused send alone (C13). */
+  private readonly openingWrites = new Set<string>();
+  /** Session id to its streamed blocks: the block the next fragment belongs to, and the kinds each held block has (C14). */
+  private readonly blocks = new Map<string, { current: string; held: Map<string, Set<(typeof FRAGMENT_KINDS)[number]>> }>();
   /** `log_failed` notices on their way into the office log (M1-AC4). */
   private noticesWriting = 0;
   private readonly secrets: string[];
@@ -164,6 +177,8 @@ export class PostOffice {
   private logFailed(name: string, error: Error): void {
     // M1-AC4: the office log failing while it records a notice is the same failure (a full disk), already reported once.
     if (name === "post-office" && this.noticesWriting > 0) return;
+    // C13: the refused send already tells the owner; a second line would say the same thing twice.
+    if (this.openingWrites.has(name)) return;
     const soldier = [...this.sessions.values()].find((session) => session.id === name)?.spec.key;
     const notice = redact({ ...(soldier ? { soldier } : {}), type: "log_failed",
       data: { log: name, reason: `the log ${name} could not be written; later lines are retried and the gap is counted: ${error.message}` } }, this.secrets) as OfficeEvent;
@@ -177,14 +192,33 @@ export class PostOffice {
   private recordNative(session: Session, event: ChannelEvent): void {
     const soldier = session.spec.key;
     this.trackToolInput(session, event);
+    this.trackBlock(session, event);
     const kind = FRAGMENT_KINDS.find((name) => name === event.type);
     if ((kind && typeof event.data === "string") || isDelta(event)) {
       this.options.onEvent?.(redact({ soldier, ...event }, this.secrets) as OfficeEvent);
-      if (kind) { const text = event.data as string; this.logPending = this.logPending.then(() => this.logs.fragment(session.id, kind, text)); }
+      if (kind) { const text = event.data as string; const block = this.holdBlock(session, kind); this.logPending = this.logPending.then(() => this.logs.fragment(session.id, `${kind}|${block}`, text)); }
       return;
     }
-    if (endsBlock(event)) this.flushBlocks(session, event.type === "turn_end" || event.type === "closed");
+    if (endsBlock(event)) this.flushBlocks(session, event.type === "turn_end" || event.type === "closed", blockScope(event));
     this.record({ soldier, ...event }, session);
+  }
+
+  /** C14: a raw stream frame names the block the next fragment belongs to (the process emits the frame first). */
+  private trackBlock(session: Session, event: ChannelEvent): void {
+    const frame = event.type === "raw" && event.data && typeof event.data === "object" ? event.data as RawFrame : undefined;
+    if (frame?.type !== "stream_event" && frame?.type !== "assistant") return;
+    const state = this.blocks.get(session.id) ?? { current: "main:message", held: new Map() };
+    this.blocks.set(session.id, state);
+    state.current = `${frame.parent_tool_use_id ?? "main"}:${frame.type === "assistant" ? "message" : String(frame.event?.index)}`;
+  }
+
+  private holdBlock(session: Session, kind: (typeof FRAGMENT_KINDS)[number]): string {
+    const state = this.blocks.get(session.id) ?? { current: "main:message", held: new Map() };
+    this.blocks.set(session.id, state);
+    const kinds = state.held.get(state.current) ?? new Set();
+    kinds.add(kind);
+    state.held.set(state.current, kinds);
+    return state.current;
   }
 
   /** C10 (PO-5): a tool call's streamed input is held by its block until the whole call arrives; the delta itself is never logged. */
@@ -224,10 +258,15 @@ export class PostOffice {
   }
 
   /** Writes each held block whole, redacted as one text; at the turn's end, tool input whose call never arrived too. */
-  private flushBlocks(session: Session, turnOver = false): void {
-    this.logPending = this.logPending.then(async () => {
-      for (const kind of FRAGMENT_KINDS) await this.logs.endMessage(session.id, kind, { soldier: session.spec.key, type: kind, time: new Date().toISOString() });
+  private flushBlocks(session: Session, turnOver = false, scope?: BlockScope): void {
+    // C14: only the block that ended (or the stream a whole message ended), never another stream's.
+    const held = this.blocks.get(session.id)?.held ?? new Map<string, Set<(typeof FRAGMENT_KINDS)[number]>>();
+    const ended = [...held.entries()].filter(([key]) => turnOver || !scope || (scope.block ? key === scope.block : key.startsWith(`${scope.parent}:`)));
+    for (const [key] of ended) held.delete(key);
+    if (ended.length > 0) this.logPending = this.logPending.then(async () => {
+      for (const [key, kinds] of ended) for (const kind of FRAGMENT_KINDS) if (kinds.has(kind)) await this.logs.endMessage(session.id, `${kind}|${key}`, { soldier: session.spec.key, type: kind, time: new Date().toISOString() });
     }).catch(() => {});
+    if (turnOver) this.blocks.delete(session.id);
     if (!turnOver) return;
     this.writeToolInputs(session, [...(this.toolInputs.get(session.id)?.values() ?? [])]);
     this.toolInputs.delete(session.id);
@@ -470,7 +509,8 @@ export class PostOffice {
   private async run(session: Session, text: string): Promise<TurnResult> {
     // C2 (PO-5, M1-AC4): the turn's opening record is written, after everything before it, before the soldier gets the message.
     await this.logPending;
-    const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() });
+    this.openingWrites.add(session.id);
+    const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() }).finally(() => this.openingWrites.delete(session.id));
     if (!opened.written) {
       throw new Error(`message not sent: the session log could not record the turn's start (${String(redact(opened.error?.message ?? "unknown error", this.secrets))})`);
     }

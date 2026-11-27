@@ -508,6 +508,46 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect(delivered).toEqual([]);
   }, 30_000);
 
+  it("shows no log_failed notice when the opening write is what stops the send: the refusal is the one line (C13, M1-AC4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    const opened = await office.open("scout");
+    await breakLog(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`));
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    expect(events.filter((event) => event.type === "log_failed")).toEqual([]);
+    await office.close();
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toEqual([]);
+  }, 30_000);
+
+  it("flushes each streamed block at its own stop, so interleaved streams are not mixed (C14, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const raw = (frame: Record<string, unknown>): void => emit({ type: "raw", data: { session_id: "c14", ...frame } });
+    const stream = (parent: string | null, index: number, event: Record<string, unknown>): void => raw({ type: "stream_event", parent_tool_use_id: parent, event: { index, ...event } });
+    const delta = (parent: string | null, index: number, kind: "text" | "thinking", text: string): void => {
+      stream(parent, index, { type: "content_block_delta", delta: kind === "text" ? { type: "text_delta", text } : { type: "thinking_delta", thinking: text } });
+      emit({ type: kind, data: text });
+    };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        delta(null, 0, "text", "main one ");
+        delta("sub", 0, "text", "sub one ");
+        stream("sub", 0, { type: "content_block_stop" });
+        delta(null, 0, "text", "main two");
+        stream(null, 0, { type: "content_block_stop" });
+        return { status: "completed", text: "x", refusal: false };
+      }); } });
+    offices.push(office);
+    const opened = await office.open("scout");
+    await office.send("scout", "go");
+    await office.close();
+    const texts = (await records(repo.dir, opened.session)).filter((record) => record.type === "text").map((record) => record.text);
+    expect(texts).toEqual(["sub one ", "main one main two"]);
+  }, 30_000);
+
   it("reports a log that fails mid-turn once in the event stream and the office log, and the turn carries on (C3, M1-AC4)", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];
