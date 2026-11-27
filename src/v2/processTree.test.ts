@@ -1,10 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as childProcess from "node:child_process";
+import * as fsPromises from "node:fs/promises";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeRepo } from "../workspace/testRepo.testutil.js";
 import { spawnManagedProcess, verifiedRoots, verifyExecutable, type ManagedProcess } from "./processTree.js";
 
+// Pass-through wrappers, so one test can fail a launch after the supervisor spawned and fail its temp folder's removal (#111 C16).
+vi.mock("node:child_process", async (original) => {
+  const real = await original<typeof import("node:child_process")>();
+  return { ...real, spawn: vi.fn(real.spawn) };
+});
+vi.mock("node:fs/promises", async (original) => {
+  const real = await original<typeof import("node:fs/promises")>();
+  return { ...real, rm: vi.fn(real.rm) };
+});
 const sessions: ManagedProcess[] = [];
 const directories: string[] = [];
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -142,6 +153,34 @@ describe.skipIf(!windows)("session process containment (Windows; Not tested on o
 
   it("fails a missing executable without launching an unmanaged fallback", async () => {
     await expect(spawnManagedProcess({ file: "shadow-definitely-missing-executable", cwd: await directory() })).rejects.toThrow();
+  }, 30_000);
+
+  it("keeps a started supervisor's containment failure when its temp folder cannot be removed (#111 C16)", async () => {
+    const controller = new AbortController();
+    const spawn = vi.mocked(childProcess.spawn);
+    const realSpawn = spawn.getMockImplementation()!;
+    const remove = vi.mocked(fsPromises.rm);
+    const realRm = remove.getMockImplementation()!;
+    let folder = "";
+    // The supervisor starts, then the launch fails before it is ready; then removing its temp folder fails too.
+    spawn.mockImplementation(((...args: Parameters<typeof childProcess.spawn>) => {
+      const child = (realSpawn as typeof childProcess.spawn)(...args);
+      if (/powershell\.exe$/i.test(String(args[0]))) controller.abort();
+      return child;
+    }) as typeof childProcess.spawn);
+    remove.mockImplementation((async (path: string, options?: object) => {
+      if (!/shadow-job-/.test(String(path))) return (realRm as typeof rm)(path, options);
+      folder = String(path);
+      throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+    }) as typeof rm);
+    try {
+      const launch = spawnManagedProcess({ file: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], cwd: await directory(), signal: controller.signal });
+      await expect(launch).rejects.toMatchObject({ containmentFailed: true, message: expect.stringMatching(/the launch was cancelled.*could not be removed.*EBUSY/) });
+      expect(folder).not.toBe("");
+    } finally {
+      spawn.mockImplementation(realSpawn); remove.mockImplementation(realRm);
+      if (folder) directories.push(folder);
+    }
   }, 30_000);
 
   it("launches a Windows npm-style cmd shim without a visible window", async () => {

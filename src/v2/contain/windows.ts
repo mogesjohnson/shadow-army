@@ -147,6 +147,10 @@ export async function verifyExecutable(executable: string, roots: string[], real
  * PO-1 (#111 C11): the launch checks failed before any process started, so the caller can report a refused start.
  * Failures after the supervisor starts are containment failures and carry no such flag.
  */
+/** #111 C16: keeps the error and its flags, and names a temp folder that could not be removed as a secondary detail. */
+const withRemoval = (error: Error, removal: Error | undefined): Error => removal
+  ? Object.assign(error, { message: `${error.message} (its temp folder could not be removed: ${removal.message})`, removalError: removal })
+  : error;
 const refuse = (error: unknown) => Object.assign(error instanceof Error ? error : new Error(String(error)), { launchRefused: true });
 async function checkedLaunch(options: ManagedProcessOptions): Promise<LaunchTarget> {
   let launch: LaunchTarget;
@@ -191,6 +195,8 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
   const token = randomUUID();
   const directory = await mkdtemp(join(tmpdir(), "shadow-job-")).catch((error: unknown) => { throw refuse(error); });
   const script = join(directory, "supervisor.ps1");
+  // #111 C16: removal never throws over the launch's outcome; its failure comes back to be attached as a detail.
+  const removeDirectory = () => rm(directory, { recursive: true, force: true }).then(() => undefined, (error: unknown) => error instanceof Error ? error : new Error(String(error)));
   let control: Socket | undefined;
   let treeClosed = false;
   let rootPid: number | undefined;
@@ -257,11 +263,11 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       const killed = setTimeout(() => wrapper.kill(), 15_000);
       wrapper.stdin.end();
       control?.write("close\n");
-      try { await wrapperClosed; } finally {
-        clearTimeout(killed); control?.destroy(); server.close();
-        await rm(directory, { recursive: true, force: true });
-      }
-      if (!treeClosed) throw new Error("Windows supervisor ended without confirming session process-tree cleanup");
+      try { await wrapperClosed; } finally { clearTimeout(killed); control?.destroy(); server.close(); }
+      // #111 C16: the tree's outcome is decided first; a folder that cannot be removed is a secondary detail.
+      const removal = await removeDirectory();
+      if (!treeClosed) throw withRemoval(new Error("Windows supervisor ended without confirming session process-tree cleanup"), removal);
+      if (removal) throw removal;
     })();
     return {
       pid: rootPid!, stdin: wrapper.stdin, stdout: wrapper.stdout, stderr: wrapper.stderr, exited, droppedPath: dropped,
@@ -276,10 +282,11 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       child.kill();
       await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, 2_000).unref(); });
     }
-    await rm(directory, { recursive: true, force: true });
     // No supervisor process (the pipe could not listen, or PowerShell never spawned): a refused start (C11).
     // A supervisor that ran and then failed, even before CreateProcess, leaves its cleanup unconfirmed (#111 C12, PO-15).
-    throw child?.pid !== undefined ? Object.assign(error instanceof Error ? error : new Error(String(error)), { containmentFailed: true }) : refuse(error);
+    // #111 C16: that outcome is classified before the folder's removal, which can only add a detail, never replace it.
+    const failure = child?.pid !== undefined ? Object.assign(error instanceof Error ? error : new Error(String(error)), { containmentFailed: true }) : refuse(error);
+    throw withRemoval(failure, await removeDirectory());
   }
 }
 
