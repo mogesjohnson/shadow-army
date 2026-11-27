@@ -225,6 +225,56 @@ describe("a new registration's pointers, overlap and record (C15, C16, C17)", ()
     expect(events.at(-1)).toMatchObject({ event: "held", files: [".git/config"] }); // logged though the trusted line failed
     expect(await open().start()).toMatchObject({ held: true, files: [".git/config"] });
   }, 60_000);
+
+  it("refuses a registration when a pointer that was absent appears before the scan reads it (C19)", async () => {
+    const { base, repo, hooksDir, main, statePath } = setup();
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: repo.globalConfig, GIT_CONFIG_NOSYSTEM: "1" };
+    let planted = false;
+    const hold = new HarnessHold({ repo: main, statePath, gitFor: (where, config = []) => {
+      // The scan's first step, after the pointer check: an optional `gitdir` naming another folder appears.
+      if (where.gitDir.endsWith("snap") && !planted) { planted = true; writeFileSync(join(where.gitDir, "gitdir"), `${join(temp(), ".git")}\n`); }
+      return new HarnessGit({ repo: where, hooksDir, env: withConfig(env, config) });
+    } });
+    await hold.start();
+    const snap = worktree(base, repo);
+    rmSync(join(snap.gitDir, "gitdir"));
+    await expect(hold.register(snap)).rejects.toThrow(/worktrees\/snap\/gitdir changed while/);
+    await expect(hold.run(snap, ["status"])).rejects.toThrow("isn't a repository this hold covers");
+  }, 60_000);
+
+  it("holds at a clean start when a logged worktree's pointer is missing or names another folder, and can't accept it (C20)", async () => {
+    const { base, repo, open } = setup();
+    const cases: [string, (snap: GitRepo) => void, RegExp][] = [
+      ["no commondir", (snap) => rmSync(join(snap.gitDir, "commondir")), /worktrees\/snap-0\/commondir$/],
+      ["no .git", (snap) => rmSync(join(snap.workTree, ".git")), /snap-1\/\.git$/],
+      ["gitdir elsewhere", (snap) => writeFileSync(join(snap.gitDir, "gitdir"), `${join(temp(), ".git")}\n`), /worktrees\/snap-2\/gitdir$/],
+    ];
+    for (const [i, [name, change, file]] of cases.entries()) {
+      const hold = open();
+      await hold.start();
+      const snap = worktree(base, repo, `snap-${i}`);
+      await hold.register(snap);
+      change(snap);
+      const again = open(); // the record is clean: no hold, turn or command was open
+      expect(await again.start(), name).toMatchObject({ held: true, files: expect.arrayContaining([expect.stringMatching(file)]) });
+      await expect(again.accept(), name).rejects.toThrow("can't be accepted");
+      await again.unregister(snap);
+      expect(await again.check(), name).toEqual({ held: false });
+    }
+  }, 60_000);
+
+  it("leaves a worktree whose removal was in progress to WSP-10's removal at a clean start", async () => {
+    const { base, repo, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo);
+    await hold.register(snap);
+    rmSync(snap.workTree, { recursive: true, force: true }); // the folder went; its `worktrees/<id>` entry is still there
+    const again = open();
+    expect(await again.start()).toEqual({ held: false });
+    await expect(again.run(snap, ["status"])).rejects.toThrow("is being removed");
+    await again.unregister(snap);
+    expect(await again.check()).toEqual({ held: false });
+  }, 60_000);
 });
 
 describe("a repository's whole identity (C9)", () => {
