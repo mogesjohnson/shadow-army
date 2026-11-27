@@ -48,16 +48,22 @@ describe("CH-1 executable check", () => {
     await expect(verifyExecutable(outside, [root.toLowerCase()], async (path) => path)).resolves.toBe(outside);
   });
 
-  it.skipIf(!windows)("flags a supervisor that fails before readiness as a containment failure, not a refusal (#111 C12)", async () => {
+  it.skipIf(!windows)("flags a supervisor that fails before readiness as a containment failure, and no supervisor as a refusal (#111 C12)", async () => {
     const cwd = await directory();
+    // The supervisor runs, then its CreateProcess fails on a file that is not a program.
+    const tools = await directory();
+    const broken = join(tools, "broken.exe");
+    await writeFile(broken, "not a program");
+    await expect(spawnManagedProcess({ file: broken, cwd })).rejects.toMatchObject({ containmentFailed: true });
+    // PowerShell never spawns: no supervisor process existed, so nothing can be left running.
     const systemRoot = process.env.SystemRoot;
     process.env.SystemRoot = join(cwd, "no-windows-here");
     let failure: unknown;
     try { await spawnManagedProcess({ file: process.execPath, args: ["-e", "0"], cwd }); } catch (error) { failure = error; }
     finally { process.env.SystemRoot = systemRoot; }
-    expect(failure).toMatchObject({ containmentFailed: true });
-    expect((failure as { launchRefused?: boolean }).launchRefused).toBeUndefined();
-  });
+    expect(failure).toMatchObject({ launchRefused: true });
+    expect((failure as { containmentFailed?: boolean }).containmentFailed).toBeUndefined();
+  }, 30_000);
 
   it.skipIf(!windows)("refuses a launch whose executable no longer resolves to the identity checked earlier, before any process starts (#111 C10, C11)", async () => {
     const cwd = await directory();

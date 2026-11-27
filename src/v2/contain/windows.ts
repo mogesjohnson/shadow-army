@@ -260,9 +260,9 @@ async function spawnWindows(options: ManagedProcessOptions): Promise<ManagedProc
       await new Promise<void>((done) => { child!.once("close", done); setTimeout(done, 2_000).unref(); });
     }
     await rm(directory, { recursive: true, force: true });
-    // No supervisor yet (the pipe could not listen): nothing started, so a refused start (C11).
-    // A supervisor that started and then failed leaves its cleanup unconfirmed (#111 C12, PO-15).
-    throw child ? Object.assign(error instanceof Error ? error : new Error(String(error)), { containmentFailed: true }) : refuse(error);
+    // No supervisor process (the pipe could not listen, or PowerShell never spawned): a refused start (C11).
+    // A supervisor that ran and then failed, even before CreateProcess, leaves its cleanup unconfirmed (#111 C12, PO-15).
+    throw child?.pid !== undefined ? Object.assign(error instanceof Error ? error : new Error(String(error)), { containmentFailed: true }) : refuse(error);
   }
 }
 
