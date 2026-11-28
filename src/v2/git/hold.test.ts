@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -926,5 +926,44 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     expect(ran).toBe(false);
     await Promise.all(removal);
     expect(record(statePath).repos).toHaveLength(1);
+  }, 60_000);
+});
+
+describe("a removal through a linked path, and a gitlink that isn't text (self-review, round five)", () => {
+  const worktree = (base: string, repo: HostileRepo, name = "snap"): GitRepo => {
+    const tree = join(base, name);
+    plainGit(repo, repo.root, "-c", "core.hooksPath=/nowhere", "worktree", "add", "-q", "--detach", tree);
+    return { gitDir: join(repo.gitDir, "worktrees", name), workTree: tree, commonDir: repo.gitDir };
+  };
+
+  it("keeps a worktree's identity after `git worktree remove` deletes its folders, though its path goes through a link", async () => {
+    const { base, repo, open } = setup(), hold = open();
+    await hold.start();
+    const snap = worktree(base, repo);
+    const link = join(base, "link");
+    symlinkSync(base, link, "junction"); // a symlink on POSIX, a junction on Windows
+    const via = (path: string) => join(link, path.slice(base.length));
+    const linked: GitRepo = { gitDir: via(snap.gitDir), workTree: via(snap.workTree), commonDir: snap.commonDir };
+    await hold.register(linked);
+    await hold.beginRemoval(linked);
+    plainGit(repo, repo.root, "worktree", "remove", "--force", snap.workTree); // the admin folder goes with the working tree
+    expect(existsSync(snap.gitDir)).toBe(false);
+    expect(await hold.check()).toEqual({ held: false });
+    await hold.unregister(linked);
+    expect(await hold.check()).toEqual({ held: false });
+    expect(await open().start()).toEqual({ held: false });
+  }, 60_000);
+
+  posixOnly("holds for a gitlink whose path isn't UTF-8, which the scan can't follow", async () => {
+    const { repo, open } = setup(), hold = open();
+    await hold.start();
+    const blob = plainGit(repo, repo.root, "rev-parse", "HEAD").trim();
+    // `sub\xff`: a byte no text decoder keeps, so the path git gave would read back as another name.
+    execFileSync("git", ["update-index", "-z", "--index-info"], {
+      cwd: repo.root, env: { ...process.env, GIT_CONFIG_GLOBAL: repo.globalConfig, GIT_CONFIG_NOSYSTEM: "1" },
+      input: Buffer.concat([Buffer.from(`160000 ${blob}\t0\tsub`), Buffer.from([0xff]), Buffer.from("\0")]),
+    });
+    const check = await hold.check();
+    expect(check.held).toBe(true);
   }, 60_000);
 });

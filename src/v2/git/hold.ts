@@ -61,7 +61,16 @@ interface Persisted {
 
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const slash = (path: string) => path.replace(/\\/g, "/");
-const real = (path: string) => { try { return realpathSync.native(path); } catch { return resolve(path); } };
+/**
+ * The real path, so a path through a link, junction or short name has one identity. A folder that is gone keeps it:
+ * the nearest folder still there is resolved and the rest is appended, so `git worktree remove` doesn't change a key.
+ */
+const real = (path: string): string => {
+  try { return realpathSync.native(path); } catch {
+    const full = resolve(path), parent = dirname(full);
+    return parent === full ? full : join(real(parent), basename(full));
+  }
+};
 const canon = (path: string) => { const out = slash(real(path)); return process.platform === "linux" ? out : out.toLowerCase(); };
 const keyOf = (repo: GitRepo) => canon(repo.gitDir);
 /** One repository is the whole tuple git is given: its administration folder, working tree and common folder (C9). */
@@ -227,6 +236,8 @@ class Scan {
       if (!record) continue;
       const match = /^(\d{6}) [0-9a-f]+ \d\t([\s\S]+)$/.exec(record);
       if (!match) throw new Uninspectable(join(repo.gitDir, "index"), "a record git ls-files gave can't be parsed");
+      // `collect` decodes as UTF-8: a path that wasn't text reads back as another name, a folder that isn't there, so its submodule would go unscanned.
+      if (match[1] === "160000" && match[2]!.includes("�")) throw new Uninspectable(join(repo.gitDir, "index"), "a gitlink's path isn't text");
       if (match[1] === "160000") paths.add(match[2]!);
     }
     for (const path of paths) await this.step(() => this.submodule(repo, path));
