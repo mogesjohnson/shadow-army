@@ -151,6 +151,58 @@ describe("every kind redact() matches (M1-AC2, SEC-4)", () => {
     expect(redact(cert)).toBe(cert);
   });
 
+  it("every armored block whose BEGIN label names a private key, through its END line (C33, WSP-8)", () => {
+    const labels = [
+      "PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY", "OPENSSH PRIVATE KEY",
+      "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK", "SSH2 ENCRYPTED PRIVATE KEY",
+    ];
+    for (const label of labels) {
+      for (const eol of ["\n", "\r\n"]) {
+        const block = `-----BEGIN ${label}-----${eol}Version: x${eol}${eol}lQOYBF${eol}=abcd${eol}-----END ${label}-----`;
+        expect(redact(`before${eol}${block}${eol}after`), `${label} ${JSON.stringify(eol)}`).toBe(`before${eol}${REDACTED}${eol}after`);
+        // cut before its END line: redacted to the end of the text
+        expect(redact(`before ${block.slice(0, block.indexOf("-----END"))}`), `${label} cut`).toBe(`before ${REDACTED}`);
+        // the same block inside JSON text, its line ends escaped
+        const safe = JSON.stringify(redact(JSON.stringify({ output: `x${eol}${block}${eol}y` })));
+        expect(safe, `${label} in JSON`).not.toContain("lQOYBF");
+      }
+    }
+    // two blocks, and the text between them kept
+    const two = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nAAA\n-----END PGP PRIVATE KEY BLOCK-----\nmid\n-----BEGIN RSA PRIVATE KEY-----\nBBB\n-----END RSA PRIVATE KEY-----";
+    expect(redact(two)).toBe(`${REDACTED}\nmid\n${REDACTED}`);
+    // a certificate before a key, in JSON text with escaped line ends: only the key goes
+    const cert = "-----BEGIN CERTIFICATE-----\\nAAA\\n-----END CERTIFICATE-----";
+    const mixed = `{"cert":"${cert}","key":"-----BEGIN PRIVATE KEY-----\\nBBB\\n-----END PRIVATE KEY-----","next":"x"}`;
+    const kept = JSON.stringify(redact(mixed));
+    expect(kept).toContain("AAA");
+    expect(kept).not.toContain("BBB");
+    expect(kept).toContain('next');
+    // a very long line of BEGINs stays fast
+    const started = Date.now();
+    redact("-----BEGIN ".repeat(95000));
+    expect(Date.now() - started).toBeLessThan(2000);
+    // kept: public key armor, a certificate and a signature
+    for (const label of ["PGP PUBLIC KEY BLOCK", "PUBLIC KEY", "CERTIFICATE", "PGP SIGNATURE"]) {
+      const armor = `-----BEGIN ${label}-----\nmQENB\n-----END ${label}-----`;
+      expect(redact(armor), label).toBe(armor);
+    }
+  });
+
+  it("an OpenPGP private key in a tool result, an object key or a streamed message is not in the persisted record (C33)", async () => {
+    const dir = await directory();
+    const logs = new SessionLogs(dir, []);
+    const block = "-----BEGIN PGP PRIVATE KEY BLOCK-----\r\n\r\nlQOYBFdummypayload\r\n=abcd\r\n-----END PGP PRIVATE KEY BLOCK-----";
+    const pub = "-----BEGIN PGP PUBLIC KEY BLOCK-----\r\nmQENBFpublic\r\n-----END PGP PUBLIC KEY BLOCK-----";
+    await logs.write("soldier-1", { type: "tool_result", output: `${block}\r\n${pub}`, nested: { [block]: "k" } });
+    for (const part of ["start -----BEGIN PGP PRIVATE ", "KEY BLOCK-----\nlQOYBFsplit", "payload\n-----END PGP PRIVATE KEY BLOCK----- end"]) logs.fragment("soldier-1", "m1", part);
+    await logs.endMessage("soldier-1", "m1", { type: "message" });
+    const raw = await readFile(join(dir, "soldier-1.jsonl"), "utf8");
+    expect(raw).not.toMatch(/lQOYBF|PRIVATE KEY BLOCK/);
+    const [first, second] = raw.trim().split("\n").map((line) => JSON.parse(line));
+    expect(first.output).toBe(`${REDACTED}\r\n${pub}`);
+    expect(second).toEqual({ type: "message", text: `start ${REDACTED} end` });
+  });
+
   it("a key that starts sk-, sk-ant-, ghp_, gho_, ghu_, ghs_ or ghr_", () => {
     for (const prefix of ["sk-", "sk-ant-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_"]) {
       expect(redact(`use ${prefix}abcDEF123_-xyz9 now`), prefix).toBe(`use ${REDACTED} now`);

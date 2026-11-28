@@ -39,7 +39,11 @@ function secretMatcher(secrets: readonly string[]): RegExp | undefined {
 }
 
 const NOT_IN_WORD = "(?<![A-Za-z0-9_])";
-const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|[\s\S]*$)/g;
+// Any armored or PEM block whose BEGIN label names a private key (PKCS#8, RSA, EC, OPENSSH, ENCRYPTED, PGP ... BLOCK), through
+// the END line with the same label; cut before it, to the end of the text. The label is short and holds no dashes run,
+// so a long line of BEGINs stays linear and a certificate before a key is not swallowed with it.
+const LABEL_CHAR = String.raw`(?:(?!-----)[^\r\n])`;
+const PRIVATE_KEY_BLOCK = new RegExp(String.raw`-----BEGIN (${LABEL_CHAR}{0,100}?PRIVATE KEY${LABEL_CHAR}{0,100}?)-----(?:[\s\S]*?-----END \1-----|[\s\S]*$)`, "gi");
 const URL_PASSWORD = new RegExp(`${NOT_IN_WORD}([A-Za-z][A-Za-z0-9+.-]*://[^\\s/?#:@"']*:)[^/?#\\s"']*@`, "g");
 // The name, its own quote (escaped to any depth, as in JSON inside JSON) and the separator.
 const AUTHORIZATION = new RegExp(`${NOT_IN_WORD}(?:proxy-)?authorization(?:\\\\*["'])?[ \\t]*[=:][ \\t]*`, "gi");
