@@ -278,11 +278,17 @@ export const createVitest = () => new Promise(() => {});
     expect(alive(pid)).toBe(false);
   }, 30_000);
   it("credits a test's own title only: an ID in a suite's title names nothing (review 140 C26)", async () => {
-    const root = suite({ "src/suites.test.mjs": 'describe("PO-1 suite", () => { it("creates its fixture", () => {}); });\ndescribe("CH-99 suite", () => { it("CH-1 by its own title", () => {}); });\n' });
+    const root = suite({ "src/suites.test.mjs": 'describe("PO-1 suite", () => { it("creates its fixture", () => {}); });\ndescribe("CH-99 suite", () => { it("CH-1 by its own title", () => {}); });\nit.skip("PO-1 skipped", () => {});\nit.todo("PO-1 todo");\ndescribe.skip("skipped suite", () => { it("PO-1 in a skipped suite", () => {}); });\n' });
     roots.push(root);
     const listing = await listTests(root);
     expect(listing.tests.map(({ name }) => name)).toEqual(["creates its fixture", "CH-1 by its own title"]);
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual(["PO-1: implemented, but no test names it"]);
+  }, 120_000);
+  it("ends a collector whose config leaves a handle open, once its list is written (self-review)", async () => {
+    const root = suite({ "src/named.test.mjs": 'it("PO-1 CH-1", () => {});\n' }, 'setInterval(() => {}, 1000);\nexport default { test: { globals: true } };\n');
+    roots.push(root);
+    const listing = await listTests(root, { timeout: 60_000 });
+    expect(listing).toEqual({ tests: [{ path: "src/named.test.mjs", name: "PO-1 CH-1" }], files: 1, problems: [] });
   }, 120_000);
   it("explains a failure by the collection's error or stderr, not the config's startup output (review 140 C29)", async () => {
     const root = suite({

@@ -249,7 +249,11 @@ function stopTree(child) {
       const system = process.env.SystemRoot ?? process.env.windir;
       if (!system) return finish(new Error("SystemRoot is not set, so taskkill.exe cannot be found"));
       const taskkill = join(system, "System32", "taskkill.exe");
-      killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      try {
+        killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      } catch (error) {
+        return finish(new Error(`${taskkill}: ${error.message}`));
+      }
       killer.on("error", (error) => finish(new Error(`${taskkill}: ${error.message}`)));
       killer.on("exit", (status) => {
         if (status !== 0 && child.exitCode === null && child.signalCode === null) finish(new Error(`${taskkill} exited ${status}, so not every process in the tree was ended`));
@@ -444,7 +448,8 @@ async function collect(requestPath) {
   process.env.NODE_ENV ??= "test";
   const { createVitest } = await import(pathToFileURL(api).href);
   if (typeof createVitest !== "function") throw new Error(`${api} is not vitest's Node API`);
-  const vitest = await createVitest("test", { watch: false, run: true });
+  // allowOnly false as in CI, so that a committed `.only` fails here too rather than hiding its siblings.
+  const vitest = await createVitest("test", { watch: false, run: true, allowOnly: false });
   try {
     const { testModules, unhandledErrors } = await vitest.collect(files, { staticParse: false });
     const message = (error) => collapse(String(error?.message ?? error)) || "an error without a message";
@@ -476,6 +481,9 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   } catch (error) {
     console.error(`collector failed: ${collapse(String(error?.message ?? error))}`);
     process.exitCode = 1;
+  } finally {
+    // The list is written: a handle the config leaves open must not hold the collector until the deadline.
+    setTimeout(() => process.exit(), 2_000).unref();
   }
 } else if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
