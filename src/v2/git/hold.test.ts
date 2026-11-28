@@ -685,6 +685,38 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     expect(events[1]).toMatchObject({ files: [".git/info/exclude"] });
   }, 60_000);
 
+  it("keeps a hold raised while an older scan ran, so that scan neither releases it nor runs git (self-review)", async () => {
+    const { repo, main, events, open } = setup();
+    let release!: () => void, paused!: () => void, pause = false, ran = 0;
+    const gate = new Promise<void>((done) => { release = done; }), waiting = new Promise<void>((done) => { paused = done; });
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      if (pause && args[0] === "ls-files") { pause = false; paused(); await gate; } // B's scan has read info/ clean
+      if (args[0] === "log") ran++;
+      return runner.run(args, kind);
+    } }));
+    await hold.start();
+    pause = true;
+    const b = hold.run(main, ["log", "-1"]);
+    await waiting;
+    appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n");
+    await expect(hold.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld); // A holds
+    release();
+    await expect(b).rejects.toBeInstanceOf(HarnessGitHeld);
+    expect(ran).toBe(0);
+    expect(events.map((event) => event.event)).toEqual(["trusted", "held"]);
+  }, 60_000);
+
+  it("logs a restart's unlogged hold once, though the restart finds the same files (self-review)", async () => {
+    const { repo, events, statePath, open } = setup(), hold = open();
+    await hold.start();
+    plantChange(repo, "hook");
+    const held = await hold.check();
+    writeFileSync(statePath, JSON.stringify({ ...record(statePath), unlogged: [{ files: held.held ? held.files : [], reason: "changed" }] }));
+    const from = events.length;
+    expect(await open().start()).toMatchObject({ held: true });
+    expect(events.slice(from).filter((event) => event.event === "held")).toHaveLength(1);
+  }, 60_000);
+
   it("says a restart held by a timeout or an unrecorded outcome is held, with the line to show (self-review)", async () => {
     const { main, statePath, open } = setup();
     const timing = open((_, runner) => ({ run: async (args, kind) => {

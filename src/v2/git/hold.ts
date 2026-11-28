@@ -310,6 +310,8 @@ export class HarnessHold {
   private pending: { files: string[]; reason: string }[] = [];
   /** The line of the hold `files` is, for a command whose gate is checked again after its check (C28). */
   private heldLine: string | undefined;
+  /** Holds raised so far: a scan that started before the latest can't release it (self-review). */
+  private holds = 0;
 
   constructor(private readonly options: HarnessHoldOptions) { this.repos = [options.repo]; }
 
@@ -329,6 +331,7 @@ export class HarnessHold {
     this.trusted = saved.trusted;
     this.turnOpen = saved.turnOpen === true;
     this.pending = saved.unlogged ?? []; // logged with the first write below (C29)
+    this.files = saved.held?.files; // so the same hold found again adds no second event
     // A timeout's hold outlives the restart, until g tries again. So does a command whose outcome no write recorded:
     // its timeout may be the write that failed, and unchanged metadata can't say it wasn't (C25).
     this.timeout = saved.timeout ?? (saved.running ? UNRECORDED : undefined);
@@ -353,12 +356,15 @@ export class HarnessHold {
     // Write-ahead (C27): the record says an inspection is pending before the scan, so a restart before its outcome is
     // written compares with the trusted state. A failed write here scans nothing, so nothing is known that disk lacks.
     this.update(() => { this.checks++; });
+    const holds = this.holds;
     let current: Awaited<ReturnType<HarnessHold["read"]>>;
     try { current = await this.read(); } finally { this.checks--; } // in memory now; the outcome's write records it
     if (!this.trusted && !current.problems.length) { this.trust(current.state); return { held: false }; }
     const { files, why } = this.compare(current);
     if (files.length) return this.hold(files, why);
     if (!this.files) { this.update(() => {}); return { held: false }; }
+    // A hold raised while this scan ran is newer than what it read: it stands until a later scan (self-review).
+    if (this.holds !== holds) return { held: true, files: this.files, line: this.heldLine ?? this.line(this.files, "changed") };
     this.update(() => { this.files = undefined; this.heldLine = undefined; });
     this.options.log?.({ event: "released" });
     return { held: false };
@@ -420,16 +426,16 @@ export class HarnessHold {
     }
     // Shared state that already differs is held, in the same write as the baseline, so no restart trusts it (C17).
     const files = changedFiles(own, state), why = "changed before it was registered";
-    // A record that can't be written leaves nothing registered, in memory either.
+    // A record that can't be written leaves nothing registered, in memory either. Its held event is pending with
+    // it, logged by the write that records it, or by a later one (C29).
+    if (files.length) this.holds++;
     this.update(() => {
       this.repos = known ? this.repos : [...this.repos, repo];
       this.trusted = { ...this.trusted, [key]: own };
-      if (files.length) this.files = [...new Set([...this.files ?? [], ...files])].sort();
+      if (files.length) { this.files = [...new Set([...this.files ?? [], ...files])].sort(); this.pending = [...this.pending, { files, reason: why }]; }
     });
     // Recorded now. A held repository stays registered though this throws: the caller unregisters it to remove it.
-    try { this.options.log?.({ event: "trusted", hashes: own }); } finally {
-      if (files.length) this.options.log?.({ event: "held", files, reason: why });
-    }
+    this.options.log?.({ event: "trusted", hashes: own });
     if (files.length) throw new HarnessGitHeld(this.line(files, why));
   }
 
@@ -614,7 +620,7 @@ export class HarnessHold {
     // Fail closed: the hold stands in memory first, with its event pending, and the write records both; if the write
     // fails, both stay, and the first write that succeeds records the hold and logs its event (C26, C29).
     if (!this.files || this.files.join("\0") !== files.join("\0")) this.pending = [...this.pending, { files, reason: why }];
-    this.files = files; this.heldLine = line;
+    this.files = files; this.heldLine = line; this.holds++;
     this.update(() => {});
     return { held: true, files, line };
   }
