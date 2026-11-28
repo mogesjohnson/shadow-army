@@ -186,6 +186,8 @@ const defaultAppend = async (path: string, text: string): Promise<void> => {
 const opensTurn = (data: unknown): boolean => (data as { type?: unknown } | null)?.type === "turn_started";
 const CONFIRMED = "turn_confirmed";
 const REFUSED = "turn_refused";
+/** The post office's own notice of a lost line (PO-5): the one record whose loss is never reported by a notice of its own. */
+const NOTICE = "log_failed";
 const moved = (name: string): Error => new Error(`the log ${name} was moved or replaced while a turn's opening was written`);
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -226,8 +228,8 @@ export function confirmedOpenings(text: string): Set<string> {
 export class SessionLogs {
   private readonly pending = new Map<string, Promise<unknown>>();
   private readonly secrets: string[];
-  /** Logs with a gap: its id and the lines lost in it. */
-  private readonly gaps = new Map<string, { id: string; lost: number }>();
+  /** Logs with a gap: its id, the lines lost in it, and whether only `log_failed` records have been lost in it so far (C32). */
+  private readonly gaps = new Map<string, { id: string; lost: number; onlyNotices: boolean }>();
   /** Opening ids whose rows may be in a log although their send was refused; the next line written names them. */
   private readonly refused = new Map<string, string[]>();
   private readonly cut = new Set<string>();
@@ -309,12 +311,13 @@ export class SessionLogs {
   /** The line is lost after its retry: it is counted, and a new gap is reported once, right now (PO-5, C26). */
   private lost(name: string, error: Error, type: string | undefined): LogWriteResult {
     const gap = this.gaps.get(name);
-    if (gap) gap.lost++;
-    else {
-      this.gaps.set(name, { id: randomUUID(), lost: 1 });
-      // The notice belongs to the caller; a notice that throws must not stop this log's queue.
-      try { this.options.onFailure?.({ name, error, ...(type ? { type } : {}) }); } catch { /* the caller's own failure */ }
-    }
+    const notice = type === NOTICE;
+    // C32: a gap only `log_failed` records have been lost in was never reported (the caller keeps a lost notice from
+    // recursing), so the first other line lost in it is reported as the gap's notice, whichever failed first.
+    if (gap) { gap.lost++; if (!gap.onlyNotices || notice) return { written: false, error }; gap.onlyNotices = false; }
+    else this.gaps.set(name, { id: randomUUID(), lost: 1, onlyNotices: notice });
+    // The notice belongs to the caller; a notice that throws must not stop this log's queue.
+    try { this.options.onFailure?.({ name, error, ...(type ? { type } : {}) }); } catch { /* the caller's own failure */ }
     return { written: false, error };
   }
 

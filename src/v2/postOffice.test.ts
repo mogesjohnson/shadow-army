@@ -710,7 +710,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
     await office.open("scout");
     await office.close();
-    const failed = events.filter((event) => event.type === "log_failed");
+    // C32: the office's own log is broken too, so its first ordinary line lost (the close record) gets its own notice.
+    const failed = events.filter((event) => event.type === "log_failed" && (event.data as { log: string }).log !== "post-office");
     expect(failed).toHaveLength(1);
     expect(failed[0]!.data).not.toHaveProperty("refused");
   }, 30_000);
@@ -730,11 +731,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     // A later send refused in that same, already reported gap still gets its one refused line.
     await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
     await office.close();
-    const failed = events.filter((event) => event.type === "log_failed");
+    // C32: the office's own log is broken the same way, and its first ordinary line lost after the unreported notice's gap gets its notice too.
+    const failed = events.filter((event) => event.type === "log_failed" && (event.data as { log: string }).log !== "post-office");
     expect(failed).toHaveLength(2);
     expect(failed[0]).toMatchObject({ soldier: "scout" });
     expect(failed[0]!.data).not.toHaveProperty("refused");
     expect(failed[1]!.data).toMatchObject({ refused: true });
+    expect(events.filter((event) => event.type === "log_failed" && (event.data as { log: string }).log === "post-office")).toHaveLength(1);
   }, 30_000);
 
   it("reports an ordinary line lost while the opening is written as an unmarked gap, and delivers the send (C30, PO-5, M1-AC4)", async () => {

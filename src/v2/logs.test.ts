@@ -18,6 +18,23 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+describe("a gap only log_failed records were lost in (C32, PO-5)", () => {
+  it("is reported by the first ordinary record lost in it, in either order, and once per gap after that", async () => {
+    const onFailure = vi.fn();
+    const logs = new SessionLogs("logs", [], { append: async () => { throw new Error("EIO"); }, onFailure, retryDelayMs: 1 });
+    await logs.write("post-office", { type: "log_failed" });
+    await logs.write("post-office", { type: "log_failed" });
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenLastCalledWith(expect.objectContaining({ type: "log_failed" }));
+    await logs.write("post-office", { type: "command_refused" });
+    expect(onFailure).toHaveBeenCalledTimes(2);
+    expect(onFailure).toHaveBeenLastCalledWith(expect.objectContaining({ type: "command_refused" }));
+    await logs.write("post-office", { type: "command_refused" });
+    await logs.write("post-office", { type: "log_failed" });
+    expect(onFailure).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("redaction", () => {
   it("removes known secrets from nested values, errors and object keys, without changing usage", () => {
     const secret = "private-monarch-credential";
