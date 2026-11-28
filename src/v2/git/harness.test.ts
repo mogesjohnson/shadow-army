@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildGitArgs, HarnessGit, HarnessGitHeld, HarnessGitTimeout, LIMIT_MS, resolveGit } from "./harness.js";
+import { buildGitArgs, HarnessGit, HarnessGitHeld, HarnessGitTimeout, LIMIT_MS, osStartStamp, resolveGit } from "./harness.js";
 import { createFakeClock, createHostileRepo } from "./hostileRepo.testutil.js";
 
 const hang = fileURLToPath(new URL("../../../test/fakes/git-hang.mjs", import.meta.url));
@@ -100,17 +100,18 @@ const fakeProcess = (close: () => Promise<void>) => {
 };
 
 describe("process tree registration", () => {
+  const stamp = async () => "test:1";
   const repo = { gitDir: "/g", workTree: tmpdir(), commonDir: "/c" };
   it("ends git when registration fails, and keeps the sweep record when teardown is unconfirmed", async () => {
     const proc = fakeProcess(async () => {});
     const trees = { add: vi.fn(async () => { throw new Error("store down"); }), remove: vi.fn(async () => {}) };
-    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, git: { file: "git" }, spawn: async () => proc });
+    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, stamp, git: { file: "git" }, spawn: async () => proc });
     await expect(harness.run(["status"])).rejects.toThrow("store down");
     expect(proc.close).toHaveBeenCalled();
     const stuck = fakeProcess(async () => { throw new Error("tree still running"); });
     const kept = { add: vi.fn(async () => {}), remove: vi.fn(async () => {}) };
     const clock = createFakeClock();
-    const second = new HarnessGit({ repo, hooksDir: repo.workTree, trees: kept, clock, git: { file: "git" }, spawn: async () => stuck });
+    const second = new HarnessGit({ repo, hooksDir: repo.workTree, trees: kept, stamp, clock, git: { file: "git" }, spawn: async () => stuck });
     const result = second.run(["status"]).catch((error: unknown) => error);
     await until(() => kept.add.mock.calls.length === 1);
     run(clock, LIMIT_MS.other);
@@ -122,13 +123,58 @@ describe("process tree registration", () => {
     const proc = fakeProcess(async () => {});
     const trees = { add: vi.fn(() => new Promise<void>(() => {})), remove: vi.fn(async () => {}) };
     const clock = createFakeClock();
-    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, clock, git: { file: "git" }, spawn: async () => proc });
+    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, stamp, clock, git: { file: "git" }, spawn: async () => proc });
     const result = harness.run(["status"]).catch((error: unknown) => error);
     await until(() => trees.add.mock.calls.length === 1);
     run(clock, LIMIT_MS.other);
     expect(await result).toBeInstanceOf(HarnessGitTimeout);
     expect(proc.close).toHaveBeenCalled();
   });
+});
+
+describe("git starts behind a gate until its sweep entry is recorded (C30)", () => {
+  const repo = { gitDir: "/g", workTree: tmpdir(), commonDir: "/c" };
+  it("spawns the gate, stamps the pid with the OS start stamp, registers it, and only then releases git", async () => {
+    const order: string[] = [], stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough();
+    stdout.end(); stderr.end();
+    let exit!: (value: { code: number; signal: null }) => void;
+    const exited = new Promise<{ code: number; signal: null }>((done) => { exit = done; });
+    stdin.on("data", (chunk) => { order.push(`released ${String(chunk).trim()}`); exit({ code: 0, signal: null }); });
+    const proc = { pid: 7, stdin, stdout, stderr, exited, close: vi.fn(async () => {}), droppedPath: [] };
+    let started: { file: string; args?: string[] } | undefined;
+    const trees = { add: vi.fn(async (entry: { pid: number; startedAt: string }) => { order.push(`added ${entry.pid} ${entry.startedAt}`); }), remove: vi.fn(async () => {}) };
+    const stamp = async (pid: number) => { order.push(`stamp ${pid}`); return "linux:4242"; };
+    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, stamp, clock: createFakeClock(), git: { file: "git" },
+      spawn: async (options) => { started = options; order.push("spawned"); return proc; } });
+    expect((await harness.run(["status"])).code).toBe(0);
+    expect(order).toEqual(["spawned", "stamp 7", "added 7 linux:4242", "released go"]);
+    expect(started!.file).not.toBe("git"); // the gate, with git after it
+    expect(started!.args).toContain("git");
+    expect(trees.remove).toHaveBeenCalled();
+  });
+
+  it("runs nothing when the registration fails, and runs git once it is recorded, with the real gate and stamp", async () => {
+    const base = temp(), marker = join(base, "ran"), script = join(base, "git.mjs");
+    writeFileSync(script, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "x");\n`);
+    const git = { file: process.execPath, prefix: [script] };
+    const refused = new HarnessGit({ repo: { gitDir: base, workTree: base, commonDir: base }, hooksDir: base, git,
+      trees: { add: async () => { await new Promise((r) => setTimeout(r, 500)); throw new Error("store down"); }, remove: async () => {} } });
+    await expect(refused.run(["status"])).rejects.toThrow("store down");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(existsSync(marker)).toBe(false); // git never ran
+    const entries: { pid: number; startedAt: string }[] = [];
+    const harness = new HarnessGit({ repo: { gitDir: base, workTree: base, commonDir: base }, hooksDir: base, git, trees: {
+      add: async (entry) => { await new Promise((r) => setTimeout(r, 500)); expect(existsSync(marker)).toBe(false); entries.push(entry); }, remove: async () => {} } });
+    expect((await harness.run(["status"])).code).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    expect(entries[0]!.startedAt).toMatch(new RegExp(`^${process.platform}:\\S`));
+  }, 60_000);
+
+  it.runIf(process.platform !== "darwin")("reads the OS start stamp, the same for the same process", async () => {
+    const stamp = await osStartStamp(process.pid);
+    expect(stamp).toMatch(new RegExp(`^${process.platform}:\\S`));
+    expect(await osStartStamp(process.pid)).toBe(stamp);
+  }, 60_000);
 });
 
 /** Runs the fake clock in one-second steps, as a post office that never stops does. */

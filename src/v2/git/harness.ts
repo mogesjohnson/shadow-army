@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
-import { Writable } from "node:stream";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { spawnManagedProcess, type ManagedProcess, type ManagedProcessOptions, type ProcessExit } from "../processTree.js";
 
 /** WSP-10 harness git: git that runs nothing a repository names, on a limit, from a trusted PATH entry. */
@@ -55,9 +55,43 @@ export interface HarnessGitOptions {
   spawn?: (options: ManagedProcessOptions) => Promise<ManagedProcess>;
   /** Test seam: run this instead of the git found on PATH. */
   git?: { file: string; prefix?: string[] };
-  /** PO-16's entry for a running command: added before it starts, removed once it has ended. */
-  trees?: { add(entry: { pid: number; startedAt: number }): Promise<void>; remove(): Promise<void> };
+  /**
+   * PO-16's entry for a running command: added, with the pid and the OS's start stamp, while git waits behind its
+   * gate, before it may run; removed once it has ended (C30).
+   */
+  trees?: { add(entry: { pid: number; startedAt: string }): Promise<void>; remove(): Promise<void> };
+  /** Test seam: the OS start stamp for a pid (`osStartStamp`). */
+  stamp?: (pid: number) => Promise<string>;
 }
+
+const run = promisify(execFile);
+
+/**
+ * The OS's own start stamp for `pid`, the identity PO-16's sweep compares with the pid: Linux's start time in
+ * clock ticks (`/proc/<pid>/stat`), macOS's `ps -o lstart`, Windows' creation time. Throws when there is none.
+ */
+export async function osStartStamp(pid: number, platform: NodeJS.Platform = process.platform): Promise<string> {
+  let stamp: string;
+  if (platform === "linux") {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    stamp = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? ""; // field 22, counted from the state (field 3)
+  } else if (platform === "win32") {
+    const shell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    stamp = (await run(shell, ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`], { windowsHide: true, timeout: 60_000 })).stdout.trim();
+  } else stamp = (await run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { timeout: 60_000 })).stdout.trim();
+  if (!stamp) throw new Error(`the start time of process ${pid} can't be read`);
+  return `${platform}:${stamp}`;
+}
+
+/**
+ * Where a registered git waits (C30): one line on stdin releases it, and EOF before that runs nothing. On POSIX
+ * the shell becomes git (`exec`: the same pid and start time); on Windows Node runs git as its only child, in
+ * the same job, so ending the registered tree ends git.
+ */
+const POSIX_GATE = 'IFS= read -r _ || exit 125; exec "$0" "$@"';
+const WINDOWS_GATE = 'let b="";process.stdin.on("data",(d)=>{if(b.includes("\\n"))return;b+=d;if(!b.includes("\\n"))return;process.stdin.pause();'
+  + 'const c=require("child_process").spawn(process.argv[1],process.argv.slice(2),{stdio:["ignore","inherit","inherit"],windowsHide:true});'
+  + 'c.on("exit",(code)=>process.exit(code??1));c.on("error",()=>process.exit(127));});process.stdin.on("end",()=>{if(!b.includes("\\n"))process.exit(125);});';
 
 /**
  * The first fully qualified PATH entry with a git whose canonical file is outside every untrusted folder.
@@ -142,12 +176,13 @@ export function buildGitArgs(args: string[], options: { hooksDir: string; hookNa
 }
 
 async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProcess> {
-  const child = spawn(options.file, options.args ?? [], { cwd: options.cwd, env: options.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(options.file, options.args ?? [], { cwd: options.cwd, env: options.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   await new Promise<void>((done, fail) => { child.once("spawn", done); child.once("error", fail); });
   const exited = new Promise<ProcessExit>((done) => child.once("exit", (code, signal) => done({ code, signal })));
   // The process group is the tree; killing it ends git and everything it started.
   const close = async () => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ } };
-  return { pid: child.pid!, stdin: new Writable({ write: (_chunk, _encoding, done) => done() }), stdout: child.stdout, stderr: child.stderr, exited, close, droppedPath: [] };
+  child.stdin.on("error", () => {}); // a gate that ended early closes it
+  return { pid: child.pid!, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exited, close, droppedPath: [] };
 }
 
 const collect = async (stream: AsyncIterable<Buffer | string>) => {
@@ -199,7 +234,11 @@ export class HarnessGit {
     Object.assign(env, built.env, { PATH: this.path, GIT_TERMINAL_PROMPT: "0", GIT_DIR: repo.gitDir, GIT_WORK_TREE: repo.workTree, GIT_COMMON_DIR: repo.commonDir });
     if (process.platform === "win32") env.NoDefaultCurrentDirectoryInExePath = "1";
     const spawnTree = this.options.spawn ?? (process.platform === "win32" ? spawnManagedProcess : spawnPosix);
-    const proc = await spawnTree({ file: this.file, args: [...this.prefix, ...built.args], cwd, env });
+    const trees = this.options.trees, gitArgs = [...this.prefix, ...built.args];
+    // With a sweep to register in, git starts behind its gate, released only once its entry is recorded (C30).
+    const start = !trees ? { file: this.file, args: gitArgs } : process.platform === "win32"
+      ? { file: process.execPath, args: ["-e", WINDOWS_GATE, this.file, ...gitArgs] } : { file: "/bin/sh", args: ["-c", POSIX_GATE, this.file, ...gitArgs] };
+    const proc = await spawnTree({ ...start, cwd, env });
     // stdin stays open until teardown: on Windows its EOF starts the supervisor's two-second shutdown.
     // Harness git sends no input, so a command that waits for some runs to its limit.
     const stdout = collect(proc.stdout), stderr = collect(proc.stderr);
@@ -208,13 +247,15 @@ export class HarnessGit {
     // The limit runs from the start, so a slow registration spends it too (WSP-10, counted as PO-7 counts).
     const limit = new Promise<"timeout">((expired) => { cancel = countedDeadline(clock, LIMIT_MS[kind], () => expired("timeout")); });
     try {
-      const registering = Promise.resolve(this.options.trees?.add({ pid: proc.pid, startedAt: Date.now() }));
+      const stamp = this.options.stamp ?? osStartStamp;
+      const registering = trees ? (async () => trees.add({ pid: proc.pid, startedAt: await stamp(proc.pid) }))() : Promise.resolve();
       if (await Promise.race([registering.then(() => "added" as const), limit]) === "timeout") {
         registering.catch(() => {}); // a registration that lands later is PO-16's sweep record for an ended tree
         await close();
         return "timeout";
       }
       registered = true;
+      if (trees) proc.stdin.write("go\n"); // registered: git may run now
       const outcome = await Promise.race([proc.exited, limit]);
       await close();
       if (outcome === "timeout") return "timeout";
