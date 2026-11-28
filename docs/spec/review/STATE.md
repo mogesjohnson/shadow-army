@@ -2,7 +2,7 @@
 
 A short current state, rewritten at each orchestrator handoff. The working detail is in [`handoffs/LATEST.md`](handoffs/LATEST.md). The log up to 2026-11-25 is in git: `git show 013be2e:docs/spec/review/STATE.md`.
 
-- **orch-69 takes over (2026-11-28 ~01:50 UTC):** Codex reviewed all three. #116 at `1d7e8b0` (C30-C31 fixed) waits for file 141; #117 (review 140, C26-C29) has w248 running, file 142; #106 (review 138, C27-C30, write-ahead rewrite) has w249 running, file 143. VER-7 credits test titles only (`6eb55b9`). The owner runs Codex; Claude reviews when Codex is out. All GitHub workflows are disabled, so CI is `blocked`. Next free file: 144.
+- **orch-70 takes over (2026-11-28 ~04:15 UTC):** #117 at `c6e421f` waits for file 144 (review 142 fixed); #116 at `ed06929` waits for file 145 (review 141 fixed); #106 (review 143, C31-C40, ten P1, round five) is being rebuilt around one serial queue by w255 (file 146). The owner runs Codex; Claude reviews when Codex is out. All GitHub workflows are disabled, so CI is `blocked`. Next free file: 147.
 - **Order (the owner, 2026-11-26): bottom-first, merge on approval without asking, orchestrators merge from their own Bash.**
 - **Spec:** v0.29 (2026-11-25): D-40 and D-41 applied (v2.1's standalone `shadow` app; PO-22, the viewer's read-only feed, milestone M7; open Q11). D-42 (2026-11-27, `410961e`): the Linux helper needs Linux 5.1. Frozen for the build since v0.28 (D-39, prototype first); M1 is cut to M1a (Windows-only slice) and M1b (the rest of M1).
 - **Build:** M1a on PRs #89 to #104; M1b on #105 to #144, stacked on `claude/63-m1b` and its `claude/63-m1b-base-*` branches. 37 PRs open (2026-11-27 pm).
