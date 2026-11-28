@@ -1,5 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -201,68 +201,114 @@ export function parseImplemented(source) {
   return { milestone, ids, problems };
 }
 
-// Rule 9 reads test titles from vitest itself (review 133): no JavaScript is lexed here. `vitest list` runs each test
-// file's top level to collect its tests (--staticParse=false; vitest 5's default static parse leaves a title's
-// expression unevaluated), so a title is the string the test run would show. VER-7 credits titles only (orch-67,
-// review 137 C22): a regular expression, a fixture string or a comment, even one beside the test, names nothing. A
-// skipped test is not collected, so it names nothing either.
+// Rule 9 reads test titles from vitest itself (review 133): no JavaScript is lexed here. The collector (collect,
+// below) runs each test file's top level through vitest's Node API (staticParse false; vitest 5's default static
+// parse leaves a title's expression unevaluated), so a title is the string the test run would show. VER-7 credits a
+// test's own title only (review 140 C26): not its suites' titles, nor a regular expression, a fixture string or a
+// comment beside it (review 137 C22). A skipped test is left out, so it names nothing either.
 const TEST_DIRECTORIES = ["src", "scripts", "plugins"];
-const LIST_FLAGS = ["list", "--staticParse=false"];
-const firstLine = (text) => text.split(/\r\n?|\n/).map((line) => line.trim()).find(Boolean) ?? "no output";
-
-/** Ends `child` and every process it started: its process group on POSIX (it leads one), its tree on Windows. */
-function killTree(child) {
+const firstLine = (text) => text.split(/\r\n?|\n/).map((line) => line.trim()).find(Boolean);
+// How long stopping a timed-out collector may take before the check reports that it could not stop it.
+const TEARDOWN = 10_000;
+const alive = (target) => {
   try {
-    if (process.platform === "win32") spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-    else process.kill(-child.pid, "SIGKILL");
-  } catch {
-    // Already gone.
+    process.kill(target, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
   }
+};
+
+/**
+ * Stops `child` and every process it started, and resolves only once that is verified (review 140 C27); otherwise it
+ * rejects, saying why. Windows: taskkill.exe by its absolute path, never PATH, must end the whole tree (exit 0) and the
+ * child must exit. POSIX: SIGKILL to the child's process group (it leads one), until no process is left in the group.
+ * Either way the stop has TEARDOWN ms.
+ */
+function stopTree(child) {
+  return new Promise((stopped, failed) => {
+    let poll;
+    const finish = (error) => {
+      clearTimeout(limit);
+      clearInterval(poll);
+      if (error) failed(error);
+      else stopped();
+    };
+    const limit = setTimeout(() => finish(new Error(`it was still running ${TEARDOWN} ms after the kill`)), TEARDOWN);
+    if (process.platform === "win32") {
+      const system = process.env.SystemRoot ?? process.env.windir;
+      if (!system) return finish(new Error("SystemRoot is not set, so taskkill.exe cannot be found"));
+      const taskkill = join(system, "System32", "taskkill.exe");
+      const killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      killer.on("error", (error) => finish(new Error(`${taskkill}: ${error.message}`)));
+      killer.on("exit", (status) => {
+        if (status !== 0) finish(new Error(`${taskkill} exited ${status}, so not every process in the tree was ended`));
+        else if (child.exitCode !== null || child.signalCode !== null) finish();
+        else child.once("exit", () => finish());
+      });
+    } else {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") return finish(error);
+      }
+      poll = setInterval(() => { if (!alive(-child.pid)) finish(); }, 50);
+    }
+  });
 }
 
 /**
- * Runs the repository's own vitest from `root` with the repository's config on `files` only (review 137 C23), and
- * parses the JSON list it writes to a file of its own, never stdout, which the config may also print to (C24). Past
- * `timeout` ms the whole process tree is killed, a collector that ignores SIGTERM included (C25).
+ * Collects the tests vitest would run from `root`, with the repository's config, on `files` only (review 137 C23):
+ * this file runs again as the collector (--collect), with `vitest` the path of vitest's Node API, and writes
+ * { tests, configured, errors } to a file of its own, never stdout, which the config may also print to (C24). Past
+ * `timeout` ms the collector's whole process tree is stopped, one that ignores SIGTERM included (C25), and the stop is
+ * verified (C27). A failure says what the collector reported: its collection errors first, then its stderr, then its
+ * stdout, each kept apart and bounded (C29).
  */
-function vitestList(root, flags, files, vitest, timeout) {
+function vitestList(root, files, vitest, timeout) {
   const directory = mkdtempSync(join(tmpdir(), "trace-list-"));
   const output = join(directory, "list.json");
+  const request = join(directory, "request.json");
+  writeFileSync(request, JSON.stringify({ vitest, files, output }));
   return new Promise((resolveList, rejectList) => {
-    const child = spawn(process.execPath, [vitest, ...flags, `--json=${output}`, ...files], { cwd: root, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    let text = "";
-    const keep = (chunk) => { if (text.length < 1 << 20) text += chunk; };
-    child.stdout.setEncoding("utf8").on("data", keep);
-    child.stderr.setEncoding("utf8").on("data", keep);
-    // A detached group misses the terminal's Ctrl-C: end the tree with this process, then let the signal end it too.
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "--collect", request], { cwd: root, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const captured = { stdout: "", stderr: "" };
+    for (const stream of ["stdout", "stderr"]) {
+      child[stream].setEncoding("utf8").on("data", (chunk) => { if (captured[stream].length < 1 << 20) captured[stream] += chunk; });
+    }
+    const said = () => firstLine(captured.stderr) ?? firstLine(captured.stdout) ?? "no output";
+    let ended = false;
+    // A detached group misses the terminal's Ctrl-C: stop the tree with this process, then let the signal end it too.
     const signals = process.platform === "win32" ? [] : ["SIGINT", "SIGTERM", "SIGHUP"];
     const settle = () => {
+      ended = true;
       clearTimeout(timer);
       for (const signal of signals) process.removeListener(signal, forward);
     };
     const forward = (signal) => {
       settle();
-      killTree(child);
-      process.kill(process.pid, signal);
+      stopTree(child).catch(() => {}).finally(() => process.kill(process.pid, signal));
     };
     for (const signal of signals) process.on(signal, forward);
     const timer = setTimeout(() => {
       settle();
-      killTree(child);
       child.stdout.destroy();
       child.stderr.destroy();
-      child.unref();
-      rejectList(new Error(`timed out after ${timeout} ms; its process tree was killed`));
+      stopTree(child).then(
+        () => rejectList(new Error(`timed out after ${timeout} ms; its process tree was killed`)),
+        (error) => rejectList(new Error(`timed out after ${timeout} ms, and its process tree could not be stopped: ${error.message}`)),
+      );
     }, timeout);
-    child.on("error", (error) => { settle(); rejectList(error); });
+    child.on("error", (error) => { if (!ended) { settle(); rejectList(error); } });
     child.on("close", (status, signal) => {
+      if (ended) return;
       settle();
-      if (status !== 0) return rejectList(new Error(signal ? `stopped by ${signal}` : `exit ${status}: ${firstLine(text)}`));
-      // vitest exits 0 without a list when a file's errors stop collection.
-      if (!existsSync(output)) return rejectList(new Error(`it wrote no list: ${firstLine(text)}`));
+      if (status !== 0) return rejectList(new Error(signal ? `stopped by ${signal}` : `exit ${status}: ${said()}`));
+      if (!existsSync(output)) return rejectList(new Error(`it wrote no list: ${said()}`));
       try {
         const listed = JSON.parse(readFileSync(output, "utf8"));
-        if (!Array.isArray(listed) || !listed.every((entry) => typeof entry?.file === "string")) throw new Error("its output is not a list of tests");
+        if (!Array.isArray(listed?.tests) || !Array.isArray(listed.configured) || !Array.isArray(listed.errors)) throw new Error("its output is not a list of tests");
+        if (listed.errors.length) throw new Error(`${listed.errors[0]}${listed.errors.length > 1 ? ` (and ${listed.errors.length - 1} more)` : ""}`);
         resolveList(listed);
       } catch (error) {
         rejectList(error);
@@ -279,13 +325,13 @@ function vitestList(root, flags, files, vitest, timeout) {
 
 /**
  * The tests that can name a requirement: each test vitest collects from the test files under `directories`, as
- * { path, name } with its full name (the describe chain and its title, joined by " > "). Only those files are passed
+ * { path, name } with the test's own title, not its suites' (review 140 C26). Only those files are passed
  * to vitest, so a suite outside them is not loaded, unless its path ends with one of theirs (vitest matches a file
  * argument as a substring). It fails closed: when `vitest list` fails (a file does not
  * load, the command errors or passes `timeout`), the result names no test and says why in `problems`. A test file
  * under `directories` that the vitest config does not take in is reported too, since rule 9 cannot read it.
  */
-export async function listTests(given, { directories = TEST_DIRECTORIES, vitest = join(given, "node_modules/vitest/vitest.mjs"), timeout = 600_000 } = {}) {
+export async function listTests(given, { directories = TEST_DIRECTORIES, vitest = join(given, "node_modules/vitest/dist/node.js"), timeout = 600_000 } = {}) {
   // vitest reports real paths (macOS's /var is /private/var), so compare against the real root.
   const root = realpathSync(given);
   const inside = (file) => {
@@ -297,13 +343,14 @@ export async function listTests(given, { directories = TEST_DIRECTORIES, vitest 
     // With no file, vitest would list every suite the config takes in.
     if (!found.length) return { tests: [], files: 0, problems: [`no test file under ${directories.join(", ")}, so no test names anything`] };
     const tests = [];
-    for (const { file, name } of await vitestList(root, LIST_FLAGS, found, vitest, timeout)) {
-      if (typeof name !== "string") throw new Error(`${file}: a test without a name`);
+    const listed = await vitestList(root, found, vitest, timeout);
+    for (const { file, name } of listed.tests) {
+      if (typeof file !== "string" || typeof name !== "string") throw new Error(`${file}: a test without a name`);
       // vitest matches a file argument as a substring, so drop a namesake outside `directories`.
       const path = inside(file);
       if (path) tests.push({ path, name });
     }
-    const configured = new Set((await vitestList(root, [...LIST_FLAGS, "--filesOnly"], found, vitest, timeout)).map(({ file }) => inside(file)));
+    const configured = new Set(listed.configured.map((file) => inside(String(file))));
     const problems = found.filter((path) => !configured.has(path)).map((path) => `${path}: the vitest config does not run this file, so it names nothing`);
     return { tests, files: new Set(tests.map(({ path }) => path)).size, problems };
   } catch (error) {
@@ -313,7 +360,7 @@ export async function listTests(given, { directories = TEST_DIRECTORIES, vitest 
 
 /**
  * Appendix B rule 9 (VER-7). `trace` is checkSpecTrace's result, `implementedSource` the text of implemented.txt and
- * `listing` listTests's result. A test names the IDs in its full name; a requirement is named only by its own ID:
+ * `listing` listTests's result. A test names the IDs in its own title; a requirement is named only by its own ID:
  * ranges do not count. A listing with problems has failed closed, and its problems are reported.
  */
 export function checkTestReferences(trace, implementedSource, listing) {
@@ -370,7 +417,47 @@ export function findTests(root, directories = TEST_DIRECTORIES) {
   return found;
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+/**
+ * The collector, run by vitestList in a process of its own: it reads { vitest, files, output } from `requestPath`,
+ * collects `files` through vitest's Node API from the current folder, and writes each test's file and own title, the
+ * files the config takes in, and every collection error, to `output`.
+ */
+async function collect(requestPath) {
+  const { vitest: api, files, output } = JSON.parse(readFileSync(requestPath, "utf8"));
+  // As the vitest command sets them before it loads a config.
+  process.env.TEST = "true";
+  process.env.VITEST = "true";
+  process.env.NODE_ENV ??= "test";
+  const { createVitest } = await import(pathToFileURL(api).href);
+  if (typeof createVitest !== "function") throw new Error(`${api} is not vitest's Node API`);
+  const vitest = await createVitest("test", { watch: false, run: true });
+  try {
+    const { testModules, unhandledErrors } = await vitest.collect(files, { staticParse: false });
+    const message = (error) => collapse(String(error?.message ?? error)) || "an error without a message";
+    const errors = unhandledErrors.map(message);
+    const tests = [];
+    for (const module of testModules) {
+      const where = relative(process.cwd(), module.moduleId).replaceAll("\\", "/");
+      for (const suite of [module, ...module.children.allSuites()]) errors.push(...suite.errors().map((error) => `${where}: ${message(error)}`));
+      for (const test of module.children.allTests()) if (test.result().state !== "skipped") tests.push({ file: module.moduleId, name: test.name });
+    }
+    const configured = (await vitest.getRelevantTestSpecifications(files)).map(({ moduleId }) => moduleId);
+    writeFileSync(output, JSON.stringify({ tests, configured, errors }));
+  } finally {
+    await vitest.close();
+  }
+  // vitest sets exit code 1 when a file fails to collect; the list written above already says why.
+  process.exitCode = 0;
+}
+
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url && process.argv[2] === "--collect") {
+  try {
+    await collect(process.argv[3]);
+  } catch (error) {
+    console.error(`collector failed: ${collapse(String(error?.message ?? error))}`);
+    process.exitCode = 1;
+  }
+} else if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
     // Usage: check-spec-trace.mjs [spec.md] [--tests]. --tests adds rule 9 (CI): it reads docs/spec/implemented.txt,
     // or the path in --implemented=<file>, and the tests vitest collects under src/, scripts/ and plugins/.

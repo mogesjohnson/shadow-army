@@ -1,5 +1,5 @@
-import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -140,8 +140,8 @@ describe("Appendix B rule 9: tests name the requirements", () => {
   const trace = checkSpecTrace(valid);
   const listed = (...names) => ({ tests: names.map((name) => ({ path: "src/v2/x.test.ts", name })), files: 1, problems: [] });
   const unnamedCh1 = ["CH-1: implemented, but no test names it"];
-  it("accepts tests whose full names name each tested requirement", () => {
-    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listed("PO-1 and M1-AC1", "office > CH-1")).problems).toEqual([]);
+  it("accepts tests whose titles name each tested requirement", () => {
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listed("PO-1 and M1-AC1", "CH-1")).problems).toEqual([]);
   });
   it("fails when an implemented requirement with U, C, I, X, F or S evidence is named by no test", () => {
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listed("PO-1")).problems).toEqual(unnamedCh1);
@@ -167,10 +167,12 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     expect(checkTestReferences(trace, "M1\nPO-9\n", listed()).problems).toEqual(["implemented list: PO-9 is not in this spec"]);
   });
 
-  // Fixture suites in a temporary root with their own config, run by this repository's vitest (review 133).
-  const vitest = fileURLToPath(new URL("../node_modules/vitest/vitest.mjs", import.meta.url));
+  // Fixture suites in a temporary root with their own config, run by this repository's vitest (review 133), which the
+  // root's node_modules links to, so that listTests finds it as it would in a repository.
+  const modules = fileURLToPath(new URL("../node_modules", import.meta.url));
   const suite = (files, config = 'export default { test: { globals: true, exclude: ["**/node_modules/**", "src/out/**"] } };\n') => {
     const root = mkdtempSync(join(tmpdir(), "trace-rule9-"));
+    symlinkSync(modules, join(root, "node_modules"), "junction");
     writeFileSync(join(root, "vitest.config.mjs"), config);
     for (const [path, text] of Object.entries(files)) {
       mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -179,7 +181,8 @@ describe("Appendix B rule 9: tests name the requirements", () => {
     return root;
   };
   const roots = [];
-  afterAll(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
+  // Unlink node_modules first, so that removing the root never reaches the repository's own.
+  afterAll(() => roots.forEach((root) => { unlinkSync(join(root, "node_modules")); rmSync(root, { recursive: true, force: true }); }));
   const run = 'it("runs", () => {});\n';
   it("credits only the titles vitest collects, never a regular expression, a comment or a title's operand (review 133 C17-C21)", async () => {
     const root = suite({
@@ -195,17 +198,17 @@ describe("Appendix B rule 9: tests name the requirements", () => {
       "src/out/excluded.test.mjs": 'it("PO-1 outside the config", () => {});\n',
     });
     roots.push(root);
-    const listing = await listTests(root, { vitest });
-    expect(listing.tests.map(({ name }) => name).sort()).toEqual(["CH-1 after a classic for", "CH-1 after a labeled block", "differs", "grouped > CH-1", ...Array(5).fill("runs")]);
+    const listing = await listTests(root);
+    expect(listing.tests.map(({ name }) => name).sort()).toEqual(["CH-1", "CH-1 after a classic for", "CH-1 after a labeled block", "differs", ...Array(5).fill("runs")]);
     expect(listing.problems).toEqual(["src/out/excluded.test.mjs: the vitest config does not run this file, so it names nothing"]);
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual([...listing.problems, "PO-1: implemented, but no test names it"]);
   }, 120_000);
   it("fails closed when a test file does not load: no test names anything", async () => {
     const root = suite({ "src/named.test.mjs": 'it("PO-1 CH-1", () => {});\n', "src/broken.test.mjs": 'throw new Error("fixture does not load");\n' });
     roots.push(root);
-    const listing = await listTests(root, { vitest });
+    const listing = await listTests(root);
     expect(listing.tests).toEqual([]);
-    expect(listing.problems).toEqual([expect.stringMatching(/^vitest list failed, so no test names anything: exit 1: /)]);
+    expect(listing.problems).toEqual(["vitest list failed, so no test names anything: src/broken.test.mjs: fixture does not load"]);
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual([...listing.problems, "PO-1: implemented, but no test names it", ...unnamedCh1]);
     expect((await listTests(root, { vitest: join(root, "missing.mjs") })).problems).toEqual([expect.stringMatching(/^vitest list failed/)]);
   }, 120_000);
@@ -215,23 +218,25 @@ describe("Appendix B rule 9: tests name the requirements", () => {
       "docs/other.test.mjs": 'throw new Error("out of scope, never loaded");\n',
     }, 'console.log("fixture config initialized");\nexport default { test: { globals: true } };\n');
     roots.push(root);
-    const listing = await listTests(root, { vitest });
+    const listing = await listTests(root);
     expect(listing).toEqual({ tests: [{ path: "src/trace.test.mjs", name: "PO-1 by its title" }, { path: "src/trace.test.mjs", name: "checks behavior" }], files: 1, problems: [] });
     expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual(unnamedCh1);
   }, 120_000);
   it("fails closed with vitest's message when it writes no list, and when no test file is found", async () => {
-    const root = suite({ "src/named.test.mjs": 'it("PO-1", () => {});\n', "quiet.mjs": 'console.error("collection stopped by an error");\n' });
+    const root = suite({ "src/named.test.mjs": 'it("PO-1", () => {});\n', "quiet.mjs": 'export async function createVitest() {\n  console.error("collection stopped by an error");\n  process.exit(0);\n}\n' });
     roots.push(root);
     expect((await listTests(root, { vitest: join(root, "quiet.mjs") })).problems).toEqual(["vitest list failed, so no test names anything: it wrote no list: collection stopped by an error"]);
-    expect((await listTests(root, { vitest, directories: ["plugins"] })).problems).toEqual(["no test file under plugins, so no test names anything"]);
+    expect((await listTests(root, { directories: ["plugins"] })).problems).toEqual(["no test file under plugins, so no test names anything"]);
   }, 30_000);
-  // A collector that ignores SIGTERM and starts a child that does too.
+  // A collector that ignores SIGTERM, starts a child that does too, and never collects.
   const hang = `import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 process.on("SIGTERM", () => {});
 const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'], { stdio: "ignore" });
 writeFileSync(new URL("./grandchild.pid", import.meta.url), String(child.pid));
+writeFileSync(new URL("./collector.pid", import.meta.url), String(process.pid));
 setInterval(() => {}, 1000);
+export const createVitest = () => new Promise(() => {});
 `;
   const alive = (pid) => {
     try {
@@ -266,6 +271,61 @@ setInterval(() => {}, 1000);
     expect(await ended).toBe("SIGINT");
     for (let n = 0; n < 50 && alive(pid); n++) await new Promise((wake) => setTimeout(wake, 100));
     expect(alive(pid)).toBe(false);
+  }, 30_000);
+  it("credits a test's own title only: an ID in a suite's title names nothing (review 140 C26)", async () => {
+    const root = suite({ "src/suites.test.mjs": 'describe("PO-1 suite", () => { it("creates its fixture", () => {}); });\ndescribe("CH-99 suite", () => { it("CH-1 by its own title", () => {}); });\n' });
+    roots.push(root);
+    const listing = await listTests(root);
+    expect(listing.tests.map(({ name }) => name)).toEqual(["creates its fixture", "CH-1 by its own title"]);
+    expect(checkTestReferences(trace, "M1\nPO-1\nCH-1\n", listing).problems).toEqual(["PO-1: implemented, but no test names it"]);
+  }, 120_000);
+  it("explains a failure by the collection's error or stderr, not the config's startup output (review 140 C29)", async () => {
+    const root = suite({
+      "src/valid.test.mjs": 'it("PO-1", () => {});\n',
+      "src/broken.test.mjs": 'throw new Error("specific suite initialization failure");\n',
+      "noisy.mjs": 'console.log("normal config startup");\nconsole.error("the real diagnostic");\nprocess.exit(1);\n',
+    }, 'console.log("normal config startup");\nexport default { test: { globals: true } };\n');
+    roots.push(root);
+    expect((await listTests(root)).problems).toEqual(["vitest list failed, so no test names anything: src/broken.test.mjs: specific suite initialization failure"]);
+    expect((await listTests(root, { vitest: join(root, "noisy.mjs") })).problems).toEqual(["vitest list failed, so no test names anything: exit 1: the real diagnostic"]);
+  }, 120_000);
+  // A real vitest whose test file never finishes loading; its worker records its own and its parent's process IDs.
+  const slow = 'import { writeFileSync } from "node:fs";\nwriteFileSync(new URL("../worker.pid", import.meta.url), JSON.stringify([process.pid, process.ppid]));\nawait new Promise((wake) => setTimeout(wake, 60_000));\nit("PO-1", () => {});\n';
+  it("stops vitest and its worker at the deadline with no system folder on PATH, and verifies it (review 140 C27)", async () => {
+    const root = suite({ "src/slow.test.mjs": slow });
+    roots.push(root);
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PATH"));
+    env.PATH = dirname(process.execPath);
+    const checker = new URL("./check-spec-trace.mjs", import.meta.url).href;
+    // The caller checks the processes the moment the check reports, while it still runs: once it exits, vitest's
+    // worker would end with it anyway.
+    const pidFile = JSON.stringify(join(root, "worker.pid"));
+    const script = `const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+import(${JSON.stringify(checker)}).then((m) => m.listTests(${JSON.stringify(root)}, { timeout: 15000 })).then((r) => {
+  console.log(JSON.stringify({ problems: r.problems, alive: JSON.parse(require("node:fs").readFileSync(${pidFile}, "utf8")).filter(alive) }));
+});`;
+    const output = await new Promise((done, failed) => execFile(process.execPath, ["-e", script], { env, timeout: 60_000 }, (error, stdout) => (error ? failed(error) : done(stdout))));
+    expect(JSON.parse(output)).toEqual({ problems: ["vitest list failed, so no test names anything: timed out after 15000 ms; its process tree was killed"], alive: [] });
+  }, 90_000);
+  it.runIf(process.platform === "win32")("says the tree could not be stopped when taskkill.exe cannot run, never that it was killed (review 140 C27)", async () => {
+    const root = suite({ "src/named.test.mjs": 'it("PO-1", () => {});\n', "hang.mjs": hang });
+    roots.push(root);
+    // Node itself needs SystemRoot to start, so it moves only once the collector runs, before the deadline.
+    const system = process.env.SystemRoot;
+    let listing;
+    try {
+      const listed = listTests(root, { vitest: join(root, "hang.mjs"), timeout: 8_000 });
+      for (let n = 0; n < 70 && !existsSync(join(root, "collector.pid")); n++) await new Promise((wake) => setTimeout(wake, 100));
+      process.env.SystemRoot = join(root, "no-system");
+      listing = await listed;
+    } finally {
+      process.env.SystemRoot = system;
+      for (const file of ["collector.pid", "grandchild.pid"]) {
+        const pid = Number(readFileSync(join(root, file), "utf8"));
+        if (alive(pid)) process.kill(pid);
+      }
+    }
+    expect(listing.problems).toEqual([expect.stringMatching(/^vitest list failed, so no test names anything: timed out after 8000 ms, and its process tree could not be stopped: .*no-system\\System32\\taskkill\.exe/)]);
   }, 30_000);
   it("VER-7, M1-AC7: takes the repository tests as vitest collects them, and catches a planted break in them", async () => {
     // docs/spec/v2.md here may trail the review branch, so compare against the baseline, not against zero.
