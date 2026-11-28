@@ -48,6 +48,13 @@ describe("spec traceability", () => {
     expect(checkSpecTrace(valid.replace("(PO-1, CH-1)", "(PO-99)")).problems.join("\n")).toContain("M1-AC1: cites no requirement");
     expect(checkSpecTrace(valid.replace("- CH-1.", "- CH-99.")).problems.join("\n")).toContain("M1: implements unknown requirement CH-99");
   });
+  it("skips a withdrawn requirement in rules 2 to 4, an Implements line that still lists it included (review 140 C28)", () => {
+    const withdrawn = valid.replace("- **CH-1** (M1; C, I) Second requirement.", "- **CH-1** (withdrawn in v0.3: merged into PO-1)").replace("(PO-1, CH-1)", "(PO-1)");
+    expect(checkSpecTrace(withdrawn).problems).toEqual([]);
+    expect(checkSpecTrace(withdrawn.replace("- CH-1.", "")).problems).toEqual([]);
+    expect(checkSpecTrace(withdrawn.replace("(PO-1)", "(PO-1, CH-1)")).problems).toEqual([]);
+    expect(checkSpecTrace(valid.replace("(PO-1, CH-1)", "(PO-1)")).problems).toEqual(["CH-1: in M1's Implements but no M1 AC cites it"]);
+  });
   it("requires carried-over IDs in Appendix A and rejects unknown table IDs", () => {
     const carried = valid.replace("Second requirement.", "Second requirement (from v1).");
     expect(checkSpecTrace(carried).problems).toContain("CH-1: carried over but not in Appendix A");

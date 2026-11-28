@@ -140,8 +140,9 @@ export function checkSpecTrace(source) {
   }
   for (const [milestone, ids] of implementsByMilestone) {
     for (const id of ids) {
+      // Rules 2 to 4 skip a withdrawn requirement (review 140 C28), so an Implements line may still list it.
       if (!requirements.has(id)) problems.push(`${milestone}: implements unknown requirement ${id}`);
-      else if (!citationsByMilestone.get(milestone)?.has(id)) problems.push(`${id}: in ${milestone}'s Implements but no ${milestone} AC cites it`);
+      else if (!requirements.get(id).withdrawn && !citationsByMilestone.get(milestone)?.has(id)) problems.push(`${id}: in ${milestone}'s Implements but no ${milestone} AC cites it`);
     }
   }
 
