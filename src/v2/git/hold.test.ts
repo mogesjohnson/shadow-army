@@ -663,10 +663,11 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     pause = true;
     const a = hold.run(main, ["log"]);
     await waiting;
-    const b = hold.run(main, ["status"]); // queued: it can't check or gate until A's git has ended or started
+    // Queued: it can't check or gate until A's git has ended or started. It rejects before A does, so it is expected now.
+    const b = expect(hold.run(main, ["status"])).rejects.toThrow("timed out twice");
     release();
     await expect(a).rejects.toThrow("timed out twice");
-    await expect(b).rejects.toThrow("timed out twice");
+    await b;
   }, 60_000);
 
   it("logs a hold's event when a later write, retry()'s, first records it, before its release (C29)", async () => {
