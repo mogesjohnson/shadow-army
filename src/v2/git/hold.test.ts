@@ -12,6 +12,8 @@ const temp = () => { const folder = mkdtempSync(join(tmpdir(), "sa-hold-")); fol
 afterEach(() => { for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true }); });
 const filter = '[filter "evil"]\n\tclean = evil-clean\n';
 const posixOnly = it.skipIf(process.platform === "win32");
+/** The hold's own transitions, without the inspections' rows. */
+const holds = (events: HoldEvent[]) => events.filter((event) => ["trusted", "held", "released"].includes(event.event)).map((event) => event.event);
 
 function setup(limits?: { entries?: number; bytes?: number }) {
   const base = temp(), repo = createHostileRepo(base), hooksDir = join(base, "empty-hooks"), events: HoldEvent[] = [];
@@ -29,7 +31,7 @@ describe("harness git hold", () => {
   it("trusts the state at the start, and holds on a later change until it is undone", async () => {
     const { repo, events, open } = setup(), hold = open();
     expect(await hold.start()).toEqual({ held: false });
-    expect(events[0]).toMatchObject({ event: "trusted" });
+    expect(holds(events)[0]).toBe("trusted");
     expect(await hold.check()).toEqual({ held: false });
     for (const [change, file] of [["config", ".git/config"], ["hook", ".git/hooks/pre-rebase"], ["info", ".git/info/attributes"]] as const) {
       const undo = plantChange(repo, change);
@@ -37,8 +39,8 @@ describe("harness git hold", () => {
       undo();
       expect(await hold.check()).toEqual({ held: false });
     }
-    expect(events.map((event) => event.event)).toEqual(["trusted", "held", "released", "held", "released", "held", "released"]);
-    expect(events[1]).toMatchObject({ files: [".git/config"] });
+    expect(holds(events)).toEqual(["trusted", "held", "released", "held", "released", "held", "released"]);
+    expect(events.find((event) => event.event === "held")).toMatchObject({ files: [".git/config"] });
   }, 60_000);
 
   it("holds for a filter added to the user's global config", async () => {
@@ -91,7 +93,7 @@ describe("harness git hold", () => {
     expect(await open().start()).toEqual({ held: false });
     const hold = open();
     await hold.start();
-    hold.setTurnOpen(true);
+    await hold.setTurnOpen(true);
     plantChange(repo, "hook");
     expect(await open().start()).toMatchObject({ held: true, files: [".git/hooks/pre-rebase"] });
   }, 60_000);
@@ -205,7 +207,7 @@ describe("a new registration's pointers, overlap and record (C15, C16, C17)", ()
     const [first, second] = await Promise.allSettled([hold.register(snap), hold.register(snap)]);
     expect(first.status).toBe("fulfilled");
     expect(second).toMatchObject({ status: "rejected", reason: expect.any(HarnessGitHeld) });
-    expect(events.slice(from).map((event) => event.event)).toEqual(["trusted", "held"]);
+    expect(holds(events.slice(from))).toEqual(["trusted", "held"]);
     expect(await hold.check()).toMatchObject({ held: true, files: [expect.stringMatching(/worktrees\/snap\/info\/exclude$/)] });
     await hold.accept();
     const other = worktree(base, repo, "other");
@@ -220,9 +222,9 @@ describe("a new registration's pointers, overlap and record (C15, C16, C17)", ()
     plantChange(repo, "config");
     const push = events.push;
     events.push = (...items: HoldEvent[]) => { if (items.some((event) => event.event === "trusted")) throw new Error("log failed"); return push.apply(events, items); };
-    await expect(hold.register(snap)).rejects.toThrow("log failed");
+    await expect(hold.register(snap)).rejects.toBeInstanceOf(HarnessGitHeld); // the hold's error wins; the trusted row stays pending
     events.push = push;
-    expect(events.at(-1)).toMatchObject({ event: "held", files: [".git/config"] }); // logged though the trusted line failed
+    expect(events.filter((event) => event.event === "held").at(-1)).toMatchObject({ files: [".git/config"] }); // logged though the trusted line failed
     expect(await open().start()).toMatchObject({ held: true, files: [".git/config"] });
   }, 60_000);
 
@@ -268,7 +270,7 @@ describe("a new registration's pointers, overlap and record (C15, C16, C17)", ()
     await hold.start();
     const snap = worktree(base, repo);
     await hold.register(snap);
-    hold.beginRemoval(snap); // recorded before the folder goes
+    await hold.beginRemoval(snap); // recorded before the folder goes
     rmSync(snap.workTree, { recursive: true, force: true }); // the folder went; its `worktrees/<id>` entry is still there
     expect(await hold.check()).toEqual({ held: false });
     const again = open();
@@ -299,9 +301,9 @@ describe("a new registration's pointers, overlap and record (C15, C16, C17)", ()
     const snap = worktree(base, repo), other = worktree(base, repo, "other");
     await hold.register(snap);
     await hold.register(other);
-    hold.beginRemoval(snap);
-    hold.endRemoval(snap); // the removal failed: its folder is still there
-    hold.beginRemoval(other); // this one stopped with the post office
+    await hold.beginRemoval(snap);
+    await hold.endRemoval(snap); // the removal failed: its folder is still there
+    await hold.beginRemoval(other); // this one stopped with the post office
     const again = open();
     expect(await again.start()).toEqual({ held: false });
     rmSync(snap.workTree, { recursive: true, force: true });
@@ -351,9 +353,10 @@ describe("commands that overlap (C10)", () => {
     const { main, statePath, open } = setup();
     let release!: () => void, started!: () => void;
     const gate = new Promise<void>((done) => { release = done; }), waiting = new Promise<void>((done) => { started = done; });
-    const hold = open((_, runner) => ({ run: async (args, kind) => {
-      if (args[0] === "log") { started(); await gate; }
-      return runner.run(args, kind);
+    const hold = open((_, runner) => ({ run: async (args, kind, begun) => {
+      const result = await runner.run(args, kind, begun);
+      if (args[0] === "log") { started(); await gate; } // git ran; its outcome is still to come
+      return result;
     } }));
     await hold.start();
     const slow = hold.run(main, ["log", "-1", "--oneline"]);
@@ -401,7 +404,7 @@ describe("the hold's own record (C3, C4)", () => {
     const again = open();
     await again.start();
     await expect(again.run(main, ["status"])).rejects.toThrow("timed out twice");
-    again.retry();
+    await again.retry();
     expect((await again.run(main, ["status"])).code).toBe(0);
   }, 60_000);
 
@@ -532,19 +535,19 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await hold.start();
     const snap = worktree(base, repo, "snap"), other = worktree(base, repo, "other");
     await hold.register(snap); await hold.register(other);
-    hold.beginRemoval(snap);
+    await hold.beginRemoval(snap);
     let unblock = blockWrite(statePath);
-    expect(() => hold.endRemoval(snap)).toThrow();
+    await expect(hold.endRemoval(snap)).rejects.toThrow();
     await expect(hold.unregister(other)).rejects.toThrow();
     unblock();
-    hold.endRemoval(snap); await hold.unregister(other); // the retries write
+    await hold.endRemoval(snap); await hold.unregister(other); // the retries write
     expect(record(statePath).removing).toBeUndefined();
     expect(record(statePath).repos).toHaveLength(2);
     rmSync(snap.workTree, { recursive: true, force: true });
     expect(await open().start()).toMatchObject({ held: true, files: [expect.stringMatching(/snap$/)] });
     unblock = blockWrite(statePath); // the same for the turn marker: a failed write leaves it closed
-    expect(() => hold.setTurnOpen(true)).toThrow();
-    unblock(); hold.retry();
+    await expect(hold.setTurnOpen(true)).rejects.toThrow();
+    unblock(); await hold.retry();
     expect(record(statePath).turnOpen).toBeUndefined();
   }, 60_000);
 
@@ -566,7 +569,7 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await expect(again.run(main, ["status"])).rejects.toThrow("timed out twice");
     release(); await expect(running).rejects.toThrow("timed out twice");
     const unblock = blockWrite(statePath);
-    expect(() => again.retry()).toThrow();
+    await expect(again.retry()).rejects.toThrow();
     unblock();
     await expect(again.run(main, ["status"])).rejects.toThrow("timed out twice"); // still held: retry() wrote nothing
   }, 60_000);
@@ -589,7 +592,7 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await expect(again.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
     const third = open(); await third.start(); // the record the restart wrote still holds
     await expect(third.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
-    third.retry();
+    await third.retry();
     expect((await third.run(main, ["status"])).code).toBe(0);
     await expect(hold.run(main, ["status"])).rejects.toThrow("timed out twice"); // held in memory
     await hold.check(); // and its next write records it
@@ -609,11 +612,11 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await hold.start();
     const other = worktree(base, repo, "other");
     await hold.register(other);
-    hold.beginRemoval(other);
+    await hold.beginRemoval(other);
     await expect(hold.run(main, ["status"])).rejects.toThrow();
     expect(hold.held).toBe(true);
     unblock();
-    hold.endRemoval(other); // an unrelated write, once storage recovers
+    await hold.endRemoval(other); // an unrelated write, once storage recovers
     expect(record(statePath)).toMatchObject({ held: { files: [".git/info/exclude"] } });
     expect(record(statePath).running).toBeUndefined();
     expect(await open().start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
@@ -644,21 +647,22 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await expect(again.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
   }, 60_000);
 
-  it("re-checks the timeout after a command's before-check, so one that landed meanwhile stops it (C28)", async () => {
+  it("queues a command called during another's before-check behind it, so the first one's timeout stops it (C28)", async () => {
     const { main, open } = setup();
     let release!: () => void, paused!: () => void, pause = false;
     const gate = new Promise<void>((done) => { release = done; }), waiting = new Promise<void>((done) => { paused = done; });
-    const hold = open((_, runner) => ({ run: async (args, kind) => {
+    const hold = open((_, runner) => ({ run: async (args, kind, started) => {
       if (args[0] === "log") throw new HarnessGitHeld("git log timed out twice");
-      if (pause && args[0] === "config") { pause = false; paused(); await gate; } // B's before-scan waits here
-      return runner.run(args, kind);
+      if (pause && args[0] === "config") { pause = false; paused(); await gate; } // A's before-scan waits here
+      return runner.run(args, kind, started);
     } }));
     await hold.start();
     pause = true;
-    const b = hold.run(main, ["status"]);
+    const a = hold.run(main, ["log"]);
     await waiting;
-    await expect(hold.run(main, ["log"])).rejects.toThrow("timed out twice"); // A times out, held and saved
+    const b = hold.run(main, ["status"]); // queued: it can't check or gate until A's git has ended or started
     release();
+    await expect(a).rejects.toThrow("timed out twice");
     await expect(b).rejects.toThrow("timed out twice");
   }, 60_000);
 
@@ -675,35 +679,36 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await hold.start();
     await expect(hold.run(main, ["status"])).rejects.toThrow(); // and the finally's write
     unblock();
-    expect(events.map((event) => event.event)).toEqual(["trusted"]);
-    hold.retry(); // the first write that succeeds
+    expect(holds(events)).toEqual(["trusted"]);
+    await hold.retry(); // the first write that succeeds
     expect(record(statePath)).toMatchObject({ held: { files: [".git/info/exclude"] } });
     expect(record(statePath).unlogged).toBeUndefined();
     writeFileSync(exclude, original);
     expect(await hold.check()).toEqual({ held: false });
-    expect(events.map((event) => event.event)).toEqual(["trusted", "held", "released"]);
-    expect(events[1]).toMatchObject({ files: [".git/info/exclude"] });
+    expect(holds(events)).toEqual(["trusted", "held", "released"]);
+    expect(events.find((event) => event.event === "held")).toMatchObject({ files: [".git/info/exclude"] });
   }, 60_000);
 
-  it("keeps a hold raised while an older scan ran, so that scan neither releases it nor runs git (self-review)", async () => {
+  it("queues a command behind an older one's before-check, so its hold isn't released by that scan (self-review)", async () => {
     const { repo, main, events, open } = setup();
     let release!: () => void, paused!: () => void, pause = false, ran = 0;
     const gate = new Promise<void>((done) => { release = done; }), waiting = new Promise<void>((done) => { paused = done; });
-    const hold = open((_, runner) => ({ run: async (args, kind) => {
+    const hold = open((_, runner) => ({ run: async (args, kind, started) => {
       if (pause && args[0] === "ls-files") { pause = false; paused(); await gate; } // B's scan has read info/ clean
       if (args[0] === "log") ran++;
-      return runner.run(args, kind);
+      return runner.run(args, kind, started);
     } }));
     await hold.start();
     pause = true;
     const b = hold.run(main, ["log", "-1"]);
     await waiting;
     appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n");
-    await expect(hold.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld); // A holds
+    const a = hold.run(main, ["status"]); // queued behind B's before-check, so its scan sees the change
     release();
-    await expect(b).rejects.toBeInstanceOf(HarnessGitHeld);
-    expect(ran).toBe(0);
-    expect(events.map((event) => event.event)).toEqual(["trusted", "held"]);
+    await expect(a).rejects.toBeInstanceOf(HarnessGitHeld);
+    await expect(b).rejects.toBeInstanceOf(HarnessGitHeld); // its after-check holds; nothing released the hold
+    expect(ran).toBe(1); // B's git ran on its clean scan, before A's check: the change landed mid-scan
+    expect(holds(events)).toEqual(["trusted", "held"]);
   }, 60_000);
 
   it("logs a restart's unlogged hold once, though the restart finds the same files (self-review)", async () => {
@@ -738,6 +743,6 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await expect(hold.check()).rejects.toThrow();
     unblock();
     expect(await hold.check()).toMatchObject({ held: true });
-    expect(events.map((event) => event.event)).toEqual(["trusted", "held"]);
+    expect(holds(events)).toEqual(["trusted", "held"]);
   }, 60_000);
 });

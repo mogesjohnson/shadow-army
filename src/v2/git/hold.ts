@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { HarnessGitHeld, type GitResult, type HarnessKind } from "./harness.js";
+import { Serial } from "./serial.js";
 
 /**
  * WSP-10's hold. Harness git compares what git reads for each repository it runs in (config, `hooks/`, `info/`,
@@ -16,9 +17,12 @@ export type TrustedState = Record<string, string>;
 
 /** Where git for a repository is: what harness git is given as GIT_DIR, GIT_WORK_TREE and GIT_COMMON_DIR. */
 export interface GitRepo { gitDir: string; workTree: string; commonDir: string }
-export interface GitRunner { run(args: string[], kind?: HarnessKind): Promise<GitResult> }
+/** `started`, when given, is called once git may run (its sweep entry recorded): the hold keeps its queue until then. */
+export interface GitRunner { run(args: string[], kind?: HarnessKind, started?: () => void): Promise<GitResult> }
 
-export interface HoldEvent { event: "trusted" | "held" | "released"; files?: string[]; hashes?: TrustedState; reason?: string }
+/** One audit row per transition (C37): a state trusted, a hold raised or released, an inspection started or finished. */
+export interface HoldEvent { event: "trusted" | "held" | "released" | "inspecting" | "inspected"; files?: string[]; hashes?: TrustedState; reason?: string }
+const EVENTS = ["trusted", "held", "released", "inspecting", "inspected"];
 
 export interface HarnessHoldOptions {
   /** The folder's own checkout. This army's snapshots and worktrees join it with `register`. */
@@ -42,9 +46,9 @@ interface Persisted {
   /** By repository (`keyOf`). */
   trusted: Record<string, TrustedState>;
   held?: { files: string[] };
-  /** Held events this record holds that the log may not have yet: logged at the next successful write, or at the start (C29). */
-  unlogged?: { files: string[]; reason: string }[];
-  /** An inspection had started and its outcome wasn't written: a restart compares with the trusted state (C27). */
+  /** Audit rows this record holds that the log may not have yet: logged at the end of the next operation, or at the start (C29, C37). */
+  unlogged?: HoldEvent[];
+  /** An inspection had started and its outcome wasn't written: a restart compares with the trusted state (C27, C31, C33). */
   checking?: boolean;
   turnOpen?: boolean;
   /** A harness git command had started and its after-check hadn't finished. */
@@ -277,8 +281,10 @@ function valid(value: unknown): value is Persisted {
   return isObject(value) && value.version === 2 && Array.isArray(value.repos) && value.repos.every(isRepo)
     && isObject(value.trusted) && Object.values(value.trusted).every(isStrings)
     && (value.held === undefined || (isObject(value.held) && Array.isArray(value.held.files) && value.held.files.every((file) => typeof file === "string")))
-    && (value.unlogged === undefined || (Array.isArray(value.unlogged) && value.unlogged.every((item) => isObject(item) && typeof item.reason === "string"
-      && Array.isArray(item.files) && item.files.every((file) => typeof file === "string"))))
+    && (value.unlogged === undefined || (Array.isArray(value.unlogged) && value.unlogged.every((item) => isObject(item)
+      && (item.event === undefined || EVENTS.includes(item.event as string)) && (item.reason === undefined || typeof item.reason === "string")
+      && (item.files === undefined || (Array.isArray(item.files) && item.files.every((file) => typeof file === "string")))
+      && (item.hashes === undefined || isStrings(item.hashes)))))
     && ["turnOpen", "running", "checking"].every((key) => value[key] === undefined || typeof value[key] === "boolean")
     && (value.timeout === undefined || typeof value.timeout === "string")
     && (value.removing === undefined || (Array.isArray(value.removing) && value.removing.every((key) => typeof key === "string")));
@@ -295,23 +301,31 @@ export class HarnessHold {
   private turnOpen = false;
   /** Harness git commands started whose after-check hasn't finished: the record says `running` while any is (C10). */
   private active = 0;
-  /** Inspections started whose outcome isn't written yet: the record says `checking` while any is (C27). */
-  private checks = 0;
+  /**
+   * An inspection started whose outcome isn't written: the record says `checking`. Set by the write before its
+   * scan, and cleared only by the write that records that scan's result, so a scan that rejects, or a result whose
+   * write fails, leaves it set for every later write (C27, C31, C36).
+   */
+  private checking = false;
   private timeout: string | undefined;
   /** Submodule names, at any depth, from the last scan. */
   private names: string[] = [];
   /** The last record exists but can't be read or checked: held, and the record left as it is, until the owner accepts. */
   private unverified = false;
-  /** The registration or unregistration running now, if any: the next waits for it (C16). */
-  private registering: Promise<void> = Promise.resolve();
   /** Repositories (`keyOf`) whose removal began (C21). */
   private removing: string[] = [];
-  /** Held events not logged yet: written with the record first, then logged, once, after a write succeeds (C29). */
-  private pending: { files: string[]; reason: string }[] = [];
+  /** Audit rows not logged yet: written with the record first, then logged, once, at the end of the operation (C29, C37). */
+  private pending: HoldEvent[] = [];
   /** The line of the hold `files` is, for a command whose gate is checked again after its check (C28). */
   private heldLine: string | undefined;
-  /** Holds raised so far: a scan that started before the latest can't release it (self-review). */
-  private holds = 0;
+  /**
+   * The one queue (C31-C40): every operation that reads or writes the record, scans, registers or gates a command
+   * runs here, one at a time, in the order called. One instance per state file: a second one stands for another
+   * process, a restart, whose only link to this one is the record's write-ahead markers.
+   */
+  private readonly queue = new Serial();
+  /** The record on disk holds every pending audit row: false after a write that failed, until one succeeds. */
+  private recorded = true;
 
   constructor(private readonly options: HarnessHoldOptions) { this.repos = [options.repo]; }
 
@@ -319,62 +333,68 @@ export class HarnessHold {
 
   /**
    * The post office's start. Where the last one ended held, with a turn or a command still open, or after a
-   * timeout, the state that log last trusted is kept; otherwise the state as it is now is the trusted one, but
-   * only where the scan finds no problem: one that does is compared with the saved state, and held with it, so
-   * nothing but that saved state releases the hold (C22). A change since then can't be told from the owner's.
+   * timeout, or mid-inspection, the state that log last trusted is kept; otherwise the state as it is now is the
+   * trusted one, but only where the scan finds no problem: one that does is compared with the saved state, and
+   * held with it, so nothing but that saved state releases the hold (C22). A change since then can't be told
+   * from the owner's. Its inspection is armed against the saved baseline before any metadata is read (C33).
    */
-  async start(): Promise<HoldCheck> {
+  start(): Promise<HoldCheck> { return this.op(() => this.startNow()); }
+
+  private async startNow(): Promise<HoldCheck> {
     const saved = this.load();
-    if (saved === "unreadable") { this.unverified = true; return this.check(); }
-    if (!saved) return this.check();
+    if (saved === "unreadable") { this.unverified = true; return this.checkNow(); }
+    if (!saved) return this.checkNow();
     this.repos = [this.options.repo, ...saved.repos.filter((repo) => keyOf(repo) !== keyOf(this.options.repo))];
     this.trusted = saved.trusted;
     this.turnOpen = saved.turnOpen === true;
-    this.pending = saved.unlogged ?? []; // logged with the first write below (C29)
+    this.pending = (saved.unlogged ?? []).map((event) => ({ ...event, event: event.event ?? "held" })); // logged at the end of the start (C29); an older record's rows are holds
     this.files = saved.held?.files; // so the same hold found again adds no second event
+    this.checking = saved.checking === true;
     // A timeout's hold outlives the restart, until g tries again. So does a command whose outcome no write recorded:
-    // its timeout may be the write that failed, and unchanged metadata can't say it wasn't (C25).
+    // its timeout may be the write that failed, and unchanged metadata can't say it wasn't (C25). That one is new here.
     this.timeout = saved.timeout ?? (saved.running ? UNRECORDED : undefined);
+    if (!saved.timeout && saved.running) this.pending = [...this.pending, { event: "held", reason: UNRECORDED }];
     // No removal runs across a restart: a mark whose folder is still there is one that stopped, so it's dropped,
     // and a removal that goes on marks it again (C21).
-    // Memory only: a write here would come before `held` is restored. A stop before the next write drops it again.
     this.removing = (saved.removing ?? []).filter((key) => { const repo = this.repos.find((other) => keyOf(other) === key); return repo !== undefined && typeOf(repo.workTree) === undefined; });
+    // Write-ahead (C33): everything restored is saved, with the inspection pending, before anything is read.
+    this.write(() => { this.checking = true; }, [{ event: "inspecting" }]);
     const current = await this.read();
     if (!(saved.held || saved.turnOpen || saved.running || saved.timeout || saved.checking) && !current.problems.length) { this.trust(current.state); return { held: false }; }
     const { files, why } = this.compare(current);
     if (!files.length) {
-      this.update(() => { this.files = undefined; this.heldLine = undefined; });
+      const released: HoldEvent[] = this.files ? [{ event: "released", reason: "undone while the post office was stopped" }] : [];
+      this.write(() => { this.files = undefined; this.heldLine = undefined; this.checking = false; }, [{ event: "inspected" }, ...released]);
       // Held by a timeout, or an outcome no write recorded, alone: still held, and said so with its line (M1-AC10).
       return this.timeout ? { held: true, files: [], line: this.line([], this.timeout, "g tries again") } : { held: false };
     }
-    return this.hold(files, `${why === "changed" ? "differs from" : `${why}, or differs from`} what the last post office trusted · can't be told from your own edit`);
+    return this.found(files, `${why === "changed" ? "differs from" : `${why}, or differs from`} what the last post office trusted · can't be told from your own edit`);
   }
 
   /** Before and after a command, and at each later use of the army: held while anything differs, and goes on once nothing does. */
-  async check(): Promise<HoldCheck> {
-    if (this.unverified) return this.hold([this.label(this.options.statePath)], ...UNREADABLE);
+  check(): Promise<HoldCheck> { return this.op(() => this.checkNow()); }
+
+  private async checkNow(): Promise<HoldCheck> {
+    if (this.unverified) { const held = this.raise([this.label(this.options.statePath)], ...UNREADABLE); this.write(); return held; }
     // Write-ahead (C27): the record says an inspection is pending before the scan, so a restart before its outcome is
     // written compares with the trusted state. A failed write here scans nothing, so nothing is known that disk lacks.
-    this.update(() => { this.checks++; });
-    const holds = this.holds;
-    let current: Awaited<ReturnType<HarnessHold["read"]>>;
-    try { current = await this.read(); } finally { this.checks--; } // in memory now; the outcome's write records it
+    this.write(() => { this.checking = true; }, [{ event: "inspecting" }]);
+    const current = await this.read(); // a rejection leaves the marker set, on disk and here (C31)
     if (!this.trusted && !current.problems.length) { this.trust(current.state); return { held: false }; }
     const { files, why } = this.compare(current);
-    if (files.length) return this.hold(files, why);
-    if (!this.files) { this.update(() => {}); return { held: false }; }
-    // A hold raised while this scan ran is newer than what it read: it stands until a later scan (self-review).
-    if (this.holds !== holds) return { held: true, files: this.files, line: this.heldLine ?? this.line(this.files, "changed") };
-    this.update(() => { this.files = undefined; this.heldLine = undefined; });
-    this.options.log?.({ event: "released" });
+    if (files.length) return this.found(files, why);
+    if (!this.files) { this.write(() => { this.checking = false; }, [{ event: "inspected" }]); return { held: false }; }
+    this.write(() => { this.files = undefined; this.heldLine = undefined; this.checking = false; }, [{ event: "inspected" }, { event: "released" }]);
     return { held: false };
   }
 
   /** The owner answered y on the guard's card, or Shadow Army's own command changed these files: this is the trusted state. */
-  async accept(): Promise<void> {
-    const current = await this.read();
-    if (current.problems.length) throw new Uninspectable(current.problems.join(", "), "the state can't be accepted");
-    this.trust(current.state, true);
+  accept(): Promise<void> {
+    return this.op(async () => {
+      const current = await this.read();
+      if (current.problems.length) throw new Uninspectable(current.problems.join(", "), "the state can't be accepted");
+      this.trust(current.state, true);
+    });
   }
 
   /**
@@ -383,60 +403,66 @@ export class HarnessHold {
    * user's config) keeps the hash already trusted, so a change to it is still held (C13). A repository already
    * trusted is checked against that baseline, never trusted again: a change holds.
    */
-  register(repo: GitRepo): Promise<void> {
-    // One at a time: two overlapping registrations would each see no baseline and the later replace the first (C16).
-    const next = this.registering.then(() => this.registerNow(repo));
-    this.registering = next.catch(() => {});
-    return next;
-  }
+  register(repo: GitRepo): Promise<void> { return this.op(() => this.registerNow(repo)); }
 
+  /** In the queue, so no other registration, check or unregistration changes a baseline while this one is checked (C16). */
   private async registerNow(repo: GitRepo): Promise<void> {
-    const key = keyOf(repo), find = () => this.repos.find((other) => keyOf(other) === key);
-    if (find() && !same(find()!, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
+    const key = keyOf(repo), known = this.repos.find((other) => keyOf(other) === key);
+    if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
     if (!this.trusted) throw new Error("harness git: a repository registers only once the folder's own state is trusted");
+    const baseline = known ? this.trusted[key] : undefined;
     // Every slot, present or absent, checked before the scan. A known repository's pointer that no longer matches
     // isn't refused but held, by the comparison with its baseline below, as a check would hold it.
     let pointers: TrustedState = {};
-    try { pointers = this.pointers(repo); } catch (error) { if (!(error instanceof PointerError) || !(find() && this.trusted[key])) throw error; }
-    const { state, problems } = await readState(this.options.repo, find() ?? repo, this.options.gitFor, this.options.limits);
+    try { pointers = this.pointers(repo); } catch (error) { if (!(error instanceof PointerError) || !baseline) throw error; }
+    // Write-ahead (C32): the inspection is recorded before the scan, so a restart before its outcome is written
+    // compares with the trusted state. A scan that can't be relied on leaves it set, for the next check to record.
+    this.write(() => { this.checking = true; }, [{ event: "inspecting" }]);
+    const { state, problems } = await readState(this.options.repo, known ?? repo, this.options.gitFor, this.options.limits);
     if (problems.length) throw new Uninspectable(problems.join(", "), "the repository can't be trusted");
-    // The pointers the scan read are the ones checked against the tuple, not ones swapped in or added meanwhile (C15, C19).
-    const moved = find() && this.trusted?.[key] ? [] : this.drift(pointers, state); // a known one: its baseline holds
-    if (moved.length) throw new Error(`harness git: ${moved.join(", ")} changed while ${repo.gitDir} registered`);
-    // Looked up again after the scan: a registration that finished meanwhile set the baseline this one is checked against (C16).
-    const known = find(), baseline = this.trusted?.[key];
-    if (known && !same(known, repo)) throw new Error(`harness git: ${repo.gitDir} is already registered with another working tree or common folder`);
-    if (known && baseline) {
+    if (baseline) {
       const files = changedFiles(baseline, state);
-      if (files.length) throw new HarnessGitHeld(this.hold(files, "changed since it was trusted").line);
+      if (files.length) throw new HarnessGitHeld(this.found(this.merge(files), "changed since it was trusted").line);
+      this.write(() => { this.checking = false; }, [{ event: "inspected" }]);
       return;
     }
-    // Its own: inside its git folder, or its working tree (its `.git` file, its submodules) but not the common folder.
-    const inside = (path: string, folder: string) => (path + "/").startsWith(canon(folder).replace(/\/?$/, "/"));
-    const isOwn = (label: string) => {
+    // The pointers the scan read are the ones checked against the tuple, not ones swapped in or added meanwhile (C15, C19).
+    const moved = this.drift(pointers, state);
+    if (moved.length) throw new Error(`harness git: ${moved.join(", ")} changed while ${repo.gitDir} registered`);
+    // Where a label's file sits (not where a link points), and whether that is inside a folder.
+    const where = (label: string) => {
       const name = label.replace(/^(config|submodule) /, ""), full = isAbsolute(name) ? name : resolve(this.options.repo.workTree, name);
-      const leaf = basename(full), path = `${canon(dirname(full))}/${process.platform === "linux" ? leaf : leaf.toLowerCase()}`; // where it sits, not where a link points
-      return inside(path, repo.gitDir) || (inside(path, repo.workTree) && !inside(path, repo.commonDir));
+      const leaf = basename(full);
+      return `${canon(dirname(full))}/${process.platform === "linux" ? leaf : leaf.toLowerCase()}`;
     };
-    const others = Object.entries(this.trusted ?? {}).filter(([other]) => other !== key).map(([, hashes]) => hashes);
+    const inside = (path: string, folder: string) => (path + "/").startsWith(canon(folder).replace(/\/?$/, "/"));
+    // Its own: inside its git folder, or its working tree (its `.git` file, its submodules) but not the common folder.
+    const isOwn = (label: string) => { const path = where(label); return inside(path, repo.gitDir) || (inside(path, repo.workTree) && !inside(path, repo.commonDir)); };
+    // Shared state another repository trusted that this tuple reads too: the common folder's hooks, info and config,
+    // and config from outside every covered repository (the user's own). Compared whether present now or not (C39).
+    const reads = (label: string) => {
+      if (label.startsWith("submodule ") || isOwn(label)) return false;
+      const path = where(label);
+      if (!label.startsWith("config ")) return ["hooks", "info"].some((name) => inside(path, join(repo.commonDir, name)));
+      return path === where(join(repo.commonDir, "config"))
+        || !this.repos.some((other) => [other.gitDir, other.workTree, other.commonDir].some((folder) => inside(path, folder)));
+    };
+    const others = Object.entries(this.trusted).filter(([other]) => other !== key).map(([, hashes]) => hashes);
+    const labels = new Set(Object.keys(state));
+    for (const hashes of others) for (const label of Object.keys(hashes)) if (reads(label)) labels.add(label);
     const own: TrustedState = {};
-    for (const [label, hash] of Object.entries(state)) {
-      const before = isOwn(label) ? hash : others.find((hashes) => label in hashes)?.[label];
+    for (const label of labels) {
+      const before = isOwn(label) ? state[label] : others.find((hashes) => label in hashes)?.[label];
       if (before !== undefined) own[label] = before; // shared state no other repository trusted is left out, so it holds
     }
-    // Shared state that already differs is held, in the same write as the baseline, so no restart trusts it (C17).
-    const files = changedFiles(own, state), why = "changed before it was registered";
-    // A record that can't be written leaves nothing registered, in memory either. Its held event is pending with
-    // it, logged by the write that records it, or by a later one (C29).
-    if (files.length) this.holds++;
-    this.update(() => {
-      this.repos = known ? this.repos : [...this.repos, repo];
-      this.trusted = { ...this.trusted, [key]: own };
-      if (files.length) { this.files = [...new Set([...this.files ?? [], ...files])].sort(); this.pending = [...this.pending, { files, reason: why }]; }
-    });
+    // Shared state that already differs (changed, added or removed) is held, in the same write as the baseline, so
+    // no restart trusts it (C17). The hold is raised first: a write that fails leaves nothing registered, but keeps
+    // the hold and its event here, and the record still says an inspection is pending (C32).
+    const files = changedFiles(own, state), held = files.length ? this.raise(this.merge(files), "changed before it was registered") : undefined;
+    this.write(() => { this.repos = [...this.repos, repo]; this.trusted = { ...this.trusted, [key]: own }; this.checking = false; },
+      [{ event: "trusted", hashes: own }, { event: "inspected", ...(files.length ? { files } : {}) }]);
     // Recorded now. A held repository stays registered though this throws: the caller unregisters it to remove it.
-    this.options.log?.({ event: "trusted", hashes: own });
-    if (files.length) throw new HarnessGitHeld(this.line(files, why));
+    if (held) throw new HarnessGitHeld(held.line);
   }
 
   /**
@@ -480,87 +506,125 @@ export class HarnessHold {
    * now or after a restart, is that removal's and not held (C21, WSP-10). `unregister` finishes it; `endRemoval`
    * ends one that failed or stopped.
    */
-  beginRemoval(repo: GitRepo) {
-    const key = keyOf(repo);
-    if (key === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo)) || this.removing.includes(key)) return;
-    this.update(() => { this.removing = [...this.removing, key]; });
-  }
-
-  /** The removal `beginRemoval` recorded failed or stopped: a folder of it found gone after this is held (C21). */
-  endRemoval(repo: GitRepo) {
-    const key = keyOf(repo);
-    if (!this.removing.includes(key)) return;
-    this.update(() => { this.removing = this.removing.filter((other) => other !== key); }); // a failed write leaves it to retry (C23)
-  }
-
-  /** Shadow Army's own command removed it. */
-  unregister(repo: GitRepo): Promise<void> {
-    // In the registrations' queue, so no baseline goes away while a registration is checked against it.
-    const next = this.registering.then(() => this.unregisterNow(repo));
-    this.registering = next.catch(() => {});
-    return next;
-  }
-
-  private async unregisterNow(repo: GitRepo): Promise<void> {
-    if (keyOf(repo) === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo))) return;
-    this.update(() => { // copies, not edits in place, so a failed write leaves it registered to retry (C23)
-      this.repos = this.repos.filter((other) => !same(other, repo));
-      this.removing = this.removing.filter((key) => key !== keyOf(repo));
-      if (this.trusted) { const { [keyOf(repo)]: _gone, ...rest } = this.trusted; this.trusted = rest; }
+  beginRemoval(repo: GitRepo): Promise<void> {
+    return this.op(async () => {
+      const key = keyOf(repo);
+      if (key === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo)) || this.removing.includes(key)) return;
+      this.write(() => { this.removing = [...this.removing, key]; });
     });
   }
 
-  /** The next use of the army tries again after a timeout (WSP-10). */
-  retry() { this.update(() => { this.timeout = undefined; }); }
+  /** The removal `beginRemoval` recorded failed or stopped: a folder of it found gone after this is held (C21). */
+  endRemoval(repo: GitRepo): Promise<void> {
+    return this.op(async () => {
+      const key = keyOf(repo);
+      if (!this.removing.includes(key)) return;
+      this.write(() => { this.removing = this.removing.filter((other) => other !== key); }); // a failed write leaves it to retry (C23)
+    });
+  }
+
+  /** Shadow Army's own command removed it. In the queue: no command's gate or registration's baseline sees it half gone (C40). */
+  unregister(repo: GitRepo): Promise<void> {
+    return this.op(async () => {
+      if (keyOf(repo) === keyOf(this.options.repo) || !this.repos.some((other) => same(other, repo))) return;
+      this.write(() => { // copies, not edits in place, so a failed write leaves it registered to retry (C23)
+        this.repos = this.repos.filter((other) => !same(other, repo));
+        this.removing = this.removing.filter((key) => key !== keyOf(repo));
+        if (this.trusted) { const { [keyOf(repo)]: _gone, ...rest } = this.trusted; this.trusted = rest; }
+      });
+    });
+  }
+
+  /** The next use of the army tries again after a timeout (WSP-10): the release is audited (C37). */
+  retry(): Promise<void> {
+    return this.op(async () => {
+      const released: HoldEvent[] = this.timeout ? [{ event: "released", reason: "g tries again" }] : [];
+      this.write(() => { this.timeout = undefined; }, released);
+    });
+  }
 
   /**
    * Run harness git in `repo`, one this hold covers (all three paths), with the paths it was registered with,
-   * between a check before and one after. The after-check runs
-   * whether the command succeeded or not, and a change on either side holds; the command's own error is the one thrown.
+   * between a check before and one after. The after-check runs whether the command succeeded or not, and a change
+   * on either side holds; the command's own error is the one thrown. In three phases (C31-C40):
+   * 1. In the queue: the gates, the before-check, the tuple found again and every gate again, then git started.
+   *    The queue is held until git may run (its sweep entry recorded), so nothing lands between the last gate and git.
+   * 2. Outside it, git runs; other operations go on. A timeout is held in memory the moment it's known (C24, C37).
+   * 3. In the queue again: the timeout recorded, the after-check, and the running marker cleared.
    */
   async run(repo: GitRepo, args: string[], kind: HarnessKind = "other"): Promise<GitResult> {
-    const covered = this.repos.find((other) => same(other, repo));
-    if (!covered) throw new Error(`harness git: ${repo.gitDir} isn't a repository this hold covers`);
-    const gate = (checked: boolean) => {
-      if (this.timeout) throw new HarnessGitHeld(this.timeout);
-      // Its folder is gone in a removal recorded as begun, which no scan covers, so nothing runs there (C20, C21).
-      // Gone with none recorded, the check below holds and names it.
-      if (this.removing.includes(keyOf(covered)) && typeOf(covered.workTree) === undefined) throw new Error(`harness git: ${covered.workTree} is being removed`);
-      if (checked && this.files) throw new HarnessGitHeld(this.heldLine ?? this.line(this.files, "changed"));
+    const { settled } = await this.queue.run(async () => {
+      try { return await this.launch(repo, args, kind); } catch (error) { try { this.drain(); } catch { /* the launch's error wins */ } throw error; }
+    });
+    let result: GitResult | undefined, failure: unknown;
+    try { result = await settled; } catch (error) { failure = error; }
+    return this.op(async () => {
+      let after: HoldCheck | undefined;
+      try {
+        // Saved with the running marker still set, before the after-check. If that write fails, the hold still
+        // stands here, and the next write records it (C24).
+        if (failure instanceof HarnessGitHeld) { try { this.write(); } catch (written) { failure = written; } }
+        after = await this.checkNow();
+      } finally {
+        // An after-check that failed leaves the outcome unknown: held here as a restart holds the `running` record,
+        // until g tries again (C25). The decrement stays in memory; disk says running until a write records the
+        // outcome with it, so a failed write here leaves the record on the safe side (C26).
+        if (after === undefined && !this.held) { this.timeout = UNRECORDED; this.pending = [...this.pending, { event: "held", reason: UNRECORDED }]; }
+        this.active--;
+        this.write();
+      }
+      if (failure !== undefined) throw failure;
+      if (after!.held) throw new HarnessGitHeld(after.line);
+      return result!;
+    });
+  }
+
+  /** Phase 1 of `run`, in the queue. Resolves, with git's outcome still to come, once git may run or has ended. */
+  private async launch(repo: GitRepo, args: string[], kind: HarnessKind): Promise<{ settled: Promise<GitResult> }> {
+    const find = () => {
+      const covered = this.repos.find((other) => same(other, repo));
+      if (!covered) throw new Error(`harness git: ${repo.gitDir} isn't a repository this hold covers`);
+      return covered;
     };
-    gate(false);
-    const before = await this.check();
+    this.gate(find(), false);
+    const before = await this.checkNow();
     if (before.held) throw new HarnessGitHeld(before.line);
-    // Every gate again after the await, just before git starts: another command's timeout or hold may have landed (C28).
-    gate(true);
+    // The whole tuple found again, and every gate again, just before git starts (C28, C40).
+    const covered = find();
+    this.gate(covered, true);
     // A guard command sees into every submodule: no `ignore`, in a config or a `.gitmodules`, at any depth (WSP-10).
     const config: [string, string][] = kind !== "guard" ? []
       : [["diff.ignoreSubmodules", "none"], ...this.names.map((name): [string, string] => [`submodule.${name}.ignore`, "none"])];
-    this.update(() => { this.active++; });
-    let result: GitResult | undefined, failure: unknown, after: HoldCheck | undefined;
-    try {
-      try { result = await this.options.gitFor(covered, config).run(args, kind); } catch (error) {
-        failure = error;
-        // Held in memory first, then saved as it's caught, with the running marker still set, before the after-check
-        // is awaited (C24). If that write fails, the hold still stands here, and the next write records it.
-        if (error instanceof HarnessGitHeld) { this.timeout = error.reason; try { this.update(() => {}); } catch (written) { failure = written; } }
-      }
-      after = await this.check();
-    } finally {
-      // An after-check that failed leaves the outcome unknown: held here as a restart holds the `running` record,
-      // until g tries again (C25). The decrement stays in memory; disk says running until a write records the
-      // outcome with it, so a failed write here leaves the record on the safe side (C26).
-      if (after === undefined && !this.held) this.timeout = UNRECORDED;
-      this.active--;
-      this.update(() => {});
-    }
-    if (failure !== undefined) throw failure;
-    if (after!.held) throw new HarnessGitHeld(after!.line);
-    return result!;
+    this.write(() => { this.active++; });
+    let started!: () => void;
+    const begun = new Promise<void>((done) => { started = done; });
+    const settled = (async () => this.options.gitFor(covered, config).run(args, kind, started))(); // a throw is an outcome too
+    // Held in memory the moment it's known, with its event pending, whichever phase is running (C24, C37).
+    settled.catch((error: unknown) => { if (error instanceof HarnessGitHeld) this.timedOut(error.reason); });
+    await Promise.race([begun, settled.then(() => {}, () => {})]);
+    return { settled }; // wrapped: a promise returned bare would be adopted, keeping the queue until git ends
+  }
+
+  /** Every gate on a command: a timeout, a removal under way, a gone working tree, a hold (C20, C21, C28, C40). */
+  private gate(covered: GitRepo, checked: boolean) {
+    if (this.timeout) throw new HarnessGitHeld(this.timeout);
+    const gone = typeOf(covered.workTree) === undefined;
+    // Its folder is gone in a removal recorded as begun, which no scan covers, so nothing runs there (C20, C21).
+    // Gone with none recorded, the check holds and names it.
+    if (this.removing.includes(keyOf(covered)) && gone) throw new Error(`harness git: ${covered.workTree} is being removed`);
+    if (!checked) return;
+    if (this.files) throw new HarnessGitHeld(this.heldLine ?? this.line(this.files, "changed"));
+    if (gone && keyOf(covered) !== keyOf(this.options.repo)) throw new Error(`harness git: ${covered.workTree} is gone`);
+  }
+
+  /** A guard or audit command timed out twice: held now, in memory, and recorded by the next write. */
+  private timedOut(reason: string) {
+    if (this.timeout !== reason) this.pending = [...this.pending, { event: "held", reason }];
+    this.timeout = reason;
   }
 
   /** A turn's guard is open until it has closed (PO-8): a restart then trusts the saved state, not the current one. */
-  setTurnOpen(open: boolean) { this.update(() => { this.turnOpen = open; }); }
+  setTurnOpen(open: boolean): Promise<void> { return this.op(async () => { this.write(() => { this.turnOpen = open; }); }); }
 
   /** Every covered repository's state, or the first thing that can't be inspected. */
   private async read(): Promise<{ state: Record<string, TrustedState>; problems: string[]; fatal: boolean }> {
@@ -615,21 +679,83 @@ export class HarnessHold {
 
   private label(path: string) { return new Scan(this.options.repo, this.options.gitFor).where(path); }
 
-  private hold(files: string[], why: string, how = "undo it to go on"): HoldCheck & { held: true } {
+  private line(files: string[], why: string, how = "undo it to go on") { return `Shadow Army: harness git held · ${files.length ? `${files.join(", ")} ` : ""}${why} · ${how}`; }
+
+  /** `files` with what is held already. */
+  private merge(files: string[]) { return [...new Set([...this.files ?? [], ...files])].sort(); }
+
+  /**
+   * Fail closed: the hold stands in memory, with its event pending, before any write, and no failed write takes it
+   * back; the first write that succeeds records both (C26, C29, C32). The same files held again add no event.
+   */
+  private raise(files: string[], why: string, how = "undo it to go on"): HoldCheck & { held: true } {
     const line = this.line(files, why, how);
-    // Fail closed: the hold stands in memory first, with its event pending, and the write records both; if the write
-    // fails, both stay, and the first write that succeeds records the hold and logs its event (C26, C29).
-    if (!this.files || this.files.join("\0") !== files.join("\0")) this.pending = [...this.pending, { files, reason: why }];
-    this.files = files; this.heldLine = line; this.holds++;
-    this.update(() => {});
+    if (!this.files || this.files.join("\0") !== files.join("\0")) this.pending = [...this.pending, { event: "held", files, reason: why }];
+    this.files = files; this.heldLine = line;
     return { held: true, files, line };
   }
 
-  private line(files: string[], why: string, how = "undo it to go on") { return `Shadow Army: harness git held · ${files.length ? `${files.join(", ")} ` : ""}${why} · ${how}`; }
+  /** An inspection found `files`: held, and its outcome written, which ends the inspection (C31). */
+  private found(files: string[], why: string): HoldCheck & { held: true } {
+    const held = this.raise(files, why);
+    this.write(() => { this.checking = false; }, [{ event: "inspected", files }]);
+    return held;
+  }
 
+  /** `state` is the trusted one now, in one write with its audit rows: trusted, a release, the inspection's end (C37). */
   private trust(state: Record<string, TrustedState>, accepted = false) {
-    this.update(() => { this.trusted = state; this.files = undefined; this.heldLine = undefined; if (accepted) this.unverified = false; });
-    this.options.log?.({ event: "trusted", hashes: flat(state) });
+    const events: HoldEvent[] = [{ event: "trusted", hashes: flat(state) }];
+    if (this.files) events.push({ event: "released", reason: accepted ? "accepted" : "undone" });
+    if (!accepted) events.push({ event: "inspected" });
+    this.write(() => { this.trusted = state; this.files = undefined; this.heldLine = undefined; this.checking = false; if (accepted) this.unverified = false; }, events);
+  }
+
+  /**
+   * One operation in the queue (C31-C40), then its audit rows logged. If `work` throws, its error is the one
+   * thrown, and the rows it left are logged quietly.
+   */
+  private op<T>(work: () => Promise<T>): Promise<T> {
+    return this.queue.run(async () => {
+      let result: T;
+      try { result = await work(); } catch (error) { try { this.drain(); } catch { /* work's error wins */ } throw error; }
+      this.drain();
+      return result;
+    });
+  }
+
+  /**
+   * Persist first (C23, C24): `change` is applied, `events` added to the pending audit rows, and the record
+   * written, with nothing awaited between; if the write fails, every field is put back as it was, so the caller's
+   * retry writes it again. What makes it more held is set before, not in `change`, so a failed write keeps it
+   * (C27, C32). Nothing is logged here: a log that throws can't undo a state transition (C36). Every change to
+   * what the record holds goes through here.
+   */
+  private write(change: () => void = () => {}, events: HoldEvent[] = []) {
+    const before = { repos: this.repos, trusted: this.trusted, files: this.files, heldLine: this.heldLine, turnOpen: this.turnOpen, active: this.active,
+      checking: this.checking, timeout: this.timeout, removing: this.removing, unverified: this.unverified, pending: this.pending };
+    change();
+    this.pending = [...this.pending, ...events];
+    try { this.save(); } catch (error) { Object.assign(this, before); throw error; }
+  }
+
+  /**
+   * The audit rows the record holds, logged once each, at the end of an operation (C29, C37). Only rows on disk:
+   * after a failed write, the record is written first. A row whose log throws stays pending, and in the record,
+   * for the next operation or a restart; the first error is thrown.
+   */
+  private drain() {
+    if (!this.pending.length) return;
+    if (!this.recorded) this.save();
+    const failed: HoldEvent[] = [];
+    let error: unknown, thrown = false;
+    for (const event of this.pending) {
+      try { this.options.log?.(event); } catch (caught) { failed.push(event); if (!thrown) { thrown = true; error = caught; } }
+    }
+    const logged = failed.length < this.pending.length;
+    this.pending = failed;
+    // The record still lists the logged rows until this write: a failure leaves that to the next, and a restart before it logs them again.
+    if (logged) try { this.save(); } catch { /* left to the next write */ }
+    if (thrown) throw error;
   }
 
   /** The last record; undefined when there is none, "unreadable" when one exists but can't be read or checked. */
@@ -641,36 +767,19 @@ export class HarnessHold {
     try { const record: unknown = JSON.parse(text); return valid(record) ? record : "unreadable"; } catch { return "unreadable"; }
   }
 
-  /**
-   * Persist first (C23, C24): `change` is applied and the record written in one step, with nothing awaited
-   * between; if the write fails, every field `change` set is put back as it was, so the caller's retry writes it
-   * again. What makes it more held is set before, not in `change`, so a failed write keeps it (C27). Every change
-   * to what the record holds goes through here. Once a write succeeds, the held events it holds are logged (C29).
-   */
-  private update(change: () => void) {
-    const before = { repos: this.repos, trusted: this.trusted, files: this.files, heldLine: this.heldLine, turnOpen: this.turnOpen,
-      active: this.active, checks: this.checks, timeout: this.timeout, removing: this.removing, unverified: this.unverified, pending: this.pending };
-    change();
-    try { this.save(); } catch (error) { Object.assign(this, before); throw error; }
-    if (!this.pending.length) return;
-    const events = this.pending;
-    for (const event of events) this.options.log?.({ event: "held", files: event.files, reason: event.reason });
-    this.pending = [];
-    // The record still lists them until this write: a failure leaves that to the next one, and a restart before it logs them again.
-    try { this.save(); } catch { /* left to the next write */ }
-  }
-
-  /** Written whole: to a file beside it, then renamed over it. */
+  /** Written whole: to a file beside it, then renamed over it. `recorded` says whether the record holds what memory does. */
   private save() {
-    if (this.unverified || !this.trusted) return;
+    if (this.unverified || !this.trusted) { this.recorded = true; return; }
     const record: Persisted = { version: 2, repos: this.repos, trusted: this.trusted,
       ...(this.files ? { held: { files: this.files } } : {}), ...(this.turnOpen ? { turnOpen: true } : {}),
-      ...(this.pending.length ? { unlogged: this.pending } : {}), ...(this.checks > 0 ? { checking: true } : {}),
+      ...(this.pending.length ? { unlogged: this.pending } : {}), ...(this.checking ? { checking: true } : {}),
       ...(this.active > 0 ? { running: true } : {}), ...(this.timeout ? { timeout: this.timeout } : {}),
       ...(this.removing.length ? { removing: this.removing } : {}) };
     const path = this.options.statePath, temp = `${path}.${process.pid}.tmp`;
+    this.recorded = false;
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(temp, JSON.stringify(record));
     renameSync(temp, path);
+    this.recorded = true;
   }
 }
