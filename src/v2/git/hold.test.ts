@@ -22,9 +22,12 @@ function setup(limits?: { entries?: number; bytes?: number }) {
   const gitFor = (where: GitRepo, config: [string, string][] = []) => new HarnessGit({ repo: where, hooksDir, env: withConfig(env, config) });
   const main: GitRepo = { gitDir: repo.gitDir, workTree: repo.root, commonDir: repo.gitDir };
   const statePath = join(base, "log", "hold.json");
+  /** `sink.fail`: the log throws EIO, as a full disk would (C36, C37). */
+  const sink = { fail: false };
+  const log = (event: HoldEvent) => { if (sink.fail) throw Object.assign(new Error("EIO: the log can't be written"), { code: "EIO" }); events.push(event); };
   const open = (wrap?: (repo: GitRepo, runner: GitRunner) => GitRunner) =>
-    new HarnessHold({ repo: main, gitFor: (where, config) => (wrap ?? ((_, runner) => runner))(where, gitFor(where, config)), statePath, limits, log: (event) => events.push(event) });
-  return { base, repo, events, hooksDir, main, statePath, open };
+    new HarnessHold({ repo: main, gitFor: (where, config) => (wrap ?? ((_, runner) => runner))(where, gitFor(where, config)), statePath, limits, log });
+  return { base, repo, events, hooksDir, main, statePath, open, sink };
 }
 
 describe("harness git hold", () => {
@@ -744,5 +747,183 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     unblock();
     expect(await hold.check()).toMatchObject({ held: true });
     expect(holds(events)).toEqual(["trusted", "held"]);
+  }, 60_000);
+
+  // Review 143 (C31-C40): one queue for every operation, write-ahead at start and registration, every transition audited.
+  it("keeps the inspection marker when a check's scan rejects, through an unrelated write, so a restart holds (C31)", async () => {
+    const { base, repo, main, statePath, open } = setup();
+    let failing = false;
+    const hold = open((_, runner) => ({ run: async (args, kind, started) => {
+      if (failing && args[0] === "config") { failing = false; throw Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" }); }
+      return runner.run(args, kind, started);
+    } }));
+    await hold.start();
+    const snap = worktree(base, repo, "snap");
+    await hold.register(snap);
+    await hold.beginRemoval(snap);
+    appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n");
+    failing = true;
+    await expect(hold.check()).rejects.toThrow("EAGAIN");
+    expect(record(statePath)).toMatchObject({ checking: true });
+    await hold.endRemoval(snap); // an unrelated write records no outcome, so the marker stays
+    expect(record(statePath)).toMatchObject({ checking: true });
+    const again = open();
+    expect(await again.start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
+    await expect(again.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+  }, 60_000);
+
+  it("keeps a hold registration found though its save fails, and the record says an inspection is pending (C32)", async () => {
+    const { base, repo, main, statePath, open } = setup();
+    let unblock = () => {}, armed = false;
+    const snap = worktree(base, repo, "snap");
+    const hold = open((where, runner) => ({ run: async (args, kind, started) => {
+      const result = await runner.run(args, kind, started);
+      if (armed && where.workTree === snap.workTree && args[0] === "ls-files") { armed = false; unblock = blockWrite(statePath); } // the scan's last git
+      return result;
+    } }));
+    await hold.start();
+    appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n");
+    armed = true;
+    await expect(hold.register(snap)).rejects.toThrow();
+    expect(hold.held).toBe(true);
+    unblock();
+    expect(record(statePath)).toMatchObject({ checking: true });
+    expect(record(statePath).repos).toHaveLength(1); // the registration itself rolled back
+    await expect(hold.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+    const again = open();
+    expect(await again.start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
+    await expect(again.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+  }, 60_000);
+
+  it("saves a start's inspection before it reads, so a hold whose save failed is held after a restart (C33)", async () => {
+    const { base, repo, main, statePath, open } = setup(), first = open();
+    await first.start();
+    const snap = worktree(base, repo, "snap");
+    await first.register(snap);
+    // While no post office runs: the worktree's commondir is bad, and the shared exclude file changed.
+    const commondir = join(snap.gitDir, "commondir"), pointer = readFileSync(commondir, "utf8");
+    writeFileSync(commondir, `${join(base, "elsewhere")}\n`);
+    appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n");
+    let unblock = () => {}, armed = true;
+    const second = open((_, runner) => ({ run: async (args, kind, started) => {
+      if (armed && args[0] === "config") { armed = false; unblock = blockWrite(statePath); } // after the write-ahead
+      return runner.run(args, kind, started);
+    } }));
+    await expect(second.start()).rejects.toThrow();
+    expect(second.held).toBe(true);
+    unblock();
+    expect(record(statePath)).toMatchObject({ checking: true });
+    writeFileSync(commondir, pointer); // only the pointer repaired
+    const third = open();
+    expect(await third.start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
+    await expect(third.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+  }, 60_000);
+
+  it("clears the inspection marker once its outcome is written, though the log threw while draining (C36)", async () => {
+    const { repo, statePath, open, sink } = setup();
+    let unblock = () => {}, armed = false;
+    const hold = open((_, runner) => ({ run: async (args, kind, started) => {
+      if (armed && args[0] === "config") { armed = false; unblock = blockWrite(statePath); } // the hold's write fails
+      return runner.run(args, kind, started);
+    } }));
+    await hold.start();
+    const undo = plantChange(repo, "hook");
+    armed = true;
+    await expect(hold.check()).rejects.toThrow(); // its held event is pending
+    unblock();
+    sink.fail = true;
+    await expect(hold.check()).rejects.toThrow("EIO"); // the scan ran and its outcome was written, then the log threw
+    expect(record(statePath)).toMatchObject({ held: { files: [".git/hooks/pre-rebase"] } });
+    expect(record(statePath).checking).toBeUndefined();
+    sink.fail = false;
+    undo();
+    expect(await hold.check()).toEqual({ held: false });
+    expect(record(statePath).checking).toBeUndefined();
+    expect(record(statePath).unlogged).toBeUndefined();
+    plantChange(repo, "config"); // the owner's edit while stopped is trusted, not taken for an interrupted check
+    expect(await open().start()).toEqual({ held: false });
+  }, 60_000);
+
+  it("logs a release found at the start, a release whose log threw, and a timeout's hold and its retry (C37)", async () => {
+    const { main, repo, events, open, sink } = setup();
+    let hold = open();
+    await hold.start();
+    let undo = plantChange(repo, "hook");
+    expect(await hold.check()).toMatchObject({ held: true });
+    undo(); // undone while no post office runs
+    expect(await open().start()).toEqual({ held: false });
+    expect(holds(events)).toEqual(["trusted", "held", "released"]);
+    hold = open(); await hold.start();
+    undo = plantChange(repo, "hook");
+    await hold.check();
+    undo();
+    sink.fail = true;
+    await expect(hold.check()).rejects.toThrow("EIO"); // released on disk; its row is pending
+    sink.fail = false;
+    expect(await hold.check()).toEqual({ held: false });
+    expect(holds(events).slice(3)).toEqual(["trusted", "held", "released"]);
+    const from = events.length;
+    const timing = open((_, runner) => ({ run: async (args, kind, started) => {
+      if (args[0] === "log") throw new HarnessGitHeld("git log timed out twice");
+      return runner.run(args, kind, started);
+    } }));
+    await timing.start();
+    await expect(timing.run(main, ["log"])).rejects.toThrow("timed out twice");
+    await timing.retry();
+    expect(holds(events.slice(from))).toEqual(["trusted", "held", "released"]);
+    expect(events.slice(from).filter((event) => event.event !== "trusted" && event.reason)).toMatchObject([{ event: "held", reason: "git log timed out twice" }, { event: "released" }]);
+  }, 60_000);
+
+  it("holds a registration when a shared file the other tuple trusted was removed before it (C39)", async () => {
+    const { base, repo, main, statePath, open } = setup(), hold = open();
+    await hold.start();
+    rmSync(join(repo.gitDir, "info", "exclude"));
+    const snap = worktree(base, repo, "snap");
+    await expect(hold.register(snap)).rejects.toBeInstanceOf(HarnessGitHeld);
+    expect(record(statePath)).toMatchObject({ held: { files: [".git/info/exclude"] } });
+    const again = open();
+    expect(await again.start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
+    await expect(again.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+  }, 60_000);
+
+  it("runs an unregistration called during a command's before-check after its git started, and refuses a gone worktree (C40)", async () => {
+    const { base, repo, statePath, open } = setup();
+    const snap = worktree(base, repo, "snap");
+    let unregistered: Promise<void> | undefined, during = false, registered: boolean | undefined;
+    const hold: HarnessHold = open((_, runner) => ({ run: async (args, kind, started) => {
+      if (during && args[0] === "ls-files") { during = false; unregistered = hold.unregister(snap); await new Promise((done) => setTimeout(done, 50)); }
+      if (args[0] === "log") registered = record(statePath).repos.some((other: GitRepo) => other.workTree === snap.workTree);
+      return runner.run(args, kind, started);
+    } }));
+    await hold.start();
+    await hold.register(snap);
+    during = true;
+    expect((await hold.run(snap, ["log", "-1"])).code).toBe(0);
+    expect(registered).toBe(true); // git ran in a tuple still registered
+    await unregistered;
+    expect(record(statePath).repos).toHaveLength(1);
+    // Codex's second repro: during the before-check, the removal is marked, the folder deleted and the tuple
+    // unregistered. Both calls queue behind the launch, whose gate, run again, finds the folder gone: git never runs.
+    const other = worktree(base, repo, "other");
+    let removal: Promise<void>[] = [], removing = false, ran = false;
+    const second: HarnessHold = open((where, runner) => ({ run: async (args, kind, started) => {
+      if (args[0] === "log") ran = true;
+      const result = await runner.run(args, kind, started);
+      if (removing && where.workTree === other.workTree && args[0] === "ls-files") {
+        removing = false;
+        removal = [Promise.resolve(second.beginRemoval(other))];
+        rmSync(other.workTree, { recursive: true, force: true });
+        removal.push(second.unregister(other));
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      return result;
+    } }));
+    await second.start();
+    await second.register(other);
+    removing = true;
+    await expect(second.run(other, ["log", "-1"])).rejects.toThrow(/is (being removed|gone)/);
+    expect(ran).toBe(false);
+    await Promise.all(removal);
+    expect(record(statePath).repos).toHaveLength(1);
   }, 60_000);
 });
