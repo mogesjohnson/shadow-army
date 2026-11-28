@@ -573,16 +573,14 @@ describe("persist first: a failed write changes nothing, so a retry writes again
 
   it("holds a restart that finds a command's outcome unrecorded, though its timeout's write failed, until g tries again (C25)", async () => {
     const { main, statePath, open } = setup();
-    let release!: () => void, checking!: () => void, unblock = () => {}, timedOut = false;
-    const gate = new Promise<void>((done) => { release = done; }), pending = new Promise<void>((done) => { checking = done; });
+    let unblock = () => {};
     const hold = open((_, runner) => ({ run: async (args, kind) => {
-      if (args[0] === "log") { timedOut = true; unblock = blockWrite(statePath); throw new HarnessGitHeld("git log timed out twice"); }
-      if (timedOut) { checking(); await gate; }
+      if (args[0] === "log") { unblock = blockWrite(statePath); throw new HarnessGitHeld("git log timed out twice"); }
       return runner.run(args, kind);
     } }));
     await hold.start();
-    const running = hold.run(main, ["log"]);
-    await pending;
+    // The timeout's write fails, and so does the after-check's write-ahead, so it scans nothing (C27).
+    await expect(hold.run(main, ["log"])).rejects.toThrow();
     expect(record(statePath)).toMatchObject({ running: true });
     expect(record(statePath).timeout).toBeUndefined(); // the timeout's write failed
     unblock();
@@ -593,17 +591,19 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     await expect(third.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
     third.retry();
     expect((await third.run(main, ["status"])).code).toBe(0);
-    release(); await expect(running).rejects.toThrow();
-    await expect(hold.run(main, ["status"])).rejects.toThrow("timed out twice"); // held in memory, and on disk by the finally
+    await expect(hold.run(main, ["status"])).rejects.toThrow("timed out twice"); // held in memory
+    await hold.check(); // and its next write records it
     expect(record(statePath).timeout).toBe("git log timed out twice");
   }, 60_000);
 
   it("keeps a hold the after-check found though its write and the finally's fail, so a later write records it (C26)", async () => {
     const { base, repo, main, statePath, open } = setup();
-    let unblock = () => {};
+    let unblock = () => {}, ran = false;
     const hold = open((_, runner) => ({ run: async (args, kind) => {
+      // The after-check's write-ahead succeeds; the block lands at its scan's first git, so the hold's write fails.
+      if (ran && args[0] === "config") { ran = false; unblock = blockWrite(statePath); }
       const result = await runner.run(args, kind);
-      if (args[0] === "status") { appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n"); unblock = blockWrite(statePath); }
+      if (args[0] === "status") { appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n"); ran = true; }
       return result;
     } }));
     await hold.start();
@@ -617,6 +617,72 @@ describe("persist first: a failed write changes nothing, so a retry writes again
     expect(record(statePath)).toMatchObject({ held: { files: [".git/info/exclude"] } });
     expect(record(statePath).running).toBeUndefined();
     expect(await open().start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
+  }, 60_000);
+
+  it("records an inspection before its scan, so a restart after its hold's write failed is held (C27)", async () => {
+    const { repo, main, statePath, open } = setup();
+    let unblock = () => {}, armed = false;
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      if (armed && args[0] === "config") { armed = false; unblock = blockWrite(statePath); } // the scan's write, not the write-ahead
+      return runner.run(args, kind);
+    } }));
+    await hold.start();
+    appendFileSync(join(repo.gitDir, "info", "exclude"), "\n*.secret\n");
+    // Codex's repro: the first write fails, so nothing is scanned and nothing is held that disk lacks.
+    unblock = blockWrite(statePath);
+    await expect(hold.run(main, ["status"])).rejects.toThrow();
+    expect(hold.held).toBe(false);
+    unblock();
+    // The write-ahead succeeds and the hold's write fails: the record says an inspection was pending.
+    armed = true;
+    await expect(hold.run(main, ["status"])).rejects.toThrow();
+    expect(hold.held).toBe(true);
+    expect(record(statePath)).toMatchObject({ checking: true });
+    unblock();
+    const again = open();
+    expect(await again.start()).toMatchObject({ held: true, files: [".git/info/exclude"] });
+    await expect(again.run(main, ["status"])).rejects.toBeInstanceOf(HarnessGitHeld);
+  }, 60_000);
+
+  it("re-checks the timeout after a command's before-check, so one that landed meanwhile stops it (C28)", async () => {
+    const { main, open } = setup();
+    let release!: () => void, paused!: () => void, pause = false;
+    const gate = new Promise<void>((done) => { release = done; }), waiting = new Promise<void>((done) => { paused = done; });
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      if (args[0] === "log") throw new HarnessGitHeld("git log timed out twice");
+      if (pause && args[0] === "config") { pause = false; paused(); await gate; } // B's before-scan waits here
+      return runner.run(args, kind);
+    } }));
+    await hold.start();
+    pause = true;
+    const b = hold.run(main, ["status"]);
+    await waiting;
+    await expect(hold.run(main, ["log"])).rejects.toThrow("timed out twice"); // A times out, held and saved
+    release();
+    await expect(b).rejects.toThrow("timed out twice");
+  }, 60_000);
+
+  it("logs a hold's event when a later write, retry()'s, first records it, before its release (C29)", async () => {
+    const { repo, main, events, statePath, open } = setup();
+    const exclude = join(repo.gitDir, "info", "exclude"), original = readFileSync(exclude, "utf8");
+    let unblock = () => {}, ran = false;
+    const hold = open((_, runner) => ({ run: async (args, kind) => {
+      if (ran && args[0] === "config") { ran = false; unblock = blockWrite(statePath); } // the after-check's hold write fails
+      const result = await runner.run(args, kind);
+      if (args[0] === "status") { appendFileSync(exclude, "\n*.secret\n"); ran = true; }
+      return result;
+    } }));
+    await hold.start();
+    await expect(hold.run(main, ["status"])).rejects.toThrow(); // and the finally's write
+    unblock();
+    expect(events.map((event) => event.event)).toEqual(["trusted"]);
+    hold.retry(); // the first write that succeeds
+    expect(record(statePath)).toMatchObject({ held: { files: [".git/info/exclude"] } });
+    expect(record(statePath).unlogged).toBeUndefined();
+    writeFileSync(exclude, original);
+    expect(await hold.check()).toEqual({ held: false });
+    expect(events.map((event) => event.event)).toEqual(["trusted", "held", "released"]);
+    expect(events[1]).toMatchObject({ files: [".git/info/exclude"] });
   }, 60_000);
 
   it("says a restart held by a timeout or an unrecorded outcome is held, with the line to show (self-review)", async () => {
