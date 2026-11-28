@@ -185,22 +185,24 @@ export class PostOffice {
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
     this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets, {
-      onFailure: ({ name, error }) => this.logFailed(name, error),
+      onFailure: ({ name, error, type }) => this.logFailed(name, error, type),
       // C22: a later line closed the opening gap, so no send can be refused for it: it is reported unmarked now.
       onRecovered: (name) => this.releaseHeldGap(name),
     });
   }
 
   /** C3 (PO-5, M1-AC4): one notice per gap, outside the failing log; the turn carries on. */
-  private logFailed(name: string, error: Error): void {
+  private logFailed(name: string, error: Error, type: string | undefined): void {
     // M1-AC4: the office log failing while it records a notice is the same failure (a full disk), already reported once.
     if (name === "post-office" && this.noticesWriting > 0) return;
     // C19/C26/C29: a gap the `opened` record opened waits only while a send holds the session: if that send is refused
     // for the same gap, the one event is marked refused; a send that ends first releases it. A standalone open is reported now.
+    // C30: only the lost record's own kind decides: any other line lost meanwhile is an ordinary, unmarked gap.
     const paired = [...this.sessions.values()].some((session) => session.id === name && session.active);
-    if (this.openedWrites.has(name) && paired) { this.heldGaps.set(name, error); return; }
-    if (this.openingWrites.has(name)) this.refusalsReported.add(name);
-    this.reportGap(name, error, this.openingWrites.has(name));
+    if (type === "opened" && this.openedWrites.has(name) && paired) { this.heldGaps.set(name, error); return; }
+    const refused = type === "turn_started" && this.openingWrites.has(name);
+    if (refused) this.refusalsReported.add(name);
+    this.reportGap(name, error, refused);
   }
 
   private releaseHeldGap(name: string): void {
@@ -537,13 +539,7 @@ export class PostOffice {
     session.used = true;
     const next = (async () => {
       // WSP-2: fail closed before the brief goes out when the claims may have changed hands.
-      if (!(await this.renewLease(session))) {
-        session.down = true;
-        await session.channel?.close();
-        const reason = "the claims lease was lost, so the files may have changed hands; reconnect to start fresh";
-        this.record({ soldier: key, type: "down", data: { reason } }, session);
-        throw new Error(`${key}: ${reason}`);
-      }
+      if (!(await this.renewLease(session))) await this.leaseLostDown(session);
       // A copied credential in a brief must never enter a soldier's stdin/context either.
       return this.run(session, text.replace(new RegExp(this.secrets[0]!, "gi"), REDACTED));
     })();
@@ -556,6 +552,15 @@ export class PostOffice {
     }
   }
 
+  /** WSP-2: a lease known lost before the turn's opening takes the session down and refuses the send; nothing is opened. */
+  private async leaseLostDown(session: Session): Promise<never> {
+    session.down = true;
+    await session.channel?.close();
+    const reason = "the claims lease was lost, so the files may have changed hands; reconnect to start fresh";
+    this.record({ soldier: session.spec.key, type: "down", data: { reason } }, session);
+    throw new Error(`${session.spec.key}: ${reason}`);
+  }
+
   private async run(session: Session, text: string): Promise<TurnResult> {
     // C2 (PO-5, M1-AC4): the turn's opening record is written, after everything before it, before the soldier gets the message.
     await this.logPending;
@@ -565,8 +570,8 @@ export class PostOffice {
     // A write session has no read-only snapshot to guard: the claim audit takes its place.
     const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
     session.guardBase = await this.exclusive(() => captureState(this.root));
-    // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
-    await this.renewLease(session);
+    // WSP-2 (C31): a lease that could not be renewed since the last turn may have changed hands: no opening is written.
+    if (!(await this.renewLease(session))) { session.guardBase = undefined; await this.leaseLostDown(session); }
     this.openingWrites.add(session.id);
     const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() }).finally(() => this.openingWrites.delete(session.id));
     const held = this.heldGaps.get(session.id);
@@ -583,7 +588,7 @@ export class PostOffice {
     try {
       this.check();
       if (session.write?.leaseLost) {
-        // C2: the claims may now be someone else's, so nothing reaches the CLI; a fresh open claims them again.
+        // C2: lost while the opening was written (the renewal above passed): the claims may now be someone else's, so nothing reaches the CLI; a fresh open claims them again.
         session.down = true;
         await session.channel!.close();
         result = { status: "failed", text: "", refusal: false, error: { kind: "other", message: "the claims lease was lost before this turn, so nothing was sent; reconnect to claim the files again" } };

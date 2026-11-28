@@ -140,8 +140,9 @@ export interface OpeningFile {
 }
 
 export interface SessionLogsOptions {
-  /** Called once when a gap opens in a log: its first line lost after a failed retry. The post office reports it. */
-  onFailure?: (failure: { name: string; error: Error }) => void;
+  /** Called once when a gap opens in a log: its first line lost after a failed retry. The post office reports it.
+   * `type` is the lost record's own `type` (C30), so only a lost turn opening or `opened` record is treated as one. */
+  onFailure?: (failure: { name: string; error: Error; type?: string }) => void;
   /** Called when a later line is written and so closes the gap `onFailure` reported (C22). */
   onRecovered?: (name: string) => void;
   /** Delay before the one retry; PO-5 says 100 ms. */
@@ -248,7 +249,8 @@ export class SessionLogs {
     const line = JSON.stringify(safe);
     if (line === undefined) throw new Error("session log record is not JSON data");
     if (opensTurn(data)) return this.enqueue(name, () => this.tryOpening(name, safe as Record<string, unknown>));
-    return this.enqueue(name, () => this.tryWrite(name, line));
+    const type = (safe as { type?: unknown } | null)?.type;
+    return this.enqueue(name, () => this.tryWrite(name, line, typeof type === "string" ? type : undefined));
   }
 
   /** Holds one streamed fragment of a message. Nothing is written until the message ends. */
@@ -305,18 +307,18 @@ export class SessionLogs {
   }
 
   /** The line is lost after its retry: it is counted, and a new gap is reported once, right now (PO-5, C26). */
-  private lost(name: string, error: Error): LogWriteResult {
+  private lost(name: string, error: Error, type: string | undefined): LogWriteResult {
     const gap = this.gaps.get(name);
     if (gap) gap.lost++;
     else {
       this.gaps.set(name, { id: randomUUID(), lost: 1 });
       // The notice belongs to the caller; a notice that throws must not stop this log's queue.
-      try { this.options.onFailure?.({ name, error }); } catch { /* the caller's own failure */ }
+      try { this.options.onFailure?.({ name, error, ...(type ? { type } : {}) }); } catch { /* the caller's own failure */ }
     }
     return { written: false, error };
   }
 
-  private async tryWrite(name: string, line: string): Promise<LogWriteResult> {
+  private async tryWrite(name: string, line: string, type: string | undefined): Promise<LogWriteResult> {
     const path = join(this.directory, `${name}.jsonl`);
     let error: Error | undefined;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -330,7 +332,7 @@ export class SessionLogs {
         this.cut.add(name);
       }
     }
-    return this.lost(name, error!);
+    return this.lost(name, error!, type);
   }
 
   /** PO-5 (C24, C25): see the class comment. Each try has its own handle, its own `opening` id, and two syncs. */
@@ -370,7 +372,7 @@ export class SessionLogs {
       }
     }
     if (refused.length) this.refused.set(name, [...(this.refused.get(name) ?? []), ...refused]);
-    return this.lost(name, error!);
+    return this.lost(name, error!, "turn_started");
   }
 
   /** Writes and syncs one row through `file`: true only when it is on disk in the file the path still names. */

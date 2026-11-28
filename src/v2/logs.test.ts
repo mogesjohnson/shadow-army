@@ -393,6 +393,8 @@ describe("the flushed opening row (PO-5)", () => {
     // Each try's opening sync and its refusal's (C27).
     expect(sync).toHaveBeenCalledTimes(4);
     expect(onFailure).toHaveBeenCalledTimes(1);
+    // C30: the callback names the lost record's kind, so the post office marks only a lost opening refused.
+    expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ name: "soldier-1", type: "turn_started" }));
   });
 
   it("never trusts a failed sync: the retry writes a new opening, names the failed one refused, and confirms only the new one (C21, C24)", async () => {
@@ -488,6 +490,8 @@ describe("the flushed opening row (PO-5)", () => {
     expect((await logs.write("soldier-1", { type: "turn_started" })).written).toBe(false);
     expect(onRecovered).not.toHaveBeenCalled();
     expect(onFailure).toHaveBeenCalledTimes(1);
+    // C30: the gap is the `opened` record's, not the opening's that fell into it.
+    expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ type: "opened" }));
     expect((await logs.write("soldier-1", { type: "text" })).written).toBe(true);
     expect(onRecovered).toHaveBeenCalledTimes(1);
     const list = log.rows();

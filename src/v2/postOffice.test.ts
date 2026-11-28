@@ -587,6 +587,22 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     // The office stays open: the lost lease takes only that session down.
     expect(() => (office as unknown as { check: () => void }).check()).not.toThrow();
   }, 30_000);
+
+  it("refuses the send with no opening written when the renewal just before the opening fails (C31, WSP-2)", async () => {
+    let delivered = 0;
+    const { repo, office } = await writer({}, async () => { delivered++; });
+    const opened = await office.open("tank", { claims: ["src/a.ts"] });
+    // send()'s own renewal passes; the one in run(), after the guard preparation, fails.
+    let renewals = 0;
+    const renew = vi.spyOn(Locks.prototype, "renew").mockImplementation(async () => ++renewals === 1);
+    try {
+      await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
+    } finally { renew.mockRestore(); }
+    expect(renewals).toBe(2);
+    expect(delivered).toBe(0);
+    const log = await readFile(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`), "utf8");
+    expect(log).not.toContain('"turn_started"');
+  }, 30_000);
 });
 
 describe("the session log on the office's real path (Codex review 7 on #116)", () => {
@@ -719,6 +735,34 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect(failed[0]).toMatchObject({ soldier: "scout" });
     expect(failed[0]!.data).not.toHaveProperty("refused");
     expect(failed[1]!.data).toMatchObject({ refused: true });
+  }, 30_000);
+
+  it("reports an ordinary line lost while the opening is written as an unmarked gap, and delivers the send (C30, PO-5, M1-AC4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    const opened = await office.open("scout");
+    type Logs = { append: (path: string, text: string) => Promise<void>; write: (name: string, data: unknown) => Promise<unknown> };
+    const internals = office as unknown as { logs: Logs; openingWrites: Set<string> };
+    const append = internals.logs.append;
+    // A background result lost to a full disk on both tries, while the send's opening is under way.
+    internals.logs.append = async (path, text) => {
+      if (!text.includes("background done")) return append(path, text);
+      await until(() => internals.openingWrites.has(opened.session));
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    };
+    const sending = office.send("scout", "do it");
+    void internals.logs.write(opened.session, { soldier: "scout", type: "result", data: { text: "background done" } });
+    expect((await sending).status).toBe("completed");
+    expect(delivered).toEqual(["do it"]);
+    await office.close();
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
   }, 30_000);
 
   it("reports an opened-record gap with its soldier when its session closes during the retry, the office still up (C20, PO-5)", async () => {
