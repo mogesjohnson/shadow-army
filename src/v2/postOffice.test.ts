@@ -765,6 +765,34 @@ for await (const line of createInterface({ input: process.stdin })) {
     expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
   }, 30_000);
 
+  it("reports an ordinary office line lost while a soldier's notice is queued behind it, apart from that notice (C32, PO-5, M1-AC4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    const { session } = await office.open("scout");
+    type Logs = { append: (path: string, text: string) => Promise<void>; write: (name: string, data: unknown) => Promise<unknown> };
+    const internals = office as unknown as { logs: Logs };
+    const append = internals.logs.append;
+    internals.logs.append = async (path, text) => {
+      if (text.includes("soldier line")) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      // The office's own ordinary line fails on both tries, only once the soldier's notice is queued behind it.
+      if (text.includes("command_refused")) { await until(() => events.some((event) => event.type === "log_failed")); throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); }
+      return append(path, text);
+    };
+    void internals.logs.write("post-office", { soldier: "scout", type: "command_refused", data: { reason: "office line" } });
+    void internals.logs.write(session, { soldier: "scout", type: "note", data: { text: "soldier line" } });
+    await until(() => events.filter((event) => event.type === "log_failed").length === 2);
+    expect(events.filter((event) => event.type === "log_failed").map((event) => (event.data as { log: string }).log).sort()).toEqual(["post-office", session].sort());
+    // The office's next line writes the soldier's notice after one gap line that counts the lost record.
+    internals.logs.append = append;
+    await office.close();
+    const written = await records(repo.dir, "post-office");
+    expect(written.filter((record) => record.type === "log-gap")).toMatchObject([{ lost: 1 }]);
+    expect(written.filter((record) => record.type === "log_failed")).toHaveLength(1);
+  }, 30_000);
+
   it("reports an opened-record gap with its soldier when its session closes during the retry, the office still up (C20, PO-5)", async () => {
     const repo = makeRepo(); repos.push(repo);
     const events: OfficeEvent[] = [];

@@ -169,8 +169,6 @@ export class PostOffice {
   private readonly refusalsReported = new Set<string>();
   /** Session id to its streamed blocks: the block the next fragment belongs to, and the kinds each held block has (C14). */
   private readonly blocks = new Map<string, { current: string; held: Map<string, Set<(typeof FRAGMENT_KINDS)[number]>> }>();
-  /** `log_failed` notices on their way into the office log (M1-AC4). */
-  private noticesWriting = 0;
   private readonly secrets: string[];
   /** Applies and guard captures take turns, so no guard reads the owner's folder halfway through an apply. */
   private applying = Promise.resolve();
@@ -193,8 +191,9 @@ export class PostOffice {
 
   /** C3 (PO-5, M1-AC4): one notice per gap, outside the failing log; the turn carries on. */
   private logFailed(name: string, error: Error, type: string | undefined): void {
-    // M1-AC4: the office log failing while it records a notice is the same failure (a full disk), already reported once.
-    if (name === "post-office" && this.noticesWriting > 0) return;
+    // M1-AC4, C32: only a failed `log_failed` record is the same failure (a full disk), already reported once. Any other
+    // office line lost is an ordinary gap, reported whatever notices are queued behind it.
+    if (name === "post-office" && type === "log_failed") return;
     // C19/C26/C29: a gap the `opened` record opened waits only while a send holds the session: if that send is refused
     // for the same gap, the one event is marked refused; a send that ends first releases it. A standalone open is reported now.
     // C30: only the lost record's own kind decides: any other line lost meanwhile is an ordinary, unmarked gap.
@@ -223,8 +222,7 @@ export class PostOffice {
       data: { log: name, ...(refused ? { refused: true } : {}), reason: `the log ${name} could not be written; ${refused ? "the send was refused" : "later lines are retried and the gap is counted"}: ${error.message}` } }, this.secrets) as OfficeEvent;
     try { this.options.onEvent?.(notice); } catch { /* the owner's handler cannot stop the turn */ }
     if (name === "post-office" || refused) return;
-    this.noticesWriting++;
-    void this.logs.write("post-office", { ...notice, time: new Date().toISOString() }).finally(() => { this.noticesWriting--; });
+    void this.logs.write("post-office", { ...notice, time: new Date().toISOString() });
   }
 
   /** A native event: a streamed fragment is forwarded now and logged whole when its block ends (C1, M1-AC2). */
