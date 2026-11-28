@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "
 import { delimiter, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { spawnManagedProcess, type ManagedProcess, type ManagedProcessOptions, type ProcessExit } from "../processTree.js";
+import { Serial } from "./serial.js";
 
 /** WSP-10 harness git: git that runs nothing a repository names, on a limit, from a trusted PATH entry. */
 export type HarnessKind = "snapshot" | "guard" | "other";
@@ -57,18 +58,32 @@ export interface HarnessGitOptions {
   git?: { file: string; prefix?: string[] };
   /**
    * PO-16's entry for a running command: added, with the pid and the OS's start stamp, while git waits behind its
-   * gate, before it may run; removed once it has ended (C30).
+   * gate, before it may run; that entry, and no other, removed once its tree is confirmed gone (C30, C34, C35).
+   * One command's adds and removes reach it one at a time, in order: a retry's add waits for the attempt before it.
    */
-  trees?: { add(entry: { pid: number; startedAt: string }): Promise<void>; remove(): Promise<void> };
+  trees?: { add(entry: SweepEntry): Promise<void>; remove(entry: SweepEntry): Promise<void> };
   /** Test seam: the OS start stamp for a pid (`osStartStamp`). */
   stamp?: (pid: number) => Promise<string>;
 }
 
+export interface SweepEntry { pid: number; startedAt: string }
+
 const run = promisify(execFile);
 
 /**
+ * macOS: `p_starttime` from `sysctl({CTL_KERN, KERN_PROC, KERN_PROC_PID, pid})`, the struct timeval that opens
+ * `kinfo_proc` and that `proc_pidinfo` reports too, as seconds.microseconds (C38). macOS ships perl, which can make
+ * the call; no rendered, local or second-rounded time. Not tested: no Mac runs here, so the call and the offsets
+ * are from the headers (sys/sysctl.h, sys/proc.h), unverified on a real Mac. Anything unexpected fails closed.
+ */
+const DARWIN_STAMP = 'my $b="\\0"x4096;my $l=pack("Q",4096);my $m=pack("i4",1,14,1,$ARGV[0]+0);'
+  + 'syscall(202,$m,4,$b,$l,0,0)==0 or exit 2;unpack("Q",$l)>=16 or exit 3;my($s,$u)=unpack("q l",$b);'
+  + '$s>0&&$u>=0&&$u<1000000 or exit 4;printf("%d.%06d\\n",$s,$u);';
+
+/**
  * The OS's own start stamp for `pid`, the identity PO-16's sweep compares with the pid: Linux's start time in
- * clock ticks (`/proc/<pid>/stat`), macOS's `ps -o lstart`, Windows' creation time. Throws when there is none.
+ * clock ticks since boot (`/proc/<pid>/stat`), macOS's start time to the microsecond, Windows' creation time in
+ * 100 ns units, UTC. Never a rendered time. Throws when there is none.
  */
 export async function osStartStamp(pid: number, platform: NodeJS.Platform = process.platform): Promise<string> {
   let stamp: string;
@@ -78,7 +93,7 @@ export async function osStartStamp(pid: number, platform: NodeJS.Platform = proc
   } else if (platform === "win32") {
     const shell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     stamp = (await run(shell, ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`], { windowsHide: true, timeout: 60_000 })).stdout.trim();
-  } else stamp = (await run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { timeout: 60_000 })).stdout.trim();
+  } else stamp = (await run("/usr/bin/perl", ["-e", DARWIN_STAMP, String(pid)], { env: { PATH: "/usr/bin:/bin" }, timeout: 60_000 })).stdout.trim();
   if (!stamp) throw new Error(`the start time of process ${pid} can't be read`);
   return `${platform}:${stamp}`;
 }
@@ -175,12 +190,22 @@ export function buildGitArgs(args: string[], options: { hooksDir: string; hookNa
   return { args: [...head, subcommand, ...extra, ...rest], env };
 }
 
-async function spawnPosix(options: ManagedProcessOptions): Promise<ManagedProcess> {
+/** Test seam: POSIX's tree is the process group git leads. */
+export async function spawnPosix(options: ManagedProcessOptions, poll = { tries: 100, ms: 50 }): Promise<ManagedProcess> {
   const child = spawn(options.file, options.args ?? [], { cwd: options.cwd, env: options.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   await new Promise<void>((done, fail) => { child.once("spawn", done); child.once("error", fail); });
   const exited = new Promise<ProcessExit>((done) => child.once("exit", (code, signal) => done({ code, signal })));
-  // The process group is the tree; killing it ends git and everything it started.
-  const close = async () => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ } };
+  const gone = (error: unknown) => (error as NodeJS.ErrnoException).code === "ESRCH";
+  // The process group is the tree; killing it ends git and everything it started. It resolves only once the group
+  // is empty, polled for a bounded time: otherwise it throws, and the caller keeps the sweep entry (C35).
+  const close = async () => {
+    try { process.kill(-child.pid!, "SIGKILL"); } catch (error) { if (!gone(error)) throw error; }
+    for (let i = 0; i < poll.tries; i++) {
+      try { process.kill(-child.pid!, 0); } catch (error) { if (gone(error)) return; throw error; }
+      await new Promise((done) => setTimeout(done, poll.ms));
+    }
+    throw new Error(`process group ${child.pid} is still running after SIGKILL`);
+  };
   child.stdin.on("error", () => {}); // a gate that ended early closes it
   return { pid: child.pid!, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exited, close, droppedPath: [] };
 }
@@ -198,6 +223,8 @@ export class HarnessGit {
   readonly file: string;
   private readonly prefix: string[];
   private readonly path: string;
+  /** This command's sweep entries, one add or remove at a time (C34). */
+  private readonly sweep = new Serial();
 
   constructor(private readonly options: HarnessGitOptions) {
     const env = options.env ?? process.env;
@@ -214,18 +241,21 @@ export class HarnessGit {
   /** The next use of the army tries again (WSP-10). */
   retryHold() { this.held = undefined; }
 
-  /** A guard or audit command ("guard") is tried once more after a timeout; a second timeout holds harness git. */
-  async run(args: string[], kind: HarnessKind = "other", cwd = this.options.repo.workTree): Promise<GitResult> {
+  /**
+   * A guard or audit command ("guard") is tried once more after a timeout; a second timeout holds harness git.
+   * `started` is called once git may run (its sweep entry recorded), or not at all: the hold's queue waits for it.
+   */
+  async run(args: string[], kind: HarnessKind = "other", started?: () => void): Promise<GitResult> {
     if (this.held) throw new HarnessGitHeld(this.held);
     for (let attempt = 1; ; attempt++) {
-      const result = await this.attempt(args, kind, cwd);
+      const result = await this.attempt(args, kind, this.options.repo.workTree, started);
       if (result !== "timeout") return result;
       if (kind !== "guard") throw new HarnessGitTimeout(kind, LIMIT_MS[kind]);
       if (attempt === 2) { this.held = `git took longer than ${LIMIT_MS[kind] / 60_000} min, twice`; throw new HarnessGitHeld(this.held); }
     }
   }
 
-  private async attempt(args: string[], kind: HarnessKind, cwd: string): Promise<GitResult | "timeout"> {
+  private async attempt(args: string[], kind: HarnessKind, cwd: string, started?: () => void): Promise<GitResult | "timeout"> {
     const { repo, hooksDir, hookNames } = this.options;
     const clock = this.options.clock ?? realClock;
     const built = buildGitArgs(args, { hooksDir, hookNames, kind });
@@ -246,16 +276,20 @@ export class HarnessGit {
     const close = async () => { if (!closed) { await proc.close(); closed = true; } }; // ends git's whole tree, filters included
     // The limit runs from the start, so a slow registration spends it too (WSP-10, counted as PO-7 counts).
     const limit = new Promise<"timeout">((expired) => { cancel = countedDeadline(clock, LIMIT_MS[kind], () => expired("timeout")); });
+    // This attempt's own entry, added and removed in the command's sweep queue, so a late add of an attempt that
+    // timed out lands, and is removed, before a retry's add (C34).
+    let entry: SweepEntry | undefined;
     try {
       const stamp = this.options.stamp ?? osStartStamp;
-      const registering = trees ? (async () => trees.add({ pid: proc.pid, startedAt: await stamp(proc.pid) }))() : Promise.resolve();
+      const registering = trees ? this.sweep.run(async () => { const mine = { pid: proc.pid, startedAt: await stamp(proc.pid) }; await trees.add(mine); entry = mine; }) : Promise.resolve();
       if (await Promise.race([registering.then(() => "added" as const), limit]) === "timeout") {
-        registering.catch(() => {}); // a registration that lands later is PO-16's sweep record for an ended tree
+        registering.catch(() => {}); // removed below once it lands, if teardown is confirmed
         await close();
         return "timeout";
       }
       registered = true;
       if (trees) proc.stdin.write("go\n"); // registered: git may run now
+      started?.();
       const outcome = await Promise.race([proc.exited, limit]);
       await close();
       if (outcome === "timeout") return "timeout";
@@ -263,8 +297,11 @@ export class HarnessGit {
     } finally {
       cancel();
       await close().catch(() => {}); // a failed path still ends the tree; its error is the one thrown
-      // PO-16's sweep record stays until teardown is confirmed.
-      if (registered && closed) await this.options.trees?.remove();
+      // PO-16's sweep record stays until teardown is confirmed (C35), and goes after its own add, in the queue (C34).
+      if (trees && closed) {
+        const removal = this.sweep.run(async () => { if (entry) await trees.remove(entry); });
+        if (registered) await removal; else removal.catch(() => {}); // a late add may never land; a retry's waits for it
+      }
     }
   }
 }
