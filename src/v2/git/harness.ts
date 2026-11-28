@@ -1,0 +1,307 @@
+import { execFile, spawn } from "node:child_process";
+import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
+import { spawnManagedProcess, type ManagedProcess, type ManagedProcessOptions, type ProcessExit } from "../processTree.js";
+import { Serial } from "./serial.js";
+
+/** WSP-10 harness git: git that runs nothing a repository names, on a limit, from a trusted PATH entry. */
+export type HarnessKind = "snapshot" | "guard" | "other";
+/** 30 min for a command that makes or brings a snapshot or worktree, 5 min for any other. */
+export const LIMIT_MS: Record<HarnessKind, number> = { snapshot: 30 * 60_000, guard: 5 * 60_000, other: 5 * 60_000 };
+
+/** Monotonic time. Tests pass a fake, so a limit never needs a real wait. */
+export interface HarnessClock { now(): number; after(ms: number, fn: () => void): () => void }
+export const realClock: HarnessClock = {
+  now: () => performance.now(),
+  after(ms, fn) { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); },
+};
+
+/**
+ * PO-7's running time: a check once a second adds the step since the last one, never more than 5 s of it,
+ * so sleep, hibernation or a stall between two checks spends at most 5 s of a limit. Returns its cancel.
+ */
+export function countedDeadline(clock: HarnessClock, limitMs: number, expired: () => void): () => void {
+  let counted = 0, last = clock.now(), cancel = () => {};
+  const check = () => {
+    const now = clock.now();
+    counted += Math.min(Math.max(now - last, 0), 5_000);
+    last = now;
+    if (counted >= limitMs) expired(); else cancel = clock.after(Math.min(1_000, limitMs - counted), check);
+  };
+  cancel = clock.after(Math.min(1_000, limitMs), check);
+  return () => cancel();
+}
+
+export interface GitResult { code: number | null; stdout: string; stderr: string }
+export class HarnessGitTimeout extends Error {
+  constructor(readonly kind: HarnessKind, readonly limitMs: number) { super(`git took longer than ${limitMs / 60_000} min`); }
+}
+export class HarnessGitHeld extends Error {
+  constructor(readonly reason: string) { super(`harness git held · ${reason}`); }
+}
+
+export interface HarnessGitOptions {
+  /** The git folder, working tree and common folder Shadow Army knows (GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR). */
+  repo: { gitDir: string; workTree: string; commonDir: string };
+  /** An empty folder Shadow Army keeps, as `core.hooksPath`. */
+  hooksDir: string;
+  /** Names of hooks the config defines (`hook.<name>.command`), switched off one by one. */
+  hookNames?: string[];
+  /** The post office's environment. */
+  env?: NodeJS.ProcessEnv;
+  /** Folders PATH may not name: the checkout, worktrees, snapshots. Compared by real path. */
+  untrusted?: string[];
+  clock?: HarnessClock;
+  spawn?: (options: ManagedProcessOptions) => Promise<ManagedProcess>;
+  /** Test seam: run this instead of the git found on PATH. */
+  git?: { file: string; prefix?: string[] };
+  /**
+   * PO-16's entry for a running command: added, with the pid and the OS's start stamp, while git waits behind its
+   * gate, before it may run; that entry, and no other, removed once its tree is confirmed gone (C30, C34, C35).
+   * One command's adds and removes reach it one at a time, in order: a retry's add waits for the attempt before it.
+   */
+  trees?: { add(entry: SweepEntry): Promise<void>; remove(entry: SweepEntry): Promise<void> };
+  /** Test seam: the OS start stamp for a pid (`osStartStamp`). */
+  stamp?: (pid: number) => Promise<string>;
+}
+
+export interface SweepEntry { pid: number; startedAt: string }
+
+const run = promisify(execFile);
+
+/**
+ * macOS: `p_starttime` from `sysctl({CTL_KERN, KERN_PROC, KERN_PROC_PID, pid})`, the struct timeval that opens
+ * `kinfo_proc` and that `proc_pidinfo` reports too, as seconds.microseconds (C38). macOS ships perl, which can make
+ * the call; no rendered, local or second-rounded time. Not tested: no Mac runs here, so the call and the offsets
+ * are from the headers (sys/sysctl.h, sys/proc.h), unverified on a real Mac. Anything unexpected fails closed.
+ */
+const DARWIN_STAMP = 'my $b="\\0"x4096;my $l=pack("Q",4096);my $m=pack("i4",1,14,1,$ARGV[0]+0);'
+  + 'syscall(202,$m,4,$b,$l,0,0)==0 or exit 2;unpack("Q",$l)>=16 or exit 3;my($s,$u)=unpack("q l",$b);'
+  + '$s>0&&$u>=0&&$u<1000000 or exit 4;printf("%d.%06d\\n",$s,$u);';
+
+/**
+ * The OS's own start stamp for `pid`, the identity PO-16's sweep compares with the pid: Linux's start time in
+ * clock ticks since boot (`/proc/<pid>/stat`), macOS's start time to the microsecond, Windows' creation time in
+ * 100 ns units, UTC. Never a rendered time. Throws when there is none.
+ */
+export async function osStartStamp(pid: number, platform: NodeJS.Platform = process.platform): Promise<string> {
+  let stamp: string;
+  if (platform === "linux") {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    stamp = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] ?? ""; // field 22, counted from the state (field 3)
+  } else if (platform === "win32") {
+    const shell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    stamp = (await run(shell, ["-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid}).StartTime.ToFileTimeUtc()`], { windowsHide: true, timeout: 60_000 })).stdout.trim();
+  } else stamp = (await run("/usr/bin/perl", ["-e", DARWIN_STAMP, String(pid)], { env: { PATH: "/usr/bin:/bin" }, timeout: 60_000 })).stdout.trim();
+  if (!stamp) throw new Error(`the start time of process ${pid} can't be read`);
+  return `${platform}:${stamp}`;
+}
+
+/**
+ * Where a registered git waits (C30): one line on stdin releases it, and EOF before that runs nothing. On POSIX
+ * the shell becomes git (`exec`: the same pid and start time); on Windows Node runs git as its only child, in
+ * the same job, so ending the registered tree ends git.
+ */
+const POSIX_GATE = 'IFS= read -r _ || exit 125; exec "$0" "$@"';
+const WINDOWS_GATE = 'let b="";process.stdin.on("data",(d)=>{if(b.includes("\\n"))return;b+=d;if(!b.includes("\\n"))return;process.stdin.pause();'
+  + 'const c=require("child_process").spawn(process.argv[1],process.argv.slice(2),{stdio:["ignore","inherit","inherit"],windowsHide:true});'
+  + 'c.on("exit",(code)=>process.exit(code??1));c.on("error",()=>process.exit(127));});process.stdin.on("end",()=>{if(!b.includes("\\n"))process.exit(125);});';
+
+/**
+ * The first fully qualified PATH entry with a git whose canonical file is outside every untrusted folder.
+ * Folders are compared by canonical path, component by component. Dropped entries are named.
+ */
+export function resolveGit(pathValue: string, untrusted: string[] = [], platform: NodeJS.Platform = process.platform) {
+  const split = (value: string) => (platform === "linux" ? value : value.toLowerCase()).split(platform === "win32" ? /[\\/]+/ : /\/+/).filter(Boolean);
+  const real = (value: string) => { try { return realpathSync.native(value); } catch { return undefined; } };
+  const roots = untrusted.map((root) => split(real(root) ?? resolve(root)));
+  const inside = (value: string) => { const parts = split(value); return roots.some((root) => root.length <= parts.length && root.every((part, i) => part === parts[i])); };
+  const qualified = (entry: string) => (platform === "win32" ? /^([a-z]:[\\/]|[\\/]{2}[^\\/])/i.test(entry) : entry.startsWith("/"));
+  const name = platform === "win32" ? "git.exe" : "git";
+  const dropped: { entry: string; reason: string }[] = [];
+  const kept: string[] = [];
+  let git: string | undefined;
+  for (const entry of pathValue.split(delimiter)) {
+    const resolved = qualified(entry) ? real(entry) : undefined;
+    if (!qualified(entry)) { dropped.push({ entry, reason: "not fully qualified" }); continue; }
+    if (resolved === undefined) { dropped.push({ entry, reason: "missing" }); continue; }
+    if (inside(resolved)) { dropped.push({ entry, reason: "inside the folder, a worktree or a snapshot" }); continue; }
+    const target = real(join(entry, name));
+    if (target && inside(target)) { dropped.push({ entry, reason: "its git resolves inside the folder, a worktree or a snapshot" }); continue; }
+    kept.push(entry);
+    if (!git && target && statSync(target).isFile()) git = target;
+  }
+  return { git, path: kept.join(delimiter), dropped };
+}
+
+/**
+ * The checkout's own folders and the worktrees its common folder lists, always untrusted.
+ * A registration Git wrote relative (worktree.useRelativePaths) is relative to its own folder. One that cannot be read fails closed.
+ */
+function repoFolders(repo: HarnessGitOptions["repo"]) {
+  const folders = [repo.workTree, repo.gitDir, repo.commonDir];
+  const admin = join(repo.commonDir, "worktrees");
+  const unchecked = (what: string, cause: unknown) => new Error(`the worktree inventory could not be checked: ${what}`, { cause });
+  let entries: Dirent[];
+  try { entries = readdirSync(admin, { withFileTypes: true }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return folders; // no worktrees
+    throw unchecked(admin, error);
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const registration = join(admin, entry.name);
+    let link: string;
+    try { link = readFileSync(join(registration, "gitdir"), "utf8").trim(); } catch (error) { throw unchecked(registration, error); }
+    if (!link) throw unchecked(registration, new Error("empty gitdir"));
+    // Git resolves the link from the registration's real path, so ".." steps out of the real folder, not a link to it.
+    let from: string;
+    try { from = realpathSync.native(registration); } catch (error) { throw unchecked(registration, error); }
+    folders.push(dirname(resolve(from, link)));
+  }
+  return folders;
+}
+
+const HOOK_EVENTS = ["applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg",
+  "commit-msg", "post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-auto-gc", "post-rewrite", "post-index-change",
+  "reference-transaction", "push-to-checkout", "fsmonitor-watchman", "pre-receive", "update", "post-receive", "post-update"];
+
+/** Command-line overrides, so a hostile repository's config runs nothing. `args[0]` is the subcommand. */
+export function buildGitArgs(args: string[], options: { hooksDir: string; hookNames?: string[]; kind: HarnessKind }) {
+  const env: Record<string, string> = {};
+  const head = ["--no-pager", "--no-optional-locks"];
+  // core.fsmonitor is empty, not false: Git 2.34 reads it as a hook path and runs "false"; empty is off in every version.
+  // A name holding "=" would be split by -c, so it goes through --config-env.
+  const set = (key: string, value: string) => {
+    if (!key.includes("=")) { head.push("-c", `${key}=${value}`); return; }
+    const variable = `SA_GIT_CONFIG_${Object.keys(env).length}`;
+    env[variable] = value; head.push(`--config-env=${key}=${variable}`);
+  };
+  set("core.hooksPath", options.hooksDir);
+  for (const event of HOOK_EVENTS) set(`hook.${event}.enabled`, "false");
+  for (const name of options.hookNames ?? []) set(`hook.${name}.enabled`, "false");
+  for (const [key, value] of [["core.fsmonitor", ""], ["core.useReplaceRefs", "false"], ["commit.gpgSign", "false"], ["tag.gpgSign", "false"],
+    ["push.gpgSign", "false"], ["log.showSignature", "false"], ["credential.interactive", "false"], ["worktree.useRelativePaths", "false"]] as const) set(key, value);
+  const [subcommand = "", ...rest] = args;
+  const extra: string[] = [];
+  if (["diff", "log", "show"].includes(subcommand)) extra.push("--no-ext-diff", "--no-textconv");
+  if (subcommand === "commit") extra.push("--no-verify");
+  if (options.kind === "guard" && ["diff", "status"].includes(subcommand)) extra.push("--ignore-submodules=none");
+  return { args: [...head, subcommand, ...extra, ...rest], env };
+}
+
+/** Test seam: POSIX's tree is the process group git leads. */
+export async function spawnPosix(options: ManagedProcessOptions, poll = { tries: 100, ms: 50 }): Promise<ManagedProcess> {
+  const child = spawn(options.file, options.args ?? [], { cwd: options.cwd, env: options.env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+  await new Promise<void>((done, fail) => { child.once("spawn", done); child.once("error", fail); });
+  const exited = new Promise<ProcessExit>((done) => child.once("exit", (code, signal) => done({ code, signal })));
+  const gone = (error: unknown) => (error as NodeJS.ErrnoException).code === "ESRCH";
+  // The process group is the tree; killing it ends git and everything it started. It resolves only once the group
+  // is empty, polled for a bounded time: otherwise it throws, and the caller keeps the sweep entry (C35).
+  const close = async () => {
+    try { process.kill(-child.pid!, "SIGKILL"); } catch (error) { if (!gone(error)) throw error; }
+    for (let i = 0; i < poll.tries; i++) {
+      try { process.kill(-child.pid!, 0); } catch (error) { if (gone(error)) return; throw error; }
+      await new Promise((done) => setTimeout(done, poll.ms));
+    }
+    throw new Error(`process group ${child.pid} is still running after SIGKILL`);
+  };
+  child.stdin.on("error", () => {}); // a gate that ended early closes it
+  return { pid: child.pid!, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exited, close, droppedPath: [] };
+}
+
+const collect = async (stream: AsyncIterable<Buffer | string>) => {
+  const chunks: Buffer[] = [];
+  try { for await (const chunk of stream) chunks.push(Buffer.from(chunk)); } catch { /* the stream ended with the process */ }
+  return Buffer.concat(chunks).toString("utf8");
+};
+
+export class HarnessGit {
+  /** Set after a guard or audit command timed out twice; every run throws until `retryHold()`. */
+  held: string | undefined;
+  readonly dropped: { entry: string; reason: string }[];
+  readonly file: string;
+  private readonly prefix: string[];
+  private readonly path: string;
+  /** This command's sweep entries, one add or remove at a time (C34). */
+  private readonly sweep = new Serial();
+
+  constructor(private readonly options: HarnessGitOptions) {
+    const env = options.env ?? process.env;
+    const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path");
+    const found = resolveGit(pathKey ? env[pathKey] ?? "" : "", [...repoFolders(options.repo), ...options.untrusted ?? []]);
+    this.dropped = found.dropped;
+    this.path = found.path;
+    const file = options.git?.file ?? found.git;
+    if (!file) throw new Error("git was not found in any fully qualified PATH entry outside the repository");
+    this.file = file;
+    this.prefix = options.git?.prefix ?? [];
+  }
+
+  /** The next use of the army tries again (WSP-10). */
+  retryHold() { this.held = undefined; }
+
+  /**
+   * A guard or audit command ("guard") is tried once more after a timeout; a second timeout holds harness git.
+   * `started` is called once git may run (its sweep entry recorded), or not at all: the hold's queue waits for it.
+   */
+  async run(args: string[], kind: HarnessKind = "other", started?: () => void): Promise<GitResult> {
+    if (this.held) throw new HarnessGitHeld(this.held);
+    for (let attempt = 1; ; attempt++) {
+      const result = await this.attempt(args, kind, this.options.repo.workTree, started);
+      if (result !== "timeout") return result;
+      if (kind !== "guard") throw new HarnessGitTimeout(kind, LIMIT_MS[kind]);
+      if (attempt === 2) { this.held = `git took longer than ${LIMIT_MS[kind] / 60_000} min, twice`; throw new HarnessGitHeld(this.held); }
+    }
+  }
+
+  private async attempt(args: string[], kind: HarnessKind, cwd: string, started?: () => void): Promise<GitResult | "timeout"> {
+    const { repo, hooksDir, hookNames } = this.options;
+    const clock = this.options.clock ?? realClock;
+    const built = buildGitArgs(args, { hooksDir, hookNames, kind });
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(this.options.env ?? process.env)) if (!/^(path|git_external_diff|git_pager)$/i.test(key)) env[key] = value;
+    Object.assign(env, built.env, { PATH: this.path, GIT_TERMINAL_PROMPT: "0", GIT_DIR: repo.gitDir, GIT_WORK_TREE: repo.workTree, GIT_COMMON_DIR: repo.commonDir });
+    if (process.platform === "win32") env.NoDefaultCurrentDirectoryInExePath = "1";
+    const spawnTree = this.options.spawn ?? (process.platform === "win32" ? spawnManagedProcess : spawnPosix);
+    const trees = this.options.trees, gitArgs = [...this.prefix, ...built.args];
+    // With a sweep to register in, git starts behind its gate, released only once its entry is recorded (C30).
+    const start = !trees ? { file: this.file, args: gitArgs } : process.platform === "win32"
+      ? { file: process.execPath, args: ["-e", WINDOWS_GATE, this.file, ...gitArgs] } : { file: "/bin/sh", args: ["-c", POSIX_GATE, this.file, ...gitArgs] };
+    const proc = await spawnTree({ ...start, cwd, env });
+    // stdin stays open until teardown: on Windows its EOF starts the supervisor's two-second shutdown.
+    // Harness git sends no input, so a command that waits for some runs to its limit.
+    const stdout = collect(proc.stdout), stderr = collect(proc.stderr);
+    let registered = false, closed = false, cancel = () => {};
+    const close = async () => { if (!closed) { await proc.close(); closed = true; } }; // ends git's whole tree, filters included
+    // The limit runs from the start, so a slow registration spends it too (WSP-10, counted as PO-7 counts).
+    const limit = new Promise<"timeout">((expired) => { cancel = countedDeadline(clock, LIMIT_MS[kind], () => expired("timeout")); });
+    // This attempt's own entry, added and removed in the command's sweep queue, so a late add of an attempt that
+    // timed out lands, and is removed, before a retry's add (C34).
+    let entry: SweepEntry | undefined;
+    try {
+      const stamp = this.options.stamp ?? osStartStamp;
+      const registering = trees ? this.sweep.run(async () => { const mine = { pid: proc.pid, startedAt: await stamp(proc.pid) }; await trees.add(mine); entry = mine; }) : Promise.resolve();
+      if (await Promise.race([registering.then(() => "added" as const), limit]) === "timeout") {
+        registering.catch(() => {}); // removed below once it lands, if teardown is confirmed
+        await close();
+        return "timeout";
+      }
+      registered = true;
+      if (trees) proc.stdin.write("go\n"); // registered: git may run now
+      started?.();
+      const outcome = await Promise.race([proc.exited, limit]);
+      await close();
+      if (outcome === "timeout") return "timeout";
+      return { code: outcome.code, stdout: await stdout, stderr: await stderr };
+    } finally {
+      cancel();
+      await close().catch(() => {}); // a failed path still ends the tree; its error is the one thrown
+      // PO-16's sweep record stays until teardown is confirmed (C35), and goes after its own add, in the queue (C34).
+      if (trees && closed) {
+        const removal = this.sweep.run(async () => { if (entry) await trees.remove(entry); });
+        if (registered) await removal; else removal.catch(() => {}); // a late add may never land; a retry's waits for it
+      }
+    }
+  }
+}
