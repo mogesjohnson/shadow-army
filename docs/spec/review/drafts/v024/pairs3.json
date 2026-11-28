@@ -1,0 +1,26 @@
+[
+ [
+  "A filter added while no post office runs is in the config at start like any other.",
+  "A filter added while no post office runs is in the config at start like any other, unless this army's last log makes that start compare with the state it last trusted (WSP-10): then it holds harness git as a soldier's would, since the two can't be told apart. So in M1, before the card exists, an owner's own config edit made after such an end stays held until it is undone; to keep it, the owner undoes it, lets a post office start and end with no turn open, and makes the edit again while no post office runs."
+ ],
+ [
+  "a filter already in the config when the post office starts (residual 15)",
+  "a filter already in the config when the post office starts, unless the last post office ended with a turn of this army's still open or with harness git held (residual 15)"
+ ],
+ [
+  "the next post office's sweep ends that git, with every process it started, before PO-1's finishing begins, and the snapshot its log names as started but not made is removed (WSP-10);",
+  "the next post office's sweep ends that git, with every process it started, before PO-1's finishing begins, and the snapshot its log names as started but not made is removed (WSP-10); in a second case, with the fake mod alive, the mod's one-shot sweep ends that git and every process it started at once, on Windows with `taskkill /t /f` (PO-16);"
+ ],
+ [
+  "A harness git command's entry (WSP-10), which has no job or coalition, is ended through its process group, as on Linux.",
+  "A harness git command's entry (WSP-10) has no job, and its git runs in the post office's own coalition, which the helper never signals (PO-17), so the sweep itself ends it through its process group, as on Linux."
+ ],
+ [
+  "so the post office runs on (probe P-17); one that does reload the module ends it as above.",
+  "so the post office runs on (probe P-17, on WSL 2 Ubuntu); one that does reload the module ends it as above. **Not tested:** `/reload-plugins` in an interactive session on Windows and on macOS (D-34)."
+ ],
+ [
+  "| **Version** | 0.23, 2026-10-30: fix check V22-FC1's repairs",
+  "| **Version** | 0.24, 2026-10-30: fix check V23-FC1's repairs (among them: an owner's own config edit after an end with a turn open held like a soldier's, as Appendix D now says, the mod's one-shot sweep of a harness git command tested, harness git on macOS ended by the sweep since it runs in the post office's coalition, and P-17's `/reload-plugins` result limited to WSL 2). 0.23, 2026-10-30: fix check V22-FC1's repairs"
+ ]
+]

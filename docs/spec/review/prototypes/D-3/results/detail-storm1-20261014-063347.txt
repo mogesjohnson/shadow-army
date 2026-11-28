@@ -1,0 +1,218 @@
+[m2a #1] before close: d3hb processes=649; daemon c pid=6871 ppid=6864 (d3sup           /tmp/d3run.qMUH1a/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m2a-1 /tmp/d3run.qMUH1a/bin/d3hb) sid=6871 pgid=6871 (cli pgid=n/a)
+    [m2a #1 table]    6864    6809    1489    1489 S+   d3sup           /tmp/d3run.qMUH1a/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m2a-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m2a #1 table]    6866    6864    1489    1489 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m2a-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m2a #1 table]    6867    6866    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m2a-1/a.hb
+    [m2a #1 table]    6868    6866    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m2a-1/b.hb
+    [m2a #1 table]    6871    6864    6871    6871 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb daemon /tmp/d3run.qMUH1a/m2a-1/c.hb
+    [m2a #1 table]    6872    6866    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2a-1/d 2000 500
+    [m2a #1 table]    6874    6864    6874    6874 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2a-1/d 2000 500
+    [m2a #1 table]    6876    6864    6876    6876 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2a-1/d 2000 500
+    [m2a #1 table]    6878    6864    6878    6878 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2a-1/d 2000 500
+    [m2a #1 table]    6880    6864    6880    6880 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2a-1/d 2000 500
+    [m2a #1 table]    6882    6864    6882    6882 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2a-1/d 2000 500
+    [m2a #1 table]    6884    6864    6884    6884 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2a-1/d 2000 500
+[m2a #1] survivors by ps: d3hb=0, their ppids: 
+[m2a #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 771 0 
+[m2a #1] d3sup: closed by signal: none left passes=3 killed=776 first_pass_descendants=772 direct_children=769
+[m2a #2] survivors by ps: d3hb=0, their ppids: 
+[m2a #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 659 0 
+[m2a #2] d3sup: closed by signal: none left passes=3 killed=718 first_pass_descendants=660 direct_children=657
+[m2a #3] survivors by ps: d3hb=0, their ppids: 
+[m2a #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 673 0 
+[m2a #3] d3sup: closed by signal: none left passes=3 killed=678 first_pass_descendants=672 direct_children=669
+[m2a #4] survivors by ps: d3hb=0, their ppids: 
+[m2a #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 731 0 
+[m2a #4] d3sup: closed by signal: none left passes=3 killed=1015 first_pass_descendants=731 direct_children=728
+[m2a #5] survivors by ps: d3hb=0, their ppids: 
+[m2a #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 759 0 
+[m2a #5] d3sup: closed by signal: none left passes=3 killed=1168 first_pass_descendants=760 direct_children=757
+[m2a #6] survivors by ps: d3hb=0, their ppids: 
+[m2a #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 787 0 
+[m2a #6] d3sup: closed by signal: none left passes=3 killed=918 first_pass_descendants=784 direct_children=781
+[m2a #7] survivors by ps: d3hb=0, their ppids: 
+[m2a #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 775 0 
+[m2a #7] d3sup: closed by signal: none left passes=3 killed=780 first_pass_descendants=775 direct_children=772
+[m2a #8] survivors by ps: d3hb=0, their ppids: 
+[m2a #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 773 0 
+[m2a #8] d3sup: closed by signal: none left passes=3 killed=778 first_pass_descendants=773 direct_children=770
+[m2a #9] survivors by ps: d3hb=0, their ppids: 
+[m2a #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 775 0 
+[m2a #9] d3sup: closed by signal: none left passes=3 killed=780 first_pass_descendants=773 direct_children=770
+[m2a #10] survivors by ps: d3hb=0, their ppids: 
+[m2a #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 737 0 
+[m2a #10] d3sup: closed by signal: none left passes=3 killed=742 first_pass_descendants=737 direct_children=734
+[m2b #1] before close: d3hb processes=800; daemon c pid=22105 ppid=22098 (d3sup           /tmp/d3run.qMUH1a/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m2b-1 /tmp/d3run.qMUH1a/bin/d3hb) sid=22105 pgid=22105 (cli pgid=n/a)
+    [m2b #1 table]   22098    6809    1489    1489 S+   d3sup           /tmp/d3run.qMUH1a/bin/d3sup run -- bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m2b-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m2b #1 table]   22100   22098    1489    1489 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m2b-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m2b #1 table]   22101   22100    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m2b-1/a.hb
+    [m2b #1 table]   22102   22100    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m2b-1/b.hb
+    [m2b #1 table]   22105   22098   22105   22105 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb daemon /tmp/d3run.qMUH1a/m2b-1/c.hb
+    [m2b #1 table]   22106   22100    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2b-1/d 2000 500
+    [m2b #1 table]   22108   22098   22108   22108 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2b-1/d 2000 500
+    [m2b #1 table]   22110   22098   22110   22110 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2b-1/d 2000 500
+    [m2b #1 table]   22112   22098   22112   22112 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2b-1/d 2000 500
+    [m2b #1 table]   22114   22098   22114   22114 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2b-1/d 2000 500
+    [m2b #1 table]   22116   22098   22116   22116 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2b-1/d 2000 500
+    [m2b #1 table]   22118   22098   22118   22118 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m2b-1/d 2000 500
+[m2b #1] survivors by ps: d3hb=0, their ppids: 
+[m2b #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 943 0 
+[m2b #1] d3sup: closed by cli-exit: none left passes=3 killed=947 first_pass_descendants=941 direct_children=941
+[m2b #2] survivors by ps: d3hb=0, their ppids: 
+[m2b #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 752 0 
+[m2b #2] d3sup: closed by cli-exit: none left passes=3 killed=756 first_pass_descendants=752 direct_children=752
+[m2b #3] survivors by ps: d3hb=0, their ppids: 
+[m2b #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 766 0 
+[m2b #3] d3sup: closed by cli-exit: none left passes=3 killed=1353 first_pass_descendants=766 direct_children=766
+[m2b #4] survivors by ps: d3hb=0, their ppids: 
+[m2b #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 918 0 
+[m2b #4] d3sup: closed by cli-exit: none left passes=3 killed=922 first_pass_descendants=916 direct_children=916
+[m2b #5] survivors by ps: d3hb=0, their ppids: 
+[m2b #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 768 0 
+[m2b #5] d3sup: closed by cli-exit: none left passes=3 killed=772 first_pass_descendants=768 direct_children=768
+[m2b #6] survivors by ps: d3hb=0, their ppids: 
+[m2b #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 761 0 
+[m2b #6] d3sup: closed by cli-exit: none left passes=3 killed=765 first_pass_descendants=759 direct_children=759
+[m2b #7] survivors by ps: d3hb=0, their ppids: 
+[m2b #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 767 0 
+[m2b #7] d3sup: closed by cli-exit: none left passes=3 killed=771 first_pass_descendants=766 direct_children=766
+[m2b #8] survivors by ps: d3hb=0, their ppids: 
+[m2b #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 781 0 
+[m2b #8] d3sup: closed by cli-exit: none left passes=3 killed=785 first_pass_descendants=781 direct_children=781
+[m2b #9] survivors by ps: d3hb=0, their ppids: 
+[m2b #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 826 0 
+[m2b #9] d3sup: closed by cli-exit: none left passes=3 killed=830 first_pass_descendants=824 direct_children=824
+[m2b #10] survivors by ps: d3hb=0, their ppids: 
+[m2b #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 763 0 
+[m2b #10] d3sup: closed by cli-exit: none left passes=3 killed=767 first_pass_descendants=763 direct_children=763
+[m3 #1] before close: d3hb processes=785; daemon c pid=38557 ppid=1488 (Relay(1489)     /init) sid=38557 pgid=38557 (cli pgid=n/a)
+[m3 #1] cgroup of daemon c: 0::/user.slice/user-1000.slice/user@1000.service/app.slice/d3run-6809-1.scope; scope ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/d3run-6809-1.scope ActiveState=active
+[m3 #1] d3hb processes whose /proc/<pid>/cgroup is the scope: 904 of 904 (all of them have a different parent than the CLI: orphans are adopted by the WSL relay)
+    [m3 #1 table]   38550    6809    1489    1489 S+   bash            /usr/bin/bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m3-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m3 #1 table]   38553   38550    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m3-1/a.hb
+    [m3 #1 table]   38554   38550    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m3-1/b.hb
+    [m3 #1 table]   38557    1488   38557   38557 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb daemon /tmp/d3run.qMUH1a/m3-1/c.hb
+    [m3 #1 table]   38558   38550    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+    [m3 #1 table]   38560    1488   38560   38560 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+    [m3 #1 table]   38562    1488   38562   38562 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+    [m3 #1 table]   38564    1488   38564   38564 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+    [m3 #1 table]   38566    1488   38566   38566 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+    [m3 #1 table]   38568    1488   38568   38568 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+    [m3 #1 table]   38570    1488   38570   38570 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+    [m3 #1 table]   38572    1488   38572   38572 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m3-1/d 2000 500
+[m3 #1] close stderr: 
+[m3 #1] survivors by ps: d3hb=0, their ppids: 
+[m3 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 2091 0 
+[m3 #2] close stderr: 
+[m3 #2] survivors by ps: d3hb=0, their ppids: 
+[m3 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 776 0 
+[m3 #3] close stderr: 
+[m3 #3] survivors by ps: d3hb=0, their ppids: 
+[m3 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 755 0 
+[m3 #4] close stderr: 
+[m3 #4] survivors by ps: d3hb=0, their ppids: 
+[m3 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 757 0 
+[m3 #5] close stderr: 
+[m3 #5] survivors by ps: d3hb=0, their ppids: 
+[m3 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 762 0 
+[m3 #6] close stderr: 
+[m3 #6] survivors by ps: d3hb=0, their ppids: 
+[m3 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 762 0 
+[m3 #7] close stderr: 
+[m3 #7] survivors by ps: d3hb=0, their ppids: 
+[m3 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 767 0 
+[m3 #8] close stderr: 
+[m3 #8] survivors by ps: d3hb=0, their ppids: 
+[m3 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 765 0 
+[m3 #9] close stderr: 
+[m3 #9] survivors by ps: d3hb=0, their ppids: 
+[m3 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 784 0 
+[m3 #10] close stderr: 
+[m3 #10] survivors by ps: d3hb=0, their ppids: 
+[m3 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 753 0 
+[m5 #1] before close: d3hb processes=775; daemon c pid=57802 ppid=1488 (Relay(1489)     /init) sid=57802 pgid=57802 (cli pgid=n/a)
+    [m5 #1 table]   57788    6809    1489    1489 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh /tmp/d3run.qMUH1a/m5-1 /tmp/d3run.qMUH1a/bin/d3hb envtag
+    [m5 #1 table]   57796   57788    1489    1489 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m5-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m5 #1 table]   57798   57796    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m5-1/a.hb
+    [m5 #1 table]   57799   57796    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m5-1/b.hb
+    [m5 #1 table]   57802    1488   57802   57802 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb daemon /tmp/d3run.qMUH1a/m5-1/c.hb
+    [m5 #1 table]   57803   57796    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m5-1/d 2000 500
+    [m5 #1 table]   57805    1488   57805   57805 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m5-1/d 2000 500
+    [m5 #1 table]   57807    1488   57807   57807 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m5-1/d 2000 500
+    [m5 #1 table]   57809    1488   57809   57809 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m5-1/d 2000 500
+    [m5 #1 table]   57811    1488   57811   57811 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m5-1/d 2000 500
+    [m5 #1 table]   57814    1488   57814   57814 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m5-1/d 2000 500
+    [m5 #1 table]   57816    1488   57816   57816 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m5-1/d 2000 500
+[m5 #1] survivors by ps: d3hb=0, their ppids: 
+[m5 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 974 0 
+[m5 #1] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 57796 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #2] survivors by ps: d3hb=0, their ppids: 
+[m5 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 822 0 
+[m5 #2] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 59809 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #3] survivors by ps: d3hb=0, their ppids: 
+[m5 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 811 0 
+[m5 #3] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 61498 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #4] survivors by ps: d3hb=0, their ppids: 
+[m5 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 816 0 
+[m5 #4] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 63165 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #5] survivors by ps: d3hb=0, their ppids: 
+[m5 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 907 0 
+[m5 #5] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 64842 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #6] survivors by ps: d3hb=0, their ppids: 
+[m5 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 770 0 
+[m5 #6] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 66701 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #7] survivors by ps: d3hb=0, their ppids: 
+[m5 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 823 0 
+[m5 #7] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 68286 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #8] survivors by ps: d3hb=0, their ppids: 
+[m5 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 831 0 
+[m5 #8] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 69977 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #9] survivors by ps: d3hb=0, their ppids: 
+[m5 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 807 0 
+[m5 #9] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 71684 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m5 #10] survivors by ps: d3hb=0, their ppids: 
+[m5 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 820 0 
+[m5 #10] /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/poller.sh: line 27: 73344 Killed                  env D3TAG="$tag" bash "$here/fakecli.sh" "$dir" "$hb" > "$dir/cli.log" 2>&1 < /dev/null
+envtag passes=3
+[m6 #1] before close: d3hb processes=920; daemon c pid=75034 ppid=75029 (bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m6-1 /tmp/d3run.qMUH1a/bin/d3hb) sid=75034 pgid=75034 (cli pgid=n/a)
+[m6 #1] daemon c inside the namespace: NSpid:	75034	6 (host pid first, pid inside the namespace last)
+    [m6 #1 table]   75027    6809    1489    1489 S+   unshare         unshare --user --map-root-user --pid --fork --kill-child --mount-proc bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m6-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m6 #1 table]   75029   75027    1489    1489 S+   bash            bash /mnt/c/Users/johns/projects/AIConnections/.shadow/v2-tools/review/prototypes/D-3/fakecli.sh /tmp/d3run.qMUH1a/m6-1 /tmp/d3run.qMUH1a/bin/d3hb
+    [m6 #1 table]   75030   75029    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m6-1/a.hb
+    [m6 #1 table]   75031   75029    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb beat /tmp/d3run.qMUH1a/m6-1/b.hb
+    [m6 #1 table]   75034   75029   75034   75034 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb daemon /tmp/d3run.qMUH1a/m6-1/c.hb
+    [m6 #1 table]   75035   75029    1489    1489 S+   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m6-1/d 2000 500
+    [m6 #1 table]   75037   75029   75037   75037 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m6-1/d 2000 500
+    [m6 #1 table]   75039   75029   75039   75039 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m6-1/d 2000 500
+    [m6 #1 table]   75041   75029   75041   75041 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m6-1/d 2000 500
+    [m6 #1 table]   75043   75029   75043   75043 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m6-1/d 2000 500
+    [m6 #1 table]   75045   75029   75045   75045 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m6-1/d 2000 500
+    [m6 #1 table]   75047   75029   75047   75047 Ss   d3hb            /tmp/d3run.qMUH1a/bin/d3hb loop /tmp/d3run.qMUH1a/m6-1/d 2000 500
+[m6 #1] survivors by ps: d3hb=0, their ppids: 
+[m6 #1] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 1100 0 
+[m6 #2] survivors by ps: d3hb=0, their ppids: 
+[m6 #2] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 757 0 
+[m6 #3] survivors by ps: d3hb=0, their ppids: 
+[m6 #3] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 767 0 
+[m6 #4] survivors by ps: d3hb=0, their ppids: 
+[m6 #4] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 777 0 
+[m6 #5] survivors by ps: d3hb=0, their ppids: 
+[m6 #5] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 766 0 
+[m6 #6] survivors by ps: d3hb=0, their ppids: 
+[m6 #6] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 740 0 
+[m6 #7] survivors by ps: d3hb=0, their ppids: 
+[m6 #7] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 778 0 
+[m6 #8] survivors by ps: d3hb=0, their ppids: 
+[m6 #8] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 745 0 
+[m6 #9] survivors by ps: d3hb=0, their ppids: 
+[m6 #9] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 753 0 
+[m6 #10] survivors by ps: d3hb=0, their ppids: 
+[m6 #10] RESULT a 1 0 RESULT b 1 0 RESULT c 1 0 RESULT d 760 0 

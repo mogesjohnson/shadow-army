@@ -1,0 +1,6 @@
+[
+ [
+  "grok 1.0.70 lists no modes and its `session/set_mode` takes any string | P3, to apply unverified | repair pending |",
+  "grok 1.0.70 lists no modes and its `session/set_mode` takes any string | P3, to apply unverified | fixed in v0.21, batch 8 (drafts/v021/repairs8.txt): SET-2 sets each installed plugin to `false` in `enabledPlugins` through claude's `--settings`, and names what still loads (P-3); CH-11's approved plan leaves `plan` for `default`, so the next edit still asks; CH-11 records each vendor's answer (grok 1.0.70 lists no modes, so the adapter sends it no `session/set_mode` and it keeps the mode it opened in); M6-AC17's recorded case checks P-15's answer (P-15) |"
+ ]
+]

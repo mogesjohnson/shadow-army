@@ -1,0 +1,30 @@
+[
+ [
+  "A post office whose last one's log ends with harness git held, for a change or after a timeout, or with a turn of this army's still open (PO-1),",
+  "A post office whose last one's log ends with harness git held, for a change or after a timeout, or where this army's logs show a turn still open, its guard not yet closed (PO-1, PO-5),"
+ ],
+ [
+  "In that comparison, the `gitdir` and `commondir` of each of this army's snapshots and worktrees that the log names as started, made or being removed are trusted as they are, as PO-1 does for a turn's guard, until Shadow Army's own command removes that snapshot or worktree; a `config.worktree` there is compared like any other config.",
+  "In that comparison, the `gitdir` and `commondir` of each of this army's snapshots and worktrees that the log names as started, made or being removed are trusted, as PO-1 does for a turn's guard, until Shadow Army's own command removes that snapshot or worktree, but only where each holds what Shadow Army's own command writes there: a `commondir` that names the repository's own common folder, and a `gitdir` that is missing or names the `.git` file of that snapshot or worktree at the path the log gives. Any other content, or a `commondir` that is gone, is a change, since git reads the config of whatever folder `commondir` names, or of the entry itself when there is none; a `config.worktree` there is compared like any other config."
+ ],
+ [
+  "Beside the log it keeps a copy of each of those files as last trusted, so a card shown again after a restart gives each file's diff from that state.",
+  "Beside the log it keeps a copy of each of those files as last trusted, so a card shown again after a restart gives each file's diff from that state. A copy that is gone, or whose hash isn't the one the log gives, is never diffed from: the card, or in M1 the transcript line, names the file, says its last trusted copy is missing or changed, and shows the file as it is now."
+ ],
+ [
+  "holds harness git at the next check, or at the next start where the post office ended first (WSP-10), so no harness git command that starts after that check runs it.",
+  "holds harness git at the next check, or, where the post office ended first with harness git held or a turn of this army's still open, at the next start (WSP-10), so no harness git command that starts after that check runs it."
+ ],
+ [
+  "and Claude's transcript gets WSP-10's line that harness git is held and that undoing the change lets it go on.",
+  "and Claude's transcript gets WSP-10's line that harness git is held, that the change can't be told from one the owner made since the last post office ended, and that undoing the change lets it go on."
+ ],
+ [
+  "So it is when the fake mod releases the army while the soldier's turn still runs, before any harness git command has checked the config change: the next use's post office holds harness git before it finishes that turn, and its transcript line also says the change can't be told from the owner's (WSP-10);",
+  "So it is when the post office is ended outright while the soldier's turn still runs, as Claude Code ends it at a normal exit (PO-7), before any harness git command has checked the config change, and when the config changes while a guard command's timeout holds harness git and the post office then shuts down: each time, the next use's post office holds harness git before it finishes that turn, and its transcript line says the change can't be told from the owner's (WSP-10). So it is, too, when the post office is ended outright that way after the soldier instead points its snapshot's `commondir` at a folder of its own whose config defines a clean filter that a `.gitattributes` in its snapshot names: the next use's post office holds harness git, and the filter never runs (WSP-10);"
+ ],
+ [
+  "keeps harness git held and shows the card again, where y lets harness git go on",
+  "keeps harness git held and shows the card again, with the config file's diff from the copy kept beside the log and its note that the change can't be told from the owner's (with that copy changed first, the card gives no diff, says the copy changed and shows the file as it is now), where y lets harness git go on"
+ ]
+]

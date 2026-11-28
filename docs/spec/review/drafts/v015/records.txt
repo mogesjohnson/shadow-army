@@ -1,0 +1,14 @@
+Records for v0.15 (decisions.md, ledger.md, STATE.md decision rows).
+<<< OLD
+- **Card** (2026-10-21, the new cards doc): recommended **B**, because nothing the owner writes is lost without the owner's say, and it reuses the y/n of the attribution card; it shows only when a self-started read-only turn follows an edit in a soldier's worktree, which is rare. C is rejected on safety: it lets a read-only turn's write survive.
+=== NEW
+- **Card** (2026-10-21, the new cards doc): recommended **B**, because nothing the owner writes is lost without the owner's say, and it reuses the y/n of the attribution card; it shows only when a self-started read-only turn follows an edit in a soldier's worktree, which is rare. C is rejected on safety: it lets a read-only turn's write survive.
+- **Answer** (2026-10-23, the doc's table pasted in chat; the doc refused reads from this session's account): **B**. Applied in v0.15 (`drafts/v015/repairs.txt`): WSP-12 saves a copy of each audited path changed between the saved state and the self-started turn's first event, with its hash in the log; before the revert a y/n card lists them (y keeps them as at the first event, n reverts them), the queue held; a card open at shutdown is shown again by the next post office before the revert. HOST-2's keys and decisions list, M6-AC13 and residual 11 follow.
+>>> END
+
+<<< OLD
+- **Card** (2026-10-21): recommended **A**, because it is what Claude Code does, which the owner asked for, and a soldier's answer is never left unseen until the owner types; the mark tells the Monarch the brief came from the earlier conversation.
+=== NEW
+- **Card** (2026-10-21): recommended **A**, because it is what Claude Code does, which the owner asked for, and a soldier's answer is never left unseen until the owner types; the mark tells the Monarch the brief came from the earlier conversation.
+- **Answer** (2026-10-23, pasted in chat): **A**. Applied in v0.15: MSG-5's summary for a brief from before `/clear`, `/resume` or `/branch` wakes Claude as any summary does (MSG-8); M3-AC2 tests it.
+>>> END

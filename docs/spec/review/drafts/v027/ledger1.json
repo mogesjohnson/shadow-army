@@ -1,0 +1,30 @@
+[
+ [
+  "M1-AC10 1105 cases for a submodule's `commondir` and for an unnamed gitlink made with `git init` |",
+  "M1-AC10 1105 cases for a submodule's `commondir` and for an unnamed gitlink made with `git init`. Fix-checked (V26-FC1): FIXED: 798 finds each gitlink in the index of the working tree or submodule it lies in, whose folder has a `.git` file or folder, whether or not `.gitmodules` names it, as git's `is_submodule_modified` accepts a gitfile or a git directory. SOUND: a `.git` folder's config, `hooks/` and `info/`, a `commondir` written mid-turn and the folder it names, and an unnamed gitlink at any depth are each compared; fork2's rewording (config, `hooks/`, `info/` and `commondir` only) leaves out only files that name no program; gitlinks at depth 2 or more are found from the index, staged ones included, and HEAD-only and empty ones are rightly left out; 1105's two new cases fail a build that uses `.gitmodules`, looks only for a `.git` file or doesn't compare `commondir`. Open: a new submodule holding harness git, the owner's own `git submodule add` or `update --init` included, is stated nowhere the owner reads (V26-FC1 N1, P3: R-M1-295); 1105 tests no `.git`-folder gitlink the trusted state already has and no comparison at depth 2 (N5, P3: R-M1-299); 795 says the submodule's `.git` folder is compared, the whole-folder reading 798 avoids (N6, P3: R-M1-300). Neighbours: 796, 799, 800, 835, 855, 957, 1110, 1841 and line 6 SOUND (`raw/V26-FC1.md`) |"
+ ],
+ [
+  "settings git passes on to the git it runs inside each submodule |",
+  "settings git passes on to the git it runs inside each submodule. Fix-checked (V26-FC1): FIXED: git looks up `submodule.<name>.ignore` in the command scope, which beats a submodule's `.gitmodules` and its own config; names read when the command runs catch an entry already there, an entry a soldier adds is itself a change, and two submodules with one name at different depths get the same `none`, which is harmless. Open: `-c` splits at the first `=`, so a name that holds `=` sets another key (V26-FC1 N2, P3: R-M1-296) (`raw/V26-FC1.md`) |"
+ ],
+ [
+  "in the user's global git config, set before the post office starts |",
+  "in the user's global git config, set before the post office starts. Fix-checked (V26-FC1): FIXED: the guard's sight is a case of its own with nothing else changed, so harness git isn't held, and \"before the post office starts\" is right for both settings: for the global config because a later change holds harness git, for `.gitmodules` because a later edit is itself a change the guard sees. Open: where the nested `ignore` entry goes is unclear (V26-FC1 N5, P3: R-M1-299) (`raw/V26-FC1.md`) |"
+ ],
+ [
+  "takes back the start state's `.git` file with the put-back, so it is no change |",
+  "takes back the start state's `.git` file with the put-back, so it is no change. Fix-checked (V26-FC1): FIXED: after y the trusted state takes back the start state's file, so the put-back is no change, which agrees with 799, 835 and 855; on n the hold and the revert both wait, and with no answer before the end the next start holds again and shows the card again before the revert (`raw/V26-FC1.md`) |"
+ ],
+ [
+  "in place of the fix text's `GIT_NO_REPLACE_OBJECTS=1` at 795, which git clears there |",
+  "in place of the fix text's `GIT_NO_REPLACE_OBJECTS=1` at 795, which git clears there. Fix-checked (V26-FC1): FIXED. SOUND: the move to 792's `-c core.useReplaceRefs=false`: git-config says false behaves as `--no-replace-objects`, `local_repo_env` lists `GIT_NO_REPLACE_OBJECTS` while `sanitize_repo_env` keeps the `-c` settings, so it reaches the git run inside a submodule, rev-parse included, and command scope outranks every file a soldier writes; there is no `replace.refBase` key. Open: the \"so no ref …\" clause makes `--no-optional-locks` read as part of it (V26-FC1 N4, P3: R-M1-298) (`raw/V26-FC1.md`) |"
+ ],
+ [
+  "the folder and its common folder, also with the folder a linked worktree |",
+  "the folder and its common folder, also with the folder a linked worktree. Fix-checked (V26-FC1): FIXED: the folder's commands, also as a linked worktree, are tested. Open: \"each one run in the folder\" also covers the start's own `git rev-parse` that finds those values, which can't have them (V26-FC1 N3, P3: R-M1-297) (`raw/V26-FC1.md`) |"
+ ],
+ [
+  "with no `ignore` override (N3, P3: R-M1-291) (`raw/V25-FC1.md`) |",
+  "with no `ignore` override (N3, P3: R-M1-291) (`raw/V25-FC1.md`). Checked again (V26-FC1): SOUND: with R-M1-289 to 291's repairs, no submodule's own config can run a filter in the guard's listing unless that config was compared first; what remains is P3 (V26-FC1 N2, N5, N6: R-M1-296, R-M1-299, R-M1-300) (`raw/V26-FC1.md`) |"
+ ]
+]

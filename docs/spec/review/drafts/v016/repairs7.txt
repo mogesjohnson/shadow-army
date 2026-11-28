@@ -1,0 +1,34 @@
+v0.16 repairs, part 7: F-R3-V1's confirmed findings. Written by the orchestrator (Fork 2), session 8, 2026-10-23.
+
+R-F-137 (P2): PO-21 names the test build.
+<<< OLD
+except VER-6's coverage job, which runs copies instrumented for coverage that never ship.
+=== NEW
+except VER-6's coverage job, which runs copies instrumented for coverage, and the jobs of M1-AC15 and M1-AC18 that run a test build: a build of the same source with its faults compiled in, and its own checksums in its own post office (PO-13). Neither ever ships, and no shipped file holds a switch that turns a fault on.
+>>> END
+
+R-F-139 (P2): what the live budget counts.
+<<< OLD
+Every live check run toward it since the tag before it counts: every milestone's, on every system, repeats included.
+=== NEW
+Every live check run toward it since the tag before it counts: each run the owner makes for L evidence (VER-9, VER-10 and each live AC), every milestone's, on every system, repeats included.
+>>> END
+
+<<< OLD
+For each run, the sum over both prompts of every model request's input tokens, whether uncached, written to the cache or read from it, and its output tokens.
+=== NEW
+For each run, the sum over both prompts of every model request's input tokens, whether uncached, written to the cache or read from it, and its output tokens. For a live check other than the parity task, the sum over all its turns, counted the same way.
+>>> END
+
+R-F-143 (P2): CH-1, how a CLI is found and started on Windows.
+<<< OLD
+never through a relative `PATH` entry. On Windows the current folder is never searched.
+=== NEW
+never through a relative `PATH` entry. On Windows the current folder is never searched. On Windows, a name is looked up in each absolute `PATH` entry with each extension of `PATHEXT` in order, never with none, and the first match wins. A `.cmd` or `.bat` CLI is started through `cmd.exe /d /s /c`, with every argument escaped for both `cmd.exe` and the program's own parser, as cross-spawn does; an argument with a line break goes through a file, as CH-2 does for the instructions. A unit test covers the escaping.
+>>> END
+
+<<< OLD
+the CLI, git and the post office's Node.js come from the first absolute entry on `PATH` that holds them (CH-1, WSP-10, HOST-2).
+=== NEW
+the CLI, git and the post office's Node.js come from the first absolute entry on `PATH` that holds them (CH-1, WSP-10, HOST-2). On Windows, from a `PATH` folder that holds `claude`, `claude.cmd` and `claude.exe`, the post office starts the first by `PATHEXT`'s order, never `claude`.
+>>> END

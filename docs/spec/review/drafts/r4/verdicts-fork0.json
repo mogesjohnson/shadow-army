@@ -1,0 +1,6 @@
+[
+  { "id": "R-F-166", "verdict": "DECISION P1 (F-R4-V1)", "resolution": "card D-36 (fixture vetting: (a) clean checkout plus the owner reading each fixture whole, recommended; (b) the same plus a local and CI secret scan); shared text for VER-4 997, WSP-8 773, M1 Implements 1039 in raw/F-R4-V1.md; VER-4 moves into M1" },
+  { "id": "R-F-167", "verdict": "CONFIRMED P2 (F-R4-V1)", "resolution": "fix pending v0.21: SEC-6 857 covers every text the mod draws, repository paths, diffs and ref names included; M1-AC11 and M2-AC5 cases; Appendix D row 4 (raw/F-R4-V1.md)" },
+  { "id": "R-F-168", "verdict": "CONFIRMED P3, was P2 (F-R4-V2)", "resolution": "fix pending v0.21: row 8 1800 and the In short line 1811 name a new residual 14, filters in the config at start (raw/F-R4-V2.md); re-check its last sentence against R-M1-206's fix" },
+  { "id": "R-F-169", "verdict": "CONFIRMED P3, was P2 (F-R4-V2)", "resolution": "fix pending v0.21: row 13 1805 says prevented, except residual 3 (raw/F-R4-V2.md)" }
+]

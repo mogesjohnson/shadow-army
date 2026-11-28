@@ -1,0 +1,175 @@
+v0.18 repairs: fix check V17-FC1's findings N1 to N13 (R-M1-193 to R-M1-205), which also finish R-M1-182 (N1), R-M1-183 (N7), R-M1-186 (N8) and R-M1-187 (N9). Written by the orchestrator (session 10, Fork 1), 2026-10-26.
+
+N1 (R-M1-193, R-M1-182's rest) and N13 (R-M1-205): CH-1, the CLI's PATH loses relative entries and entries in the repository; the variable's reach and CH-7.
+<<< OLD
+`cmd.exe` is found by its absolute path in the Windows folder, never by name, and gets `NoDefaultCurrentDirectoryInExePath=1` in its environment, so no program a shim runs by name, such as npm's `node`, is taken from the current folder. A command the CLI itself later runs through `cmd.exe` inherits the variable; `.\name` still runs a program there.
+=== NEW
+`cmd.exe` is found by its absolute path in the Windows folder, never by name, and gets `NoDefaultCurrentDirectoryInExePath=1` in its environment, so cmd.exe doesn't search the current folder ahead of `PATH`. Every process the CLI starts inherits the variable, so a program in the current folder runs there only as `.\name`; this changes one vendor default and disables no safeguard (CH-7). On every system, each CLI starts with the post office's `PATH` less every relative or empty entry and every entry in the folder, a worktree or a snapshot, and the soldier's log names each entry dropped. So no program a shim or a `#!/usr/bin/env node` line runs by name, such as npm's `node`, is taken from the repository's files. This too disables no safeguard (CH-7).
+>>> END
+
+N1: M1-AC10's shim case runs with the bad PATH entries.
+<<< OLD
+A fake `claude.cmd` on `PATH` that runs `node` by name, as npm's shim does, with `node.bat`, `node.exe` and `cmd.exe` committed in the soldier's snapshot, runs none of them.
+=== NEW
+A fake `claude.cmd` on `PATH` that runs `node` by name, as npm's shim does, with `node.bat`, `node.exe`, `node_modules/.bin/node.cmd` and `cmd.exe` committed in the soldier's snapshot, runs none of them, with `.`, an empty entry and `node_modules\.bin` on the post office's `PATH`; on Linux and macOS, a fake `claude` whose first line is `#!/usr/bin/env node` does the same with `node` and `node_modules/.bin/node` committed. The fake reports the `PATH` it got, which holds none of those entries, and the soldier's log names each one dropped.
+>>> END
+
+N1: Appendix D row 9.
+<<< OLD
+On Windows a CLI's shim takes no program from the current folder.
+=== NEW
+Each CLI starts with no relative or empty `PATH` entry and none in the folder, a worktree or a snapshot, so a CLI's shim takes no program from the repository's files.
+>>> END
+
+N2 (R-M1-194): PO-4, a claude soldier under `disableSideloadFlags`.
+<<< OLD
+  - agy has no per-session way to add it, so agy soldiers get no `send` tool in v2.0. They reply through summaries only.
+=== NEW
+  - agy has no per-session way to add it, so agy soldiers get no `send` tool in v2.0. They reply through summaries only.
+  - Claude Code's managed setting `disableSideloadFlags` also rejects `--mcp-config` at startup. Before it starts a claude soldier, the post office reads that setting from the managed settings Claude Code reads. Where it is set, the soldier takes `send` only over its stream-json input (Q9); where that isn't possible, it starts without `--mcp-config` and without `send`, replying through summaries only, as agy does, and its log and its row say why. It is never reported as a refused start or an autonomy problem.
+>>> END
+
+N2: Q9 names the case.
+<<< OLD
+Until it does, and if the first answer is no, claude takes them from PO-4's owner-only file (PO-4).
+=== NEW
+Until it does, and if the first answer is no, claude takes them from PO-4's owner-only file (PO-4). Where managed settings set `disableSideloadFlags`, the first answer alone decides whether a claude soldier has `send` at all (PO-4).
+>>> END
+
+N3 (R-M1-195): HOST-1 is M1's.
+<<< OLD
+- **HOST-1** (M5; R) Shadow Army ships the mod
+=== NEW
+- **HOST-1** (M1; R) Shadow Army ships the mod
+>>> END
+
+<<< OLD
+Implements:
+- HOST-2;
+- PO-1, PO-2, PO-3, PO-5, PO-7, PO-9 to PO-21;
+=== NEW
+Implements:
+- HOST-1, HOST-2;
+- PO-1, PO-2, PO-3, PO-5, PO-7, PO-9 to PO-21;
+>>> END
+
+<<< OLD
+- HOST-1, HOST-3 to HOST-9, HOST-12 to HOST-15;
+=== NEW
+- HOST-3 to HOST-9, HOST-12 to HOST-15;
+>>> END
+
+<<< OLD
+- **M5-AC3** Review confirms the mod is loaded from this repository, never approves
+=== NEW
+- **M5-AC3** Review confirms the mod is loaded from its release package (HOST-1), never approves
+>>> END
+
+<<< OLD
+Live: on a Linux machine with no C compiler, the owner installs the package tarball, loads the mod from it with `--plugin-dir <package>/plugin`, and starts a claude soldier, once with the network off. Nothing asks for a compiler. Closing the soldier leaves no process behind. The run is written up on the PR (PO-13).
+=== NEW
+Live: on a Linux machine with no C compiler, the owner installs the package tarball, loads the mod from it with `--plugin-dir <package>/plugin`, and starts a claude soldier, once with the network off. Nothing asks for a compiler. The post office that starts is the one in the same package, with no Shadow Army on `PATH`. Closing the soldier leaves no process behind. The run is written up on the PR (HOST-1, PO-13).
+>>> END
+
+N4 (R-M1-196): WSP-11, the folders above the snapshots folder.
+<<< OLD
+The post office makes that folder and checks it as PO-5 does `~/.shadow-army/`; a value that fails starts no soldier, with the reason in one line in Claude's transcript.
+=== NEW
+The post office makes that folder and checks it as PO-5 does `~/.shadow-army/`. Every folder above it must be owned by the owner, root, SYSTEM or Administrators and writable by no other user, and each one that is neither the owner's home nor inside it must hold no `CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md` or `AGENTS.md`, since soldiers' CLIs load those from every folder above their working directory. A value that fails starts no soldier, with the reason in one line in Claude's transcript.
+>>> END
+
+N5 (R-M1-197): WSP-10 names the snapshots folder, not its default.
+<<< OLD
+A snapshot or worktree is this army's own when it lies in this army's subfolder of `~/.shadow-army/snapshots/` (WSP-11), or when this army's logs name it (PO-5). Any other snapshot or worktree is another army's in two cases: its `gitdir` lies in a subfolder there that carries another army's mark, or its HEAD names a branch under another army's mark (WSP-1, →M6).
+=== NEW
+A snapshot or worktree is this army's own when it lies in this army's subfolder of the snapshots folder (WSP-11), or when this army's logs name it (PO-5). Any other snapshot or worktree is another army's in two cases: its `gitdir` lies in a subfolder that carries another army's mark and holds that army's path file (WSP-11), in whatever snapshots folder, or its HEAD names a branch under another army's mark (WSP-1, →M6).
+>>> END
+
+N5: WSP-11's sweep scans the default folder too.
+<<< OLD
+When a post office starts, it checks each other subfolder that holds snapshots of this repository.
+=== NEW
+When a post office starts, it checks each other subfolder that holds snapshots of this repository, in the snapshots folder it uses and in the default `~/.shadow-army/snapshots/`.
+>>> END
+
+N6 (R-M1-198): M1-AC11 tests the variable.
+<<< OLD
+  - a snapshot that can't be made keeps the soldier from starting, and its log and Claude's transcript say why;
+=== NEW
+  - a snapshot that can't be made keeps the soldier from starting, and its log and Claude's transcript say why;
+  - with `SHADOW_ARMY_SNAPSHOTS` set to an absolute folder outside the folder's directory tree, its session's snapshot opens in a subfolder there, and `trust/` stays under `~/.shadow-army/`. A relative path, a path inside the folder, one inside a linked working tree of the repository, a folder that another user can write (faked), and a folder whose parent outside the owner's home holds a `CLAUDE.md` each start no soldier, with one transcript line giving the reason (WSP-11);
+>>> END
+
+N7 (R-M1-199, R-M1-183's rest): WSP-10, HOST-14 and HOST-5 lift the hold after a timeout.
+<<< OLD
+harness git is held with that reason, and the hold joins the decisions list (HOST-14, →M5), where the owner can try again; in M1 the next use of the army tries again.
+=== NEW
+harness git is held with that reason, and the hold joins the decisions list (HOST-14, →M5), where g tries again (HOST-5, →M5); until M5, the next use of the army tries again.
+>>> END
+
+<<< OLD
+or after a read-only turn's revert failed (WSP-12, →M6), logins needed, channels down and messages not delivered.
+=== NEW
+or after a read-only turn's revert failed (WSP-12, →M6), harness git held after a command timed out twice (WSP-10), logins needed, channels down and messages not delivered.
+>>> END
+
+<<< OLD
+and after a mode couldn't be set or a revert failed it tries again first (CH-11, →M6; WSP-12, →M6);
+=== NEW
+and after a mode couldn't be set or a revert failed it tries again first (CH-11, →M6; WSP-12, →M6); on harness git held after a timeout, it tries harness git again (WSP-10);
+>>> END
+
+N8 (R-M1-200, R-M1-186 wrong as applied): no `git worktree prune`.
+<<< OLD
+is removed with `git worktree remove --force --force` and `git worktree prune`, run as harness git, and the log says so.
+=== NEW
+is removed with `git worktree remove --force --force <path>`, run as harness git, or, where its folder is already gone, by deleting only its own `worktrees/<id>` entry; never with `git worktree prune`, which removes every missing working tree's metadata. The log says so.
+>>> END
+
+N9 (R-M1-201, R-M1-187 wrong as applied): M1-AC1 fakes the host just below the floor.
+<<< OLD
+with the host's version faked as 2.1.285, and in turn
+=== NEW
+with the host's version faked as 2.1.293, and in turn
+>>> END
+
+N10 (R-M1-202): PO-13's audit gates the bundled packages alone.
+<<< OLD
+(`npm audit --audit-level=moderate` on the lockfile the bundle is built from)
+=== NEW
+(`npm audit --omit=dev --audit-level=moderate` on a manifest and lockfile of the bundled packages alone, so a build or test tool that never ships doesn't block a release)
+>>> END
+
+<<< OLD
+  - a planted bundled dependency with a known advisory, and one with a license off the allowlist, each fail the dry run,
+=== NEW
+  - a planted bundled dependency with a known advisory, and one with a license off the allowlist, each fail the dry run, while a planted advisory in a build-only tool doesn't,
+>>> END
+
+N11 (R-M1-203): M6-AC9's cleanup runs in a later turn.
+<<< OLD
+During a soldier's turn, `claude --worktree fix-1` makes `.claude/worktrees/fix-1` with its branch `worktree-fix-1`, and its cleanup then deletes both: the turn passes with no card, and the transcript lines for that working tree name the branch (WSP-1, WSP-4, WSP-10).
+=== NEW
+During a soldier's turn, `claude --worktree fix-1` makes `.claude/worktrees/fix-1` with its branch `worktree-fix-1`; after that turn's guard has closed, the soldier's next turn runs its cleanup, which deletes both. Each turn passes with no card, and the transcript lines for that working tree name the branch. In that next turn, deleting the owner's branch `hotfix` together with a linked worktree that was checked out on it, though the branch existed before the worktree, goes on the card (WSP-1, WSP-4, WSP-10).
+>>> END
+
+N12 (R-M1-204): WSP-4 narrows D-26's exemption to a branch made with its tree.
+<<< OLD
+One is a branch made or deleted together with a working tree whose metadata WSP-10 leaves out, when that tree's HEAD names it,
+=== NEW
+One is a branch made together with a working tree whose metadata WSP-10 leaves out, when that tree's HEAD names it, or deleted together with the working tree it was made with; the post office's log records each such pair when both appear,
+>>> END
+
+N12: residual 13 lists the refs of other armies.
+<<< OLD
+The nested tree's own army, whenever one runs there, guards it during that army's turns.
+=== NEW
+The nested tree's own army, whenever one runs there, guards it during that army's turns. Refs under another army's mark move uncarded in this army (WSP-4): a soldier here can move or delete another army's `shadow/<mark>/` branch while that army has no turn open, and no army cards it.
+>>> END
+
+The version line.
+<<< OLD
+| **Version** | 0.17, 2026-10-23:
+=== NEW
+| **Version** | 0.18, 2026-10-26: fix check V17-FC1's repairs (among them: each CLI's `PATH` without relative entries or entries in the repository, a claude soldier under `disableSideloadFlags`, HOST-1 moved to M1, the folders above `SHADOW_ARMY_SNAPSHOTS` checked, the hold after a timeout lifted by g, no `git worktree prune`, and D-26's exemption narrowed to a branch made with its working tree). 0.17, 2026-10-23:
+>>> END

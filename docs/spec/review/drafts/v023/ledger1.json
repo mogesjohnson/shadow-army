@@ -1,0 +1,70 @@
+[
+ [
+  " as the file that keeps the hold; M1-AC10 and M2-AC5 cases |",
+  " as the file that keeps the hold; M1-AC10 and M2-AC5 cases. Fix-checked (V22-FC1): FIXED, with gaps: `n` and an unanswered card hold across restarts, but a change the last post office never checked, as when a normal exit cuts a turn short or during a guard-timeout hold, is still trusted at the next start (V22-FC1 N1, P2, with an owner option); PO-5 doesn't list or flush the hold records and the card shown again has no diff (N2, P3); PO-1's other finishing items aren't told to wait (N3, P3); three places still call a filter at start the owner's (N4, P3); no AC for `y` on the card shown again or M1's restart line (N5, P3) (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "al is 15, and row 8 and the In short line cite residual 15 |",
+  "al is 15, and row 8 and the In short line cite residual 15. Fix-checked (V22-FC1): FIXED by fork1's grep of `v2@c18f845.md`: residual 14 is D-34's (1860), the filters residual is 15 (1861), and row 8 (1827) and the In short line (1838) cite residual 15; no \"residual 14\" citation is left (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "the DACL's 30 s has no AC case (N2, P3) (`raw/V21-FC1.md`) |",
+  "the DACL's 30 s has no AC case (N2, P3) (`raw/V21-FC1.md`). Fix-checked (V22-FC1): FIXED: PO-7 270's ready point lists the steps before and after the report, and the DACL's 30 s sits inside the 60 s (R-M1-246, 247) (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "16's sweep and PO-1's finishing come after it; M1-AC1 case |",
+  "16's sweep and PO-1's finishing come after it; M1-AC1 case. Fix-checked (V22-FC1): FIXED: 270's before and after lists match PO-3, PO-5, PO-14 372, PO-16 411 and WSP-10 796, and M1-AC1 1075 tests it (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "s2.txt`): M1-AC2's case for a DACL script that never exits |",
+  "s2.txt`): M1-AC2's case for a DACL script that never exits. Fix-checked (V22-FC1): FIXED: M1-AC2 1077 matches PO-7 270 (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "fts/v022/repairs2.txt`): the example drops `started 14:02` |",
+  "fts/v022/repairs2.txt`): the example drops `started 14:02`. Fix-checked (V22-FC1): FIXED; no other copy of the old example (`raw/V22-FC1.md`) |"
+ ],
+ [
+  " lock's starting process is no longer running; M1-AC1 case |",
+  " lock's starting process is no longer running; M1-AC1 case. Fix-checked (V22-FC1): FIXED: agrees with PO-7 276, 290 and PO-11; a Windows watch run restarted after its process ended is unhandled (V22-FC1 N6, P3) (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "ents and runs on until the watch or the lease; M1-AC1 case |",
+  "ents and runs on until the watch or the lease; M1-AC1 case. Fix-checked (V22-FC1): FIXED: agrees with PO-7's 16 MiB rule; the watch or the lease ends the post office after `EPIPE` (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "t for macOS; residual 14 lists it; M1-AC8's live kill case |",
+  "t for macOS; residual 14 lists it; M1-AC8's live kill case. Fix-checked (V22-FC1): FIXED: PO-7 262-263 match `raw/P-17.md`; fork2's residual 14 entry is SOUND (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "ot sweep may also run PO-19's process operation on Windows |",
+  "ot sweep may also run PO-19's process operation on Windows. Fix-checked (V22-FC1): FIXED as asked; neither sweep may end a harness git command on Windows, and WSP-10 796's process group conflicts with PO-16 412 (V22-FC1 N7, P3) (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "d input closes, and is started again at most once a second |",
+  "d input closes, and is started again at most once a second. Fix-checked (V22-FC1): FIXED as asked; a watch run that can't open the process, or opens a reused pid, is unhandled (V22-FC1 N6, P3) (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "hes from the `:` to the last `@` before the authority ends |",
+  "hes from the `:` to the last `@` before the authority ends. Fix-checked (V22-FC1): FIXED: `u:p@ss@host`, a query `@` and a URL with no password all come out right (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "PATH`; M1-AC10's link, letter-case and missing-entry cases |",
+  "PATH`; M1-AC10's link, letter-case and missing-entry cases. Fix-checked (V22-FC1): FIXED: CH-1 499 and M1-AC10 1110 agree (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "e Code ended instead, the post office's log names the turn |",
+  "e Code ended instead, the post office's log names the turn. Fix-checked (V22-FC1): FIXED: agrees with WSP-10 800 (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "v0.22, batch 2 (`drafts/v022/repairs2.txt`): M1-AC1's case |",
+  "v0.22, batch 2 (`drafts/v022/repairs2.txt`): M1-AC1's case. Fix-checked (V22-FC1): FIXED: agrees with HOST-2 116 and PO-7 267 (`raw/V22-FC1.md`) |"
+ ],
+ [
+  " 3 (`drafts/v022/repairs3.txt`): CH-4 530 cites both pages |",
+  " 3 (`drafts/v022/repairs3.txt`): CH-4 530 cites both pages. Fix-checked (V22-FC1): FIXED: the grok-build page exists and puts CLI flags above `~/.grok/config.toml` (`raw/V22-FC1.md`) |"
+ ],
+ [
+  "-8's result and a \"Not tested:\" note on a stock Mac (D-34) |",
+  "-8's result and a \"Not tested:\" note on a stock Mac (D-34). Fix-checked (V22-FC1): NOT SOUND, P3: P-8 tested a `KeepAlive` LaunchAgent removed with `bootout`, while PO-18 uses `launchctl submit` and PO-17 allows only `launchctl remove` (V22-FC1 N8) (`raw/V22-FC1.md`) |"
+ ]
+]

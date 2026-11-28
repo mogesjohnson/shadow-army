@@ -1,0 +1,11 @@
+{
+ "NEW-D3-1": "PO-9", "NEW-D3-2": "PO-10", "NEW-D3-3": "PO-11", "NEW-D3-4": "PO-12", "NEW-D3-5": "PO-13",
+ "NEW-D3-6": "PO-14", "NEW-D3-7": "PO-15", "NEW-D3-8": "PO-16", "NEW-D3-9": "PO-17", "NEW-D3-10": "PO-18",
+ "NEW-D3-11": "PO-19", "NEW-D3-12": "PO-20", "NEW-D3-13": "PO-21",
+ "NEW-D10-1": "ARM-7",
+ "NEW-D10-AC1": "M1-AC13", "NEW-D19-AC1": "M1-AC14",
+ "NEW-D3-AC1": "M1-AC15", "NEW-D3-AC2": "M1-AC16", "NEW-D3-AC3": "M1-AC17", "NEW-D3-AC4": "M1-AC18",
+ "NEW-D3-AC5": "M1-AC19", "NEW-D3-AC6": "M1-AC20", "NEW-D3-AC7": "M1-AC21", "NEW-D3-AC8": "M1-AC22",
+ "NEW-D5-AC1": "M3-AC14",
+ "NEW-D17-AC1": "M6-AC9"
+}

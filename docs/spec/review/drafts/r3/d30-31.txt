@@ -1,0 +1,21 @@
+Cards D-30 and D-31, from F-R3-V3 (raw/F-r3-verify-V3.md). Written by the orchestrator (Fork 2), 2026-10-23.
+
+<<< OLD
+## Values set in the fix pass
+=== NEW
+## D-30 Accepting residuals 7, 8 and 12 (R-F-153)
+
+- **Kind:** big: accepting a remaining risk (PLAYBOOK section 14). Verified by F-R3-V3 (`raw/F-r3-verify-V3.md`).
+- **Question:** Appendix D says residuals 7, 8 and 12 are "for the owner to accept", and no card has ever asked. 7: a soldier can change the shared git config between harness git's check and git's own read, so what git then runs has run (the check after finds it and holds harness git). 8: a `claude -p` soldier runs the repository's own hooks, `env` block and helper commands, as the owner's own trusted session does. 12: a turn's start state and guard baseline are files the soldier's user can write; the hash catches a rewrite while the post office runs, not after it died. M1 builds WSP-10, the control that residual 7 leaves open.
+- **Options:** A accept the three as written; B a control for each instead (for 12, the start state's hash kept outside the soldier's reach); C accept them later, before M1-AC10 (7), M1-AC13 (8) and M6-AC14 (12) are claimed, with each of those ACs' PRs saying its residual is not yet accepted.
+- **Card** (2026-10-23, in chat): recommended **A**, because each is already bounded by a check that finds it afterwards (7, 12) or matches what the owner's own Claude Code session already runs (8), and a control for each means running soldiers as another user, which v2.0 left out.
+
+## D-31 Whether soldiers resume in a new Claude Code process (R-F-156, Appendix C H38)
+
+- **Kind:** big: it changes what the owner keeps, loses and pays (PLAYBOOK section 14 names H38). Verified by F-R3-V3 (`raw/F-r3-verify-V3.md`). D-11 left it with H38.
+- **Question:** each Claude Code process has its own soldier sessions (SES-1), and PO-7 closes them when it ends. When the owner resumes a conversation in a new process, do soldiers start fresh, or resume their last sessions?
+- **Options:** A start fresh in every new process, as written; state it in SES-1 and close H38; B each soldier resumes its last session by id (CH-9) where its worktree or snapshot still exists, which needs WSP-1 to keep the earlier worktree, since claude keys a session to its folder; C B, but only on the owner's y on a card listing the soldiers that can be resumed.
+- **Card** (2026-10-23, in chat): recommended **A** for 2.0, because it is the text as written, costs nothing, and a fresh soldier gets its brief again from the Monarch; C can come after 2.0 with H38.
+
+## Values set in the fix pass
+>>> END

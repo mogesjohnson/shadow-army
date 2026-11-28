@@ -1,0 +1,22 @@
+v0.25 batch 1 (fork1, 2026-10-30): the owner's N1 decision (V22-FC1 N1, D-38's carried comparison: keep the main fix), from handoffs/LATEST.md at 74edc93, "First: record the owner's N1 decision". OLD texts are v0.24's (v2.md at 74edc93 equals v2@cf09e77.md); each is one sentence or part of one.
+
+Files:
+- pairs1.json (v2.md, 7 pairs):
+  1. WSP-10 798: a start's hold (card from M2, transcript line in M1) names each file that changed, says the change can't be told from the owner's, and says how to release the hold (M2: the card; M1: undo the change), with an example line.
+  2. WSP-10 799: the M1 line names each file that changed (it said "why"); after a start's comparison it also says the change can't be told from the owner's own.
+  3. M1-AC10 1109, first case: the line names `.git/config`, says held and can't be told, and says undo lets it go on.
+  4. M1-AC10 1109, cut-short and timeout cases: the line names the file and says undo lets harness git go on, besides can't be told.
+  5. M1-AC10 1109, redirected `commondir` case: the line names the snapshot's `commondir`.
+  6. Section 8: new Q10 after Q9, the owner's two M2 ideas (Accept this config; Inspect the issue against the project's goals, with its three safety rules), recorded as ideas, not requirements, citing D-38 and R-M1-269. Wording is LATEST's, put in the spec's voice.
+  7. Version row 6: the 0.25 entry begins with this decision; V24-FC1's repairs go after it.
+- pairs1-decisions.json (decisions.md, 1 pair): a bullet after D-38's Answer, "Its carried comparison's cost, answered", with the owner's quote, the two additions and the pointer to Q10 and R-M1-278.
+- ledger1.json (ledger.md, 1 pair): R-M1-260's resolution ends "The owner kept this main fix (2026-10-30, D-38; R-M1-278)".
+- rows1.txt (ledger.md, 1 row for tools/insert-rows.mjs): R-M1-278, the owner's decision, P2, "the owner's decision, not verified (V24-FC1 checks it)".
+
+Dry run (temporary copies of v2.md, ledger.md and decisions.md at 74edc93): pairs1.json 7 replacements; pairs1-decisions.json 1; ledger1.json 1; rows1.txt inserted 1 row (R-M1-278 after R-M1-277). trace-v2.mjs on an LF copy against v2@cf09e77.md: 0 problems (119 requirements, 81 ACs). check-appendix-c.mjs with the-future: 0 problems.
+
+Orchestrator's choices (for V24-FC1 to check):
+- Where the M2 ideas live: section 8 (Open questions) as Q10. The spec has no list of M2 ideas; Appendix C holds only the owner's 118 listed ideas and its checker counts them, and an M2 requirement or AC would make them requirements.
+- Scope of the three parts: the rule is stated for a start's comparison (798), as the owner asked. 799's general M1 line now names the file too, since naming the file is what "why" meant; the can't-be-told part stays limited to a start's hold, because a change made during a turn is the turn's.
+- M2-AC5 1206 (the card shown again) already checks the diff and the can't-be-told note; it is not changed here. Whether it should also check that the card says how to release (y, or undo) is left to V24-FC1.
+- The example line uses `.git/config`, the shared config M1-AC10's first case changes.

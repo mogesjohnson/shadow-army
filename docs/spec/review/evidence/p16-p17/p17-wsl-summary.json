@@ -1,0 +1,578 @@
+[
+ {
+  "case": "i-ctrlc-twice",
+  "trustDialog": true,
+  "claudePgid": 756,
+  "claudeSid": 756,
+  "claudePid": 756,
+  "rc": 0,
+  "msToExit": 6522,
+  "sessionEnds": [
+   "prompt_input_exit"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 814,
+    "ppid": 756,
+    "pgid": 756,
+    "sid": 756,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -3784,
+      -3336
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -950,
+      -502
+     ]
+    ],
+    "lastHbVsExit": -531,
+    "lastHbVsSessionEnd": -83,
+    "ppids": [
+     756
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "i-exit",
+  "trustDialog": true,
+  "claudePgid": 601,
+  "claudeSid": 601,
+  "claudePid": 601,
+  "rc": 0,
+  "msToExit": 6071,
+  "sessionEnds": [
+   "prompt_input_exit"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 664,
+    "ppid": 601,
+    "pgid": 601,
+    "sid": 601,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -3606,
+      -3226
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -883,
+      -503
+     ]
+    ],
+    "lastHbVsExit": -603,
+    "lastHbVsSessionEnd": -223,
+    "ppids": [
+     601
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "i-hangup",
+  "trustDialog": true,
+  "claudePgid": 846,
+  "claudeSid": 846,
+  "claudePid": 846,
+  "rc": 0,
+  "msToExit": 13495,
+  "sessionEnds": [
+   "other"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 905,
+    "ppid": 846,
+    "pgid": 846,
+    "sid": 846,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -10550,
+      -10013
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -1039,
+      -502
+     ]
+    ],
+    "lastHbVsExit": -771,
+    "lastHbVsSessionEnd": -234,
+    "ppids": [
+     846
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "i-kill-TERM",
+  "trustDialog": true,
+  "claudePgid": 1121,
+  "claudeSid": 1121,
+  "claudePid": 1121,
+  "rc": 143,
+  "msToExit": 6021,
+  "sessionEnds": [
+   "other"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 1179,
+    "ppid": 1121,
+    "pgid": 1121,
+    "sid": 1121,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -3133,
+      -2780
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -856,
+      -503
+     ]
+    ],
+    "lastHbVsExit": -380,
+    "lastHbVsSessionEnd": -27,
+    "ppids": [
+     1121
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "i-p16-HTTP_PROXY",
+  "trustDialog": true,
+  "claudePgid": 1208,
+  "claudeSid": 1208,
+  "claudePid": 1208,
+  "rc": 0,
+  "msToExit": 5943,
+  "sessionEnds": [
+   "prompt_input_exit"
+  ],
+  "sessionStarts": 1,
+  "children": [],
+  "modErrors": [],
+  "p16hits": [
+   [
+    "B",
+    "GET http://127.0.0.1:47810/probe?w=start HTTP/1.1"
+   ]
+  ]
+ },
+ {
+  "case": "i-reload-plugins",
+  "trustDialog": true,
+  "claudePgid": 937,
+  "claudeSid": 937,
+  "claudePid": 937,
+  "rc": 0,
+  "msToExit": 12673,
+  "sessionEnds": [
+   "prompt_input_exit"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 996,
+    "ppid": 937,
+    "pgid": 937,
+    "sid": 937,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -9974,
+      -9594
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -882,
+      -502
+     ]
+    ],
+    "lastHbVsExit": -462,
+    "lastHbVsSessionEnd": -82,
+    "ppids": [
+     937
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "i-save",
+  "trustDialog": true,
+  "claudePgid": 1027,
+  "claudeSid": 1027,
+  "claudePid": 1027,
+  "rc": 0,
+  "msToExit": 11983,
+  "sessionEnds": [
+   "prompt_input_exit"
+  ],
+  "sessionStarts": 2,
+  "children": [
+   {
+    "pid": 1087,
+    "ppid": 1027,
+    "pgid": 1027,
+    "sid": 1027,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -9603,
+      -9314
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -6755,
+      -6466
+     ]
+    ],
+    "lastHbVsExit": -6844,
+    "lastHbVsSessionEnd": -6555,
+    "ppids": [
+     1027
+    ]
+   },
+   {
+    "pid": 1102,
+    "ppid": 1027,
+    "pgid": 1027,
+    "sid": 1027,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -6734,
+      -6445
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -792,
+      -503
+     ]
+    ],
+    "lastHbVsExit": -469,
+    "lastHbVsSessionEnd": -180,
+    "ppids": [
+     1027
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "kill-HUP",
+  "claudePid": 638,
+  "rc": 129,
+  "msToExit": 3772,
+  "sessionEnds": [
+   "other"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 678,
+    "ppid": 638,
+    "pgid": 636,
+    "sid": 632,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -2913,
+      -2562
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -853,
+      -502
+     ]
+    ],
+    "lastHbVsExit": -409,
+    "lastHbVsSessionEnd": -58,
+    "ppids": [
+     638
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "kill-KILL",
+  "claudePid": 698,
+  "rc": -9,
+  "msToExit": 3135,
+  "sessionEnds": [],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 736,
+    "ppid": 698,
+    "pgid": 696,
+    "sid": 692,
+    "aliveAfter4s": true,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -2061,
+      null
+     ],
+     [
+      "stdout-error",
+      "[Errno 32] Broken pipe",
+      941,
+      null
+     ],
+     [
+      "stdout-error",
+      "[Errno 32] Broken pipe",
+      1943,
+      null
+     ],
+     [
+      "stdout-error",
+      "[Errno 32] Broken pipe",
+      2945,
+      null
+     ],
+     [
+      "stdout-error",
+      "[Errno 32] Broken pipe",
+      3946,
+      null
+     ]
+    ],
+    "lastHbVsExit": 3946,
+    "lastHbVsSessionEnd": null,
+    "ppids": [
+     691,
+     698
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "kill-TERM",
+  "claudePid": 578,
+  "rc": 143,
+  "msToExit": 4152,
+  "sessionEnds": [
+   "other"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 618,
+    "ppid": 578,
+    "pgid": 576,
+    "sid": 572,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -3026,
+      -2606
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -924,
+      -504
+     ]
+    ],
+    "lastHbVsExit": -493,
+    "lastHbVsSessionEnd": -73,
+    "ppids": [
+     578
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "p-exit",
+  "claudePid": 382,
+  "rc": 0,
+  "msToExit": 2963,
+  "sessionEnds": [
+   "other"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 426,
+    "ppid": 382,
+    "pgid": 380,
+    "sid": 287,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -1080,
+      -617
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -967,
+      -504
+     ]
+    ],
+    "lastHbVsExit": -578,
+    "lastHbVsSessionEnd": -115,
+    "ppids": [
+     382
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "stream-close",
+  "claudePid": 446,
+  "rc": 0,
+  "msToExit": 4074,
+  "sessionEnds": [
+   "other"
+  ],
+  "sessionStarts": 1,
+  "children": [
+   {
+    "pid": 487,
+    "ppid": 446,
+    "pgid": 444,
+    "sid": 440,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -2957,
+      -2595
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -865,
+      -503
+     ]
+    ],
+    "lastHbVsExit": -455,
+    "lastHbVsSessionEnd": -93,
+    "ppids": [
+     446
+    ]
+   }
+  ],
+  "modErrors": []
+ },
+ {
+  "case": "stream-save",
+  "claudePid": 508,
+  "rc": 0,
+  "msToExit": 11919,
+  "sessionEnds": [
+   "other"
+  ],
+  "sessionStarts": 2,
+  "children": [
+   {
+    "pid": 549,
+    "ppid": 508,
+    "pgid": 506,
+    "sid": 502,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -10909,
+      -10607
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -8208,
+      -7906
+     ]
+    ],
+    "lastHbVsExit": -8406,
+    "lastHbVsSessionEnd": -8104,
+    "ppids": [
+     508
+    ]
+   },
+   {
+    "pid": 556,
+    "ppid": 508,
+    "pgid": 506,
+    "sid": 502,
+    "aliveAfter4s": false,
+    "events": [
+     [
+      "stdin-end",
+      null,
+      -8182,
+      -7880
+     ],
+     [
+      "signal",
+      "SIGTERM",
+      -805,
+      -503
+     ]
+    ],
+    "lastHbVsExit": -420,
+    "lastHbVsSessionEnd": -118,
+    "ppids": [
+     508
+    ]
+   }
+  ],
+  "modErrors": []
+ }
+]

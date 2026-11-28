@@ -1,0 +1,390 @@
+v0.12 repairs, batch 1: from raw/v012-repairs-draft.md, against v0.11 (af97372).
+
+R-M1-104, R-M1-82/106: PO-1's cleanup also removes the settings file that now sits beside the logs (CH-2).
+<<< OLD
+Then the snapshot is removed, and so is any instructions file the last one left (CH-2).
+=== NEW
+Then the snapshot is removed, and so is any instructions or settings file the last one left beside its logs (CH-2).
+>>> END
+
+R-M1-110: PO-3's DACL is set through PO-19's script, run once from the installed package before the secret is read.
+<<< OLD
+    - **Windows.** By the same shipped means as its Job Object (PO-1), it replaces its own process's DACL (`SetSecurityInfo`) with one that grants
+=== NEW
+    - **Windows.** Through the script of PO-19, which it runs once from the installed package before it reads the secret, it replaces its own process's DACL (`SetSecurityInfo`) with one that grants
+>>> END
+
+R-M1-91: PO-3's residual states macOS as not assessed and accepted with the rest.
+<<< OLD
+and from any process through `SeDebugPrivilege` when Claude Code runs elevated. With the secret it can act as the Monarch
+=== NEW
+and from any process through `SeDebugPrivilege` when Claude Code runs elevated. On macOS the post office checks nothing, and whether a soldier can read either copy is not assessed; that is accepted as part of the same risk. With the secret it can act as the Monarch
+>>> END
+
+R-M1-104: PO-4's credential file goes beside the session's log (PO-5).
+<<< OLD
+beside the session's record as CH-2's instructions file is, never in a worktree or a snapshot.
+=== NEW
+beside the session's log under `.shadow/v2/logs/` (PO-5), as CH-2's instructions file is, never in a worktree, a snapshot or the system's temporary folder.
+>>> END
+
+R-F-95: PO-6's 2 MiB cut is taken after redact() has run on the whole reply.
+<<< OLD
+A longer reply's report keeps its first 2 MiB, cut between two characters, and ends with one line saying
+=== NEW
+A longer reply's report keeps its first 2 MiB, cut between two characters after `redact()` has run on the whole reply (WSP-8), and ends with one line saying
+>>> END
+
+R-M1-96: PO-13, the package holds the DLL, not a C# file.
+<<< OLD
+It holds every binary of PO-12, and the Windows script and its C# file (PO-19), beside the post office's code.
+=== NEW
+It holds every binary of PO-12, and the Windows script and its DLL (PO-19), beside the post office's code.
+>>> END
+
+R-M1-96: PO-13, the checksums cover the DLL.
+<<< OLD
+The SHA-256 of each binary, of the script and of its C# file is written into the post office's code when the package is built.
+=== NEW
+The SHA-256 of each binary, of the script and of its DLL is written into the post office's code when the package is built.
+>>> END
+
+R-M1-96: PO-13, a contributor's checkout builds the DLL too.
+<<< OLD
+There, `npm run build` compiles the helper for its own system with that system's C compiler, and writes its checksum into that build.
+=== NEW
+There, `npm run build` compiles the helper for its own system with that system's C compiler, or on Windows the DLL with the .NET SDK, and writes its checksum into that build.
+>>> END
+
+R-M1-96: PO-14's check step 1 looks for the DLL.
+<<< OLD
+On Windows, the script and its C# file are there (PO-19);
+=== NEW
+On Windows, the script and its DLL are there (PO-19);
+>>> END
+
+R-M1-96: PO-14's ConstrainedLanguage message names both files. Adapted: see new finding 2.
+<<< OLD
+An administrator can allow the script by its hash, listed in SHA256SUMS. No soldier can start.
+=== NEW
+An administrator can allow the script and its DLL by their hashes, listed in SHA256SUMS. No soldier can start.
+>>> END
+
+R-M1-99: PO-18 becomes (M1, M6), because its signing part moves to M6.
+<<< OLD
+- **PO-18** (M1; R, I, L) **macOS: the guardian, what it rests on, and signing.**
+=== NEW
+- **PO-18** (M1, M6; R, I, L) **macOS: the guardian, what it rests on, and signing.**
+>>> END
+
+R-M1-99: PO-18's signing comes with M6, and the network-off check is now M6-AC11.
+<<< OLD
+A notarization ticket can't be stapled to a standalone binary, so M1-AC22 confirms that an installed helper runs with the network off.
+=== NEW
+A notarization ticket can't be stapled to a standalone binary, so M6-AC11 confirms that an installed helper runs with the network off. Signing and notarization come with M6, before the first release (PO-20); until then CI's containment tests run on the macOS binary as it is built.
+>>> END
+
+R-M1-96: PO-19, the C# ships as a DLL built in CI.
+<<< OLD
+Beside it is a C# file that declares Windows' job functions.
+=== NEW
+Beside it is a DLL, a .NET assembly that declares the Windows functions the script calls. CI builds the DLL from Shadow Army's C# source for the .NET Framework 4 that Windows PowerShell 5.1 runs on, then tests it and checksums it with the binaries (PO-20, PO-21).
+>>> END
+
+R-M1-96 and R-M1-110: PO-19 loads the DLL (nothing compiles), gains the DACL operation, and keeps the ConstrainedLanguage residual. That residual now names the DLL, adapted to Microsoft's documentation (see Sources).
+<<< OLD
+  - The script loads the C# file with `Add-Type -Path`, which compiles it into an in-memory assembly. No code sits in a string (VER-6).
+  - The script does on Windows what PO-9 and PO-10 say. When its connection to the post office closes without a close command, it ends the job. If its own process ends, the job's last handle closes, and Windows ends every process in the job.
+  - **ConstrainedLanguage mode.** An AppLocker or App Control for Business policy that doesn't allow the script makes PowerShell run it in ConstrainedLanguage mode. In that mode `Add-Type` can't load C# code or Win32 functions. The script checks its language mode before anything else, and in that mode it refuses with that reason. The check then fails (PO-14), and no soldier starts. An administrator decides whether soldiers run on that machine, by allowing the script by its hash, which each release lists in `SHA256SUMS` (PO-20). The hash changes whenever the script changes.
+=== NEW
+  - The script loads the DLL with `Add-Type -Path`, which takes the types from an assembly file and compiles nothing. No code sits in a string (VER-6).
+  - The script does on Windows what PO-9 and PO-10 say. When its connection to the post office closes without a close command, it ends the job. If its own process ends, the job's last handle closes, and Windows ends every process in the job.
+  - **The DACL.** Run with its DACL operation, before the post office reads the Monarch's secret, the script replaces the post office's DACL as PO-3 says, then exits.
+  - **ConstrainedLanguage mode.** An AppLocker or App Control for Business policy that doesn't allow the script makes PowerShell run it in ConstrainedLanguage mode. In that mode `Add-Type` can't load C# code or Win32 functions, and loads an assembly only if it is signed, as the DLL isn't; nor can the script use a type outside the mode's allowed list. The script checks its language mode before anything else, and in that mode it refuses with that reason. The check then fails (PO-14), and no soldier starts. An administrator decides whether soldiers run on that machine, by allowing the script and the DLL by their hashes, which each release lists in `SHA256SUMS` (PO-20). The hashes change whenever the script or the DLL changes.
+>>> END
+
+R-M1-99: PO-20 becomes (M1, M6).
+<<< OLD
+- **PO-20** (M1; R) **Built, checked and attested in CI.**
+=== NEW
+- **PO-20** (M1, M6; R) **Built, checked and attested in CI.**
+>>> END
+
+R-M1-96: PO-20 builds the DLL in CI.
+<<< OLD
+CI builds every binary from the commit it tests or releases, on GitHub-hosted runners.
+=== NEW
+CI builds every binary, the Windows DLL included (PO-19), from the commit it tests or releases, on GitHub-hosted runners.
+>>> END
+
+R-M1-96: PO-20, the DLL's toolchain is pinned.
+<<< OLD
+The macOS binary is built with a named Xcode version on a named runner image.
+=== NEW
+The macOS binary is built with a named Xcode version on a named runner image, and the Windows DLL with a named .NET SDK version on a named runner image.
+>>> END
+
+R-M1-96: PO-20's checksums cover the DLL as a shipped binary.
+<<< OLD
+The SHA-256 of every binary that ships, and of the Windows script and its C# file, goes into
+=== NEW
+The SHA-256 of every binary that ships, the DLL included, and of the Windows script, goes into
+>>> END
+
+R-M1-99: PO-20's signing steps come with M6. Adapted: the M1 dry run has to be defined without a Developer ID.
+<<< OLD
+    The Apple credentials are secrets of a GitHub environment that only this workflow uses.
+=== NEW
+    Signing and notarization, steps 2 and 3, come with M6, before the first release (PO-18); until then a dry run skips step 2 and runs step 3 on the bytes step 1 checked. The Apple credentials are secrets of a GitHub environment that only this workflow uses.
+>>> END
+
+R-M1-111: PO-21's "those bytes" makes an exception for VER-6's coverage job.
+<<< OLD
+  - Every CI run builds the binaries first (PO-20), and every later job uses those bytes.
+=== NEW
+  - Every CI run builds the binaries first (PO-20), and every later job uses those bytes, except VER-6's coverage job, which runs copies instrumented for coverage that never ship.
+>>> END
+
+R-M1-82 and R-M1-106: CH-2 also passes the variable in the `env` of `--settings`; the managed-settings case is a stated residual.
+<<< OLD
+over any value the post office inherited, so claude neither loads nor writes its auto memory.
+=== NEW
+over any value the post office inherited, and in the `env` of the `--settings` it passes: inline, or, where the command line can't carry it, as a file written and removed as the instructions file below is. A settings file's `env` replaces a variable the process inherited, and `--settings` outranks the user's, the shared project and the local settings files, so none of them sets the variable back to `0`. Only managed settings outrank `--settings`: an organization's managed `env` that sets the variable to `0` turns auto memory back on, a stated residual risk. So claude neither loads nor writes its auto memory.
+>>> END
+
+R-M1-113: CH-2 adds the local project settings and `--settings`. Adapted: the vendor's page says the main-checkout rule doesn't hold on Windows.
+<<< OLD
+    - Only the owner turns the classifier off, by setting `useAutoModeDuringPlan` to false in their user settings (`~/.claude/settings.json`) or in managed settings. A repository's `.claude/settings.json` can't turn it off, and a false in any file that may set it wins. No adapter passes or writes this setting (CH-7).
+=== NEW
+    - Only the owner turns the classifier off, by setting `useAutoModeDuringPlan` to false in their user settings (`~/.claude/settings.json`), in their local project settings (`.claude/settings.local.json`, which claude reads from the main checkout's root when it runs in a linked worktree such as a soldier's snapshot, except on Windows, where it reads the snapshot's own), or in managed settings. A false in `--settings` would turn it off too, and the `--settings` the adapter passes never sets it. A repository's `.claude/settings.json` can't turn it off, and a false in any file that may set it wins. No adapter passes or writes this setting (CH-7).
+>>> END
+
+R-M1-104: CH-2's instructions file goes beside the session's log.
+<<< OLD
+That file is written by the post office beside the session's record, never in a worktree or a snapshot, and removed when the process ends.
+=== NEW
+That file is written by the post office beside the session's log under `.shadow/v2/logs/` (PO-5), never in a worktree, a snapshot or the system's temporary folder, and removed when the process ends.
+>>> END
+
+R-M1-105: CH-4 uses `grok agent stdio` only.
+<<< OLD
+  - `grok agent stdio`, or `grok agent serve` bound to the loopback with a secret.
+=== NEW
+  - `grok agent stdio`, over the CLI's standard streams. `grok agent serve` is not used.
+>>> END
+
+R-F-96: MSG-1's counting sentence.
+<<< OLD
+counted as Unicode code points, which is v1's limit for a whole brief.
+=== NEW
+counted as Unicode code points. 24,000 is v1's figure for a whole brief, which v1 counted in UTF-16 units.
+>>> END
+
+R-M1-112: ARM-7 compares against the repository's accepted hashes. Adapted: "gone" is judged per working tree (see new finding 3).
+<<< OLD
+It compares each hash with the one the owner last accepted for that file in that folder. A file is untrusted when the folder is new to Shadow Army, when the file is new or changed, or when a file accepted before is gone.
+=== NEW
+It compares each hash with the hashes the owner has accepted for that file in the folder's repository, in any of its working trees (PO-1). A file is untrusted when no hash accepted for it there matches, as when the repository is new to Shadow Army or the file is new or changed, or when a file that was trusted in this folder before is gone.
+>>> END
+
+R-M1-112: ARM-7, an acceptance holds for every working tree of the repository.
+<<< OLD
+`Trust these files` accepts exactly the hashes shown: the post office records them, and the waiting sessions open,
+=== NEW
+`Trust these files` accepts exactly the hashes shown, for every working tree of the repository: the post office records them, and the waiting sessions open,
+>>> END
+
+R-M1-112: ARM-7's record is keyed by the repository's common git directory. Adapted: `--path-format=absolute`, because the plain option's output can be relative (see Sources).
+<<< OLD
+one file per folder, named for the folder's name and a hash of its path as WSP-11 names snapshots, and written whole.
+=== NEW
+one file per repository, named for the first 12 hexadecimal digits of the SHA-256 of the repository's common git directory, in UTF-8, as `git rev-parse --path-format=absolute --git-common-dir` prints it, with its letters lower-cased on Windows, as WSP-11 makes an army's mark, and written whole. It holds that directory's path, the hashes accepted for each policy file, and, for each working tree, the files last trusted there, so a file gone from one is found.
+>>> END
+
+R-M1-90: WSP-7 says "for it", to match PO-8.
+<<< OLD
+- **WSP-7** (M6; I) No soldier code runs while the harness runs git (from 2.0 SAFE-11).
+=== NEW
+- **WSP-7** (M6; I) No code of a soldier runs while the harness runs git for that soldier (from 2.0 SAFE-11).
+>>> END
+
+R-M1-90: §5.1 X states the window between a command's check and git's reading of the config.
+<<< OLD
+A filter added after the post office started, in any config scope, never runs, because the change holds harness git first; one set at start is the owner's, and runs (WSP-10).
+=== NEW
+A filter added after the post office started, in any config scope, holds harness git at the next check, so no harness git command that starts after that check runs it. One added between a command's check and git's own reading of the config can run once; the check after the command finds it if it is still there, and holds harness git (Appendix D, residual 7). One set at start is the owner's, and runs (WSP-10).
+>>> END
+
+R-M1-96 and R-M1-100 (closes R-M1-61): VER-6 measures the DLL's C# with an ordinary .NET coverage tool.
+<<< OLD
+The Windows script and its C# file count the same way. How their lines are measured is what spike S7 finds, since the C# is compiled at run time (PO-19).
+=== NEW
+The Windows script counts the same way, and so does the DLL's C#: an ordinary .NET coverage tool measures its lines in the same tests, on the DLL that CI built or a copy of it instrumented for coverage (PO-19).
+>>> END
+
+R-F-93: VER-7 drops its →M2 for VER-8.
+<<< OLD
+R and L evidence is recorded on the PR (VER-8, →M2, and section 6).
+=== NEW
+R and L evidence is recorded on the PR (VER-8 and section 6).
+>>> END
+
+R-F-93: VER-8 becomes (M1, M2; R).
+<<< OLD
+- **VER-8** (M2; R) **Live checks are recorded.**
+=== NEW
+- **VER-8** (M1, M2; R) **Live checks are recorded.**
+>>> END
+
+R-F-93: M1's Implements gains VER-8.
+<<< OLD
+- VER-1, VER-2, VER-3, VER-5, VER-6, VER-7, VER-9.
+=== NEW
+- VER-1, VER-2, VER-3, VER-5, VER-6, VER-7, VER-8, VER-9.
+>>> END
+
+R-M1-96: S7's Windows item asks about loading the DLL; the coverage question is gone.
+<<< OLD
+  - on Windows: whether `Add-Type` works in a script that an AppLocker or App Control policy allows; whether Smart App Control puts the script into ConstrainedLanguage mode; how the windows runner applies a policy that doesn't allow the script, for M1-AC18; and how the C# file's lines are measured (VER-6);
+=== NEW
+  - on Windows: whether the script loads the DLL with `Add-Type -Path` under an AppLocker or App Control policy that allows the script, and whether that policy must allow the DLL too; whether Smart App Control puts the script into ConstrainedLanguage mode, or blocks the DLL; and how the windows runner applies a policy that doesn't allow the script, for M1-AC18;
+>>> END
+
+R-M1-96: S7's findings no longer feed VER-6.
+<<< OLD
+its findings go into PO-14, PO-16, PO-18, PO-19 and VER-6.
+=== NEW
+its findings go into PO-14, PO-16, PO-18 and PO-19.
+>>> END
+
+R-F-93: M1-AC8 cites VER-8.
+<<< OLD
+and the run is written up on the PR (HOST-2, PO-7).
+=== NEW
+and the run is written up on the PR (HOST-2, PO-7, VER-8).
+>>> END
+
+R-M1-112: M1-AC13's first case is a repository new to Shadow Army.
+<<< OLD
+  - a folder new to Shadow Army, with its own `shadow.config.json`
+=== NEW
+  - a repository new to Shadow Army, with its own `shadow.config.json`
+>>> END
+
+R-M1-112: M1-AC13 adds a linked worktree with the accepted bytes, and one with a changed file.
+<<< OLD
+  - a file changed between the card and `Trust these files` is not accepted, and the card shows again with its new hash;
+=== NEW
+  - a file changed between the card and `Trust these files` is not accepted, and the card shows again with its new hash;
+  - a linked worktree of the same repository whose policy files hold the accepted bytes opens its session with no card. One whose `agent.md` differs by one byte shows the card for that file alone, and accepting it there leaves the main working tree's sessions trusted;
+>>> END
+
+R-M1-82 and R-M1-106: M1-AC14 checks the `--settings` env on the command line, and adds the variable set to 0 in the user's settings `env`.
+<<< OLD
+has `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in its environment, also when the post office's own environment sets it to `0`. Live, with the owner's go, on one system: in a snapshot of a repository whose auto memory holds a `MEMORY.md`, and whose committed `.claude/settings.json` sets `autoMemoryEnabled` to true and the variable to `0` in its `env`, a claude soldier asked
+=== NEW
+has `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` in its environment, also when the post office's own environment sets it to `0`, and its command line carries `--settings` whose `env` sets the variable to `1`, inline or in a settings file beside the session's log. Live, with the owner's go, on one system: in a snapshot of a repository whose auto memory holds a `MEMORY.md`, and whose committed `.claude/settings.json` sets `autoMemoryEnabled` to true and the variable to `0` in its `env`, with the owner's user settings also setting the variable to `0` in their `env`, a claude soldier asked
+>>> END
+
+R-M1-99: M1-AC15 cites PO-18, which its macOS coalition case tests. M1 needs an AC for PO-18 once M1-AC21 drops it.
+<<< OLD
+with a fake CLI (PO-9, PO-10, PO-11, PO-19, PO-1):
+=== NEW
+with a fake CLI (PO-9, PO-10, PO-11, PO-18, PO-19, PO-1):
+>>> END
+
+R-M1-96: M1-AC18 adds a DLL with a byte changed.
+<<< OLD
+and, on Windows, a script with a byte changed, and the script under
+=== NEW
+and, on Windows, a script or its DLL with a byte changed, and the script under
+>>> END
+
+R-M1-99 and R-M1-96: M1-AC21 drops signing (it moves to M6-AC10) and names the DLL. M1-AC22 keeps the Linux half; the Mac half moves to M6-AC11.
+<<< OLD
+- **M1-AC21** A release dry run from a test tag (PO-18, PO-20, PO-21, VER-2, VER-6):
+  - each binary built twice is byte-identical, with the macOS one compared before signing, and matches what the commit's CI run tested;
+  - the macOS binary carries the project's Developer ID, the hardened runtime and a secure timestamp. It is notarized, and the signed binary passes the containment tests on every macOS runner;
+  - `SHA256SUMS`, the checksums in the post office's code, the binaries, the script and its C# file all agree;
+  - `gh attestation verify` passes for each binary and for the tarball. Where attestations aren't available, the release notes say so;
+  - CI's matrix covers every system and processor of PO-21, the weekly run exists, and VER-6's count includes the helper's C and the Windows script's C#.
+- **M1-AC22** Live: on a Mac and on a Linux machine, neither of which has a C compiler, the owner installs the package tarball and starts a claude soldier, once with the network off. Nothing asks for a compiler. On the Mac, the checkout is in `~/Documents` and the soldier reads a file there, and no system dialog, privacy prompt or notification appears. Closing the soldier leaves no process, and on the Mac no launchd job, behind. The run is written up on the PR (PO-13, PO-18).
+=== NEW
+- **M1-AC21** A release dry run from a test tag (PO-20, PO-21, VER-2, VER-6):
+  - each binary built twice is byte-identical, with the macOS one compared before signing, and matches what the commit's CI run tested;
+  - `SHA256SUMS`, the checksums in the post office's code, the binaries, the DLL included, and the script all agree;
+  - `gh attestation verify` passes for each binary and for the tarball. Where attestations aren't available, the release notes say so;
+  - CI's matrix covers every system and processor of PO-21, the weekly run exists, and VER-6's count includes the helper's C, the Windows script and the DLL's C#.
+- **M1-AC22** Live: on a Linux machine with no C compiler, the owner installs the package tarball and starts a claude soldier, once with the network off. Nothing asks for a compiler. Closing the soldier leaves no process behind. The run is written up on the PR (PO-13).
+>>> END
+
+R-F-92: M2-AC1 adds the codex token measure.
+<<< OLD
+with the instructions injected as CH-3 to CH-5 say (CH-3, CH-4, CH-5, SI-2, VER-4).
+=== NEW
+with the instructions injected as CH-3 to CH-5 say, and the codex fixture's turn tokens equal section 5.1's measure, with no field counted twice (CH-3, CH-4, CH-5, SI-2, VER-4).
+>>> END
+
+R-M1-99: M6's Implements gains PO-18 and PO-20.
+<<< OLD
+Implements: WSP-1 to WSP-7, WSP-9; ARM-5; MSG-11; LEG-1; VER-10.
+=== NEW
+Implements: PO-18, PO-20; WSP-1 to WSP-7, WSP-9; ARM-5; MSG-11; LEG-1; VER-10.
+>>> END
+
+R-M1-99: new M6-AC10 (signing and notarization) and M6-AC11 (the live Mac run).
+<<< OLD
+and once that worktree has been removed (WSP-1, WSP-4, WSP-10).
+=== NEW
+and once that worktree has been removed (WSP-1, WSP-4, WSP-10).
+- **M6-AC10** A release dry run from a test tag signs and notarizes the macOS binary. It carries the project's Developer ID, the hardened runtime and a secure timestamp, and no entitlement. It is notarized, and the signed binary passes the containment tests on every macOS runner of PO-21 before anything is attested or published (PO-18, PO-20, PO-21).
+- **M6-AC11** Live: on a Mac with no C compiler, the owner installs the package tarball from M6-AC10's dry run and starts a claude soldier, once with the network off. Nothing asks for a compiler. The checkout is in `~/Documents` and the soldier reads a file there, and no system dialog, privacy prompt or notification appears. Closing the soldier leaves no process and no launchd job behind. The run is written up on the PR (PO-13, PO-18, VER-8).
+>>> END
+
+R-M1-96: Q8's answer line, Windows.
+<<< OLD
+Windows needs no helper: a script that ships with Shadow Army holds each CLI in a Job Object (PO-19).
+=== NEW
+Windows needs no helper: a script that ships with Shadow Army holds each CLI in a Job Object, through a DLL that CI builds, tests and checksums beside it, so nothing compiles there either (PO-19).
+>>> END
+
+R-F-94: the owner's actor row cites ARM-7, not D-10.
+<<< OLD
+(SEC-3, ARM-6, WSP-9, D-10).
+=== NEW
+(SEC-3, ARM-6, WSP-9, ARM-7).
+>>> END
+
+R-M1-99: Appendix D row 12 adds the Mac live check that moved to M6.
+<<< OLD
+M1-AC1, M1-AC4, M1-AC15 to M1-AC22 |
+=== NEW
+M1-AC1, M1-AC4, M1-AC15 to M1-AC22, M6-AC11 |
+>>> END
+
+R-M1-82 and R-M1-106: Appendix D row 15 names the `--settings` env.
+<<< OLD
+| Each claude soldier runs with auto memory off (CH-2). |
+=== NEW
+| Each claude soldier runs with auto memory off, set in its environment and in the `env` of its `--settings`, which every settings file but managed settings yields to (CH-2). |
+>>> END
+
+R-F-94 with R-M1-91 (residual 1), R-M1-82/106 (residual 2), R-F-94 with R-M1-96 (residual 3), R-M1-112 (residual 4). Merged because the four are adjacent lines.
+<<< OLD
+1. **The Monarch's secret in memory** (D-9). On Windows, and on Linux at `ptrace_scope` 0, a soldier that can run code as the owner can read the Monarch's secret from the mod's or the post office's memory, and then act as the Monarch: issue any command and read the event stream. At `ptrace_scope` 1 or more, soldiers can't, since they descend from both. The post office logs which protection each machine has (PO-3). A soldier credential that a CLI holds in its memory is open to the same read, and allows only `send` as that soldier (PO-4).
+2. **What remains of shared memory** (D-19). With auto memory off, a claude soldier neither loads nor saves the owner's auto memory, and a subagent's own memory is off too. Each claude soldier still loads the owner's user instructions (`~/.claude/CLAUDE.md` and `~/.claude/rules/`), as Claude Code does for any session, and the `CLAUDE.md` files in its snapshot or worktree. A soldier that can write in the owner's home folder can still edit the memory files directly (the paragraph below).
+3. **Work outside the process tree** (D-3, PO-1). Work a CLI hands to a service outside its tree keeps running, as PO-1 lists: a systemd, launchd or cron job, a scheduled task, a process started through WMI, a container engine, a tmux or screen server, a session that `ssh localhost` opens, or a vendor's own background service. No guard or audit sees what it changes after the turn. A containment helper killed from outside lets its tree escape until the next start sweeps it (PO-16). macOS containment rests on interfaces Apple doesn't publish, so an update can stop every macOS soldier until a release; it fails closed (PO-18). On Windows under AppLocker or App Control, no soldier starts until an administrator allows the containment script (PO-19).
+4. **The folder's own files, once trusted** (D-10). After the owner accepts a trust card, those files act as the owner's own until they change again. The card shows a change; it doesn't judge it.
+=== NEW
+1. **The Monarch's secret in memory** (D-9). A soldier that can run code as the owner can read the Monarch's secret from the mod's copy, in Claude Code's own process, on Windows always and on Linux at `ptrace_scope` 0 or without Yama; from the post office's copy where PO-3 names no protection: on Linux at `ptrace_scope` 0 or without Yama, and on Windows where its DACL couldn't be set; and on Windows from any process through `SeDebugPrivilege` when Claude Code runs elevated. It can then act as the Monarch: issue any command and read the event stream. At `ptrace_scope` 1 or more, soldiers can't, since they descend from both. On macOS the post office checks nothing, and whether a soldier can read either copy is not assessed; it is accepted with the rest. The post office logs which protection each machine has (PO-3). A soldier credential that a CLI holds in its memory is open to the same read, and so is claude's credential file while it exists; either allows only `send` as that soldier (PO-4).
+2. **What remains of shared memory** (D-19). With auto memory off, a claude soldier neither loads nor saves the owner's auto memory, and a subagent's own memory is off too. An organization's managed settings outrank the `--settings` that keeps it off, so a managed `env` that sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY` to `0` turns auto memory back on for every claude soldier (CH-2). Each claude soldier still loads the owner's user instructions (`~/.claude/CLAUDE.md` and `~/.claude/rules/`), as Claude Code does for any session, and the `CLAUDE.md` files in its snapshot or worktree. A soldier that can write in the owner's home folder can still edit the memory files directly (the paragraph below).
+3. **Work outside the process tree** (D-3, PO-1). Work a CLI hands to a service outside its tree keeps running, as PO-1 lists: a systemd, launchd or cron job, a scheduled task, a process started through WMI, a container engine, a tmux or screen server, a session that `ssh localhost` opens, or a vendor's own background service. No guard or audit sees what it changes after the turn. A guardian killed together with the post office leaves its tree running until the mod or the next post office sweeps it, except on Windows, where the job ends with it. On Linux, the processes no listing found escape for good, as they do when a guardian alone is ended from outside (PO-15, PO-16). macOS containment rests on interfaces Apple doesn't publish, so an update can stop every macOS soldier until a release; it fails closed (PO-18). On Windows under AppLocker or App Control, no soldier starts until an administrator allows the containment script and its DLL: the DLL ships prebuilt, so nothing compiles, but ConstrainedLanguage mode blocks loading it too (PO-19).
+4. **The folder's own files, once trusted** (D-10). After the owner accepts a trust card, those files act as the owner's own until they change again. Bytes accepted in one working tree are trusted in every working tree of the repository, and an older version accepted once stays trusted after a newer one is accepted (ARM-7). The card shows a change; it doesn't judge it.
+>>> END
+
+R-M1-90: Appendix D's residual 7 says "if it is still there".
+<<< OLD
+The check after the command finds the change and holds harness git.
+=== NEW
+The check after the command finds the change if it is still there, and holds harness git.
+>>> END

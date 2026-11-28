@@ -1,0 +1,108 @@
+Repairs for fix check M1-FC3's findings (raw/M1-r1-fixcheck-FC3.md): R-M1-83 to R-M1-88, against v0.9 (b6f4315).
+Apply: node tools/pairs.mjs drafts/M1-r1-fc/fc3.txt <scratch>/fc3.json, then node tools/rep.mjs ../v2.md <scratch>/fc3.json.
+
+R-M1-83: Shadow Army's own snapshot command changes the trusted state only by that snapshot's metadata, and writes no repository config (WSP-10).
+<<< OLD
+compared with the state Shadow Army last trusted: their state when the post office started, as Shadow Army's own command left it when it made or removed a snapshot or a worktree, or as the owner last accepted it (2.0 GIT-3).
+=== NEW
+compared with the state Shadow Army last trusted: their state when the post office started, or as the owner last accepted it (2.0 GIT-3). After Shadow Army's own command that makes or removes a snapshot or a worktree, the trusted state gains the metadata of the one it made, or loses that of the one it removed, and nothing else: anything else that changed while the command ran is a change. That command passes `-c worktree.useRelativePaths=false`, so it writes nothing to the repository's config, where git would otherwise set `extensions.relativeWorktrees`.
+>>> END
+
+R-M1-83: ARM-6 trusts such a command for that snapshot's or worktree's metadata only.
+<<< OLD
+    - Shadow Army's own commands that made or removed a snapshot or a worktree, for the worktree metadata they changed (WSP-10).
+=== NEW
+    - Shadow Army's own commands that made or removed a snapshot or a worktree, for the metadata of the one they made or removed (WSP-10).
+>>> END
+
+R-M1-83: M1-AC10 adds an owner whose global config links worktrees by relative paths.
+<<< OLD
+  - `git push -u` run between turns, which writes `branch.*`, holds nothing;
+=== NEW
+  - `git push -u` run between turns, which writes `branch.*`, holds nothing;
+  - with `worktree.useRelativePaths=true` in the user's global git config before the post office starts, making a snapshot holds nothing and leaves the repository's config unchanged;
+>>> END
+
+R-M1-84: the log names each snapshot and worktree, with its commit, so the next post office can apply WSP-10's trust and check a snapshot's HEAD (PO-5).
+<<< OLD
+The line that opens a turn is written and flushed before its message goes in.
+=== NEW
+The line that opens a turn is written and flushed before its message goes in. So is each snapshot or worktree Shadow Army makes or removes, with the commit it was made at and its metadata, written and flushed as it is made or removed (WSP-10).
+>>> END
+
+R-M1-84: the next post office trusts what the last one's log explains (PO-1).
+<<< OLD
+Its guard is closed against the baseline kept on disk for it (WSP-11), and any change goes on that turn's attribution card
+=== NEW
+Its guard is closed against the baseline kept on disk for it (WSP-11), trusting the snapshots and worktrees the last one's log says it made or removed, as WSP-10 does, and any change goes on that turn's attribution card
+>>> END
+
+R-M1-84: a snapshot whose HEAD isn't its logged commit has a write (PO-1).
+<<< OLD
+every write is reported as a read-violation, in the log and in one line in Claude's transcript.
+=== NEW
+every write, a HEAD that isn't the commit the log gives for it included, is reported as a read-violation, in the log and in one line in Claude's transcript.
+>>> END
+
+R-M1-84: M1-AC1's kill case adds a commit in the snapshot and a second soldier's snapshot.
+<<< OLD
+In the kill case the fake, mid-turn at auto, has changed a checkout file and written a file in its snapshot. Before it opens any channel, the next post office reports the checkout change in one transcript line, which gives the time the last log ends and says that later changes show too; it reports the snapshot's file as a read-violation and removes the old snapshot (PO-1, PO-5, WSP-11);
+=== NEW
+In the kill case the fake, mid-turn at auto, has changed a checkout file, and written a file in its snapshot and committed it there, while a second soldier's snapshot was made. Before it opens any channel, the next post office reports the checkout change in one transcript line, which gives the time the last log ends and says that later changes show too, and the second soldier's snapshot is no change; it reports the snapshot's file and commit as read-violations and removes the old snapshots (PO-1, PO-5, WSP-10, WSP-11);
+>>> END
+
+R-M1-85: reports go under `.shadow/v2/`, beside the logs, which WSP-11 keeps out of the checkout (PO-6).
+<<< OLD
+Full reports go under `.shadow/reports/`.
+=== NEW
+Full reports go under `.shadow/v2/reports/`.
+>>> END
+
+R-M1-85: Appendix C's H16 row follows.
+<<< OLD
+PO-6: records, and reports under `.shadow/reports/`.
+=== NEW
+PO-6: records, and reports under `.shadow/v2/reports/`.
+>>> END
+
+R-M1-86 and R-M1-88: what the card shows reaches the mod whole from whichever message carries it, and a redacted copy goes with it for Claude (WSP-8).
+<<< OLD
+An approval request's tool input and options are the one exception: its event carries them whole, so its card shows them word for word (CH-6, →M2), and the mod redacts them wherever they reach Claude, as when `/decisions` prints them (HOST-14, →M5). The post office's log of them is redacted.
+=== NEW
+An approval request is the one exception. What its card shows (the command or tool input, a file change's diff, its title and reason, and its options) goes into its event twice: whole, taken from whichever of the CLI's messages carries it, such as codex's `item/started` item or grok's `tool_call` update, for the card to show word for word (CH-6, →M2); and redacted, for anything that reaches Claude, as when `/decisions` prints it (HOST-14, →M5). So the mod never redacts, and needs no soldier's credential. The post office's log of the request is redacted.
+>>> END
+
+R-M1-86 and R-M1-87: M2-AC2 runs the case for every CLI with a relay, with a file change, and the agy denial is redacted.
+<<< OLD
+A request whose command holds `GH_TOKEN=…` and a `Bearer` value is shown with both whole, and the post office's log of it has both redacted. No code path answers one by itself. The agy adapter never sends agy a control message, and shows each denial agy reports word for word (CH-6, SEC-3, WSP-8).
+=== NEW
+For claude, codex and grok, a request whose command holds `GH_TOKEN=…` and a `Bearer` value, and a file change whose diff holds them, are each shown with both whole, and the post office's log of each has both redacted. No code path answers one by itself. The agy adapter never sends agy a control message, and shows each denial agy reports word for word, redacted (CH-6, SEC-3, WSP-8).
+>>> END
+
+R-M1-88: M5-AC5 tests the redacted copy `/decisions` prints.
+<<< OLD
+an answer given after that is dropped, and each soldier shows not running until the next use (HOST-14, HOST-8, VIS-2, PO-7).
+=== NEW
+an answer given after that is dropped, and each soldier shows not running until the next use. `/decisions` prints a request whose command holds a `Bearer` value with that value redacted, while its card shows it whole (HOST-14, HOST-8, VIS-2, PO-7, WSP-8).
+>>> END
+
+R-M1-87: a CLI's error is kept word for word, redacted (CH-1).
+<<< OLD
+Each keeps the CLI's message word for word.
+=== NEW
+Each keeps the CLI's message word for word, redacted (WSP-8).
+>>> END
+
+R-M1-87: agy's denials (CH-6).
+<<< OLD
+It shows each denial agy reports on its standard error word for word, as a tool call that agy denied.
+=== NEW
+It shows each denial agy reports on its standard error word for word, redacted (WSP-8), as a tool call that agy denied.
+>>> END
+
+R-M1-87: a failed turn's error or reason (PO-8).
+<<< OLD
+The CLI's own error or reason is kept word for word, with its kind when it is an error (CH-1),
+=== NEW
+The CLI's own error or reason is kept word for word, redacted (WSP-8), with its kind when it is an error (CH-1),
+>>> END

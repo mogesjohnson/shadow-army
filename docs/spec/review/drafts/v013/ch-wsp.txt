@@ -1,0 +1,102 @@
+v0.13 repairs, the claude channel, workspaces and the trust card (M1's round 2, D-22, D-23, R-F-80, R-F-84). Written by the orchestrator against v0.12 (v2@2493a82.md).
+
+R-F-80 (a), M1's part: unknown events and fields, in v2's words (2.0 SOLD-6).
+<<< OLD
+A line split across reads is joined first, and only one still incomplete when the stream ends is malformed.
+=== NEW
+A line split across reads is joined first, and only one still incomplete when the stream ends is malformed. An event of a type the adapter doesn't know, or a field it doesn't know in a known event, is recorded in the soldier's log and otherwise ignored.
+>>> END
+
+R-M1-126, R-M1-137: CH-2's evidence codes.
+<<< OLD
+- **CH-2** (M1; C, L) **claude.**
+=== NEW
+- **CH-2** (M1; U, I, C, L) **claude.**
+>>> END
+
+R-M1-147: auto mode's availability as the vendor lists it.
+<<< OLD
+Auto mode is available on the Anthropic API for the roster's Opus and Sonnet models, 4.6 or later, and `useAutoModeDuringPlan` is on by default.
+=== NEW
+Auto mode is available as claude's permission-mode documentation lists it: on the Anthropic API and Claude Platform on AWS for Opus and Sonnet 4.6 or later, and on Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry and the Claude apps gateway for Sonnet 5 or later and Opus 4.7 or later, unless an organization's `disableAutoMode` or Anthropic turns it off. `useAutoModeDuringPlan` is on by default.
+>>> END
+
+R-M1-146: the critical-path removal denial, from 2.1.281, and the variables that turn it off.
+<<< OLD
+A removal of a critical path is handled as in auto mode, which denies it in a `-p` session.
+=== NEW
+A removal of a critical path is handled as in auto mode, which denies it in a `-p` session from claude 2.1.281; an older claude may send it to the classifier instead. Where the environment the soldier inherits sets `CLAUDE_CODE_DISABLE_DANGEROUS_RM_TIMEOUT=1`, or `CLAUDE_CODE_DISABLE_INLINE_SHELL_RM_PROMPT=1` for a path typed in a `-c` script, such a removal goes to the classifier too; no adapter changes that (CH-7).
+>>> END
+
+R-F-70: where claude's refusal is read until a probe settles it.
+<<< OLD
+A refusal is read from the field claude's recordings show (section 5.1, C).
+=== NEW
+A refusal is an assistant message whose `message.stop_reason` is `refusal`, as section 5.1 C's synthetic recording has it. Probe P-14 settles whether Claude Code's stream-json passes that message through, or its automatic fallback answers instead (the model in use, below), and whether the `result` carries it; then this rule names the field the probe shows.
+>>> END
+
+R-F-84, R-M1-115: fixtures redacted before they are committed; WSP-8's I evidence.
+<<< OLD
+- **WSP-8** (M1; U) `redact()` runs
+=== NEW
+- **WSP-8** (M1; U, I) `redact()` runs
+>>> END
+
+<<< OLD
+Fixtures are redacted as VER-4 (→M2) says.
+=== NEW
+Fixtures are redacted before they are committed, and VER-4 (→M2) adds their provenance.
+>>> END
+
+R-M1-143: git 2.54 has no per-event hook switch.
+<<< OLD
+and `hook.<event>.enabled` is false for each hook event the command can fire, so hooks defined in git's config stay off too;
+=== NEW
+`hook.<event>.enabled` is false for each hook event the command can fire, and `hook.<name>.enabled` is false for each hook the config git reads defines (`hook.<name>.command`), since git 2.54 runs hooks defined in its config but has no per-event switch. So hooks defined in git's config stay off too;
+>>> END
+
+D-23 (A, widened): every other working tree's metadata is left out, and its add or removal is logged.
+<<< OLD
+Their metadata is neither compared nor trusted, so making or removing one is no change, during Shadow Army's own command or at any other time.
+=== NEW
+Their metadata is neither compared nor trusted, so making or removing one is no change, during Shadow Army's own command or at any other time. So is the metadata of any other working tree of the repository that is neither this army's folder nor one of this army's own snapshots and worktrees, such as one that `git worktree add`, `claude --worktree` or a subagent's `isolation: worktree` makes, or their own cleanup removes. The post office's log names each one it finds added or removed, and Claude's transcript gets one line for it, as in `Shadow Army: a working tree was added at .claude/worktrees/fix-1 · not this army's`; nothing is held.
+>>> END
+
+D-23 (A): another working tree nested in the folder is not this army's checkout.
+<<< OLD
+and `AGENTS.md`, `CLAUDE.md`, `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md`.
+=== NEW
+and `AGENTS.md`, `CLAUDE.md`, `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md`. Another working tree of the repository that lies inside the folder is not the checkout, and nothing under it is hashed or compared (WSP-11).
+>>> END
+
+<<< OLD
+Shadow Army's own snapshots and worktrees, and its files under `.shadow/v2/`, are not the checkout, and nor are the files under `.shadow/v2/` of another army's folder inside this one, such as its lock and logs (PO-1, PO-5): a change in the soldier's own snapshot is a write there.
+=== NEW
+Shadow Army's own snapshots and worktrees, and its files under `.shadow/v2/`, are not the checkout, and nor is another working tree of the repository that lies inside the folder, as `git worktree list` gives it when the turn's guard opens or closes, such as one `claude --worktree` makes under `.claude/worktrees/`, with everything under it, another army's lock and logs there included (PO-1, PO-5). A change in the soldier's own snapshot is a write there.
+>>> END
+
+D-22 (A): the trust card also covers the folder's .mcp.json.
+<<< OLD
+  - The policy files are `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md`. One the folder has at its top level is used in place of the copy Shadow Army ships, as in v1 (`src/core/config.ts`, `src/core/rules.ts`). A shipped copy needs no trust.
+=== NEW
+  - The policy files are `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md`, and the folder's `.mcp.json`, whose servers a `claude -p` soldier connects with no trust dialog of its own (CH-2). One of the first four that the folder has at its top level is used in place of the copy Shadow Army ships, as in v1 (`src/core/config.ts`, `src/core/rules.ts`). A shipped copy needs no trust. Shadow Army ships no `.mcp.json`, so a folder without one needs no trust for it.
+>>> END
+
+<<< OLD
+and for `shadow.config.json` each soldier it sets above supervised, with its `cli`, `model` and `autonomy`, as in `Kaisel · claude · opus · full`.
+=== NEW
+and for `shadow.config.json` each soldier it sets above supervised, with its `cli`, `model` and `autonomy`, as in `Kaisel · claude · opus · full`, and for `.mcp.json` each server it declares, with its command or its URL.
+>>> END
+
+R-M1-117: only the exact label accepts.
+<<< OLD
+`Not now`, a dismissed dialog, or a dialog that can't open accepts nothing and starts nothing, and the next use shows the card again.
+=== NEW
+Only an answer that is exactly `Trust these files` accepts. `Not now`, any other answer, text typed under Other included, a dismissed dialog, or a dialog that can't open accepts nothing and starts nothing, and the next use shows the card again.
+>>> END
+
+<<< OLD
+The files the card doesn't cover, such as `CLAUDE.md`, `AGENTS.md`, `.claude/` and `.mcp.json`, steer a soldier's CLI as its vendor intends, with no card.
+=== NEW
+The files the card doesn't cover, such as `CLAUDE.md`, `AGENTS.md` and `.claude/`, steer a soldier's CLI as its vendor intends, with no card.
+>>> END

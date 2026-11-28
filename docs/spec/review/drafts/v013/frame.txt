@@ -1,0 +1,281 @@
+v0.13 repairs, the frame (unit F's round 2, and the frame lines of D-11 and D-22). Written by the orchestrator against v0.12 (v2@2493a82.md). Applied after D-7's merge (d7.txt).
+
+R-F-110, D-22: the glossary's Snapshot and Trust card entries, and a Harness git entry.
+<<< OLD
+- **Snapshot:** a throwaway copy of a base, whose writes are discarded and reported (ARM-6, WSP-11).
+=== NEW
+- **Snapshot:** a throwaway copy of HEAD (WSP-11), or of a soldier's base (ARM-6), whose writes are discarded and reported.
+- **Harness git:** every git command Shadow Army runs itself, such as the one that makes a snapshot, and the guard's and the claim audit's (WSP-10).
+>>> END
+
+<<< OLD
+- **Trust card:** the owner's acceptance, by their hashes, of the folder's own `shadow.config.json`, `orchestratorDelegate.md`, `rules.md` and `agent.md`, before any soldier starts there (ARM-7).
+=== NEW
+- **Trust card:** the card that asks the owner to accept, by their hashes, the folder's own `shadow.config.json`, `orchestratorDelegate.md`, `rules.md`, `agent.md` and `.mcp.json`, before any soldier starts there (ARM-7).
+>>> END
+
+R-F-107: one Linux binary per processor, one universal macOS binary.
+<<< OLD
+It ships prebuilt in Shadow Army's package, one for each supported system and processor (PO-12, PO-13).
+=== NEW
+It ships prebuilt in Shadow Army's package: one Linux binary for each supported processor, and one universal macOS binary (PO-12, PO-13).
+>>> END
+
+D-11: WSP-1's worktree per Claude Code process (the glossary's Worktree entry is in d7.txt).
+<<< OLD
+One worktree per soldier per Claude session (from 2.0 WS-1).
+=== NEW
+One worktree per soldier per Claude Code process (from 2.0 WS-1).
+>>> END
+
+R-F-112: no MUST in section 5.1.
+<<< OLD
+  The tests replay each recording through the channel adapter, and the adapter's events MUST match the expected events.
+=== NEW
+  The tests replay each recording through the channel adapter, and pass only when the adapter's events match the expected events.
+>>> END
+
+R-F-70: a refusal recording, built from the vendor's documented shape.
+<<< OLD
+(for claude, `SDKRateLimitEvent` with `rate_limit_info.resetsAt`) and marked synthetic in its fixture;
+=== NEW
+(for claude, `SDKRateLimitEvent` with `rate_limit_info.resetsAt`) and marked synthetic in its fixture. So is a refusal, which CH-1 doesn't count as an error: for claude, an assistant message whose `message.stop_reason` is `refusal`, with `stop_details`;
+>>> END
+
+R-F-77: no approval path without the owner.
+<<< OLD
+  - The mod has no approval path.
+=== NEW
+  - The mod never approves by itself: none of its Claude Code hooks allows a tool call or a permission (HOST-12), and it passes on a soldier's approval request only with the owner's own answer, unchanged (CH-6, SEC-3).
+  - A read-only turn does each of these: commits on its own branch, moves another soldier's branch, adds an ignore rule over a file it writes, replaces a file with a link to a checkout file, and writes `.claude/settings.local.json` in its worktree. None of it reaches `/diff`, `/apply` or a later turn, the checkout file is unchanged, and the other branch's move is on the attribution card (WSP-12, WSP-4). A start state that the turn rewrote is not restored from (WSP-12).
+>>> END
+
+<<< OLD
+- **HOST-12** (M5; R, U) The mod MUST NOT approve a tool call or a permission. It may only observe, or deny.
+=== NEW
+- **HOST-12** (M5; R, U) The mod MUST NOT approve a tool call or a permission without the owner. For Claude Code's own tool calls and permissions it may only observe, or deny. A vendor's approval request it passes on only with the owner's own answer, unchanged (CH-6, SEC-3).
+>>> END
+
+<<< OLD
+- **M5-AC3** Review confirms the mod is loaded from this repository, never approves anything, and leaves
+=== NEW
+- **M5-AC3** Review confirms the mod is loaded from this repository, never approves anything by itself, and leaves
+>>> END
+
+R-F-109: section 5.1 X plants each hook the commands can fire.
+<<< OLD
+a signing program and an external diff, with every hook present, as files and in the config: no harness git command runs any of them.
+=== NEW
+a signing program and an external diff, with each hook its commands can fire present, as files in `hooks/` and defined in the config (M1-AC10): no harness git command runs any of them.
+>>> END
+
+R-F-76: every time bound the post office measures runs on a fake clock.
+<<< OLD
+- **Fault tests (F):**
+  - a CLI killed mid-turn, in the middle of a tool call;
+=== NEW
+- **Fault tests (F).** Every time bound the post office measures, in these tests and in section 6's ACs, runs on a fake monotonic clock, and on a fake wall clock where the bound reads one. The post office takes its clocks in code, so a test that runs it in-process gives it fakes; that is no product setting (VER-5). Bounds that a guardian or the system keeps, as in the containment tests (PO-9, PO-10, PO-16), and M1-AC1's SIGSTOP and unread-output cases, run in real time:
+  - a CLI killed mid-turn, in the middle of a tool call;
+>>> END
+
+R-F-111: "until the owner reconnects it", as PO-1 says.
+<<< OLD
+whether the CLI keeps running or exits, and the soldier shows "log in" until r;
+=== NEW
+whether the CLI keeps running or exits, and the soldier shows "log in" until the owner reconnects it;
+>>> END
+
+R-F-78: each snapshot names its canvas frame.
+<<< OLD
+and in the ASCII profile, and compared with committed snapshots that follow the canvas.
+=== NEW
+and in the ASCII profile, and compared with committed snapshots that follow the canvas. Each committed snapshot names the canvas frame it follows, or the spec's table where the two differ (VIS-1), and the PR reviewer confirms the match whenever a snapshot is added or changed.
+>>> END
+
+<<< OLD
+and the commands' output match the canvas for terminals of 144, 110 and 80 columns
+=== NEW
+and the commands' output match the canvas, or the spec where it differs (VIS-1), for terminals of 144, 110 and 80 columns
+>>> END
+
+R-F-79 (a): the headless run gets the same standing instructions.
+<<< OLD
+once through a live session and once through the CLI's own headless run, with the same model, effort and autonomy:
+=== NEW
+once through a live session and once through the CLI's own headless run, with the same model, effort and autonomy, and the same standing instructions (SI-1). The headless run takes them through the slot its command offers for appended instructions, and agy's ahead of its first prompt, as its channel gives them (SI-2); the write-up says how (VER-8):
+>>> END
+
+R-F-102: grok's tokens and cost.
+<<< OLD
+    - agy: `input_tokens`, which leaves out cached input, plus `cache_read_tokens`, plus `output_tokens`, from its usage (CH-5) and from a headless run's JSON `usage`.
+=== NEW
+    - agy: `input_tokens`, which leaves out cached input, plus `cache_read_tokens`, plus `output_tokens`, from its usage (CH-5) and from a headless run's JSON `usage`.
+    - grok: a live turn's input, cached input and output come from its prompt result's `_meta.usage` (CH-4), each counted once; a live turn whose `_meta.usage` gives a cost counts against $2 instead. The contract fixtures (VER-4) show which field holds which.
+>>> END
+
+R-F-101: ADR-0009's token figures stand in only against a token limit.
+<<< OLD
+For the parity task's first run, ADR-0009's figures stand in.
+=== NEW
+For the parity task's first run, ADR-0009's token figures stand in for the runs that count against a token limit. A run that counts against $2 and has no earlier cost figure makes its check one with no earlier figures.
+>>> END
+
+R-F-85: R evidence for a rule about the PR, CI or a live check.
+<<< OLD
+- **Review (R).** The PR reviewer confirms the requirement in the code, citing file and line.
+=== NEW
+- **Review (R).** The PR reviewer confirms the requirement, citing the file and line in the code, or, for a rule about the PR, CI or a live check, the PR's file list, the workflow's line or the write-up.
+>>> END
+
+R-M1-137: VER-5's absence is a reviewer's check.
+<<< OLD
+- **VER-5** (M1; U) **Fake CLIs.**
+=== NEW
+- **VER-5** (M1; U, R) **Fake CLIs.**
+>>> END
+
+R-M1-124, merged with R-M1-111: the coverage build of the helper.
+<<< OLD
+The containment helper's C counts as the post office's: its lines are measured on a build of the same source instrumented for coverage, run by the same tests, and join the same count (PO-17).
+=== NEW
+The containment helper's C counts as the post office's: its lines are measured on a build of the same source instrumented for coverage, run by the same containment tests in a job of its own (PO-21), and join the same count. PO-17's system-call trace and import check apply to the shipped build only. The instrumented build writes its counts only under a folder the test names, before each step that can end its own process, so a helper ended by a signal, as every macOS guardian is (PO-10), still counts its lines.
+>>> END
+
+R-F-72, R-F-73 (c), R-F-74 (b): which strings are IDs, which requirements rule 9 checks, and a test's kind.
+<<< OLD
+Each test names the requirement or AC IDs it verifies, in its title or a comment beside it, and the script also fails when a requirement of the current milestone or an earlier one, with U, C, I, X, F or S evidence, is named by no test, or when a test names an ID this spec doesn't have. CI names the current milestone. R and L evidence is recorded on the PR (VER-8 and section 6).
+=== NEW
+Each test names the requirement or AC IDs it verifies, in its title or a comment beside it. An ID has one of this spec's prefixes (HOST, PO, CH, SI, MSG, SES, ARM, WSP, SEC, VIS, SET, OBS, VER, LEG), or the form `Mn-ACn`; other text, such as `UTF-8` or `SHA-256`, is no ID. An AC's ID names only that AC: a requirement is named only by its own ID. A committed file, `docs/spec/implemented.txt`, gives the milestone being built and the requirements implemented so far; each PR adds those it implements, and removes none. The script also fails when a requirement that file lists, or one of an earlier milestone than the one it gives, with U, C, I, X, F or S evidence, is named by no test, or when a test names an ID this spec doesn't have. So a milestone built over several PRs is checked on each of them. The script doesn't check a test's kind: the PR's AC-to-evidence mapping (section 6) says which test gives which kind of evidence, and the PR reviewer checks it. R and L evidence is recorded on the PR (VER-8 and section 6).
+>>> END
+
+R-F-75: rule 7 compares with the base branch's spec.
+<<< OLD
+and against the previous version's IDs, so a deleted entry is caught too.
+=== NEW
+and against the IDs of the spec on the PR's base branch, which CI fetches, so a deleted entry is caught too.
+>>> END
+
+R-F-71: rule 8 and requirements with two milestones.
+<<< OLD
+cites a requirement of a later milestone than its own (for a requirement with two milestones, its last), the citation is marked `→Mx` with the cited requirement's milestone, as in `(CH-9, →M2)` or `CH-9 (→M2)`, and the part it governs is verified in that milestone.
+=== NEW
+cites a requirement of a later milestone than its own, the citation is marked `→Mx` with the cited requirement's milestone, as in `(CH-9, →M2)` or `CH-9 (→M2)`, and the part it governs is verified in that milestone. A requirement with two milestones may be cited without a marker by an AC of either one, and that AC verifies the part its own milestone implements; that requirement's own citations are checked against its last milestone.
+>>> END
+
+R-F-74: rule 9 checks VER-7's list.
+<<< OLD
+9. Every requirement of the current milestone or an earlier one with U, C, I, X, F or S evidence is named by at least one test,
+=== NEW
+9. Every requirement that VER-7's committed list names as implemented, and every requirement of an earlier milestone than the one it gives, with U, C, I, X, F or S evidence, is named by at least one test,
+>>> END
+
+R-F-103: Windows in M6-AC8 and Q6.
+<<< OLD
+- **M6-AC8** Live: the owner's runs on Linux and macOS pass,
+=== NEW
+- **M6-AC8** Live: the owner's runs on Linux, macOS and Windows pass,
+>>> END
+
+<<< OLD
+- **Q6** (answered by VER-10) POSIX and macOS terminals need a live check before v2.0.0.
+=== NEW
+- **Q6** (answered by VER-10) Linux, macOS and Windows terminals need a live check before v2.0.0.
+>>> END
+
+R-F-107: Q8.
+<<< OLD
+Prebuilt. There is one binary for each supported system and processor, built,
+=== NEW
+Prebuilt. There is one Linux binary for each supported processor and one universal macOS binary, built,
+>>> END
+
+R-F-81 (→M3): HOST-16, the mod shows only what the post office decided.
+<<< OLD
+The mod draws it as transcript notice rows, which are not added to Claude's conversation and wake nobody (MSG-8). It is not a toast (HOST-8).
+=== NEW
+The mod draws it as transcript notice rows, which are not added to Claude's conversation and wake nobody (MSG-8). It is not a toast (HOST-8).
+- **HOST-16** (M3; I) **The mod shows only what the post office decided** (section 3). The mod shows the result of each request it makes (a stop, an approval answer, y or n, g, a cancel, a change, a fresh start, a reconnect) only from the post office's event. A request the post office refuses leaves the mod showing what the post office's last event showed, with the refusal's reason.
+>>> END
+
+<<< OLD
+- HOST-10, HOST-11;
+- PO-4, PO-6;
+=== NEW
+- HOST-10, HOST-11, HOST-16;
+- PO-4, PO-6;
+>>> END
+
+<<< OLD
+the message stays delivered, the mod shows that only from the post office's event, and Claude gets no line (MSG-10).
+=== NEW
+the message stays delivered, the mod shows that only from the post office's event, and Claude gets no line (MSG-10, HOST-16).
+>>> END
+
+<<< OLD
+`/decisions` prints a request whose command holds a `Bearer` value with that value redacted, while its card shows it whole (HOST-14, HOST-8, VIS-2, PO-7, WSP-8).
+=== NEW
+`/decisions` prints a request whose command holds a `Bearer` value with that value redacted, while its card shows it whole. y pressed on an attribution card as the post office shuts down shows the card left unanswered, never answered (HOST-14, HOST-8, VIS-2, PO-7, WSP-8, HOST-16).
+>>> END
+
+R-F-83 (→M3), D-11: a summary line's characters, and a summary for a brief from an earlier conversation.
+<<< OLD
+  - A summary has at most five lines of at most 120 characters each, counted the same at any width. A longer line or reply is cut with …, and the whole reply is saved
+=== NEW
+  - A summary has at most five lines of at most 120 characters each, counted as Unicode code points, as MSG-1 counts them, the same at any width. A longer line is cut to 119 and …, never inside a code point, a longer reply to its first five lines, and the whole reply is saved
+>>> END
+
+<<< OLD
+  - For the Monarch, it is added to Claude's conversation as a summary card. The card's title says "answered", and it also states the facts of MSG-11 (→M6).
+=== NEW
+  - For the Monarch, it is added to Claude's conversation as a summary card. The card's title says "answered", and it also states the facts of MSG-11 (→M6).
+  - A summary for a brief Claude sent before a `/clear`, `/resume` or `/branch` arrives in the conversation Claude Code is in now, and its card says so, as in `answered · a brief from before /clear`. It wakes nobody: it waits for Claude's next turn (MSG-8).
+>>> END
+
+<<< OLD
+- **M3-AC2** A summary of at most five lines comes back as a card with the report's path. A longer reply is cut and kept whole on disk.
+=== NEW
+- **M3-AC2** A summary of at most five lines comes back as a card with the report's path. A longer reply is cut and kept whole on disk. A line of 121 characters is cut to 119 and …, counted in code points, so a line of emoji is cut between two of them. A summary for a brief sent before a `/clear` arrives in the new conversation, marked as from before it, and starts no turn.
+>>> END
+
+D-11: SES-1, and the rows of Appendix C that say "Claude session".
+<<< OLD
+- **SES-1** (M4; I) **One session per soldier.** Each soldier has one open session per Claude session, and related work accumulates in it.
+=== NEW
+- **SES-1** (M4; I) **One session per soldier.** Each soldier has one open session per Claude Code process, and related work accumulates in it. `/clear`, `/resume` and `/branch` keep it open, since they keep the army (PO-7).
+>>> END
+
+<<< OLD
+| PO-7: sessions close when the Claude session ends, or when the mod's lease lapses. A soldier's session stays open while the Monarch's does (SES-1). |
+=== NEW
+| PO-7: sessions close when the owner's Claude Code process ends, or when the mod's lease lapses; `/clear`, `/resume` and `/branch` keep them. A soldier's session stays open while the Monarch's process runs (SES-1). |
+>>> END
+
+<<< OLD
+SES-1: each Claude session has its own soldier sessions. |
+=== NEW
+SES-1: each Claude Code process has its own soldier sessions, kept through `/clear`, `/resume` and `/branch`. |
+>>> END
+
+<<< OLD
+| WSP-1: one worktree per soldier per Claude session. PO-7 and SES-5
+=== NEW
+| WSP-1: one worktree per soldier per Claude Code process. PO-7 and SES-5
+>>> END
+
+<<< OLD
+| HOST-2 and PO-7: the post office lives only while the Claude session does. |
+=== NEW
+| HOST-2 and PO-7: the post office lives only while the owner's Claude Code process does. |
+>>> END
+
+<<< OLD
+| H38 | What happens when the owner resumes a Claude session: the soldiers start fresh, as SES-1 reads today, or each resumes its last session by id (CH-9). | SES-1, CH-9 |
+=== NEW
+| H38 | What happens when the owner resumes a Claude session in a new Claude Code process: the soldiers start fresh, as SES-1 reads today, or each resumes its last session by id (CH-9). A `/resume` within one process keeps the army (PO-7). | SES-1, CH-9 |
+>>> END
+
+<<< OLD
+| M9 | How old worktrees are cleaned up. WSP-1 makes one per soldier per Claude session, and PO-7 keeps them all. | WSP-1, PO-7 |
+=== NEW
+| M9 | How old worktrees are cleaned up. WSP-1 makes one per soldier per Claude Code process, and PO-7 keeps them all. | WSP-1, PO-7 |
+>>> END

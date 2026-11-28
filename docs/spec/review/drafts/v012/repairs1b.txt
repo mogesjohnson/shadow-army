@@ -1,0 +1,18 @@
+v0.12 repairs, batch 1b: the drafter's own follow-ups (raw/v012-repairs-draft.md, "New findings"), applied after repairs1.txt. Written by the orchestrator.
+
+R-M1-151 (a): S7's questions that need an interactive Mac move to M6, before M6-AC11; the launchd restart question runs on CI's macOS runners in M1.
+<<< OLD
+- **S7 Containment**, a spike in M1, done before its containment ACs are claimed, with no model call. It answers:
+  - on a Mac: whether a CLI started inside a launchd job raises a privacy prompt or notification that the same CLI started from a terminal doesn't, with the checkout in `~/Documents`; whether a helper with only an ad hoc signature, installed through npm, runs with no Gatekeeper prompt; and whether launchd starts a killed guardian again, after what delay, and in the same coalition;
+=== NEW
+- **S7 Containment**, a spike in M1, done before its containment ACs are claimed, with no model call. It answers:
+  - on CI's macOS runners: whether launchd starts a killed guardian again, after what delay, and in the same coalition;
+  - on a Mac, in M6 before M6-AC11: whether a CLI started inside a launchd job raises a privacy prompt or notification that the same CLI started from a terminal doesn't, with the checkout in `~/Documents`, and whether the signed helper, installed through npm, runs with no Gatekeeper prompt;
+>>> END
+
+R-M1-155: PO-20, the DLL's build is deterministic, so two builds can be compared byte for byte.
+<<< OLD
+and the Windows DLL with a named .NET SDK version on a named runner image.
+=== NEW
+and the Windows DLL with a named .NET SDK version on a named runner image, built with the C# compiler's deterministic output and its source paths mapped, so that no checkout path reaches the DLL.
+>>> END

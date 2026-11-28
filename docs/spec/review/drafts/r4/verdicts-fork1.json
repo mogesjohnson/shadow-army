@@ -1,0 +1,5 @@
+[
+  { "id": "R-M1-240", "verdict": "CONFIRMED P2 (M1-R4-V6)", "resolution": "fix pending v0.21: PO-16 407 runs the package's sweep as a one-shot Node.js process (no lock, no port, no secret, PO-13 checksums, ends only trees whose post office is gone); PO-17 417 lets that process run its tool operations; M1-AC16 runs the real sweep (raw/M1-R4-V6.md)" },
+  { "id": "R-M1-241", "verdict": "CONFIRMED P2 (M1-R4-V6)", "resolution": "fix pending v0.21, folded into R-M1-207's repair: ARM-7 738 sub-bullet, under `sa live` the trust card's rows and question go to the terminal, only a typed `Trust these files` accepts; 740 adds end of input; M1-AC13 `sa live` case (raw/M1-R4-V6.md)" },
+  { "id": "R-M1-242", "verdict": "CONFIRMED P2 (M1-R4-V6)", "resolution": "fix pending v0.21: PO-5 251 names logs `<soldier>-<log id>.jsonl` (a UUID the post office makes before the CLI starts; claude gets it as `--session-id`; the CLI's own id goes on the first line) and `po-<UTC YYYYMMDDTHHMMSS.mmmZ>-<pid>.jsonl` (raw/M1-R4-V6.md; the verifier's NEW, not the packet's)" }
+]

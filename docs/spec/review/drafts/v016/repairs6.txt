@@ -1,0 +1,70 @@
+v0.16 repairs, part 6: F-R3-V2's confirmed findings. Written by the orchestrator (Fork 2), session 8, 2026-10-23.
+
+R-F-147 (P2): n on the attribution card reverts nothing, and the card says so.
+<<< OLD
+n fails the turn as a read-violation. The turn's summary waits for the answer.
+=== NEW
+n fails the turn as a read-violation and leaves the files as they are: the guard reverts nothing (Appendix D, row 6). The card says so beside its keys, as in `y mine · n not mine, fail the turn · the files stay as they are`. The turn's summary waits for the answer.
+>>> END
+
+<<< OLD
+- **Attribution card:** the guard's decision on changes no record explains: y says they are the owner's, n fails the turn (ARM-6).
+=== NEW
+- **Attribution card:** the guard's decision on changes no record explains: y says they are the owner's, n fails the turn and leaves the files as they are (ARM-6).
+>>> END
+
+R-F-151 (P2): what a transcript line is.
+<<< OLD
+before any soldier starts there (ARM-7).
+
+## 3. Architecture
+=== NEW
+before any soldier starts there (ARM-7).
+- **Transcript line:** a notice row in the owner's transcript, which is not added to Claude's conversation and wakes nobody, unless its requirement says it goes to Claude's conversation.
+
+## 3. Architecture
+>>> END
+
+<<< OLD
+Claude's transcript gets one line saying that soldier's context changed.
+=== NEW
+Claude's conversation gets one line saying that soldier's context changed.
+>>> END
+
+<<< OLD
+Only cards and one-line rows enter Claude's conversation (MSG-5, HOST-11), and HOST-15's digest doesn't.
+=== NEW
+Only cards, and the rows MSG-7 and HOST-11 send to Claude, enter Claude's conversation (MSG-5, HOST-11); transcript lines and HOST-15's digest don't.
+>>> END
+
+R-F-148 (P2, the list part): the trust card is in the one list. When its dialog shows again is card D-32.
+<<< OLD
+the cards for an edit before a turn a CLI started by itself (WSP-12, →M6), handoffs ready,
+=== NEW
+the cards for an edit before a turn a CLI started by itself (WSP-12, →M6), the folder's trust card (ARM-7), whose row shows its dialog again when chosen, handoffs ready,
+>>> END
+
+<<< OLD
+an approval request or the guard's attribution card waits for the owner |
+=== NEW
+an approval request, the guard's attribution card or the folder's trust card (ARM-7) waits for the owner |
+>>> END
+
+R-F-149 (P2): a newer CLI version gives one notice, not a card.
+<<< OLD
+  - A newer version connects, with a warning card.
+=== NEW
+  - A version newer than its fixtures connects. The soldier's log and one line in Claude's transcript say so once per CLI and version, as in `claude 2.1.294 is newer than its adapter's fixtures (2.1.293)`, and `/army` lists it. It waits on nothing, so it raises no card, toast or decision.
+>>> END
+
+<<< OLD
+connects with CH-8's warning.
+=== NEW
+connects with CH-8's notice.
+>>> END
+
+<<< OLD
+An unknown CLI version connects with a warning, and an unparseable line
+=== NEW
+An unknown CLI version connects with one notice, and a second connect of that version shows none; an unparseable line
+>>> END

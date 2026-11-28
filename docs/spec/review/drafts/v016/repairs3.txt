@@ -1,0 +1,35 @@
+v0.16 repairs, part 3: round 3's P3s, applied unverified (flow rule 4). Written by the orchestrator, session 8, 2026-10-23.
+
+R-F-144 (P3): rule 5 on a push to main.
+<<< OLD
+against the IDs of the spec on the PR's base branch, which CI fetches, so a deleted entry is caught too
+=== NEW
+against the IDs of the spec on the PR's base branch or, on a push, at the commit before the push, which CI fetches, so a deleted entry is caught too
+>>> END
+
+R-F-145 (P3): Appendix A's WSP-11 row names 2.0 WS-3.
+<<< OLD
+| WSP-11 | v1 (CLAUDE.md design rules; `src/core/summon.ts`) |
+=== NEW
+| WSP-11 | v1 (CLAUDE.md design rules; `src/core/summon.ts`); 2.0 WS-3 |
+>>> END
+
+R-F-146 (P3): implemented.txt's format.
+<<< OLD
+A committed file, `docs/spec/implemented.txt`, gives the milestone being built and the requirements implemented so far; each PR adds those it implements, and removes none.
+=== NEW
+A committed file, `docs/spec/implemented.txt`, gives the milestone being built and the requirements implemented so far; each PR adds those it implements, and removes none. Its first line is the milestone being built, as `M2`, and each further line is one requirement ID. A requirement with two milestones is of an earlier milestone once both are earlier than the one the file gives.
+>>> END
+
+R-M1-181 (P3): CH-2's vendor claims name their documents.
+<<< OLD
+as claude's permission-mode documentation describes it
+=== NEW
+as claude's permission-mode documentation describes it (https://code.claude.com/docs/en/permission-modes, read 2026-10-23)
+>>> END
+
+<<< OLD
+the spec relies on Claude Code's documentation, which says that with the variable set to 1 claude neither creates nor loads auto-memory files.
+=== NEW
+the spec relies on Claude Code's documentation (https://code.claude.com/docs/en/memory; decisions.md, D-19), which says that with the variable set to 1 claude neither creates nor loads auto-memory files.
+>>> END

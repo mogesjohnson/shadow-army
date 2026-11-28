@@ -1,0 +1,7 @@
+v0.16's header.
+
+<<< OLD
+| **Version** | 0.15, 2026-10-23:
+=== NEW
+| **Version** | 0.16, 2026-10-23: the repairs for fix check V14-FC1 and for round 3 of F and M1 (among them: the post office's Node.js found by an absolute path, the supported Node.js, git and host versions, pinned runtime dependencies, no outbound connection or telemetry, harness git's time limits and no prompts, the army's folders never a link, Windows `PATHEXT` and `cmd.exe` quoting, the test build, the live budget's scope, the trust card in the one list, and what a transcript line is). 0.15, 2026-10-23:
+>>> END

@@ -1,0 +1,13 @@
+- **M1-AC4** Integration and fault tests against a fake claude whose frames are copied from section 5.1 C's claude recordings (PO-1, CH-1, CH-2, PO-5):
+  - a brief goes in, and a summary of at most five lines comes back;
+  - on a fake clock, a crash restarts the channel after 1 s, then 5 s, then 30 s, and a fourth crash within 10 minutes of the first leaves it down; a start that ends before the fake's first event counts as a crash; a reconnect, or 10 minutes without a crash, resets the count;
+  - a crash in the middle of a tool call does not send the message again, and its zeroed `result` reads "not reported" and changes no other turn's figures;
+  - a rate limit and a context overflow arrive as two different error kinds and a refusal as a refusal, and none of them restarts the channel; an `api_retry` before a turn that answers shows as a retry, not as an error;
+  - a login needed never restarts the channel, whether the fake keeps running or exits after it, and the soldier shows "log in" until it is reconnected;
+  - a turn whose later assistant messages report another model: the change is logged, and the turn's usage names that model;
+  - a background task's follow-up `result` that arrives before the next message's own ends only its own message;
+  - a fake that answers `initialize` 5 s inside its startup bound, and one silent for 10 minutes mid-turn, both run on; one that never answers is restarted as after a crash;
+  - one unparseable line shows as an error and the session carries on; ten in a row count as a lost connection;
+  - a claude older than CH-2's oldest opens no session and never counts as a crash, and its log and Claude's transcript say why;
+  - log writes fail in the middle of a turn: the turn completes, one line reports it, and the log resumes once writes succeed;
+  - closing the channel ends a process the fake CLI started and left running.

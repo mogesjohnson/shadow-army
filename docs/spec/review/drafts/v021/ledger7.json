@@ -1,0 +1,46 @@
+[
+ [
+  "the fix reacts to claude's own refusal instead | P2, from the fix check | fix pending (v0.21) |",
+  "the fix reacts to claude's own refusal instead | P2, from the fix check | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): PO-4 no longer reads managed settings; claude's own `disableSideloadFlags` refusal of `--mcp-config` restarts the soldier at once without it, not as a crash or PO-1's refused start; PO-1 217 points to PO-4; M3-AC8 case |"
+ ],
+ [
+  "and the file list leaves out `.claude/AGENTS.md` | P2, from the fix check | fix pending (v0.21) |",
+  "and the file list leaves out `.claude/AGENTS.md` | P2, from the fix check | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): WSP-11 defines writable by no other user on Windows by the rights held (the right to create a subfolder alone passes) and adds `.claude/AGENTS.md`; M1-AC11's parent-folder, `.claude/AGENTS.md` and `%LOCALAPPDATA%` cases |"
+ ],
+ [
+  "`send` should return `fresh session` on a soldier's first brief | P2, from the fix check | fix pending (v0.21) |",
+  "`send` should return `fresh session` on a soldier's first brief | P2, from the fix check | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): SES-1's first brief in a process returns `fresh session · no earlier briefs`, with WSP-1's earlier worktree (→M6); HOST-10's return names it (→M4); M4-AC3 case |"
+ ],
+ [
+  "and two leave out \"no AppLocker or App Control policy\" | P3, to apply unverified | fix pending (v0.21) |",
+  "and two leave out \"no AppLocker or App Control policy\" | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): M1-AC15's and M1-AC18's notes say only what S7 leaves open; Appendix D row 12's note removed; PO-9's and PO-13's notes get the policy qualifier |"
+ ],
+ [
+  "and the message doesn't warn | P3, to apply unverified | fix pending (v0.21) |",
+  "and the message doesn't warn | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): PO-14's Smart App Control message and PO-19's remedy warn that older Windows 11 builds can't turn it on again without a reset; S7 records the build |"
+ ],
+ [
+  "no AC tests `queued · waits · trust card` | P3, to apply unverified | fix pending (v0.21) |",
+  "no AC tests `queued · waits · trust card` | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): ARM-7 lists `sa live`'s open and cites HOST-10 for Claude's `send`, PO-4 for a soldier's; M1-AC13's next `/army` or `sa live`, and the `queued · waits · trust card` case (→M3) |"
+ ],
+ [
+  "which residual 13 says never happens | P3, to apply unverified | fix pending (v0.21) |",
+  "which residual 13 says never happens | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): WSP-4's pairs come from this army's logs, earlier post offices' included; residual 13 names the unlogged pair that goes on the card |"
+ ],
+ [
+  "but not one with changes not committed; no AC tests it | P3, to apply unverified | fix pending (v0.21) |",
+  "but not one with changes not committed; no AC tests it | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): WSP-1's start line also names a worktree with changes not committed; M6-AC7 case for `Kaisel@1` |"
+ ],
+ [
+  "(R-M1-197 half fixed) | P3, to apply unverified | fix pending (v0.21) |",
+  "(R-M1-197 half fixed) | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): WSP-11's sweep also checks any folder where `git worktree list` shows a marked snapshot subfolder of this repository |"
+ ],
+ [
+  "743 still says \"its own autonomy levels\" | P3, to apply unverified | fix pending (v0.21) |",
+  "743 still says \"its own autonomy levels\" | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): ARM-7 says v1's commands read the same shipped copy, at `supervised`; the residual says `supervised` |"
+ ],
+ [
+  "get past a prefix check on Windows | P3, to apply unverified | fix pending (v0.21) |",
+  "get past a prefix check on Windows | P3, to apply unverified | fixed in v0.21, batch 7 (`drafts/v021/repairs7.txt`): CH-1 compares each entry and folder by real path, regardless of case on Windows and macOS; an entry that can't be resolved is dropped (beyond the fix check's text) |"
+ ]
+]

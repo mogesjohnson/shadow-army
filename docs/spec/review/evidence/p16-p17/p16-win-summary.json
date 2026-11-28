@@ -1,0 +1,458 @@
+[
+  {
+    "case": "base",
+    "a": 47610,
+    "b": 47611,
+    "ms": 3141,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47610/probe?w=command\",\"status\":200,\"text\":\"A\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "A",
+        "line": "GET /probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "A",
+        "line": "GET /probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295034590,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295034619,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47610/probe?w=start",
+          "status": 200,
+          "text": "A"
+        }
+      },
+      {
+        "t": 1793295035509,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47610/probe?w=command",
+          "status": 200,
+          "text": "A"
+        }
+      },
+      {
+        "t": 1793295035581,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  },
+  {
+    "case": "shell-HTTP_PROXY",
+    "a": 47612,
+    "b": 47613,
+    "ms": 3329,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47612/probe?w=command\",\"status\":200,\"text\":\"B\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47612/probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47612/probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [
+      "CONNECT api.anthropic.com:443 HTTP/1.1",
+      "CONNECT mcp-proxy.anthropic.com:443 HTTP/1.1",
+      "CONNECT http-intake.logs.us5.datadoghq.com:443 HTTP/1.1"
+    ],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295038573,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295038621,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47612/probe?w=start",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295039364,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47612/probe?w=command",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295039457,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  },
+  {
+    "case": "shell-HTTPS_PROXY",
+    "a": 47614,
+    "b": 47615,
+    "ms": 3534,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47614/probe?w=command\",\"status\":200,\"text\":\"B\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47614/probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47614/probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [
+      "CONNECT api.anthropic.com:443 HTTP/1.1",
+      "CONNECT mcp-proxy.anthropic.com:443 HTTP/1.1",
+      "CONNECT http-intake.logs.us5.datadoghq.com:443 HTTP/1.1"
+    ],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295042530,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295042562,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47614/probe?w=start",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295043517,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47614/probe?w=command",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295043602,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  },
+  {
+    "case": "shell-http_proxy-lower",
+    "a": 47616,
+    "b": 47617,
+    "ms": 3891,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47616/probe?w=command\",\"status\":200,\"text\":\"B\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47616/probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47616/probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [
+      "CONNECT api.anthropic.com:443 HTTP/1.1",
+      "CONNECT mcp-proxy.anthropic.com:443 HTTP/1.1",
+      "CONNECT http-intake.logs.us5.datadoghq.com:443 HTTP/1.1"
+    ],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295046555,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295046581,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47616/probe?w=start",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295047927,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47616/probe?w=command",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295048009,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  },
+  {
+    "case": "settings-HTTP_PROXY",
+    "a": 47618,
+    "b": 47619,
+    "ms": 3329,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47618/probe?w=command\",\"status\":200,\"text\":\"B\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47618/probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47618/probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [
+      "CONNECT api.anthropic.com:443 HTTP/1.1",
+      "CONNECT mcp-proxy.anthropic.com:443 HTTP/1.1",
+      "CONNECT http-intake.logs.us5.datadoghq.com:443 HTTP/1.1"
+    ],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295051178,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295051211,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47618/probe?w=start",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295051829,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47618/probe?w=command",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295051914,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  },
+  {
+    "case": "settings-HTTPS_PROXY",
+    "a": 47620,
+    "b": 47621,
+    "ms": 3200,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47620/probe?w=command\",\"status\":200,\"text\":\"B\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47620/probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "B",
+        "line": "GET http://127.0.0.1:47620/probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [
+      "CONNECT api.anthropic.com:443 HTTP/1.1",
+      "CONNECT mcp-proxy.anthropic.com:443 HTTP/1.1",
+      "CONNECT http-intake.logs.us5.datadoghq.com:443 HTTP/1.1"
+    ],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295054941,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295054975,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47620/probe?w=start",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295055540,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47620/probe?w=command",
+          "status": 200,
+          "text": "B"
+        }
+      },
+      {
+        "t": 1793295055640,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  },
+  {
+    "case": "shell-HTTP_PROXY+NO_PROXY",
+    "a": 47622,
+    "b": 47623,
+    "ms": 3181,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47622/probe?w=command\",\"status\":200,\"text\":\"A\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "A",
+        "line": "GET /probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "A",
+        "line": "GET /probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [
+      "CONNECT api.anthropic.com:443 HTTP/1.1",
+      "CONNECT mcp-proxy.anthropic.com:443 HTTP/1.1",
+      "CONNECT http-intake.logs.us5.datadoghq.com:443 HTTP/1.1"
+    ],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295058596,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295058626,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47622/probe?w=start",
+          "status": 200,
+          "text": "A"
+        }
+      },
+      {
+        "t": 1793295059329,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47622/probe?w=command",
+          "status": 200,
+          "text": "A"
+        }
+      },
+      {
+        "t": 1793295059422,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  },
+  {
+    "case": "pipe-socketPath",
+    "a": 47624,
+    "b": 47625,
+    "ms": 3267,
+    "exit": 0,
+    "signal": null,
+    "stdout": "p1617: p1617 {\"url\":\"http://127.0.0.1:47624/probe?w=command\",\"status\":200,\"text\":\"A\"}",
+    "stderr": "",
+    "probeHits": [
+      {
+        "listener": "A",
+        "line": "GET /probe?w=start HTTP/1.1"
+      },
+      {
+        "listener": "A",
+        "line": "GET /probe?w=command HTTP/1.1"
+      }
+    ],
+    "bConnects": [],
+    "pipe": null,
+    "mod": [
+      {
+        "t": 1793295062290,
+        "ev": "session.start",
+        "mode": "p16"
+      },
+      {
+        "t": 1793295062317,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47624/probe?w=start",
+          "status": 200,
+          "text": "A"
+        }
+      },
+      {
+        "t": 1793295062323,
+        "ev": "socket",
+        "r": {
+          "sock": "\\\\.\\pipe\\p16-888cf9f3",
+          "error": "p1617: $.http.fetch: socketPath \\\\.\\pipe\\p16-888cf9f3 refused: a network location is not reached from here"
+        }
+      },
+      {
+        "t": 1793295063024,
+        "ev": "fetch",
+        "r": {
+          "url": "http://127.0.0.1:47624/probe?w=command",
+          "status": 200,
+          "text": "A"
+        }
+      },
+      {
+        "t": 1793295063110,
+        "ev": "session.end",
+        "reason": "other"
+      }
+    ],
+    "apiRequests": 0
+  }
+]

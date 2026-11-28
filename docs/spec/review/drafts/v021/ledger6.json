@@ -1,0 +1,58 @@
+[
+ [
+  " | after R-F-151's glossary repair a transcript line never reaches Claude's conversation unless its requirement says so, but MSG-9, MSG-10 and three M3 ACs still word theirs as reaching Claude | CONFIRMED P2 (F-R4-V1) | fix pending (v0.21): HOST-11 lists MSG-9's and MSG-10's lines as reaching Claude's conversation; MSG-9, MSG-10, M3-AC3, M3-AC4, M3-AC9, M3-AC10 say conversation or transcript as meant |",
+  " | after R-F-151's glossary repair a transcript line never reaches Claude's conversation unless its requirement says so, but MSG-9, MSG-10 and three M3 ACs still word theirs as reaching Claude | CONFIRMED P2 (F-R4-V1) | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): HOST-11 names MSG-9's and MSG-10's lines as going into Claude's conversation; MSG-9 and MSG-10 say conversation, with the transcript too; M3-AC3 keeps the soldier-to-soldier line in the transcript alone (HOST-11); M3-AC4, M3-AC9 and M3-AC10 say conversation (session 15's raw/F-R4-V1.md, `git show 0257350`) |"
+ ],
+ [
+  " | VER-6 gives another language \"the same bars through its own coverage tool\" and also has the C, script and C# \"join the same count\": per-language 85% and one pooled count are both valid readings | CONFIRMED P3 (was P2) (F-R4-V1) | fix pending (v0.21): VER-6 says another language's lines join the one count, with no bar of its own |",
+  " | VER-6 gives another language \"the same bars through its own coverage tool\" and also has the C, script and C# \"join the same count\": per-language 85% and one pooled count are both valid readings | CONFIRMED P3 (was P2) (F-R4-V1) | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): VER-6 says another language's lines join the one count of the post office and the channels, with no bar of its own |"
+ ],
+ [
+  " | three rows lack the evidence codes and ACs the intro promises | P3, to apply unverified | repair pending |",
+  " | three rows lack the evidence codes and ACs the intro promises | P3, to apply unverified | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): row 9 names only the programs it lists, and its evidence adds PO-18 (R, I, L) and PO-19 (I, F, R); row 11 adds M2-AC5 and M6-AC1; row 16 adds SES-2 (U, S) and M4-AC1 |"
+ ],
+ [
+  " | every turn on a build message is a writing turn, yet from M3 to M5 a build brief runs in a snapshot and WSP-11 calls its writes read-violations | P3, to apply unverified | repair pending |",
+  " | every turn on a build message is a writing turn, yet from M3 to M5 a build brief runs in a snapshot and WSP-11 calls its writes read-violations | P3, to apply unverified | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): §2's Read-violation says that until WSP-1 (M6) every turn runs in a snapshot, so a build turn's writes are reported as read-violations too (WSP-11) |"
+ ],
+ [
+  " | M5-AC3 still checks the mod \"is loaded from this repository\", though since D-28 it ships in the release package | P3, to apply unverified | repair pending |",
+  " | M5-AC3 still checks the mod \"is loaded from this repository\", though since D-28 it ships in the release package | P3, to apply unverified | already fixed in v0.18 (`f48b957`): M5-AC3 says the mod is loaded from its release package (HOST-1); nothing to apply in v0.21 (checked in batch 6) |"
+ ],
+ [
+  " | Q7 says S6 looks at \"redirect without stopping\", but S6 covers stopping a turn only | P3, to apply unverified | repair pending |",
+  " | Q7 says S6 looks at \"redirect without stopping\", but S6 covers stopping a turn only | P3, to apply unverified | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): S6 also looks at whether each CLI can add to a running turn, as codex's `turn/steer` does (Q7) |"
+ ],
+ [
+  " | two goals and one glossary entry say more than the requirements do | P3, to apply unverified | repair pending |",
+  " | two goals and one glossary entry say more than the requirements do | P3, to apply unverified | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): G2 adds the throwaway snapshot (WSP-11, ARM-6, ARM-8), G7 adds R and L evidence recorded on the PR (VER-7, VER-8), and §2's brief is the Monarch's (HOST-10) |"
+ ],
+ [
+  " | §0 defines a source's \"detail\" only for 2.0 text and v1.0.1's code, but requirements also cite issue numbers and v1's design rules and canvas | P3, to apply unverified | repair pending |",
+  " | §0 defines a source's \"detail\" only for 2.0 text and v1.0.1's code, but requirements also cite issue numbers and v1's design rules and canvas | P3, to apply unverified | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): §0 gives an issue's detail (its accepted text on GitHub) and that of v1's design rules and canvas (their text at `v1.0.1`) |"
+ ],
+ [
+  " | ADR-0012 still names the security tests \"SEC-1 to SEC-5\", but SEC-6 now has X evidence (v2 846) | P3, to apply unverified | repair pending |",
+  " | ADR-0012 still names the security tests \"SEC-1 to SEC-5\", but SEC-6 now has X evidence (v2 846) | P3, to apply unverified | fixed in v0.21, batch 6 (drafts/v021/pairs6-adr0012.json): ADR-0012's Consequences say SEC-1 to SEC-6 |"
+ ],
+ [
+  " | contract fixtures are protected only by `redact()`, which the spec says misses secrets a CLI read from a file or its environment (a `.env` line such as `DATABASE_URL=postgres://u:p4ss@host/db` keeps its value), and nothing asks for a clean checkout or for the owner to read a fixture before it is committed, so a recording can put the owner's secret into git history | DECISION P1 (F-R4-V1) | D-36 (a) (the owner, 2026-10-29): fix pending v0.21, clean checkout, `redact()`, the owner reads each fixture whole; VER-4 moves into M1; WSP-8 adds URL passwords; shared text for VER-4 997, WSP-8 773, M1 Implements 1039 in raw/F-R4-V1.md |",
+  " | contract fixtures are protected only by `redact()`, which the spec says misses secrets a CLI read from a file or its environment (a `.env` line such as `DATABASE_URL=postgres://u:p4ss@host/db` keeps its value), and nothing asks for a clean checkout or for the owner to read a fixture before it is committed, so a recording can put the owner's secret into git history | DECISION P1 (F-R4-V1) | D-36 (a) (the owner, 2026-10-29): fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): VER-4 (M1, M2) asks for a clean checkout, `redact()` and the owner's whole read before a fixture is committed, from M1's first claude fixture; WSP-8 drops VER-4's →M2 and matches a URL's password; M1 Implements lists VER-4, and M1-AC3 cites it (raw/F-R4-V1.md) |"
+ ],
+ [
+  " | SEC-6 escapes only \"text from a soldier, a CLI or a config file\", so paths, diffs and ref names read from the repository through harness git (a file name holding U+202E on the attribution card) have no stated escaping; WSP-12 841's \"Paths are shown as SEC-6 says\" for one line supports that reading, and no AC tests a path, diff or ref name | CONFIRMED P2 (F-R4-V1) | fix pending v0.21: SEC-6 857 covers every text the mod draws, repository paths, diffs and ref names included; M1-AC11 and M2-AC5 cases; Appendix D row 4 (raw/F-R4-V1.md) |",
+  " | SEC-6 escapes only \"text from a soldier, a CLI or a config file\", so paths, diffs and ref names read from the repository through harness git (a file name holding U+202E on the attribution card) have no stated escaping; WSP-12 841's \"Paths are shown as SEC-6 says\" for one line supports that reading, and no AC tests a path, diff or ref name | CONFIRMED P2 (F-R4-V1) | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): SEC-6 covers every text the mod draws or sends to Claude, repository paths, diffs and ref names included; M1-AC11 and M2-AC5 cite SEC-6 and gain a U+202E and ESC file-name case; Appendix D row 4's boundary and evidence (raw/F-R4-V1.md) |"
+ ],
+ [
+  " | row 8 rates \"the repository to harness git\" prevented except residual 7, but a `filter.*` driver already in the repository's config when the post office starts runs as the owner's (WSP-10 784, settled by R-F-56), and no residual names it; the same point as V1b's side point on WSP-10 784 and 790 | CONFIRMED P3, was P2 (F-R4-V2) | fix pending v0.21: row 8 1800 and the In short line 1811 name a new residual 14, filters in the config at start (raw/F-R4-V2.md); re-check its last sentence against R-M1-206's fix |",
+  " | row 8 rates \"the repository to harness git\" prevented except residual 7, but a `filter.*` driver already in the repository's config when the post office starts runs as the owner's (WSP-10 784, settled by R-F-56), and no residual names it; the same point as V1b's side point on WSP-10 784 and 790 | CONFIRMED P3, was P2 (F-R4-V2) | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): row 8 and the In short line name residual 14, filters in the config at start; its last sentence, checked against R-M1-206's fix, says a filter a soldier added that held harness git in M1 runs once the post office restarts, in the held turn's guard too, which also covers M1-R4-V1b's side point (raw/F-R4-V2.md) |"
+ ],
+ [
+  " | row 13 says a soldier is prevented from acting after the owner's session ends, with no exception, while row 12 and residual 3 say work a CLI handed to a service outside its tree keeps running | CONFIRMED P3, was P2 (F-R4-V2) | fix pending v0.21: row 13 1805 says prevented, except residual 3 (raw/F-R4-V2.md) |",
+  " | row 13 says a soldier is prevented from acting after the owner's session ends, with no exception, while row 12 and residual 3 say work a CLI handed to a service outside its tree keeps running | CONFIRMED P3, was P2 (F-R4-V2) | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): row 13 says prevented, except residual 3 (raw/F-R4-V2.md) |"
+ ],
+ [
+  " | four trust boundaries are controlled only by requirements with no X evidence (row 15's auto-memory control is CH-2 C and L only); add X to CH-2's clause M1-AC14 checks and to PO-7's lease, or say in Appendix D's intro that a cleanup control's tests may be I or F | P3, to apply unverified | repair pending |",
+  " | four trust boundaries are controlled only by requirements with no X evidence (row 15's auto-memory control is CH-2 C and L only); add X to CH-2's clause M1-AC14 checks and to PO-7's lease, or say in Appendix D's intro that a cleanup control's tests may be I or F | P3, to apply unverified | fixed in v0.21, batch 6 (drafts/v021/repairs6.txt): Appendix D's intro says rows 12, 13, 15 and 16 have no security test (X) and are checked by the other kinds of evidence beside them; a technical choice, the finding's second option, for V21-FC1 |"
+ ]
+]

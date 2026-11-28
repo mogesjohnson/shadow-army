@@ -1,0 +1,62 @@
+[
+ [
+  "  - Usage comes from the prompt result's `_meta.usage`.",
+  "  - Usage comes from the prompt result's `_meta.usage`.\n  - It passes the permission mode of the soldier's autonomy on every start and resume, as v1 does (`src/adapters/grok.ts`), as `grok agent <flags> stdio`: `--permission-mode plan` for supervised, and from M6 the mode CH-11 sets for a writing turn; `--permission-mode auto` for auto; and `--always-approve` for full. xAI documents that a mode on the command line overrides, for that process, the `permission_mode` default in the user's `~/.grok/config.toml` (https://docs.x.ai/build/features/permissions). So a supervised soldier asks through `session/request_permission` (CH-6, →M2) even where the owner's own grok sessions always approve: under `permission_mode = \"always-approve\"`, a grok 1.0.70 started with no mode sent no request and wrote at once (probe P-1). This changes one vendor default and disables no safeguard (CH-7). The adapter never sets `_meta.yoloMode` and never sends `/always-approve`, which xAI documents as a toggle. Only an administrator's `disable_bypass_permissions_mode` outranks the flag, and it only takes always-approve away. A contract fixture recorded with the user config at `permission_mode = \"always-approve\"` shows a supervised session's write and shell command each arriving as `session/request_permission`, and an `auto` session running in auto, not always-approve, before M2 ships grok (section 5.1, C; VER-4)."
+ ],
+ [
+  "  - an approval request, or for agy a tool it soft-denies (CH-6);",
+  "  - an approval request, or for agy a tool it soft-denies (CH-6); for grok, recorded with the user's `~/.grok/config.toml` at `permission_mode = \"always-approve\"`, at `supervised` and at `auto` (CH-4);"
+ ],
+ [
+  "The soldier's log says it was resumed (CH-9, PO-1).",
+  "The soldier's log says it was resumed (CH-9, PO-1). The resumed process's arguments carry its autonomy level's mode, and for grok the mode is passed whatever the user's `~/.grok/config.toml` sets (CH-4, CH-7)."
+ ],
+ [
+  "and shows each denial agy reports word for word, redacted (CH-6, SEC-3, WSP-8).",
+  "and shows each denial agy reports word for word, redacted (CH-6, SEC-3, WSP-8). Replaying the grok fixture recorded under a user config at `always-approve`, a supervised soldier's write arrives as an approval request, and the tool runs only after the owner's answer (CH-4, CH-6, SEC-3)."
+ ],
+ [
+  "    - A result whose `usage`, `total_cost_usd` and `modelUsage` are all zero, as after a crash, and after a stop where spike S6's recording shows it, reports nothing. That turn's input and cache are summed the same way, and its output and cost read \"not reported\".",
+  "    - A result whose `usage`, `total_cost_usd` and `modelUsage` are all zero, as after a crash, reports nothing. That turn's input and cache are summed the same way, and its output and cost read \"not reported\".\n    - A result that ends a turn the adapter stopped (CH-10, →M2) leaves out what the stop cut short: claude adds none of it to `total_cost_usd` or `modelUsage`, which go on growing from the result before, and the result's `usage` is not reliable (probe P-11, claude 2.1.312). So that turn's cost and output read \"not reported\", even where its totals grew, and its input and cache are summed over its main-loop assistant messages as above. Its totals are the next result's baseline, so the next turn's figures are its own."
+ ],
+ [
+  "such as a claude turn after a crash (CH-2).",
+  "such as a claude turn after a crash or a stop (CH-2)."
+ ],
+ [
+  "A CLI without one is resumed by id, and the soldier's log says so (CH-10, CH-9).",
+  "A CLI without one is resumed by id, and the soldier's log says so (CH-10, CH-9). For claude, replaying the recorded stop, the stopped turn's cost and output read \"not reported\", its input and cache are its main-loop ones, and the next turn's figures are that turn's alone, its result less the stopped turn's (CH-2, CH-10)."
+ ],
+ [
+  "a `/clear` turn, and a total below the baseline (CH-1, CH-2, SI-2).",
+  "a `/clear` turn, a total below the baseline, and a stopped turn's result whose totals equal the result before it, built from probe P-11's frames (CH-1, CH-2, SI-2)."
+ ],
+ [
+  "CI runs the oldest and the newest Node.js and git (PO-21).",
+  "CI runs the oldest and the newest Node.js and git (PO-21). The mod reaches the post office only through Claude Code's `$.http.fetch`, which Claude Code refuses for every mod where the organization's policy doesn't allow WebFetch. A command or renewal that Claude Code itself refuses, not the post office, sends nothing more. The mod stops renewing, the lease then ends the post office (PO-7), and Claude's transcript gets one line with Claude Code's words in place of the lease's reason, as in `Shadow Army can't reach its post office: Claude Code refused the request (your organization's policy doesn't allow web fetch)`."
+ ],
+ [
+  "and as the fake `$.http.fetch` records them for the mod, is to the loopback address.",
+  "and as the fake `$.http.fetch` records them for the mod, is to the loopback address. A fake `$.http.fetch` that refuses every call as Claude Code does under an organization policy without WebFetch gives HOST-2's line, and the army stops with no further command sent."
+ ],
+ [
+  "sends a release that names the army's id.",
+  "sends a release that names the army's id and `session.end`'s reason, so the post office can tell `the owner logged out` from `Claude Code ended`."
+ ],
+ [
+  "Any other address is refused at start, with an error that says so.",
+  "The bind address is fixed: 127.0.0.1, or ::1 where IPv4 loopback is missing. No setting, flag or variable names it, and the bind function refuses any other address with an error that says so."
+ ],
+ [
+  "It binds only the loopback address and refuses `0.0.0.0` with an error,",
+  "It binds only the loopback address, and its bind function, given `0.0.0.0` in a unit test, refuses it with an error,"
+ ],
+ [
+  "a `process.spawn` hook sees the secret in the post office's input, and every event on its output, and can change them.",
+  "a `process.spawn` hook sees the secret in the post office's input, and every event on its output, and can change them. An `http.fetch` hook sees and can change every command the mod sends, the secret included, and a `clock.every` hook that refuses one period ends the mod's renewal timer, so the army stops 30 seconds later (PO-7)."
+ ],
+ [
+  "a `process.spawn` hook sees the secret in the post office's input and every event on its output, and can change them, on every system and at any `ptrace_scope` (PO-3).",
+  "a `process.spawn` hook sees the secret in the post office's input and every event on its output, and can change them, an `http.fetch` hook sees and can change every command, the secret included, and a `clock.every` hook that refuses one period ends the mod's renewals, on every system and at any `ptrace_scope` (PO-3)."
+ ]
+]

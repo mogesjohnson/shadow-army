@@ -1,0 +1,6 @@
+[
+ [
+  "(c) accept and state it (WSP-10 798 and the filters residual) (`raw/V21-FC1.md`) | open: the option to choose, for v0.22 |",
+  "(c) accept and state it (WSP-10 798 and the filters residual) (`raw/V21-FC1.md`) | D-38 (a) (the owner, 2026-10-30, in chat): keep the hold across restarts. Fixed in v0.22, batch 2 (`drafts/v022/repairs2.txt`, `repairs2-late.txt`): WSP-10 logs the trusted state's hashes at start and each time it changes, and each hold; a start whose last log ends with a hold trusts that state, so a change still there holds harness git again; from M2 the card shows again after n or unanswered, and in M1 the hold lifts once the change is gone; PO-1 finishes held items once harness git goes on; the filters residual (15) names the log as the file that keeps the hold; M1-AC10 and M2-AC5 cases |"
+ ]
+]

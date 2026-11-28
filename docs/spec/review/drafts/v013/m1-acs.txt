@@ -1,0 +1,207 @@
+v0.13 repairs, M1's ACs (M1's round 2, R-F-82, R-F-84, R-F-99, R-F-100, D-11, D-22, D-23). Written by the orchestrator against v0.12 (v2@2493a82.md).
+
+M1-AC1: D-11, R-M1-123, R-M1-136 (PO-1's port), R-M1-122.
+<<< OLD
+- **M1-AC1** The post office starts with the first use of the army, starts again at the first use after it has shut down, and stops with the session.
+=== NEW
+- **M1-AC1** The post office starts with the first use of the army, starts again at the first use after it has shut down, and stops when Claude Code ends, not at `/clear`, `/resume` or `/branch`.
+>>> END
+
+<<< OLD
+A live lock refuses the start with its message and is left as it was. Two starts racing on one stale lock end with one post office.
+=== NEW
+A live lock refuses the start with its message and is left as it was. Two starts on one stale lock, with the second's read and replacement forced between the first's read and its replacement, and again in the reverse order, each end with one post office, and the other start gets the live lock's message. A lock that names another port than the post office's standard output gives changes nothing: the mod connects to the port from standard output.
+>>> END
+
+<<< OLD
+A fake that ignores its exit has its process tree ended 10 seconds later;
+=== NEW
+A fake that ignores its exit has its tree's kill begin 10 seconds after the exit request (`SIGTERM` first, at 9.5 s, on Linux and macOS), and its tree is empty within 10 seconds after that;
+>>> END
+
+<<< OLD
+At `session.end` it stops renewing, then sends the release, and the post office shuts down even when the release fails;
+=== NEW
+At a `session.end` whose reason is `clear` or `resume`, it keeps renewing with the army's id, and the post office and its soldiers run on. At any other `session.end` it stops renewing, then sends the release, and the post office shuts down even when the release fails;
+>>> END
+
+<<< OLD
+ignores the end of its input and keeps a child running has both ended within 10 seconds;
+=== NEW
+ignores the end of its input and keeps a child running has its tree's kill begin 10 seconds after the exit request, and both have ended within 10 seconds after that;
+>>> END
+
+<<< OLD
+Each time the fake and its child are gone within 10 seconds, Claude's transcript gets one line with the reason,
+=== NEW
+The fake and its child are gone within 10 seconds of the kill, and in the lease case within 10 seconds after their tree's kill, which begins 10 seconds after the exit request. Each time Claude's transcript gets one line with the reason,
+>>> END
+
+M1-AC2: R-M1-133, R-M1-141, R-M1-115, R-F-99, R-F-100.
+<<< OLD
+- **M1-AC2** A missing or wrong Monarch credential is refused and reported, and 1,000 refused requests give one full report, then one a minute with the count.
+=== NEW
+- **M1-AC2** A missing or wrong Monarch credential is refused and reported, and 1,000 refused requests, on a fake monotonic clock, give one full report in the post office's log, then one a minute with the count, and the last minute's count once that minute ends.
+>>> END
+
+<<< OLD
+and on Windows by opening it for `PROCESS_VM_READ` or `WRITE_DAC` without enabling `SeDebugPrivilege` (PO-3, SEC-2, VER-2).
+=== NEW
+and on Windows by opening it for `PROCESS_VM_READ`, `WRITE_DAC` or `PROCESS_CREATE_PROCESS`, or one of its threads for `THREAD_SET_CONTEXT`, `THREAD_GET_CONTEXT` or `THREAD_SUSPEND_RESUME`, without enabling `SeDebugPrivilege`; there, a process it starts with the post office as its parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`) fails to start (PO-3, SEC-2, VER-2). Each kind `redact()` matches, held within one fragment of a fake claude's text, tool call and error, reaches the mod's event stream as `[redacted]` (WSP-8). After a session, `git status --porcelain` in the checkout lists nothing under `.shadow/`. With the umask at 022, `.shadow/v2/` and `~/.shadow-army/` are 0700 and the files the post office wrote there 0600 on Linux and macOS, and on Windows the two folders' ACL grants only the owner's user, SYSTEM and Administrators, with inheritance off; a folder that existed with more is narrowed, and the log says so (PO-5).
+>>> END
+
+M1-AC3: R-F-84, R-M1-126.
+<<< OLD
+- **M1-AC3** A contract test replays a recorded claude session.
+=== NEW
+- **M1-AC3** A contract test replays a recorded, redacted claude session.
+>>> END
+
+<<< OLD
+A subagent's message leaves the context size unchanged (CH-1, CH-2, SI-2).
+=== NEW
+A subagent's message leaves the context size unchanged. Unit cases, with frames built from section 5.1 C's claude recordings, give each turn's figures as CH-2 says for a zero-cost result followed by a costed one, a `/clear` turn, and a total below the baseline (CH-1, CH-2, SI-2).
+>>> END
+
+M1-AC4: R-F-82, R-F-80, R-M1-136 (PO-5's retry).
+<<< OLD
+  - one unparseable line shows as an error and the session carries on; ten in a row count as a lost connection;
+=== NEW
+  - one unparseable line shows as an error and the session carries on; ten in a row count as a lost connection;
+  - a line the fake writes in three pieces, one split inside a multi-byte character, is read as one event, and a last line cut off by the fake's exit is one malformed line;
+  - a frame of a type the adapter doesn't know, and a known frame with a field it doesn't know, are recorded in the soldier's log and change nothing else;
+>>> END
+
+<<< OLD
+  - log writes fail in the middle of a turn: the turn completes, one line reports it, and the log resumes once writes succeed.
+=== NEW
+  - log writes fail in the middle of a turn: each failed write is tried once more 100 ms later, the turn completes, one line reports it, and the log resumes once writes succeed, its first line after the gap giving the number of lines lost.
+>>> END
+
+M1-AC6: R-M1-136 (ARM-3's key).
+<<< OLD
+A duplicate shadow name, in any case, or a name that is another soldier's key, is refused at start, naming both soldiers (ARM-1, ARM-3).
+=== NEW
+A soldier with neither a default name nor a `shadowName` takes its key. A duplicate shadow name, in any case, or a name that is another soldier's key, is refused at start, naming both soldiers (ARM-1, ARM-3).
+>>> END
+
+M1-AC8: D-11, R-M1-145.
+<<< OLD
+first use, reuse, `/clear`, a mod reload, a normal exit, and Claude Code killed from outside. Each time the post office, its soldiers and the lock end as HOST-2 and PO-7 say,
+=== NEW
+first use, reuse, `/clear` and `/resume` during a soldier's turn, a mod reload, a normal exit, and Claude Code killed from outside. After `/clear` and `/resume` the post office, the soldiers' sessions and the running turn go on. Each other time the post office, its soldiers and the lock end as HOST-2 and PO-7 say,
+>>> END
+
+<<< OLD
+With the owner's `useAutoModeDuringPlan` set to false, a supervised claude soldier
+=== NEW
+With `useAutoModeDuringPlan` set to false in the owner's `~/.claude/settings.json`, a supervised claude soldier
+>>> END
+
+M1-AC10: R-F-109, R-M1-119, R-M1-143, R-M1-118.
+<<< OLD
+and `post-checkout`, `post-commit` and `reference-transaction` hooks are planted, as files in `hooks/` and as a `post-checkout` hook defined in the config. The git commands the post office runs, such as the one that makes a soldier's snapshot, run none of them;
+=== NEW
+and every event githooks(5) lists has a hook planted, as a file in `hooks/` and as a hook defined in the config under a friendly name, such as `hook.fmt.event` set to `post-checkout` with `hook.fmt.command`. On git 2.54 and on the newest git, the git commands the post office runs, such as the one that makes a soldier's snapshot, run none of them;
+>>> END
+
+<<< OLD
+committed at the repository's root, and in a soldier's snapshot, never run: the CLI and git come from `PATH` (CH-1, WSP-10).
+=== NEW
+committed at the repository's root, and in a soldier's snapshot, never run, also with `.`, an empty entry and `node_modules/.bin` on `PATH` ahead of `test/fakes/`: the CLI and git come from the first absolute entry on `PATH` that holds them (CH-1, WSP-10).
+>>> END
+
+M1-AC11: R-M1-127, D-23, R-M1-136 (WSP-11's path file).
+<<< OLD
+  - a child it starts in the background, which writes a checkout file after the turn's end event, fails that turn, and the next message waits until the child has exited;
+=== NEW
+  - a child it starts in the background, which writes a checkout file after the turn's end event, fails that turn, and the next message waits until the child has exited;
+  - a fake that reports `task_started` for a task, sends its turn's `result`, then writes a checkout file from its own process before its `task_notification`, fails that turn, and its next message waits until the notification;
+  - during its turn, a linked working tree of the repository is made inside the folder, at `.claude/worktrees/fix-1/`, and the owner edits a file in it; then it is removed. The turn passes, harness git is never held, and Claude's transcript gets one line for the working tree added and one for it removed;
+>>> END
+
+<<< OLD
+the next post office in the folder removes the snapshot, after one transcript line that names the removed worktree and gives the snapshot's changed file and its HEAD's commit.
+=== NEW
+the next post office in the folder removes the snapshot, after one transcript line that names the removed worktree and gives the snapshot's changed file and its HEAD's commit. A subfolder whose path file can't be read is left as it is, and the log says so.
+>>> END
+
+M1-AC12: R-M1-116, R-M1-139.
+<<< OLD
+- **M1-AC12** Text from a fake claude holding ESC, a bidirectional control and a zero-width character shows each as a placeholder in the mod's transcript lines, and reaches Claude escaped the same way; its other characters are kept (SEC-6).
+=== NEW
+- **M1-AC12** Text from a fake claude holding every Cc and Cf code point but newline and tab, taken from the Unicode Character Database's general categories (the C1 controls such as U+009B, U+00AD, U+FEFF, and the tag characters U+E0001 and U+E0020 to U+E007F included), shows each as a placeholder in the mod's transcript lines; its other characters are kept (SEC-6). What reaches Claude is M3-AC7's (MSG-1, →M3).
+>>> END
+
+M1-AC13: R-M1-117, D-22.
+<<< OLD
+`Not now`, a dismissed dialog and a dialog that rejects each start nothing, the use says why, and the next use shows the card again. `Trust these files` opens the session at `full`;
+=== NEW
+`Not now`, an answer typed under Other, a dismissed dialog and a dialog that rejects each start nothing, the use says why, and the next use shows the card again. `Trust these files` opens the session at `full`;
+  - a folder whose `.mcp.json` is new, and then one whose accepted `.mcp.json` changed by one byte, shows the card with that file and each server it declares, and no claude session opens until the answer;
+>>> END
+
+M1-AC15: R-M1-130, R-M1-140.
+<<< OLD
+  - on Windows, a child that asks to break away from the job fails to start. With the user's execution policy set to AllSigned, the job still starts. A process the fake creates through WMI outlives the close, as PO-1 says, and the test ends it.
+=== NEW
+  - on Windows, a child that asks to break away from the job fails to start. With the user's execution policy set to AllSigned, the job still starts. A process the fake creates through WMI, and one it creates with a parent outside the session (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`), outlive the close, as PO-1 says, and the test ends them;
+  - on each system, a test build whose guardian never reports ready starts no CLI. 10 seconds after the start began, its guardian is ended, and the soldier is down with PO-15's error and isn't restarted by itself.
+>>> END
+
+M1-AC16: R-M1-120, R-M1-136 (PO-16's entry), R-M1-140.
+<<< OLD
+  - a process that has since taken a recorded pid, with another start time, is left running;
+=== NEW
+  - a process that has since taken a recorded pid, with another start time, is left running;
+  - once a tree has ended, its entry under `.shadow/v2/trees/` is gone. A tree entry that can't be written keeps the CLI from starting: the soldier is down with PO-15's error, and isn't restarted. A listing line that can't be added is reported once, as PO-5 says;
+  - on Windows, a fake in the job fails to open its guardian for `PROCESS_DUP_HANDLE` or `PROCESS_CREATE_PROCESS`;
+>>> END
+
+M1-AC17: R-M1-136 (PO-12's log line).
+<<< OLD
+  - in a unit test, a system or processor with no binary gets PO-14's message, and the post office keeps running;
+=== NEW
+  - in a unit test, a system or processor with no binary gets PO-14's message, and the post office keeps running. With the macOS version faked as newer than any CI tested, the check still decides, and the post office's log says that version is untested;
+>>> END
+
+M1-AC18: R-M1-129, R-M1-121, R-M1-136 (PO-14's log on a pass).
+<<< OLD
+Each time the post office keeps running, and its log, each soldier's log and one line in Claude's transcript give PO-14's message for that cause;
+=== NEW
+Each time the post office keeps running, and its log, each soldier's log and one line in Claude's transcript give PO-14's message for that cause;
+  - a test build whose check hangs at a step fails 10 seconds after the check began: what it started is killed, and its message names that step;
+  - the helper, or on Windows the script, replaced after a check passed: the next soldier's start is refused, and on macOS so is a listing run during a turn. Each time the containment has failed (PO-15), and a reconnect's check gives PO-14's message;
+  - when the check passes, the post office's log names the containment and the SHA-256 of each file it checked;
+>>> END
+
+<<< OLD
+- **M1-AC18** No containment, no soldier (PO-14, PO-19):
+=== NEW
+- **M1-AC18** No containment, no soldier (PO-14, PO-19, PO-13, PO-15):
+>>> END
+
+M1-AC20: R-M1-124, R-M1-136 (PO-18's nonce file).
+<<< OLD
+  - on Linux, a trace of the helper's own system calls in every containment test stays inside the allowlist;
+=== NEW
+  - on Linux, a trace of the shipped helper's own system calls in every containment test stays inside the allowlist;
+>>> END
+
+<<< OLD
+  - the Monarch's secret is in no argument, environment, input or nonce file of the helper or of a guardian.
+=== NEW
+  - the Monarch's secret is in no argument, environment, input or nonce file of the helper or of a guardian, and on macOS the nonce file is gone once the guardian has connected.
+>>> END
+
+<<< OLD
+- **M1-AC20** The helper does only what PO-17 allows (PO-17, PO-3):
+=== NEW
+- **M1-AC20** The helper does only what PO-17 allows (PO-17, PO-3, PO-18):
+>>> END
+
+<<< OLD
+- **M1-AC16** When the post office or a guardian dies (PO-10, PO-15, PO-16, PO-1):
+=== NEW
+- **M1-AC16** When the post office or a guardian dies (PO-10, PO-15, PO-16, PO-1, PO-9):
+>>> END

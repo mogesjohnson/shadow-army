@@ -1,0 +1,26 @@
+[
+ [
+  "| H25 | Control characters, terminal escape sequences, bidirectional controls and invisible characters in a soldier's text show as visible placeholders wherever the mod draws it, and are escaped in what reaches Claude. A security test proves it. | MSG-1, MSG-5, HOST-4, HOST-11, SEC |\n",
+  ""
+ ],
+ [
+  "| H2 | A line that can't be parsed is recorded and shown, and the session carries on. Today CH-8 makes it an error without saying whether the session continues. | CH-8, PO-1 |\n",
+  ""
+ ],
+ [
+  "| H2 | Diverts stray lines that aren't JSON, so they can't corrupt the stream or end the session. | CH-8: a line that can't be parsed is an error, never silently dropped. Section 5.1 has a fault test with a malformed or split JSON line. | Partly: the spec doesn't say whether the session continues. Could add (v2.0): see the list above. | `order/16/H2-Stream-JSON-Stdout-Guard-streamJsonStdoutGuard.md` |",
+  "| H2 | Diverts stray lines that aren't JSON, so they can't corrupt the stream or end the session. | CH-1: a line that can't be parsed is recorded word for word and shown as an error, and the session carries on; ten in a row count as a lost connection (PO-1). Section 5.1 F tests a malformed or split JSON line. | Same. | `order/16/H2-Stream-JSON-Stdout-Guard-streamJsonStdoutGuard.md` |"
+ ],
+ [
+  "| H25 | Strips terminal escape codes and invisible characters from agents' output, and wraps it so the leader treats it as data. | MSG-1: a soldier's words reach another model only quoted and named as its own, never as instructions (M3-AC7). Nothing covers control characters, escape sequences or invisible characters. | Partly: the framing is there, the characters aren't. Could add (v2.0): see the list above. | `order/26/H25-Output-Jailbreak-&-Prompt-Injection-Shield-inputPaste.ts.md` |",
+  "| H25 | Strips terminal escape codes and invisible characters from agents' output, and wraps it so the leader treats it as data. | SEC-6: control and format characters in a soldier's, a CLI's or a config file's text show as visible placeholders wherever the mod draws it, and reach Claude escaped. MSG-1 frames a soldier's words as its own, never as instructions (M3-AC7). | Same. | `order/26/H25-Output-Jailbreak-&-Prompt-Injection-Shield-inputPaste.ts.md` |"
+ ],
+ [
+  "| Same | The spec does what the idea does. | 18 |",
+  "| Same | The spec does what the idea does. | 20 |"
+ ],
+ [
+  "| Partly | Part of the idea is in the spec. | 22 |",
+  "| Partly | Part of the idea is in the spec. | 20 |"
+ ]
+]

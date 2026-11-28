@@ -1,0 +1,22 @@
+# Packet F-R4-V1: F's round 4 red team findings R-F-166 and R-F-167 (raised on v0.20)
+
+Spec snapshot (frozen v0.20, read this, not docs/spec/v2.md): `C:/Users/johns/projects/AIConnections/.shadow/v2-tools/review/snapshots/v2@4f481fc.md`. Line numbers below are in it. Source report: `docs/spec/review/raw/F-r4-redteam.md` (findings 1 and 2). Ledger rows: `docs/spec/review/ledger.md` 205-206. Rows waiting for v0.21 and not to raise again: R-F-157 to R-F-165 (ledger).
+
+Both are security findings: run as `spec-verifier`, Opus, `high`. Read only the cited ranges, and grep the snapshot for anything that already covers each claim (SEC, VER, Appendix D 1757-1834, the F milestone from 1015). For each CONFIRMED finding give paste-ready OLD/NEW text against the snapshot. If R-F-166 has two defensible fixes, say DECISION and draft the two options as a short owner card (review alone, or review plus a CI secret scan), with your recommendation.
+
+- severity: P1
+  type: gap
+  location: VER-4 (snapshots/v2@4f481fc.md:997), WSP-8 (:773), §5.1 C (:917-929), SEC-4 (:855), Appendix D residual 5 (:1819)
+  claim: committed contract fixtures are protected only by `redact()`, which the spec itself says misses secrets a CLI reads from files or its environment, so a recording can carry the owner's secret into the repository.
+  scenario: the owner records §5.1 C's sessions (an approval request, an error session, a cold session) in a working checkout. A tool result in the recording holds a `.env` line such as `DATABASE_URL=postgres://u:p4ss@host/db`. That name doesn't end in key, token, secret, password or credential, so WSP-8's rule keeps it. VER-4 says only "redacted before they are committed", and nothing asks for a person to look at the fixture. The fixture is committed, and the credential is in git history, where only a history rewrite takes it out.
+  evidence: VER-4 "They are redacted before they are committed"; WSP-8 :773 "Fixtures are redacted before they are committed"; SEC-4 :855 and residual 5 :1819: "Any other secret ... such as a value it read from a file or its environment, is logged as the CLI wrote it". §5.1 L :975 requires "a clean checkout of the commit under test" for live checks only. Nothing in §5.1 C asks the same of recordings.
+  fix: VER-4: "Contract fixtures are recorded by the owner in a clean checkout of the commit under test, with no file or environment variable that holds a secret, and are redacted (WSP-8). The owner reads each fixture whole before it is committed, and the PR says so (R)." If more is wanted, such as a CI secret scan of `test/fixtures/`: decision: (a) the owner's review alone; (b) review plus a scan step.
+
+- severity: P2
+  type: gap
+  location: SEC-6 (:857), Appendix D row 4 (:1796); the places that draw repository-derived text: ARM-6 attribution card (:729), WSP-10's working-tree line (:789), WSP-11 :798 and :803, PO-1 :223 and :227, WSP-9 `/diff` (:778)
+  claim: SEC-6 escapes only "text from a soldier, a CLI or a config file", so paths, diffs, and branch and worktree names that come from the repository through harness git have no stated escaping on the cards the owner decides from.
+  scenario: a repository the owner opens has a file whose name holds a bidirectional control (U+202E). A soldier's turn changes it, and the attribution card lists "each path and its diff". Reading A: the path comes from git, not from a soldier, CLI or config file, so it is drawn raw, and the name the owner reads differs from the real one when they answer y. Reading B: "wherever the mod draws it" covers every source. WSP-12 :841 adds "Paths are shown as SEC-6 says" for one line only, which supports reading A everywhere else. No AC tests a path, diff or ref name: M1-AC12 tests a fake claude's text, M1-AC13 tests a config file, and M5-AC6 tests an approval request.
+  evidence: SEC-6 :857 "In text from a soldier, a CLI or a config file"; WSP-12 :841; charter position "files carrying escape sequences"; Appendix D row 4 covers only "A soldier's words"; the actors table :1783 "Repository content | Not trusted".
+  fix: SEC-6: "In every text the mod draws or sends to Claude, whatever its source (a soldier's or a CLI's words, a config file, and paths, diffs, ref names and working-tree paths read from the repository), each character ...". Add an M1-AC11 case (a checkout path with ESC and U+202E fails the turn, and the transcript line shows placeholders) and an M2 attribution-card case. Widen row 4 to "A soldier's words, and repository text, to the Monarch, other soldiers and the terminal".
+

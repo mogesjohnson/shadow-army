@@ -1,0 +1,34 @@
+[
+ [
+  "git passes on to the git it runs inside a submodule), so no ref under `refs/replace/` changes which objects it reads, with `--no-optional-locks`,",
+  "git passes on to the git it runs inside a submodule, so that no ref under `refs/replace/` changes which objects either reads), with `--no-optional-locks`,"
+ ],
+ [
+  "`-c submodule.<name>.ignore=none` for each name that",
+  "`-c submodule.<name>.ignore=none` (for a name that holds `=`, where `-c` would split it, `--config-env=submodule.<name>.ignore=<variable>` with that variable set to `none`) for each name that"
+ ],
+ [
+  "the folder's own, as the post office found them when it started,",
+  "the folder's own, as the post office's `git rev-parse` found them when it started, the only harness git run in the folder without them,"
+ ],
+ [
+  "where git follows the submodule's own `.git` file, or uses its `.git` folder, and any `commondir` in that git folder, each of which is compared (below);",
+  "where git follows the submodule's own `.git` file, or uses its `.git` folder, and any `commondir` in that git folder; that `.git` file, and the config, `hooks/`, `info/` and `commondir` git reads there and in the folder any `commondir` names, are compared (below);"
+ ],
+ [
+  "; and, with nothing else changed, the guard finds a file the soldier touches in that submodule, and one in a submodule nested in it, also with `ignore = all` set for both in `.gitmodules` and `diff.ignoreSubmodules=all` in the user's global git config before the post office starts;",
+  "; so does such a filter that the soldier writes into the config of a submodule nested in that checked-out submodule, and one it writes into the `.git` folder's config of a repository that, when the post office started, was already a gitlink that `.gitmodules` doesn't name, with a file in each touched;\n  - with nothing else changed, the guard finds a file the soldier touches in the checked-out submodule above, and one in each of two submodules nested in it, also with `ignore = all` set for each in the `.gitmodules` that names it, the nested ones' in their parent submodule's, one of them under a name that holds `=`, and `diff.ignoreSubmodules=all` in the user's global git config, all before the post office starts;"
+ ],
+ [
+  "and each one run in the folder gets them naming the folder's own git folder, the folder and its common folder, also with the folder a linked worktree (WSP-10);",
+  "and each one run in the folder, but the start's own `git rev-parse` that finds them, gets them naming the folder's own git folder, the folder and its common folder, also with the folder a linked worktree (WSP-10);"
+ ],
+ [
+  "and makes the edit again while no post office runs.",
+  "and makes the edit again while no post office runs. A submodule checked out while a post office runs, by the owner's own `git submodule add` or `git submodule update --init` or by a soldier's in its snapshot, is one the trusted state doesn't have, and holds harness git as a soldier's change would, since its config can't be told from one a soldier wrote (WSP-10); in M1 the owner checks out submodules in the folder while no post office runs."
+ ],
+ [
+  "| **Version** | 0.26, 2026-10-30:",
+  "| **Version** | 0.27, 2026-10-30: fix check V26-FC1's repairs (among them: a submodule's `ignore` setting overridden also under a name that holds `=`, the replace-refs clause read apart from `--no-optional-locks`, the start's `git rev-parse` named as the only harness git run in the folder without its environment, and a submodule's compared files named as 798 names them (WSP-10); M1-AC10 testing a nested submodule's config, an existing unnamed gitlink's config, the guard's sight with each `ignore` entry in the `.gitmodules` that names it, and the environment case without the start's `git rev-parse`; and residual 15 saying that a submodule checked out while a post office runs holds harness git). 0.26, 2026-10-30:"
+ ]
+]

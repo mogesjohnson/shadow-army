@@ -1,0 +1,30 @@
+[
+ [
+  "Such a change can't be told from one the owner made after the last post office ended, so its card, or in M1 its transcript line, says so, as PO-1 says for a turn's changes.",
+  "Such a change can't be told from one the owner made after the last post office ended, so its card, or in M1 its transcript line, names each file that changed, says the change can't be told from one the owner made, as PO-1 says for a turn's changes, and says how to release the hold: from M2 on the card (below), and in M1 by undoing the change, as in `Shadow Army: harness git held · .git/config changed since the last post office ended · can't be told from your own edit · undo it to go on`."
+ ],
+ [
+  "In M1, before that card exists, the post office's log names the change, and Claude's transcript gets one line saying harness git is held, why, and that undoing the change lets it go on.",
+  "In M1, before that card exists, the post office's log names the change, and Claude's transcript gets one line that names each file that changed and says harness git is held and that undoing the change lets it go on; after a start's comparison, it also says the change can't be told from the owner's own (above)."
+ ],
+ [
+  "Claude's transcript gets WSP-10's line that harness git is held, that the change can't be told from one the owner made since the last post office ended, and that undoing the change lets it go on.",
+  "Claude's transcript gets WSP-10's line that names `.git/config` as the file that changed, says harness git is held and that the change can't be told from one the owner made since the last post office ended, and says that undoing the change lets it go on."
+ ],
+ [
+  "each time, the next use's post office holds harness git before it finishes that turn, and its transcript line says the change can't be told from the owner's (WSP-10).",
+  "each time, the next use's post office holds harness git before it finishes that turn, and its transcript line names the file that changed, says the change can't be told from the owner's and says that undoing it lets harness git go on (WSP-10)."
+ ],
+ [
+  "the next use's post office holds harness git, and the filter never runs (WSP-10);",
+  "the next use's post office holds harness git, its transcript line names the snapshot's `commondir` as the file that changed, and the filter never runs (WSP-10);"
+ ],
+ [
+  "Where managed settings set `disableSideloadFlags`, the first answer alone decides whether a claude soldier has `send` at all (PO-4).",
+  "Where managed settings set `disableSideloadFlags`, the first answer alone decides whether a claude soldier has `send` at all (PO-4).\n- **Q10** (the owner's ideas for M2, 2026-10-30, with D-38 and R-M1-269; recorded as ideas, not requirements) Two additions to the card shown when a start's comparison holds harness git (WSP-10, ARM-6, →M2):\n  - **Accept this config:** the owner confirms the change is theirs; Shadow Army takes the current config as its new trusted state, and harness git goes on.\n  - **Inspect the issue against the project's goals:** an Inspect step on the same card. It shows the diff of the changed file, from the copy kept beside the log (WSP-10), and says plainly what program a filter or similar setting would run and on which files. The Monarch then reads the change with `rules.md`, `agent.md` and the task that was running when the session ended, says whether anything there explains it or it looks out of place, and gives a plain recommendation: accept or undo. Its three safety rules: it advises and never releases, so only the owner accepts, since a soldier that planted a filter can also plant text aimed at the inspector; it reads the file as text and never runs git; and it runs as the Monarch, read-only."
+ ],
+ [
+  "| **Version** | 0.24, 2026-10-30: fix check V23-FC1's repairs (among them:",
+  "| **Version** | 0.25, 2026-10-30: the owner's answer on D-38's carried comparison (V22-FC1 N1: the main fix kept), with the card or M1 transcript line of a start's hold naming each file that changed, saying the change can't be told from the owner's own, and saying how to release the hold (WSP-10, M1-AC10), and two of the owner's ideas for that M2 card recorded as open question Q10. 0.24, 2026-10-30: fix check V23-FC1's repairs (among them:"
+ ]
+]

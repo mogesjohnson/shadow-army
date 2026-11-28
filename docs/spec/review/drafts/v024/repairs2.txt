@@ -1,0 +1,51 @@
+v0.24 batch 2 (fork2, 2026-10-30): fix check V23-FC1's N1, N2, N4, N5 and N9 (R-M1-269, 270, 272, 273, 277), from raw/V23-FC1.md (new findings from line 34). OLD texts are v0.23's (v2@e4cbdb5.md; v2.md at f1ff7ee has the same text, CRLF). pairs2.json holds the same 7 pairs in this order; rep.mjs's dry run on a temporary copy of v2.md: 7 replacements written.
+Notes for main: (1) N1 is narrowed from the fix text: a `commondir` that is missing is a change, not trusted. With no `commondir`, git treats the `worktrees/<id>` entry as its own common folder and reads `worktrees/<id>/config`, which isn't compared (a worktree's metadata is only `gitdir`, `commondir` and `config.worktree`); a soldier that deletes `commondir` and plants `config`, `objects/` and `refs/` there gets the same filter path N1 closes. Cost: a crash mid-removal that leaves an entry without `commondir` holds harness git at the next start, in M1 until the entry is gone. If main prefers the fix text's "missing or", the alternative is to compare every file in this army's `worktrees/<id>` entries. A missing `gitdir` stays trusted (git uses it only for prune and listing). (2) N4's second 1109 pair and N1's 1109 pair share one sentence, so they are one pair (pair 6); the `commondir` case says "ended outright that way" so it runs the carried path, the only one that trusted the redirect. (3) N5's M2-AC5 text says "its note" rather than "the line", since in M2 the card, not a transcript line, says the change can't be told (798). (4) Pairs 1 to 3 touch three different sentences of 798; none overlaps fork3's places (120, 410 to 414, 1154, 1838, 1861, line 6). (5) ledger2.json cites R-M1-271 for N3 (fork3's row, by main's numbering). (6) The other verdicts in raw lines 8-25 (PO-16 413, S7 1053, HOST-2 120, V22 N6 to N8, the Version row) are not in ledger2.json; main gave me only V22 N1 to N5 and D-38.
+
+R-M1-270 (N2): WSP-10 798, the turn-still-open test reads this army's logs and the guard's state, not only the post office's own log.
+<<< OLD
+A post office whose last one's log ends with harness git held, for a change or after a timeout, or with a turn of this army's still open (PO-1),
+=== NEW
+A post office whose last one's log ends with harness git held, for a change or after a timeout, or where this army's logs show a turn still open, its guard not yet closed (PO-1, PO-5),
+>>> END
+
+R-M1-269 (N1): WSP-10 798, a carried start trusts `commondir` and `gitdir` only where they hold what Shadow Army's own command writes.
+<<< OLD
+In that comparison, the `gitdir` and `commondir` of each of this army's snapshots and worktrees that the log names as started, made or being removed are trusted as they are, as PO-1 does for a turn's guard, until Shadow Army's own command removes that snapshot or worktree; a `config.worktree` there is compared like any other config.
+=== NEW
+In that comparison, the `gitdir` and `commondir` of each of this army's snapshots and worktrees that the log names as started, made or being removed are trusted, as PO-1 does for a turn's guard, until Shadow Army's own command removes that snapshot or worktree, but only where each holds what Shadow Army's own command writes there: a `commondir` that names the repository's own common folder, and a `gitdir` that is missing or names the `.git` file of that snapshot or worktree at the path the log gives. Any other content, or a `commondir` that is gone, is a change, since git reads the config of whatever folder `commondir` names, or of the entry itself when there is none; a `config.worktree` there is compared like any other config.
+>>> END
+
+R-M1-273 (N5): WSP-10 798, a trusted file's copy that is gone or doesn't match its logged hash is never diffed from.
+<<< OLD
+Beside the log it keeps a copy of each of those files as last trusted, so a card shown again after a restart gives each file's diff from that state.
+=== NEW
+Beside the log it keeps a copy of each of those files as last trusted, so a card shown again after a restart gives each file's diff from that state. A copy that is gone, or whose hash isn't the one the log gives, is never diffed from: the card, or in M1 the transcript line, names the file, says its last trusted copy is missing or changed, and shows the file as it is now.
+>>> END
+
+R-M1-277 (N9): section 5.1 957, the next start holds a filter only after an end held or with a turn open, as 798 says.
+<<< OLD
+holds harness git at the next check, or at the next start where the post office ended first (WSP-10), so no harness git command that starts after that check runs it.
+=== NEW
+holds harness git at the next check, or, where the post office ended first with harness git held or a turn of this army's still open, at the next start (WSP-10), so no harness git command that starts after that check runs it.
+>>> END
+
+R-M1-272 (N4): M1-AC10 1109, the first case checks the can't-be-told line.
+<<< OLD
+and Claude's transcript gets WSP-10's line that harness git is held and that undoing the change lets it go on.
+=== NEW
+and Claude's transcript gets WSP-10's line that harness git is held, that the change can't be told from one the owner made since the last post office ended, and that undoing the change lets it go on.
+>>> END
+
+R-M1-272 (N4) and R-M1-269 (N1): M1-AC10 1109, the cut-short case ends the post office outright as a normal exit does, adds a guard-timeout hold, and adds a redirected `commondir`.
+<<< OLD
+So it is when the fake mod releases the army while the soldier's turn still runs, before any harness git command has checked the config change: the next use's post office holds harness git before it finishes that turn, and its transcript line also says the change can't be told from the owner's (WSP-10);
+=== NEW
+So it is when the post office is ended outright while the soldier's turn still runs, as Claude Code ends it at a normal exit (PO-7), before any harness git command has checked the config change, and when the config changes while a guard command's timeout holds harness git and the post office then shuts down: each time, the next use's post office holds harness git before it finishes that turn, and its transcript line says the change can't be told from the owner's (WSP-10). So it is, too, when the post office is ended outright that way after the soldier instead points its snapshot's `commondir` at a folder of its own whose config defines a clean filter that a `.gitattributes` in its snapshot names: the next use's post office holds harness git, and the filter never runs (WSP-10);
+>>> END
+
+R-M1-273 (N5): M2-AC5 1206, the card shown again gives the diff from the kept copy and the can't-be-told note, and a changed copy gives no diff.
+<<< OLD
+keeps harness git held and shows the card again, where y lets harness git go on
+=== NEW
+keeps harness git held and shows the card again, with the config file's diff from the copy kept beside the log and its note that the change can't be told from the owner's (with that copy changed first, the card gives no diff, says the copy changed and shows the file as it is now), where y lets harness git go on
+>>> END

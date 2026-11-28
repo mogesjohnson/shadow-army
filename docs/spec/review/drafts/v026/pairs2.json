@@ -1,0 +1,34 @@
+[
+ [
+  "turns off the file system monitor (`core.fsmonitor`), the pager, signing, external diffs and text conversion, as 2.0 GIT-1 lists, with `--no-optional-locks`,",
+  "turns off the file system monitor (`core.fsmonitor`), the pager, signing, external diffs and text conversion, as 2.0 GIT-1 lists, and replace objects (`core.useReplaceRefs=false`, which, unlike `GIT_NO_REPLACE_OBJECTS`, git passes on to the git it runs inside a submodule), so no ref under `refs/replace/` changes which objects it reads, with `--no-optional-locks`,"
+ ],
+ [
+  "and gives each guard and audit command that lists changes `--ignore-submodules=none`, so no setting, `.gitmodules` included, hides a change inside a checked-out submodule;",
+  "and gives each guard and audit command that lists changes `--ignore-submodules=none`, with `-c diff.ignoreSubmodules=none` and `-c submodule.<name>.ignore=none` for each name that a `.gitmodules` there or in a submodule checked out at any depth (below) gives when the command runs, settings that git passes on to the git it runs inside each submodule, where the option doesn't reach, so no setting, `.gitmodules` included, hides a change inside a checked-out submodule at any depth;"
+ ],
+ [
+  "except inside a checked-out submodule, where git follows the submodule's own `.git` file, which is compared (below);",
+  "except inside a checked-out submodule, where git follows the submodule's own `.git` file, or uses its `.git` folder, and any `commondir` in that git folder, each of which is compared (below);"
+ ],
+ [
+  "for each submodule checked out in the folder or in one of this army's snapshots or worktrees, at any depth, its `.git` file and the `config`, `hooks/` and `info/` of the git folder that file names (`modules/<name>/`), which git reads when it runs inside that submodule, as `git status` does,",
+  "for each submodule checked out in the folder or in one of this army's snapshots or worktrees, at any depth, which is each gitlink, in the index of the working tree or submodule it lies in, whose folder has a `.git` file or folder, whether or not `.gitmodules` names it, its `.git` file, where it is one, and the config (includes followed, and any `config.worktree`), `hooks/`, `info/` and any `commondir` of the git folder it uses, which is the one its `.git` file names (`modules/<name>/`) or its `.git` folder, and of the folder that `commondir` names, all of which git reads when it runs inside that submodule, as `git status` does, a submodule that the trusted state doesn't have being a change,"
+ ],
+ [
+  "A worktree folder or `.git` file the turn replaced is put back before any harness git runs there;",
+  "A worktree folder or `.git` file the turn replaced is put back before any harness git runs there, and where WSP-10 held harness git for that `.git` file and the owner answered y, the trusted state takes back the start state's `.git` file with it, so putting it back is no change;"
+ ],
+ [
+  "so does that submodule's `.git` file rewritten to name a git folder of the soldier's own; and the guard finds the file touched in the submodule;",
+  "so does that submodule's `.git` file rewritten to name a git folder of the soldier's own, a `commondir` written into that submodule's git folder naming a folder of the soldier's own whose config defines such a filter, and a repository the soldier makes in the folder with `git init` and adds with `git add` as a gitlink that `.gitmodules` doesn't name, with such a filter in its own `.git` folder's config and a file in it touched; and, with nothing else changed, the guard finds a file the soldier touches in that submodule, and one in a submodule nested in it, also with `ignore = all` set for both in `.gitmodules` and `diff.ignoreSubmodules=all` in the user's global git config before the post office starts;"
+ ],
+ [
+  "each harness git command run in a snapshot gets `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` naming that snapshot's own `worktrees/<id>` entry, its folder and the repository's common folder (WSP-10);",
+  "each harness git command run in a snapshot gets `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` naming that snapshot's own `worktrees/<id>` entry, its folder and the repository's common folder, and each one run in the folder gets them naming the folder's own git folder, the folder and its common folder, also with the folder a linked worktree (WSP-10);"
+ ],
+ [
+  "| **Version** | 0.25, 2026-10-30:",
+  "| **Version** | 0.26, 2026-10-30: fix check V25-FC1's repairs (among them: each checked-out submodule found by its gitlink, whether or not `.gitmodules` names it, with a `.git` folder and any `commondir` compared too and a new submodule a change, no `ignore` setting hiding a change inside a submodule at any depth from the guard, and replace refs off for harness git, inside submodules too (WSP-10); a worktree's `.git` file that the owner trusted with y put back by the revert with no second hold (WSP-12); and M1-AC10 testing an unnamed gitlink, a submodule's `commondir`, the guard's sight into submodules apart from a hold, and harness git's environment in the folder too). 0.25, 2026-10-30:"
+ ]
+]

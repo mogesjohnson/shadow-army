@@ -1,0 +1,18 @@
+[
+ [
+  "or that reports a creation time other than the lock's, means it has ended (PO-7) |",
+  "or that reports a creation time other than the lock's, means it has ended (PO-7). Fix-checked (V23-FC1): FIXED: PO-19 462 agrees with the start time PO-1 210 keeps in the lock and with PO-7 276's watch (`raw/V23-FC1.md`) |"
+ ],
+ [
+  "414, on Windows with `taskkill /t /f` while git's pid and creation time match |",
+  "414, on Windows with `taskkill /t /f` while git's pid and creation time match. Fix-checked (V23-FC1): FIXED, with a test gap: the three platform bullets agree with WSP-10 796, but no AC runs the mod's one-shot sweep of a harness git entry (V23-FC1 N6, P3: R-M1-274); 413 (beyond the fix text) SOUND, with wording: it agrees with 412, 414 and 796, but \"has no coalition\" is untrue, since harness git runs in the post office's coalition (N7, P3: R-M1-275) (`raw/V23-FC1.md`) |"
+ ],
+ [
+  "is untested and M1-AC16 tests it on CI's macOS runners; PO-17 and PO-18 unchanged |",
+  "is untested and M1-AC16 tests it on CI's macOS runners; PO-17 and PO-18 unchanged. Fix-checked (V23-FC1): FIXED: the note names the probe's LaunchAgent and `bootout` and leaves `submit` and `remove` to M1-AC16; its pointer to M1-AC16 is SOUND, since M1-AC16 1151 and 1152 run the real `submit` job, with `remove` and no restart (`raw/V23-FC1.md`) |"
+ ],
+ [
+  "and says that with the mod unchanged it reloads nothing, so the post office runs on (probe P-17) |",
+  "and says that with the mod unchanged it reloads nothing, so the post office runs on (probe P-17). Fix-checked (V23-FC1): SOUND, with a note: HOST-2 120 matches `raw/P-17.md` line 23 and claims nothing after the mod changed, but P-17 ran it on WSL 2 only (V23-FC1 N8, P3: R-M1-276) (`raw/V23-FC1.md`) |"
+ ]
+]
