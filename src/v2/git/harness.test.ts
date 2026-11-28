@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildGitArgs, HarnessGit, HarnessGitHeld, HarnessGitTimeout, LIMIT_MS, osStartStamp, resolveGit } from "./harness.js";
+import { buildGitArgs, HarnessGit, HarnessGitHeld, HarnessGitTimeout, LIMIT_MS, osStartStamp, resolveGit, spawnPosix, type SweepEntry } from "./harness.js";
 import { createFakeClock, createHostileRepo } from "./hostileRepo.testutil.js";
 
 const hang = fileURLToPath(new URL("../../../test/fakes/git-hang.mjs", import.meta.url));
@@ -230,4 +230,53 @@ describe("limits on a monotonic clock", () => {
     expect(harness.held).toBeUndefined();
     await until(() => lines().every((line) => !alive(line.pid)));
   }, 90_000);
+});
+
+describe("each attempt's own sweep entry, gone only once its tree is (C34, C35, C38)", () => {
+  const stamp = async () => "test:1";
+  const repo = { gitDir: "/g", workTree: tmpdir(), commonDir: "/c" };
+
+  it("lands a timed-out attempt's late add, and its removal, before the retry's add (C34)", async () => {
+    // Codex's probe: a sweep slot scoped to the command, whose remove takes no identity.
+    let slot: SweepEntry | undefined, release!: () => void, exit!: (exit: { code: number; signal: null }) => void;
+    const late = new Promise<void>((done) => { release = done; });
+    const trees = { add: vi.fn(async (entry: SweepEntry) => { if (entry.pid === 100) await late; slot = entry; }), remove: vi.fn(async () => { slot = undefined; }) };
+    const first = { ...fakeProcess(async () => {}), pid: 100 };
+    const retry = { ...fakeProcess(async () => {}), pid: 200, exited: new Promise<{ code: number; signal: null }>((done) => { exit = done; }) };
+    const spawned = [first, retry], clock = createFakeClock();
+    const harness = new HarnessGit({ repo, hooksDir: repo.workTree, trees, stamp, clock, git: { file: "git" }, spawn: async () => spawned.shift()! });
+    const result = harness.run(["status"], "guard").catch((error: unknown) => error);
+    await until(() => trees.add.mock.calls.length === 1);
+    run(clock, LIMIT_MS.guard); // the first attempt times out with its add still pending
+    await until(() => spawned.length === 0);
+    await new Promise((done) => setTimeout(done, 50));
+    expect(trees.add).toHaveBeenCalledTimes(1); // the retry's add, and so its git, waits behind the late one
+    release(); // the late add lands, and is removed, before the retry's
+    await until(() => trees.add.mock.calls.length === 2);
+    await new Promise((done) => setTimeout(done, 50));
+    expect(slot?.pid).toBe(200); // the running retry is in the sweep
+    exit({ code: 0, signal: null });
+    expect(await result).toMatchObject({ code: 0 });
+    expect(slot).toBeUndefined();
+    expect(trees.add.mock.calls.map(([entry]) => entry.pid)).toEqual([100, 200]);
+  });
+
+  it.skipIf(process.platform === "win32")("resolves close() only once the whole process group is gone (C35)", async () => {
+    const proc = await spawnPosix({ file: "/bin/sh", args: ["-c", "sleep 30 & sleep 30"], cwd: tmpdir(), env: process.env });
+    await new Promise((done) => setTimeout(done, 200)); // the background sleep has started
+    await proc.close();
+    let code: string | undefined;
+    try { process.kill(-proc.pid, 0); } catch (error) { code = (error as NodeJS.ErrnoException).code; }
+    expect(code).toBe("ESRCH");
+  });
+
+  // Not tested: no Mac runs here (C38). It checks the exact, unrendered start time a time zone can't change.
+  it.runIf(process.platform === "darwin")("stamps a macOS pid with its start time in seconds and microseconds, the same in any time zone (C38)", async () => {
+    const stamp = await osStartStamp(process.pid);
+    expect(stamp).toMatch(/^darwin:\d+\.\d{6}$/);
+    const zone = process.env.TZ;
+    try {
+      for (const tz of ["UTC", "Pacific/Honolulu"]) { process.env.TZ = tz; expect(await osStartStamp(process.pid)).toBe(stamp); }
+    } finally { if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone; }
+  });
 });
