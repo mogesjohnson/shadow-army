@@ -11,9 +11,39 @@ import { createSnapshot } from "../workspace/worktree.js";
 import type { ChannelEvent, ChannelFactory, NativeChannel, RetryNotice, TurnResult, WriteOutcome } from "./channel.js";
 import { ClaudeChannel } from "./claude.js";
 import { buildStandingInstructions, InstructionsTooLargeError, MAX_INSTRUCTION_TOKENS } from "./instructions.js";
-import { redact, SessionLogs } from "./logs.js";
+import { redact, REDACTED, SessionLogs } from "./logs.js";
 import type { LeaseRecord } from "./lease.js";
 import { loadV2Roster, resolveShadowNames } from "./roster.js";
+
+/** Streamed fragments the log holds until their block ends (C1): thinking first, as the CLI streams it. */
+const FRAGMENT_KINDS = ["thinking", "text"] as const;
+const frameOf = (event: ChannelEvent): { type?: unknown; event?: { type?: unknown; delta?: unknown } } | undefined =>
+  event.type === "raw" && event.data && typeof event.data === "object" ? event.data as { type?: unknown; event?: { type?: unknown; delta?: unknown } } : undefined;
+/** A raw stream delta: its text reaches the log only inside the assembled block. */
+const isDelta = (event: ChannelEvent): boolean => frameOf(event)?.type === "stream_event" && frameOf(event)?.event?.delta !== undefined;
+/** The parts of a raw Claude frame that carry a tool call's streamed input or its whole call. */
+interface RawFrame {
+  type?: unknown;
+  parent_tool_use_id?: string | null;
+  event?: { type?: unknown; index?: unknown; content_block?: { type?: unknown; id?: unknown; name?: unknown }; delta?: { type?: unknown; partial_json?: unknown } };
+  message?: { content?: Array<{ type?: unknown; id?: unknown } | null> };
+}
+interface ToolInput { id?: string; name?: string; parts: string[] }
+/** Events that end a streamed block: the block's stop, the whole assistant message, the turn's end or the process's. */
+const endsBlock = (event: ChannelEvent): boolean => {
+  const frame = frameOf(event);
+  return event.type === "turn_end" || event.type === "closed" || frame?.type === "assistant"
+    || (frame?.type === "stream_event" && (frame.event?.type === "content_block_stop" || frame.event?.type === "message_stop"));
+};
+
+/** What a block-ending event ends: one block, or every block of one stream (a message's end or an assistant frame). */
+interface BlockScope { parent: string; block?: string }
+const blockScope = (event: ChannelEvent): BlockScope | undefined => {
+  const frame = frameOf(event) as RawFrame | undefined;
+  if (!frame) return undefined;
+  const parent = frame.parent_tool_use_id ?? "main";
+  return frame.type === "stream_event" && frame.event?.type === "content_block_stop" ? { parent, block: `${parent}:${String(frame.event?.index)}` } : { parent };
+};
 
 export type LeaseEndReason = "Claude Code ended" | "the owner logged out" | "no renewal from the mod for 30 s";
 export interface OfficeEvent { soldier?: string; type: string; data: unknown; }
@@ -127,6 +157,18 @@ export class PostOffice {
   private closePromise?: Promise<void>;
   private logPending = Promise.resolve();
   private logFailure?: Error;
+  /** Session id to its held tool input, by block (C10). */
+  private readonly toolInputs = new Map<string, Map<string, ToolInput>>();
+  /** Sessions whose opening record is being written: a failure there is reported by the refused send alone (C13). */
+  private readonly openingWrites = new Set<string>();
+  /** Sessions whose `opened` record is being written. */
+  private readonly openedWrites = new Set<string>();
+  /** A gap opened by the `opened` record, not yet reported: the first send decides whether it is a refusal (C19). */
+  private readonly heldGaps = new Map<string, Error>();
+  /** Sessions whose send's opening failure already went out as its own refused notice. */
+  private readonly refusalsReported = new Set<string>();
+  /** Session id to its streamed blocks: the block the next fragment belongs to, and the kinds each held block has (C14). */
+  private readonly blocks = new Map<string, { current: string; held: Map<string, Set<(typeof FRAGMENT_KINDS)[number]>> }>();
   private readonly secrets: string[];
   /** Applies and guard captures take turns, so no guard reads the owner's folder halfway through an apply. */
   private applying = Promise.resolve();
@@ -140,7 +182,131 @@ export class PostOffice {
     this.names = loaded.names;
     this.factory = options.channelFactory ?? ((settings) => new ClaudeChannel(settings));
     this.secrets = [options.credential];
-    this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets);
+    this.logs = new SessionLogs(join(root, ".shadow", "v2", "logs"), this.secrets, {
+      onFailure: ({ name, error, type }) => this.logFailed(name, error, type),
+      // C22: a later line closed the opening gap, so no send can be refused for it: it is reported unmarked now.
+      onRecovered: (name) => this.releaseHeldGap(name),
+    });
+  }
+
+  /** C3 (PO-5, M1-AC4): one notice per gap, outside the failing log; the turn carries on. */
+  private logFailed(name: string, error: Error, type: string | undefined): void {
+    // M1-AC4, C32: only a failed `log_failed` record is the same failure (a full disk), already reported once. Any other
+    // office line lost is an ordinary gap, reported whatever notices are queued behind it.
+    if (name === "post-office" && type === "log_failed") return;
+    // C19/C26/C29: a gap the `opened` record opened waits only while a send holds the session: if that send is refused
+    // for the same gap, the one event is marked refused; a send that ends first releases it. A standalone open is reported now.
+    // C30: only the lost record's own kind decides: any other line lost meanwhile is an ordinary, unmarked gap.
+    const paired = [...this.sessions.values()].some((session) => session.id === name && session.active);
+    if (type === "opened" && this.openedWrites.has(name) && paired) { this.heldGaps.set(name, error); return; }
+    const refused = type === "turn_started" && this.openingWrites.has(name);
+    if (refused) this.refusalsReported.add(name);
+    this.reportGap(name, error, refused);
+  }
+
+  private releaseHeldGap(name: string): void {
+    const held = this.heldGaps.get(name);
+    if (held) { this.heldGaps.delete(name); this.reportGap(name, held, false); }
+  }
+
+  /** C20: the session's queued records (its `opened` one too) settle first, so their gap is reported while the session is known. */
+  private async settleLogs(session: Session): Promise<void> {
+    await this.logPending;
+    this.releaseHeldGap(session.id);
+  }
+
+  private reportGap(name: string, error: Error, refused: boolean): void {
+    const soldier = [...this.sessions.values()].find((session) => session.id === name)?.spec.key;
+    // C13/C15: when the opening write is what stops the send, the event still goes out (PO-5) marked refused; only the duplicate transcript line is dropped.
+    const notice = redact({ ...(soldier ? { soldier } : {}), type: "log_failed",
+      data: { log: name, ...(refused ? { refused: true } : {}), reason: `the log ${name} could not be written; ${refused ? "the send was refused" : "later lines are retried and the gap is counted"}: ${error.message}` } }, this.secrets) as OfficeEvent;
+    try { this.options.onEvent?.(notice); } catch { /* the owner's handler cannot stop the turn */ }
+    if (name === "post-office" || refused) return;
+    void this.logs.write("post-office", { ...notice, time: new Date().toISOString() });
+  }
+
+  /** A native event: a streamed fragment is forwarded now and logged whole when its block ends (C1, M1-AC2). */
+  private recordNative(session: Session, event: ChannelEvent): void {
+    const soldier = session.spec.key;
+    this.trackToolInput(session, event);
+    this.trackBlock(session, event);
+    const kind = FRAGMENT_KINDS.find((name) => name === event.type);
+    if ((kind && typeof event.data === "string") || isDelta(event)) {
+      this.options.onEvent?.(redact({ soldier, ...event }, this.secrets) as OfficeEvent);
+      if (kind) { const text = event.data as string; const block = this.holdBlock(session, kind); this.logPending = this.logPending.then(() => this.logs.fragment(session.id, `${kind}|${block}`, text)); }
+      return;
+    }
+    if (endsBlock(event)) this.flushBlocks(session, event.type === "turn_end" || event.type === "closed", blockScope(event));
+    this.record({ soldier, ...event }, session);
+  }
+
+  /** C14: a raw stream frame names the block the next fragment belongs to (the process emits the frame first). */
+  private trackBlock(session: Session, event: ChannelEvent): void {
+    const frame = event.type === "raw" && event.data && typeof event.data === "object" ? event.data as RawFrame : undefined;
+    if (frame?.type !== "stream_event" && frame?.type !== "assistant") return;
+    const state = this.blocks.get(session.id) ?? { current: "main:message", held: new Map() };
+    this.blocks.set(session.id, state);
+    state.current = `${frame.parent_tool_use_id ?? "main"}:${frame.type === "assistant" ? "message" : String(frame.event?.index)}`;
+  }
+
+  private holdBlock(session: Session, kind: (typeof FRAGMENT_KINDS)[number]): string {
+    const state = this.blocks.get(session.id) ?? { current: "main:message", held: new Map() };
+    this.blocks.set(session.id, state);
+    const kinds = state.held.get(state.current) ?? new Set();
+    kinds.add(kind);
+    state.held.set(state.current, kinds);
+    return state.current;
+  }
+
+  /** C10 (PO-5): a tool call's streamed input is held by its block until the whole call arrives; the delta itself is never logged. */
+  private trackToolInput(session: Session, event: ChannelEvent): void {
+    const frame = event.type === "raw" && event.data && typeof event.data === "object" ? event.data as RawFrame : undefined;
+    if (frame?.type !== "stream_event" && frame?.type !== "assistant") return;
+    const held = this.toolInputs.get(session.id) ?? new Map<string, ToolInput>();
+    this.toolInputs.set(session.id, held);
+    if (frame.type === "assistant") {
+      // The whole call is logged from this frame, so its streamed input is no longer needed.
+      const ids = new Set((Array.isArray(frame.message?.content) ? frame.message.content : []).filter((part) => part?.type === "tool_use").map((part) => part?.id));
+      for (const [key, input] of held) if (input.id !== undefined && ids.has(input.id)) held.delete(key);
+      return;
+    }
+    const key = `${frame.parent_tool_use_id ?? "main"}:${String(frame.event?.index)}`;
+    const block = frame.event?.content_block;
+    if (frame.event?.type === "content_block_start" && block?.type === "tool_use") {
+      // A block index is reused by the next message: an earlier call still held there was never finished.
+      const earlier = held.get(key);
+      if (earlier) this.writeToolInputs(session, [earlier]);
+      held.set(key, { id: typeof block.id === "string" ? block.id : undefined, name: typeof block.name === "string" ? block.name : undefined, parts: [] });
+    } else if (frame.event?.delta?.type === "input_json_delta" && typeof frame.event.delta.partial_json === "string") {
+      const input = held.get(key) ?? { parts: [] };
+      input.parts.push(frame.event.delta.partial_json);
+      held.set(key, input);
+    }
+  }
+
+  /** Writes unfinished tool input whole, joined before it is redacted, so a secret split across deltas is still caught. */
+  private writeToolInputs(session: Session, inputs: ToolInput[]): void {
+    if (inputs.length === 0) return;
+    this.logPending = this.logPending.then(async () => {
+      for (const { id, name, parts } of inputs) {
+        await this.logs.write(session.id, { soldier: session.spec.key, type: "tool_input", unfinished: true, id, name, input: parts.join(""), time: new Date().toISOString() });
+      }
+    }).catch(() => {});
+  }
+
+  /** Writes each held block whole, redacted as one text; at the turn's end, tool input whose call never arrived too. */
+  private flushBlocks(session: Session, turnOver = false, scope?: BlockScope): void {
+    // C14: only the block that ended (or the stream a whole message ended), never another stream's.
+    const held = this.blocks.get(session.id)?.held ?? new Map<string, Set<(typeof FRAGMENT_KINDS)[number]>>();
+    const ended = [...held.entries()].filter(([key]) => turnOver || !scope || (scope.block ? key === scope.block : key.startsWith(`${scope.parent}:`)));
+    for (const [key] of ended) held.delete(key);
+    if (ended.length > 0) this.logPending = this.logPending.then(async () => {
+      for (const [key, kinds] of ended) for (const kind of FRAGMENT_KINDS) if (kinds.has(kind)) await this.logs.endMessage(session.id, `${kind}|${key}`, { soldier: session.spec.key, type: kind, time: new Date().toISOString() });
+    }).catch(() => {});
+    if (turnOver) this.blocks.delete(session.id);
+    if (!turnOver) return;
+    this.writeToolInputs(session, [...(this.toolInputs.get(session.id)?.values() ?? [])]);
+    this.toolInputs.delete(session.id);
   }
 
   static async create(options: OfficeOptions): Promise<PostOffice> {
@@ -160,8 +326,11 @@ export class PostOffice {
   private record(event: OfficeEvent, session?: Session): void {
     const safe = redact(event, this.secrets) as OfficeEvent;
     this.options.onEvent?.(safe);
+    const opening = session && event.type === "opened" ? session.id : undefined;
     this.logPending = this.logPending.then(async () => {
-      await this.logs.write(session ? session.id : "post-office", { ...safe, time: new Date().toISOString() });
+      if (opening) this.openedWrites.add(opening);
+      try { await this.logs.write(session ? session.id : "post-office", { ...safe, time: new Date().toISOString() }); }
+      finally { if (opening) this.openedWrites.delete(opening); }
     }).catch((error: unknown) => {
       this.logFailure = error instanceof Error ? error : new Error(String(error));
       // A broken audit must stop further work; close also resolves a turn waiting for native output.
@@ -185,6 +354,7 @@ export class PostOffice {
       if (existing.active) throw new Error("cannot reconnect while the previous turn is finalizing");
       await existing.channel?.close();
       await this.releaseWrite(existing);
+      await this.settleLogs(existing);
       // A fresh snapshot keeps partial work in the previous one, never silently repeats it.
       this.sessions.delete(key);
       existing = undefined;
@@ -290,7 +460,7 @@ export class PostOffice {
     session.channel = this.factory({ cwd: session.cwd, model: session.spec.model, autonomy: session.spec.autonomy, instructions: session.instructions,
       onEvent: (event: ChannelEvent) => {
         if (generation !== session.generation) return;
-        this.record({ soldier: session.spec.key, ...event }, session);
+        this.recordNative(session, event);
         if (event.type === "error" && (event.data as { kind?: string } | undefined)?.kind === "login_needed") session.loginNeeded = true;
         if (event.type === "retry") this.record({ soldier: session.spec.key, type: "notice", data: { kind: "retry", message: retryMessage(session.spec.key, session.spec.cli, event.data as RetryNotice) } }, session);
         if (event.type === "closed") {
@@ -367,43 +537,66 @@ export class PostOffice {
     session.used = true;
     const next = (async () => {
       // WSP-2: fail closed before the brief goes out when the claims may have changed hands.
-      if (!(await this.renewLease(session))) {
-        session.down = true;
-        await session.channel?.close();
-        const reason = "the claims lease was lost, so the files may have changed hands; reconnect to start fresh";
-        this.record({ soldier: key, type: "down", data: { reason } }, session);
-        throw new Error(`${key}: ${reason}`);
-      }
+      if (!(await this.renewLease(session))) await this.leaseLostDown(session);
       // A copied credential in a brief must never enter a soldier's stdin/context either.
-      return this.run(session, text.replace(new RegExp(this.secrets[0]!, "gi"), "[REDACTED]"));
+      return this.run(session, text.replace(new RegExp(this.secrets[0]!, "gi"), REDACTED));
     })();
     session.active = next;
     try { return await next; } finally {
       session.active = undefined;
+      // C29: a send that ended before its opening could account for a held gap (a lost lease) reports it unmarked now.
+      this.releaseHeldGap(session.id);
       if (session.restartPending) this.restart(session);
     }
   }
 
+  /** WSP-2: a lease known lost before the turn's opening takes the session down and refuses the send; nothing is opened. */
+  private async leaseLostDown(session: Session): Promise<never> {
+    session.down = true;
+    await session.channel?.close();
+    const reason = "the claims lease was lost, so the files may have changed hands; reconnect to start fresh";
+    this.record({ soldier: session.spec.key, type: "down", data: { reason } }, session);
+    throw new Error(`${session.spec.key}: ${reason}`);
+  }
+
   private async run(session: Session, text: string): Promise<TurnResult> {
+    // C2 (PO-5, M1-AC4): the turn's opening record is written, after everything before it, before the soldier gets the message.
+    await this.logPending;
+    // C28: the turn's own preparation is done before its opening, so only the delivery follows its last path check.
     // Both checks run even after transport failure/cancellation. M2 extends this native result
     // boundary to actual background jobs; persistent session services must survive ordinary turns.
     // A write session has no read-only snapshot to guard: the claim audit takes its place.
     const snapshotBefore = session.write ? undefined : await captureState(session.cwd);
     session.guardBase = await this.exclusive(() => captureState(this.root));
-    // WSP-2: a lease that could not be renewed since the last turn may have changed hands.
-    await this.renewLease(session);
+    // WSP-2 (C31): a lease that could not be renewed since the last turn may have changed hands: no opening is written.
+    if (!(await this.renewLease(session))) { session.guardBase = undefined; await this.leaseLostDown(session); }
+    this.openingWrites.add(session.id);
+    const opened = await this.logs.write(session.id, { soldier: session.spec.key, type: "turn_started", data: { text }, time: new Date().toISOString() }).finally(() => this.openingWrites.delete(session.id));
+    const held = this.heldGaps.get(session.id);
+    this.heldGaps.delete(session.id);
+    const reported = this.refusalsReported.delete(session.id);
+    if (held) this.reportGap(session.id, held, !opened.written);
+    // A refusal inside a gap already reported (a standalone open's, C26) still gets its one refused line.
+    else if (!opened.written && !reported) this.reportGap(session.id, opened.error ?? new Error("unknown error"), true);
+    if (!opened.written) {
+      session.guardBase = undefined;
+      throw new Error(`message not sent: the session log could not record the turn's start (${String(redact(opened.error?.message ?? "unknown error", this.secrets))})`);
+    }
     let result: TurnResult;
     try {
       this.check();
       if (session.write?.leaseLost) {
-        // C2: the claims may now be someone else's, so nothing reaches the CLI; a fresh open claims them again.
+        // C2: lost while the opening was written (the renewal above passed): the claims may now be someone else's, so nothing reaches the CLI; a fresh open claims them again.
         session.down = true;
         await session.channel!.close();
         result = { status: "failed", text: "", refusal: false, error: { kind: "other", message: "the claims lease was lost before this turn, so nothing was sent; reconnect to claim the files again" } };
-      } else result = session.stopRequested ? { status: "interrupted", text: "", refusal: false } : await session.channel!.send(text);
+      } else if (session.stopRequested) result = { status: "interrupted", text: "", refusal: false };
+      else result = await session.channel!.send(text);
     } catch (error) {
       result = { status: "failed", text: "", refusal: false, error: { kind: "transport", message: String(error) } };
     }
+    // A stream that ended without closing its block still has its fragments, and unfinished tool input, logged whole.
+    this.flushBlocks(session, true);
     if (result.status === "completed") session.loginNeeded = false;
     else if (result.error?.kind === "login_needed") session.loginNeeded = true;
     let changes: string[];
@@ -536,8 +729,10 @@ export class PostOffice {
     await session.restart;
     if (session.containmentFailed) throw new Error(`native descendants for ${key} were not confirmed stopped`);
     await this.releaseWrite(session);
-    if (this.sessions.get(key) === session) this.sessions.delete(key);
     this.record({ soldier: key, type: "session_closed", data: { cwd: session.cwd, retained: true } }, session);
+    // C19/C20: a gap no send claimed, or the close record's own, is reported with its soldier before the session goes.
+    await this.settleLogs(session);
+    if (this.sessions.get(key) === session) this.sessions.delete(key);
   }
 
   /** Runs `fn` alone among applies and checkout-guard captures. */
@@ -562,6 +757,10 @@ export class PostOffice {
       this.closed = true;
       await Promise.allSettled(this.opening.values());
       const ended = await Promise.allSettled([...this.sessions.keys()].map((key) => this.closeSession(key)));
+      await this.logPending;
+      // C19: a gap no send claimed is reported unmarked before the office ends.
+      for (const [name, error] of this.heldGaps) this.reportGap(name, error, false);
+      this.heldGaps.clear();
       this.record({ type: "closed", data: { retained: true } });
       await this.logPending;
       const failed = ended.filter((item): item is PromiseRejectedResult => item.status === "rejected");

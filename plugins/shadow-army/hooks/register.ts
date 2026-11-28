@@ -130,6 +130,15 @@ function event($: EngineInterface, runtime: Runtime, line: string): void {
     runtime.accept();
     return;
   }
+  // PO-5: a gap in a log gets one line in Claude's transcript, also while the office closes. The post office sends one event a gap.
+  if (value.type === "log_failed") {
+    // C18: a refused opening write is marked `refused`; the /send refusal already shows it, so a second line would double it.
+    if (value.data?.refused === true) return;
+    // Only what would break the line becomes a space: \s would also swallow Cc and Cf characters that SEC-6 shows.
+    const reason = String(value.data?.reason ?? "unknown error").replace(/[\n\t\u2028\u2029]+/g, " ");
+    $.ui.log(safeText(show(`Shadow Army: logs not written · ${reason}`), runtime.credential));
+    return;
+  }
   // M1 observes the event stream without adding another model turn/context.
   // The richer pane and transcript cards belong to the later mod milestones.
   // A CLI backing off before an API retry shows as a retry, not as an error: its own plain line.

@@ -1,5 +1,6 @@
 import * as fsPromises from "node:fs/promises";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -49,14 +50,14 @@ describe("M1 office integration with synthetic native processes", () => {
     expect(JSON.parse(second.text).history).toEqual(["inspect", "inspect"]);
     expect(JSON.parse(second.text).args.join(" ")).not.toContain(credential);
     const secret = await office.send("scout", `echo ${credential}`);
-    expect(secret.text).toContain("[REDACTED]");
+    expect(secret.text).toContain("[redacted]");
     await office.send("scout", `echo ${credential.toUpperCase()}`);
     const inspected = JSON.parse((await office.send("scout", "inspect")).text);
-    expect(inspected.history).toContain("echo [REDACTED]");
+    expect(inspected.history).toContain("echo [redacted]");
     expect(inspected.history.join(" ").toLowerCase()).not.toContain(credential);
     // Inspecting only office replies could hide an input leak because replies are redacted too.
     expect(deliveries.join(" ").toLowerCase()).not.toContain(credential);
-    expect(deliveries.filter((text) => text === "echo [REDACTED]")).toHaveLength(2);
+    expect(deliveries.filter((text) => text === "echo [redacted]")).toHaveLength(2);
     expect(JSON.stringify(events)).not.toContain(credential);
     await office.close();
     const logs = join(repo.dir, ".shadow", "v2", "logs");
@@ -564,6 +565,396 @@ describe("M1a write path: claims, claim audit and checkout guard (M1-AC24, M1-AC
     await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
     expect(turn).toBe(2);
     expect(events.some((event) => event.type === "down")).toBe(true);
+  }, 30_000);
+
+  it("reports a held opened-record gap unmarked when the send ends on a lost lease before its opening (C29, PO-5)", async () => {
+    const { repo, office, events } = await writer({});
+    // A file where the logs folder belongs: the `opened` record's write and its retry fail.
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("tank", { claims: ["src/a.ts"] });
+    const held = (office as unknown as { heldGaps: Map<string, Error> }).heldGaps;
+    // The renewal fails only once the send holds the opened-record gap, so the send ends before run() could account for it.
+    const renew = vi.spyOn(Locks.prototype, "renew").mockImplementation(async () => { await until(() => held.size > 0); return false; });
+    try {
+      await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
+    } finally { renew.mockRestore(); }
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ soldier: "tank" });
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+    expect(held.size).toBe(0);
+    // The office stays open: the lost lease takes only that session down.
+    expect(() => (office as unknown as { check: () => void }).check()).not.toThrow();
+  }, 30_000);
+
+  it("refuses the send with no opening written when the renewal just before the opening fails (C31, WSP-2)", async () => {
+    let delivered = 0;
+    const { repo, office } = await writer({}, async () => { delivered++; });
+    const opened = await office.open("tank", { claims: ["src/a.ts"] });
+    // send()'s own renewal passes; the one in run(), after the guard preparation, fails.
+    let renewals = 0;
+    const renew = vi.spyOn(Locks.prototype, "renew").mockImplementation(async () => ++renewals === 1);
+    try {
+      await expect(office.send("tank", "edit")).rejects.toThrow("lease was lost");
+    } finally { renew.mockRestore(); }
+    expect(renewals).toBe(2);
+    expect(delivered).toBe(0);
+    const log = await readFile(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`), "utf8");
+    expect(log).not.toContain('"turn_started"');
+  }, 30_000);
+});
+
+describe("the session log on the office's real path (Codex review 7 on #116)", () => {
+  const records = async (dir: string, session: string): Promise<Array<Record<string, unknown>>> =>
+    (await readFile(join(dir, ".shadow", "v2", "logs", `${session}.jsonl`), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const quiet = (send: NativeChannel["send"]): NativeChannel => ({ send, async interrupt() {}, async respondApproval() {}, async close() {} });
+  /** Puts a folder where the session's log file belongs, once its queued `opened` record is in, so every later append fails. */
+  const breakLog = async (path: string): Promise<void> => {
+    await until(async () => (await readFile(path, "utf8").catch(() => "")).includes('"opened"'));
+    await rm(path, { force: true });
+    await mkdir(path, { recursive: true });
+  };
+
+  // A real native process: session containment is Windows-only in M1a (D-34), as for the other fake-CLI tests.
+  windowsOnly("logs streamed text and thinking as whole blocks, so a credential split across deltas from a fake CLI is redacted (C1, M1-AC2)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const fakeDir = await mkdtemp(join(tmpdir(), "shadow-split-fake-"));
+    const fake = join(fakeDir, "split-claude.mjs");
+    const [a, b, c] = [credential.slice(0, 20), credential.slice(20, 44), credential.slice(44)];
+    await writeFile(fake, `import { createInterface } from "node:readline";
+if (process.argv.includes("--version")) { process.stdout.write("2.1.295 (Claude Code)\\n"); process.exit(0); }
+const emit = (frame) => process.stdout.write(JSON.stringify({ session_id: "split", ...frame }) + "\\n");
+const delta = (delta) => emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta } });
+for await (const line of createInterface({ input: process.stdin })) {
+  const frame = JSON.parse(line);
+  if (frame.type === "control_request") { emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id, response: {} } }); emit({ type: "system", subtype: "init", model: "fake-claude", permissionMode: "plan" }); continue; }
+  for (const part of ["think ${a}", "${b}", "${c} done"]) delta({ type: "thinking_delta", thinking: part });
+  emit({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_stop" } });
+  for (const part of ["key ${a}", "${b}", "${c} end"]) delta({ type: "text_delta", text: part });
+  emit({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "key ${credential} end" }], usage: { input_tokens: 1 } } });
+  emit({ type: "result", subtype: "success", is_error: false, user_message_uuid: frame.uuid, result: "key ${credential} end", terminal_reason: "completed", stop_reason: "end_turn" });
+}
+`);
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: (options) => new ClaudeChannel({ ...options, interruptTimeoutMs: 500, command: { file: process.execPath, args: [fake] } }) });
+    offices.push(office);
+    try {
+      const opened = await office.open("scout");
+      expect((await office.send("scout", "split it")).status).toBe("completed");
+      await office.close();
+      const file = await readFile(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`), "utf8");
+      for (const part of [a, b, c]) expect(file).not.toContain(part);
+      const logged = await records(repo.dir, opened.session);
+      expect(logged).toContainEqual(expect.objectContaining({ soldier: "scout", type: "thinking", text: "think [redacted] done" }));
+      expect(logged).toContainEqual(expect.objectContaining({ soldier: "scout", type: "text", text: "key [redacted] end" }));
+      expect(logged.findIndex((record) => record.type === "text")).toBeLessThan(logged.findIndex((record) => record.type === "turn_end"));
+    } finally {
+      await rm(fakeDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("refuses to send when the turn's opening record cannot be written, with one reason, and the soldier never gets it (C2, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    const opened = await office.open("scout");
+    await breakLog(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`));
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent: the session log could not record the turn/);
+    expect(delivered).toEqual([]);
+  }, 30_000);
+
+  it("keeps the log_failed event, marked refused, when the opening write stops the send; no duplicate transcript line (C13, C15, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    const opened = await office.open("scout");
+    await breakLog(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`));
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).toMatchObject({ log: opened.session, refused: true, reason: expect.stringContaining("the send was refused") });
+    await office.close();
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toEqual([]);
+  }, 30_000);
+
+  it("marks the one gap event refused when the opened write fails first and the send's opening write fails in the same gap (C19, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    // A file where the logs folder belongs: every append fails, from the `opened` record on.
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    expect(delivered).toEqual([]);
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).toMatchObject({ refused: true });
+  }, 30_000);
+
+  it("still reports an opened-record gap no send claimed, unmarked, when the office closes (C19, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    await office.close();
+    // C32: the office's own log is broken too, so its first ordinary line lost (the close record) gets its own notice.
+    const failed = events.filter((event) => event.type === "log_failed" && (event.data as { log: string }).log !== "post-office");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+  }, 30_000);
+
+  it("reports a standalone open's failed opened record after its retry while idle, and a later refused send apart (C26, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    // No send, no other record, no close: the notice still comes, once the retry has failed.
+    await until(() => events.some((event) => event.type === "log_failed"));
+    expect((office.army() as Array<{ key: string; state: string }>).find((soldier) => soldier.key === "scout")?.state).toBe("idle");
+    // A later send refused in that same, already reported gap still gets its one refused line.
+    await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    await office.close();
+    // C32: the office's own log is broken the same way, and its first ordinary line lost after the unreported notice's gap gets its notice too.
+    const failed = events.filter((event) => event.type === "log_failed" && (event.data as { log: string }).log !== "post-office");
+    expect(failed).toHaveLength(2);
+    expect(failed[0]).toMatchObject({ soldier: "scout" });
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+    expect(failed[1]!.data).toMatchObject({ refused: true });
+    expect(events.filter((event) => event.type === "log_failed" && (event.data as { log: string }).log === "post-office")).toHaveLength(1);
+  }, 30_000);
+
+  it("reports an ordinary line lost while the opening is written as an unmarked gap, and delivers the send (C30, PO-5, M1-AC4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    const opened = await office.open("scout");
+    type Logs = { append: (path: string, text: string) => Promise<void>; write: (name: string, data: unknown) => Promise<unknown> };
+    const internals = office as unknown as { logs: Logs; openingWrites: Set<string> };
+    const append = internals.logs.append;
+    // A background result lost to a full disk on both tries, while the send's opening is under way.
+    internals.logs.append = async (path, text) => {
+      if (!text.includes("background done")) return append(path, text);
+      await until(() => internals.openingWrites.has(opened.session));
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    };
+    const sending = office.send("scout", "do it");
+    void internals.logs.write(opened.session, { soldier: "scout", type: "result", data: { text: "background done" } });
+    expect((await sending).status).toBe("completed");
+    expect(delivered).toEqual(["do it"]);
+    await office.close();
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
+  }, 30_000);
+
+  it("reports an ordinary office line lost while a soldier's notice is queued behind it, apart from that notice (C32, PO-5, M1-AC4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    const { session } = await office.open("scout");
+    type Logs = { append: (path: string, text: string) => Promise<void>; write: (name: string, data: unknown) => Promise<unknown> };
+    const internals = office as unknown as { logs: Logs };
+    const append = internals.logs.append;
+    internals.logs.append = async (path, text) => {
+      if (text.includes("soldier line")) throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+      // The office's own ordinary line fails on both tries, only once the soldier's notice is queued behind it.
+      if (text.includes("command_refused")) { await until(() => events.some((event) => event.type === "log_failed")); throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" }); }
+      return append(path, text);
+    };
+    void internals.logs.write("post-office", { soldier: "scout", type: "command_refused", data: { reason: "office line" } });
+    void internals.logs.write(session, { soldier: "scout", type: "note", data: { text: "soldier line" } });
+    await until(() => events.filter((event) => event.type === "log_failed").length === 2);
+    expect(events.filter((event) => event.type === "log_failed").map((event) => (event.data as { log: string }).log).sort()).toEqual(["post-office", session].sort());
+    // The office's next line writes the soldier's notice after one gap line that counts the lost record.
+    internals.logs.append = append;
+    await office.close();
+    const written = await records(repo.dir, "post-office");
+    expect(written.filter((record) => record.type === "log-gap")).toMatchObject([{ lost: 1 }]);
+    expect(written.filter((record) => record.type === "log_failed")).toHaveLength(1);
+  }, 30_000);
+
+  it("reports an opened-record gap with its soldier when its session closes during the retry, the office still up (C20, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async () => ({ status: "completed", text: "ok", refusal: false })) });
+    offices.push(office);
+    await rm(join(repo.dir, ".shadow", "v2", "logs"), { recursive: true, force: true });
+    await writeFile(join(repo.dir, ".shadow", "v2", "logs"), "not a folder");
+    await office.open("scout");
+    // No await between: the close starts while the `opened` record's first try or its 100 ms retry is pending.
+    await office.closeSession("scout");
+    const failed = events.filter((event) => event.type === "log_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ soldier: "scout" });
+    expect(failed[0]!.data).not.toHaveProperty("refused");
+  }, 30_000);
+
+  it("reports a recovered opened-record gap unmarked and the send's own refused gap apart (C22, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const delivered: string[] = [];
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: () => quiet(async (text) => { delivered.push(text); return { status: "completed", text: "ok", refusal: false }; }) });
+    offices.push(office);
+    const logsDir = join(repo.dir, ".shadow", "v2", "logs");
+    await rm(logsDir, { recursive: true, force: true });
+    await writeFile(logsDir, "not a folder");
+    const { session } = await office.open("scout");
+    // C26: no send reserved the session, so its opening gap is reported once its retry fails.
+    await until(() => events.some((event) => event.type === "log_failed"));
+    // The folder comes back and one session line goes in: the opening gap is over.
+    await rm(logsDir, { force: true });
+    await mkdir(logsDir);
+    expect((await (office as unknown as { logs: { write: (name: string, data: unknown) => Promise<{ written: boolean }> } }).logs.write(session, { type: "note" })).written).toBe(true);
+    // Then the send's own opening row cannot be flushed: a new gap, which refuses the send.
+    const probe = await fsPromises.open(join(logsDir, "probe"), "w");
+    const sync = vi.spyOn(Object.getPrototypeOf(probe) as { sync: () => Promise<void> }, "sync").mockRejectedValue(new Error("EIO: flush failed"));
+    await probe.close();
+    try {
+      await expect(office.send("scout", "do it")).rejects.toThrow(/^message not sent/);
+    } finally { sync.mockRestore(); }
+    expect(delivered).toEqual([]);
+    const failed = events.filter((event) => event.type === "log_failed").map((event) => event.data as Record<string, unknown>);
+    expect(failed).toHaveLength(2);
+    expect(failed[0]).not.toHaveProperty("refused");
+    expect(failed[1]).toMatchObject({ refused: true });
+  }, 30_000);
+
+  it("flushes each streamed block at its own stop, so interleaved streams are not mixed (C14, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const raw = (frame: Record<string, unknown>): void => emit({ type: "raw", data: { session_id: "c14", ...frame } });
+    const stream = (parent: string | null, index: number, event: Record<string, unknown>): void => raw({ type: "stream_event", parent_tool_use_id: parent, event: { index, ...event } });
+    const delta = (parent: string | null, index: number, kind: "text" | "thinking", text: string): void => {
+      stream(parent, index, { type: "content_block_delta", delta: kind === "text" ? { type: "text_delta", text } : { type: "thinking_delta", thinking: text } });
+      emit({ type: kind, data: text });
+    };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        delta(null, 0, "text", "main one ");
+        delta("sub", 0, "text", "sub one ");
+        stream("sub", 0, { type: "content_block_stop" });
+        delta(null, 0, "text", "main two");
+        stream(null, 0, { type: "content_block_stop" });
+        return { status: "completed", text: "x", refusal: false };
+      }); } });
+    offices.push(office);
+    const opened = await office.open("scout");
+    await office.send("scout", "go");
+    await office.close();
+    const texts = (await records(repo.dir, opened.session)).filter((record) => record.type === "text").map((record) => record.text);
+    expect(texts).toEqual(["sub one ", "main one main two"]);
+  }, 30_000);
+
+  it("reports a log that fails mid-turn once in the event stream and the office log, and the turn carries on (C3, M1-AC4)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    let path = "";
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        // The turn's opening record is in; the log breaks mid-turn.
+        await rm(path, { force: true });
+        await mkdir(path, { recursive: true });
+        for (let n = 0; n < 3; n++) emit({ type: "tool_result", data: { n } });
+        return { status: "completed", text: "done", refusal: false };
+      }); } });
+    offices.push(office);
+    const opened = await office.open("scout");
+    path = join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`);
+    const result = await office.send("scout", "work");
+    expect(result.status).toBe("completed");
+    const notices = events.filter((event) => event.type === "log_failed");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ soldier: "scout", data: { log: opened.session } });
+    await office.close();
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
+  }, 30_000);
+
+  it("logs a tool call's input whole and marked unfinished when the stream ends before the call arrives, and not twice when it does (C10, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const [a, b] = [credential.slice(0, 30), credential.slice(30)];
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const raw = (frame: Record<string, unknown>): void => emit({ type: "raw", data: { session_id: "c10", parent_tool_use_id: null, ...frame } });
+    const call = (id: string, parts: string[]): void => {
+      raw({ type: "stream_event", event: { type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name: "Write", input: {} } } });
+      for (const part of parts) raw({ type: "stream_event", event: { type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: part } } });
+    };
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster,
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        call("toolu_done", ['{"content":"', "fine", '"}']);
+        raw({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_done", name: "Write", input: { content: "fine" } }] } });
+        call("toolu_cut", ['{"content":"key ', a, b, " end"]);
+        return { status: "interrupted", text: "", refusal: false };
+      }); } });
+    offices.push(office);
+    const opened = await office.open("scout");
+    await office.send("scout", "write it");
+    await office.close();
+    const file = await readFile(join(repo.dir, ".shadow", "v2", "logs", `${opened.session}.jsonl`), "utf8");
+    for (const part of [a, b]) expect(file).not.toContain(part);
+    const inputs = (await records(repo.dir, opened.session)).filter((record) => record.type === "tool_input");
+    expect(inputs).toEqual([expect.objectContaining({ soldier: "scout", unfinished: true, id: "toolu_cut", name: "Write", input: '{"content":"key [redacted] end' })]);
+  }, 30_000);
+
+  it("writes one log_failed line per failure: one when the session and office logs fail together, two for two failures (M1-AC4, PO-5)", async () => {
+    const repo = makeRepo(); repos.push(repo);
+    const events: OfficeEvent[] = [];
+    const logs = join(repo.dir, ".shadow", "v2", "logs");
+    const notices = (): OfficeEvent[] => events.filter((event) => event.type === "log_failed");
+    const swap = async (path: string, broken: boolean): Promise<void> => {
+      await rm(path, { recursive: true, force: true });
+      if (broken) await mkdir(path, { recursive: true });
+    };
+    let session = "";
+    let both = true;
+    let emit: ChannelOptions["onEvent"] = () => {};
+    const office = await PostOffice.create({ cwd: repo.dir, credential, roster, onEvent: (event) => events.push(event),
+      channelFactory: (options) => { emit = options.onEvent; return quiet(async () => {
+        const seen = notices().length;
+        await swap(join(logs, `${session}.jsonl`), true);
+        if (both) await swap(join(logs, "post-office.jsonl"), true);
+        emit({ type: "tool_result", data: { n: 1 } });
+        await until(async () => notices().length > seen);
+        // Long enough for the office log's own failure, had it sent a second notice.
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        await swap(join(logs, `${session}.jsonl`), false);
+        if (both) await swap(join(logs, "post-office.jsonl"), false);
+        return { status: "completed", text: "done", refusal: false };
+      }); } });
+    offices.push(office);
+    session = (await office.open("scout")).session;
+    await office.send("scout", "one failure, both logs");
+    expect(notices()).toHaveLength(1);
+    both = false;
+    await office.send("scout", "second failure");
+    expect(notices()).toHaveLength(2);
+    await office.close();
+    expect((await records(repo.dir, "post-office")).filter((record) => record.type === "log_failed")).toHaveLength(1);
   }, 30_000);
 });
 

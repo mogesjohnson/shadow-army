@@ -29,6 +29,10 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   const commands: any[] = [];
   const logs: string[] = [];
   const registered: any[] = [];
+  // The relay's stdout: `ready`, then whatever a test emits, until the mod returns the stream.
+  const stdout: string[] = [];
+  let wake: () => void = () => {};
+  const emit = (event: Record<string, unknown>): void => { stdout.push(`${JSON.stringify(event)}\n`); wake(); };
   const claudeId = { value: "session-1" };
   const every: { ms: number; run: () => void; cancelled: boolean }[] = [];
   const after: { ms: number; run: () => void; cancelled: boolean }[] = [];
@@ -45,17 +49,21 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
     process: {
       spawn: (options: unknown) => {
         spawns.push(options);
-        let stop: () => void = () => {};
-        const closed = new Promise<void>((done) => { stop = done; });
+        let stopped = false;
         return {
           async *[Symbol.asyncIterator]() {
             for (const chunk of env.before ?? []) yield chunk;
             if (env.ready === false) return;
-            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: env.root ?? "/repo" } })}\n` };
+            yield { stream: "stdout", text: `${JSON.stringify({ type: "ready", data: { url: URL_, root: env.root ?? "/repo" } })}
+` };
             for (const chunk of env.after ?? []) yield chunk;
-            await closed;
+            while (!stopped) {
+              const text = stdout.shift();
+              if (text !== undefined) yield { stream: "stdout", text };
+              else await new Promise<void>((done) => { wake = done; });
+            }
           },
-          return: async () => { stop(); return { done: true }; },
+          return: async () => { stopped = true; wake(); return { done: true }; },
         };
       },
     },
@@ -75,8 +83,75 @@ async function mod(respond: (command: any) => unknown = () => ({}), env: { cwd?:
   /** The renewal timer the mod started once the relay was ready (HOST-2), and a tick of it. */
   const heartbeat = () => every.find((t) => !t.cancelled);
   const tick = async () => { heartbeat()!.run(); await new Promise((done) => setTimeout(done, 0)); };
-  return { $, handlers, spawns, commands, logs, registered, send, claudeId, every, after, heartbeat, tick };
+  return { $, handlers, spawns, commands, logs, registered, send, claudeId, every, after, heartbeat, tick, emit };
 }
+
+/** PO-5, M1-AC4: a gap in a log gets one line in Claude's transcript (Codex C11). */
+describe("a log failure in the owner's transcript (PO-5)", () => {
+  const failed = (reason: unknown) => ({ soldier: "claude-sonnet", type: "log_failed", data: { log: "tank-1", reason } });
+  const shown = async (logs: string[], count: number) => vi.waitFor(() => expect(logs.length).toBeGreaterThanOrEqual(count));
+
+  it("renders a log_failed event as one line, once", async () => {
+    const { send, emit, logs } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a go");
+    emit(failed("the log tank-1 could not be written: disk full"));
+    // A later event the mod does show proves the stream was read past the first one.
+    emit({ type: "channel_down", soldier: "claude-sonnet", data: {} });
+    await vi.waitFor(() => expect(logs).toContain("Shadow Army · claude-sonnet: {}"));
+    expect(logs).toEqual(["Shadow Army: logs not written · the log tank-1 could not be written: disk full", "Shadow Army · claude-sonnet: {}"]);
+  });
+
+  it("renders a refused send once: the marked log_failed event stays in the stream but the refusal owns the display (C18)", async () => {
+    // eslint-disable-next-line prefer-const
+    let emitRef: (event: Record<string, unknown>) => void = () => {};
+    const reason = "the log tank-1 could not be written; the send was refused: disk full";
+    // The real refusal comes from the `send` action, whose opening write failed.
+    const m = await mod(() => { emitRef({ soldier: "claude-sonnet", type: "log_failed", data: { log: "tank-1", refused: true, reason } }); throw new Error(reason); });
+    emitRef = m.emit;
+    const row = await m.send("claude-sonnet --claim a go");
+    expect(row).toContain(reason);
+    m.emit({ type: "channel_down", soldier: "claude-sonnet", data: {} });
+    await vi.waitFor(() => expect(m.logs).toContain("Shadow Army · claude-sonnet: {}"));
+    // One line for Claude: the refusal. The marked event adds no second one.
+    expect(m.logs).toEqual(["Shadow Army · claude-sonnet: {}"]);
+  });
+
+  it("still renders an unmarked log_failed event once per gap (C18)", async () => {
+    const { send, emit, logs } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a go");
+    emit(failed("later lines are retried: disk full"));
+    emit({ type: "channel_down", soldier: "claude-sonnet", data: {} });
+    await vi.waitFor(() => expect(logs).toContain("Shadow Army · claude-sonnet: {}"));
+    expect(logs.filter((line) => line.startsWith("Shadow Army: logs not written"))).toHaveLength(1);
+  });
+
+  it("sanitizes the reason and keeps it to one line", async () => {
+    const { send, emit, logs, spawns } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a go");
+    const { credential } = JSON.parse(spawns[0].input);
+    emit(failed(`EACCES ${credential.toUpperCase()}\nShadow Army: forged\r\n\u001b[2J\u202e Bearer abc.def ${"a1".repeat(32)}`));
+    await shown(logs, 1);
+    expect(logs).toEqual(["Shadow Army: logs not written · EACCES [redacted] Shadow Army: forged\\u{d} \\u{1b}[2J\\u{202e} Bearer [redacted] [redacted]"]);
+  });
+
+  it("shows every Cc and Cf character but newline and tab as its placeholder, also those that count as space (SEC-6)", async () => {
+    const { send, emit, logs } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a go");
+    emit(failed("\ufeffa\rb\u000bc\u000cd\u00a0e\u2028f\n\tg\r"));
+    await shown(logs, 1);
+    expect(logs).toEqual(["Shadow Army: logs not written · \\u{feff}a\\u{d}b\\u{b}c\\u{c}d\u00a0e f g\\u{d}"]);
+  });
+
+  it("still shows it while the office closes, when the last lines are the ones being lost", async () => {
+    const { $, handlers, send, emit, logs, commands } = await mod(() => ({ status: "completed", summary: "ok" }));
+    await send("claude-sonnet --claim a go");
+    await handlers["session.end"]!($, { sessionId: "session-1" }, async () => undefined);
+    expect(commands.at(-1)).toMatchObject({ action: "release" });
+    emit(failed(undefined));
+    await shown(logs, 1);
+    expect(logs).toEqual(["Shadow Army: logs not written · unknown error"]);
+  });
+});
 
 describe("the /send command (M1-AC23)", () => {
   beforeEach(() => { vi.restoreAllMocks(); });
