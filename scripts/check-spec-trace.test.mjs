@@ -55,6 +55,11 @@ describe("spec traceability", () => {
     expect(checkSpecTrace(withdrawn.replace("(PO-1)", "(PO-1, CH-1)")).problems).toEqual([]);
     expect(checkSpecTrace(valid.replace("(PO-1, CH-1)", "(PO-1)")).problems).toEqual(["CH-1: in M1's Implements but no M1 AC cites it"]);
   });
+  it("never lets a withdrawn requirement supply an AC's citation (review 142 C32)", () => {
+    const withdrawn = valid.replace("- **CH-1** (M1; C, I) Second requirement.", "- **CH-1** (withdrawn in v0.3: merged into PO-1)").replace("(PO-1, CH-1).", "(PO-1).\n- **M1-AC2** Only the withdrawn one (CH-1).");
+    expect(checkSpecTrace(withdrawn).problems).toEqual(["M1-AC2: cites no requirement"]);
+    expect(checkSpecTrace(withdrawn.replace("(CH-1).", "(CH-1, PO-1).")).problems).toEqual([]);
+  });
   it("requires carried-over IDs in Appendix A and rejects unknown table IDs", () => {
     const carried = valid.replace("Second requirement.", "Second requirement (from v1).");
     expect(checkSpecTrace(carried).problems).toContain("CH-1: carried over but not in Appendix A");
@@ -293,6 +298,18 @@ export const createVitest = () => new Promise(() => {});
     expect(warned.length).toBeLessThan(400);
     expect((await listTests(root, { vitest: join(root, "noisy.mjs") })).problems).toEqual(["vitest list failed, so no test names anything: exit 1: the real diagnostic"]);
   }, 120_000);
+  it("fails closed on a test vitest rejects during collection, and bounds a structured error (review 142 C31, C34)", async () => {
+    const root = suite({ "src/only.test.mjs": 'it.only("PO-1", () => {});\n' }, 'export default { test: { globals: true, allowOnly: false } };\n');
+    roots.push(root);
+    const listing = await listTests(root);
+    expect(listing.tests).toEqual([]);
+    expect(listing.problems).toEqual([expect.stringMatching(/^vitest list failed, so no test names anything: src\/only\.test\.mjs: .*only/)]);
+    const long = suite({ "src/long.test.mjs": `throw new Error("${"y".repeat(5000)}");\n` });
+    roots.push(long);
+    const [problem] = (await listTests(long)).problems;
+    expect(problem).toMatch(/^vitest list failed, so no test names anything: src\/long\.test\.mjs: yyy/);
+    expect(problem.length).toBeLessThan(400);
+  }, 120_000);
   // A real vitest whose test file never finishes loading; its worker records its own and its parent's process IDs.
   const slow = 'import { writeFileSync } from "node:fs";\nwriteFileSync(new URL("../worker.pid", import.meta.url), JSON.stringify([process.pid, process.ppid]));\nawait new Promise((wake) => setTimeout(wake, 60_000));\nit("PO-1", () => {});\n';
   it("stops vitest and its worker at the deadline with no system folder on PATH, and verifies it (review 140 C27)", async () => {
@@ -311,26 +328,37 @@ import(${JSON.stringify(checker)}).then((m) => m.listTests(${JSON.stringify(root
     const output = await new Promise((done, failed) => execFile(process.execPath, ["-e", script], { env, timeout: 60_000 }, (error, stdout) => (error ? failed(error) : done(stdout))));
     expect(JSON.parse(output)).toEqual({ problems: ["vitest list failed, so no test names anything: timed out after 15000 ms; its process tree was killed"], alive: [] });
   }, 90_000);
-  it.runIf(process.platform === "win32")("says the tree could not be stopped when taskkill.exe cannot run, never that it was killed (review 140 C27)", async () => {
+  it.runIf(process.platform === "win32")("says the tree could not be stopped when taskkill.exe cannot run, and still exits (review 140 C27, 142 C30)", async () => {
     const root = suite({ "src/named.test.mjs": 'it("PO-1", () => {});\n', "hang.mjs": hang });
     roots.push(root);
-    // Node itself needs SystemRoot to start, so it moves only once the collector runs, before the deadline.
-    const system = process.env.SystemRoot;
-    let listing;
-    try {
-      const listed = listTests(root, { vitest: join(root, "hang.mjs"), timeout: 8_000 });
-      for (let n = 0; n < 70 && !existsSync(join(root, "collector.pid")); n++) await new Promise((wake) => setTimeout(wake, 100));
-      process.env.SystemRoot = join(root, "no-system");
-      listing = await listed;
-    } finally {
-      process.env.SystemRoot = system;
-      for (const file of ["collector.pid", "grandchild.pid"]) {
-        const pid = Number(readFileSync(join(root, file), "utf8"));
-        if (alive(pid)) process.kill(pid);
-      }
+    // Node itself needs SystemRoot to start, so the caller moves it only once the collector runs, before the deadline.
+    const checker = new URL("./check-spec-trace.mjs", import.meta.url).href;
+    const script = `const { existsSync } = require("node:fs");
+import(${JSON.stringify(checker)}).then(async (m) => {
+  const listed = m.listTests(${JSON.stringify(root)}, { vitest: ${JSON.stringify(join(root, "hang.mjs"))}, timeout: 6000 });
+  for (let n = 0; n < 50 && !existsSync(${JSON.stringify(join(root, "collector.pid"))}); n++) await new Promise((wake) => setTimeout(wake, 100));
+  process.env.SystemRoot = ${JSON.stringify(join(root, "no-system"))};
+  const r = await listed;
+  console.log(JSON.stringify(r.problems));
+  process.exitCode = r.problems.length ? 1 : 0;
+});`;
+    const caller = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "pipe", "ignore"] });
+    let output = "";
+    let reported;
+    caller.stdout.setEncoding("utf8").on("data", (chunk) => { output += chunk; reported ??= Date.now(); });
+    const status = await new Promise((done) => {
+      const limit = setTimeout(() => { caller.kill(); done("still running"); }, 30_000);
+      caller.on("exit", (code) => { clearTimeout(limit); done(code); });
+    });
+    const exited = Date.now();
+    for (const file of ["collector.pid", "grandchild.pid"]) {
+      const pid = Number(readFileSync(join(root, file), "utf8"));
+      if (alive(pid)) process.kill(pid);
     }
-    expect(listing.problems).toEqual([expect.stringMatching(/^vitest list failed, so no test names anything: timed out after 8000 ms, and its process tree could not be stopped: .*no-system\\System32\\taskkill\.exe/)]);
-  }, 30_000);
+    expect(JSON.parse(output)).toEqual([expect.stringMatching(/^vitest list failed, so no test names anything: timed out after 6000 ms, and its process tree could not be stopped: .*no-system\\System32\\taskkill\.exe/)]);
+    expect(status).toBe(1);
+    expect(exited - reported).toBeLessThan(2_000);
+  }, 60_000);
   it("VER-7, M1-AC7: takes the repository tests as vitest collects them, and catches a planted break in them", async () => {
     // docs/spec/v2.md here may trail the review branch, so compare against the baseline, not against zero.
     const spec = checkSpecTrace(readFileSync(new URL("../docs/spec/v2.md", import.meta.url), "utf8"));

@@ -122,7 +122,8 @@ export function checkSpecTrace(source) {
       if (!id.startsWith(`${milestone}-`)) problems.push(`${id}: belongs to another milestone`);
       const content = body.slice(ac.index + ac[0].length, acs[n + 1]?.index ?? body.length);
       const ids = expandReferences(content, problems);
-      if (!ids.some((ref) => requirements.has(ref))) problems.push(`${id}: cites no requirement`);
+      // A withdrawn requirement neither needs nor gives coverage (rule 5, review 142 C32), so citing it alone cites none.
+      if (!ids.some((ref) => requirements.has(ref) && !requirements.get(ref).withdrawn)) problems.push(`${id}: cites no requirement`);
       for (const ref of ids) {
         if (!requirements.has(ref)) problems.push(`${id}: cites unknown requirement ${ref}`);
         else cited.add(ref);
@@ -210,6 +211,8 @@ const TEST_DIRECTORIES = ["src", "scripts", "plugins"];
 const firstLine = (text) => text.split(/\r\n?|\n/).map((line) => line.trim()).find(Boolean);
 // How long stopping a timed-out collector may take before the check reports that it could not stop it.
 const TEARDOWN = 10_000;
+// The longest diagnostic the check repeats from the collector, whichever way it came (review 142 C34).
+const bound = (text) => (text.length > 300 ? `${text.slice(0, 300)}…` : text);
 const alive = (target) => {
   try {
     process.kill(target, 0);
@@ -228,10 +231,17 @@ const alive = (target) => {
 function stopTree(child) {
   return new Promise((stopped, failed) => {
     let poll;
+    let killer;
     const finish = (error) => {
       clearTimeout(limit);
       clearInterval(poll);
-      if (error) failed(error);
+      // A stop that failed leaves the tree running: release every handle to it, so that this process can still exit
+      // (review 142 C30).
+      if (error) {
+        killer?.unref();
+        child.unref();
+        failed(error);
+      }
       else stopped();
     };
     const limit = setTimeout(() => finish(new Error(`it was still running ${TEARDOWN} ms after the kill`)), TEARDOWN);
@@ -239,7 +249,7 @@ function stopTree(child) {
       const system = process.env.SystemRoot ?? process.env.windir;
       if (!system) return finish(new Error("SystemRoot is not set, so taskkill.exe cannot be found"));
       const taskkill = join(system, "System32", "taskkill.exe");
-      const killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
       killer.on("error", (error) => finish(new Error(`${taskkill}: ${error.message}`)));
       killer.on("exit", (status) => {
         if (status !== 0 && child.exitCode === null && child.signalCode === null) finish(new Error(`${taskkill} exited ${status}, so not every process in the tree was ended`));
@@ -279,7 +289,7 @@ function vitestList(root, files, vitest, timeout) {
     const lines = (text) => text.split(/\r\n?|\n/).map((line) => line.trim()).filter(Boolean);
     const said = () => {
       const own = lines(captured.stderr).find((line) => line.startsWith("collector failed:"));
-      return (own ?? firstLine(captured.stderr) ?? firstLine(captured.stdout) ?? "no output").slice(0, 300);
+      return bound(own ?? firstLine(captured.stderr) ?? firstLine(captured.stdout) ?? "no output");
     };
     let ended = false;
     // A detached group misses the terminal's Ctrl-C: stop the tree with this process, then let the signal end it too.
@@ -312,7 +322,7 @@ function vitestList(root, files, vitest, timeout) {
       try {
         const listed = JSON.parse(readFileSync(output, "utf8"));
         if (!Array.isArray(listed?.tests) || !Array.isArray(listed.configured) || !Array.isArray(listed.errors)) throw new Error("its output is not a list of tests");
-        if (listed.errors.length) throw new Error(`${listed.errors[0]}${listed.errors.length > 1 ? ` (and ${listed.errors.length - 1} more)` : ""}`);
+        if (listed.errors.length) throw new Error(`${bound(String(listed.errors[0]))}${listed.errors.length > 1 ? ` (and ${listed.errors.length - 1} more)` : ""}`);
         resolveList(listed);
       } catch (error) {
         rejectList(error);
@@ -378,7 +388,7 @@ export function checkTestReferences(trace, implementedSource, listing) {
         const problem = `${path}: names ${id}, which this spec doesn't have`;
         if (!unknown.has(problem)) problems.push(problem);
         unknown.add(problem);
-      } else if (!named.has(id)) named.set(id, path);
+      } else if (!named.has(id) && !trace.requirementIds.get(id)?.withdrawn) named.set(id, path);
     }
   }
   const current = Number(implemented.milestone.slice(1));
@@ -443,7 +453,13 @@ async function collect(requestPath) {
     for (const module of testModules) {
       const where = relative(process.cwd(), module.moduleId).replaceAll("\\", "/");
       for (const suite of [module, ...module.children.allSuites()]) errors.push(...suite.errors().map((error) => `${where}: ${message(error)}`));
-      for (const test of module.children.allTests()) if (test.result().state !== "skipped") tests.push({ file: module.moduleId, name: test.name });
+      // Only a test collected without error names anything (review 142 C31): one vitest rejects while collecting it,
+      // as `.only` under allowOnly false, is a failed test with errors, and fails the whole listing.
+      for (const test of module.children.allTests()) {
+        const { state, errors: own = [] } = test.result();
+        if (own.length || (state !== "pending" && state !== "skipped")) errors.push(`${where}: ${test.name}: ${own.length ? message(own[0]) : `collected as ${state}`}`);
+        else if (state === "pending") tests.push({ file: module.moduleId, name: test.name });
+      }
     }
     const configured = (await vitest.getRelevantTestSpecifications(files)).map(({ moduleId }) => moduleId);
     writeFileSync(output, JSON.stringify({ tests, configured, errors }));
@@ -484,5 +500,8 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   } catch (error) {
     console.error(`spec trace check failed: ${error.message}`);
     process.exitCode = 1;
+  } finally {
+    // The result is out: whatever a collector's teardown left behind, the check ends within 5 s (review 142 C30).
+    setTimeout(() => process.exit(), 5_000).unref();
   }
 }
