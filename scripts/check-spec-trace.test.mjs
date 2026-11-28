@@ -287,6 +287,10 @@ export const createVitest = () => new Promise(() => {});
     }, 'console.log("normal config startup");\nexport default { test: { globals: true } };\n');
     roots.push(root);
     expect((await listTests(root)).problems).toEqual(["vitest list failed, so no test names anything: src/broken.test.mjs: specific suite initialization failure"]);
+    writeFileSync(join(root, "warned.mjs"), 'console.error("(node) ExperimentalWarning: noise");\nconsole.error("collector failed: " + "x".repeat(1000));\nprocess.exit(1);\n');
+    const warned = (await listTests(root, { vitest: join(root, "warned.mjs") })).problems[0];
+    expect(warned.startsWith("vitest list failed, so no test names anything: exit 1: collector failed: xxx")).toBe(true);
+    expect(warned.length).toBeLessThan(400);
     expect((await listTests(root, { vitest: join(root, "noisy.mjs") })).problems).toEqual(["vitest list failed, so no test names anything: exit 1: the real diagnostic"]);
   }, 120_000);
   // A real vitest whose test file never finishes loading; its worker records its own and its parent's process IDs.

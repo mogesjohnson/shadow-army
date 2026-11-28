@@ -242,7 +242,7 @@ function stopTree(child) {
       const killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
       killer.on("error", (error) => finish(new Error(`${taskkill}: ${error.message}`)));
       killer.on("exit", (status) => {
-        if (status !== 0) finish(new Error(`${taskkill} exited ${status}, so not every process in the tree was ended`));
+        if (status !== 0 && child.exitCode === null && child.signalCode === null) finish(new Error(`${taskkill} exited ${status}, so not every process in the tree was ended`));
         else if (child.exitCode !== null || child.signalCode !== null) finish();
         else child.once("exit", () => finish());
       });
@@ -276,7 +276,11 @@ function vitestList(root, files, vitest, timeout) {
     for (const stream of ["stdout", "stderr"]) {
       child[stream].setEncoding("utf8").on("data", (chunk) => { if (captured[stream].length < 1 << 20) captured[stream] += chunk; });
     }
-    const said = () => firstLine(captured.stderr) ?? firstLine(captured.stdout) ?? "no output";
+    const lines = (text) => text.split(/\r\n?|\n/).map((line) => line.trim()).filter(Boolean);
+    const said = () => {
+      const own = lines(captured.stderr).find((line) => line.startsWith("collector failed:"));
+      return (own ?? firstLine(captured.stderr) ?? firstLine(captured.stdout) ?? "no output").slice(0, 300);
+    };
     let ended = false;
     // A detached group misses the terminal's Ctrl-C: stop the tree with this process, then let the signal end it too.
     const signals = process.platform === "win32" ? [] : ["SIGINT", "SIGTERM", "SIGHUP"];
